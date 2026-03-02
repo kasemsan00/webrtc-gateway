@@ -9,35 +9,35 @@
       "executor": "nx:run-commands",
       "options": {
         "cwd": "apps/ttrs-vri-mobile",
-        "command": "npm run start"
+        "command": "pnpm run start"
       }
     },
     "android": {
       "executor": "nx:run-commands",
       "options": {
         "cwd": "apps/ttrs-vri-mobile",
-        "command": "npm run android"
+        "command": "pnpm run android"
       }
     },
     "ios": {
       "executor": "nx:run-commands",
       "options": {
         "cwd": "apps/ttrs-vri-mobile",
-        "command": "npm run ios"
+        "command": "pnpm run ios"
       }
     },
     "web": {
       "executor": "nx:run-commands",
       "options": {
         "cwd": "apps/ttrs-vri-mobile",
-        "command": "npm run web"
+        "command": "pnpm run web"
       }
     },
     "lint": {
       "executor": "nx:run-commands",
       "options": {
         "cwd": "apps/ttrs-vri-mobile",
-        "command": "npm run lint"
+        "command": "pnpm run lint"
       }
     }
   }

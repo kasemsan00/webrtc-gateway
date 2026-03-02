@@ -13,6 +13,7 @@
     "lint:mobile": "nx lint ttrs-vri-mobile",
     "android:mobile": "nx run ttrs-vri-mobile:android",
     "ios:device": "nx run ttrs-vri-mobile:ios:device",
+    "ios:local": "nx run ttrs-vri-mobile:ios:build:local",
     "serve:sip": "nx serve gateway-sip",
     "build:sip": "nx build gateway-sip",
     "test:sip": "nx test gateway-sip",
@@ -67,5 +68,6 @@
   },
   "workspaces": [
     "apps/*"
-  ]
+  ],
+  "packageManager": "pnpm@10.30.3"
 }
