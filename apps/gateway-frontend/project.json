@@ -1,0 +1,52 @@
+{
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "name": "gateway-frontend",
+  "projectType": "application",
+  "sourceRoot": "apps/gateway-frontend/src",
+  "tags": ["scope:gateway", "type:frontend"],
+  "targets": {
+    "dev": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "apps/gateway-frontend",
+        "command": "npm run dev"
+      }
+    },
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "apps/gateway-frontend",
+        "command": "npm run build"
+      },
+      "outputs": ["{projectRoot}/.output", "{projectRoot}/dist", "{projectRoot}/build"]
+    },
+    "preview": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "apps/gateway-frontend",
+        "command": "npm run preview"
+      }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "apps/gateway-frontend",
+        "command": "npm run test"
+      }
+    },
+    "lint": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "apps/gateway-frontend",
+        "command": "npm run lint"
+      }
+    },
+    "check": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "apps/gateway-frontend",
+        "command": "npm run check"
+      }
+    }
+  }
+}

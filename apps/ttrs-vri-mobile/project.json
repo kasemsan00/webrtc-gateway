@@ -1,0 +1,44 @@
+{
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "name": "ttrs-vri-mobile",
+  "projectType": "application",
+  "sourceRoot": "apps/ttrs-vri-mobile",
+  "tags": ["scope:gateway", "type:mobile"],
+  "targets": {
+    "dev": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "apps/ttrs-vri-mobile",
+        "command": "npm run start"
+      }
+    },
+    "android": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "apps/ttrs-vri-mobile",
+        "command": "npm run android"
+      }
+    },
+    "ios": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "apps/ttrs-vri-mobile",
+        "command": "npm run ios"
+      }
+    },
+    "web": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "apps/ttrs-vri-mobile",
+        "command": "npm run web"
+      }
+    },
+    "lint": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "apps/ttrs-vri-mobile",
+        "command": "npm run lint"
+      }
+    }
+  }
+}

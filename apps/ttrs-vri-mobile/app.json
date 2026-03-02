@@ -1,0 +1,80 @@
+{
+  "expo": {
+    "name": "TTRS VRI",
+    "slug": "thorttrsvrstablet",
+    "version": "1.2.1",
+    "orientation": "default",
+    "backgroundColor": "#FFFFFF",
+    "icon": "./assets/images/drawable-xhdpi/logo.png",
+    "scheme": "ttrsvri",
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "th.or.ttrs.vrs.tablet",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "This app requires access to your microphone to make and receive phone calls.",
+        "NSCameraUsageDescription": "This app requires access to your camera for video calls.",
+        "NSLocationWhenInUseUsageDescription": "This app needs your location to show your current position.",
+        "UIBackgroundModes": ["audio", "voip"],
+        "ITSAppUsesNonExemptEncryption": false
+      },
+      "appleTeamId": "96775H948U"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/images/drawable-xhdpi/logo-foreground-padded.png",
+        "backgroundImage": "./assets/images/android-icon-background.png",
+        "monochromeImage": "./assets/images/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false,
+      "package": "th.or.nectec.kasemsan.ttrsvri",
+      "permissions": [
+        "CAMERA",
+        "RECORD_AUDIO",
+        "WAKE_LOCK",
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "BIND_TELECOM_CONNECTION_SERVICE",
+        "FOREGROUND_SERVICE",
+        "READ_PHONE_STATE",
+        "CALL_PHONE",
+        "FOREGROUND_SERVICE_MICROPHONE",
+        "FOREGROUND_SERVICE_CAMERA",
+        "READ_CALL_LOG",
+        "MANAGE_OWN_CALLS"
+      ]
+    },
+    "web": {
+      "output": "static",
+      "favicon": "./assets/images/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/images/white-screen.png",
+          "resizeMode": "cover",
+          "backgroundColor": "#FFFFFF",
+          "dark": {
+            "image": "./assets/images/white-screen.png",
+            "resizeMode": "cover",
+            "backgroundColor": "#FFFFFF"
+          }
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "4e34ad06-2454-4652-969e-f0d57945cd2b"
+      }
+    },
+    "owner": "darkwiess"
+  }
+}
