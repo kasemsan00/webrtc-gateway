@@ -1878,11 +1878,15 @@ export const useSipStore = create<SipStore>((set, get) => ({
         return false;
       };
 
-      const registered = options?.bypassRegistrationWait
+      const shouldBypassRegistrationWait =
+        options?.bypassRegistrationWait === true ||
+        resumeSource === 'foreground_recovery';
+
+      const registered = shouldBypassRegistrationWait
         ? true
         : await waitForRegistration(RESUME_REGISTRATION_WAIT_TIMEOUT_MS);
       console.log(
-        `[SipStore] ${recoveryTag} registration_wait_ms=${Date.now() - resumeAttemptStartedAt} registered=${registered}`,
+        `[SipStore] ${recoveryTag} registration_wait_ms=${Date.now() - resumeAttemptStartedAt} registered=${registered} bypassed=${shouldBypassRegistrationWait}`,
       );
 
       if (!registered) {

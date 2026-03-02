@@ -441,6 +441,8 @@ func (s *Server) handleWSMessage(client *WSClient, message []byte) {
 		s.handleWSSendMessage(client, msg)
 	case "resume":
 		s.handleWSResume(client, msg)
+	case "request_keyframe":
+		s.handleWSRequestKeyframe(client, msg)
 	case "trunk_resolve":
 		s.handleWSTrunkResolve(client, msg)
 	default:
@@ -1200,6 +1202,38 @@ func (s *Server) handleWSPing(client *WSClient, msg WSMessage) {
 	if s.config.DebugWebSocket {
 		fmt.Printf("[WebSocket] 💚 Sent pong to client (sessionID=%s)\n", client.sessionID)
 	}
+}
+
+// handleWSRequestKeyframe handles explicit keyframe requests from clients.
+// Used by resume/video-recovery flows to trigger fast FIR/PLI toward SIP side.
+func (s *Server) handleWSRequestKeyframe(client *WSClient, msg WSMessage) {
+	sessionID := msg.SessionID
+	if sessionID == "" {
+		sessionID = client.sessionID
+	}
+	if sessionID == "" {
+		s.sendWSError(client, "", "Session ID required for keyframe request")
+		return
+	}
+
+	sess, ok := s.sessionMgr.GetSession(sessionID)
+	if !ok {
+		s.sendWSError(client, sessionID, "Session not found")
+		return
+	}
+
+	s.logEvent(&logstore.Event{
+		Timestamp: time.Now(),
+		SessionID: sess.ID,
+		Category:  "ws",
+		Name:      "ws_request_keyframe",
+	})
+
+	if s.config.DebugWebSocket {
+		log.Printf("📸 Keyframe request received: session=%s", sessionID)
+	}
+
+	sess.SendBrowserRecoveryToAsterisk("ws-request_keyframe")
 }
 
 // handleWSSendMessage handles WebSocket send_message requests
