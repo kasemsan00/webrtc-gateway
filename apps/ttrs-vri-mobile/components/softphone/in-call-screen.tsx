@@ -115,6 +115,7 @@ export function InCallScreen({
 
   const insets = useSafeAreaInsets();
   const currentLocation = useLocationStore((s) => s.currentLocation);
+  const localStreamVersion = useSipStore((s) => s.localStreamVersion);
 
   const [showChat, setShowChat] = useState(false);
   const [showKeypad, setShowKeypad] = useState(false);
@@ -237,6 +238,14 @@ export function InCallScreen({
   const hasRemoteVideo = remoteStream && remoteStream.getVideoTracks().length > 0;
   const hasLocalVideo = localStream && localStream.getVideoTracks().length > 0;
   const remoteVideoTrack = remoteStream?.getVideoTracks?.()[0];
+  const localVideoTrack = localStream?.getVideoTracks?.()[0];
+  const localPreviewStreamUrl = hasLocalVideo ? localStream?.toURL?.() ?? null : null;
+  const localPreviewKey = useMemo(() => {
+    if (!localPreviewStreamUrl) {
+      return "local-preview-empty";
+    }
+    return `${localPreviewStreamUrl}:${localVideoTrack?.id ?? "no-track"}:${localStreamVersion}`;
+  }, [localPreviewStreamUrl, localVideoTrack?.id, localStreamVersion]);
 
   // Keep remote key stable per stream identity to avoid RTCView remount flicker
   const remoteStreamUrl = remoteStream?.toURL?.();
@@ -489,9 +498,16 @@ export function InCallScreen({
         ) : null}
 
         {/* Local Video (Picture-in-Picture) */}
-        {hasLocalVideo && (
+        {hasLocalVideo && localPreviewStreamUrl && (
           <View style={[styles.localVideoContainer, { top: insets.top + vs(46) }]}>
-            <StableRTCView streamURL={localStream.toURL()} style={styles.localVideo} objectFit="cover" zOrder={2} mirror={true} />
+            <StableRTCView
+              key={localPreviewKey}
+              streamURL={localPreviewStreamUrl}
+              style={styles.localVideo}
+              objectFit="cover"
+              zOrder={2}
+              mirror={true}
+            />
           </View>
         )}
 

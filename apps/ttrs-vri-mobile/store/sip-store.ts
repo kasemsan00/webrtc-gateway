@@ -118,6 +118,7 @@ interface SipState {
   // Media streams for video
   localStream: MediaStream | null;
   remoteStream: MediaStream | null;
+  localStreamVersion: number;
 
   // Audio state
   isMuted: boolean;
@@ -246,6 +247,7 @@ const initialState: SipState = {
   callDuration: 0,
   localStream: null,
   remoteStream: null,
+  localStreamVersion: 0,
   isMuted: false,
   isSpeaker: false,
   isVideoEnabled: true,
@@ -541,7 +543,7 @@ export const useSipStore = create<SipStore>((set, get) => ({
         },
         onLocalStream: (stream) => {
           console.log("[SipStore] Local stream received");
-          set({ localStream: stream });
+          set((state) => ({ localStream: stream, localStreamVersion: state.localStreamVersion + 1 }));
         },
         onRemoteStream: (stream) => {
           console.log("[SipStore] Remote stream received");
@@ -995,7 +997,7 @@ export const useSipStore = create<SipStore>((set, get) => ({
 
   // Set local stream
   setLocalStream: (stream) => {
-    set({ localStream: stream });
+    set((state) => ({ localStream: stream, localStreamVersion: state.localStreamVersion + 1 }));
   },
 
   // Set remote stream
