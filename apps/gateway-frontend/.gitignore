@@ -1,5 +1,16 @@
-.cache
-build
-public/build
-.env
-.react-router
+node_modules
+.DS_Store
+dist
+dist-ssr
+*.local
+count.txt
+# .env
+.nitro
+.tanstack
+.wrangler
+.output
+.vinxi
+todos.json
+
+# Local Netlify folder
+.netlify

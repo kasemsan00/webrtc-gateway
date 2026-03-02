@@ -2,7 +2,22 @@
   "name": "@webrtc-gateway/source",
   "version": "0.0.0",
   "license": "MIT",
-  "scripts": {},
+  "scripts": {
+    "nx": "nx",
+    "show:projects": "nx show projects",
+    "dev:frontend": "nx dev gateway-frontend",
+    "dev:mobile": "nx dev ttrs-vri-mobile",
+    "build:frontend": "nx build gateway-frontend",
+    "test:frontend": "nx test gateway-frontend",
+    "lint:frontend": "nx lint gateway-frontend",
+    "lint:mobile": "nx lint ttrs-vri-mobile",
+    "android:mobile": "nx run ttrs-vri-mobile:android",
+    "ios:mobile": "nx run ttrs-vri-mobile:ios",
+    "serve:sip": "nx serve gateway-sip",
+    "build:sip": "nx build gateway-sip",
+    "test:sip": "nx test gateway-sip",
+    "test": "nx run-many -t test --projects gateway-frontend,gateway-sip --parallel=2"
+  },
   "private": true,
   "dependencies": {
     "@react-router/node": "^7.12.0",
