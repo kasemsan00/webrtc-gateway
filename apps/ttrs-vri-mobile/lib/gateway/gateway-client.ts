@@ -27,6 +27,7 @@ import {
 } from "./types";
 
 type RtcDataChannel = ReturnType<RTCPeerConnection["createDataChannel"]>;
+type LocalRtpSender = ReturnType<RTCPeerConnection["getSenders"]>[number];
 
 /**
  * Strip port from SIP domain for register payload.
@@ -83,8 +84,20 @@ export interface TrunkCallAuth {
 
 export type CallAuth = PublicCallAuth | TrunkCallAuth;
 
+export type LocalVideoRecoveryStatus = "not_ios" | "healthy" | "recovered" | "exhausted" | "error";
+export interface LocalVideoRecoveryResult {
+  status: LocalVideoRecoveryStatus;
+  reason: string;
+  senderSummary?: string;
+}
+
 const PUBLIC_IDENTITY_CHANGED_ERROR_MESSAGE = "Public SIP identity changed (username/domain). Send a new offer to create a new session.";
 const LOCAL_VIDEO_RECOVERY_THROTTLE_MS = 2000;
+const LOCAL_VIDEO_SENDER_HEALTH_SAMPLE_INTERVAL_MS = 350;
+const LOCAL_VIDEO_RECOVERY_MAX_ATTEMPTS = 2;
+const LOCAL_VIDEO_SENDER_RESET_DELAY_MS = 120;
+const LOCAL_VIDEO_POST_REPLACE_WARMUP_MS = 700;
+const LOCAL_VIDEO_ENABLE_TOGGLE_DELAY_MS = 80;
 
 interface PendingCallIntent {
   destination: string;
@@ -548,6 +561,18 @@ export class GatewayClient {
     return this.sessionId;
   }
 
+  getPeerConnectionTransportSnapshot(): {
+    hasPeerConnection: boolean;
+    connectionState: string | null;
+    iceConnectionState: string | null;
+  } {
+    return {
+      hasPeerConnection: !!this.pc,
+      connectionState: this.pc?.connectionState ?? null,
+      iceConnectionState: this.pc?.iceConnectionState ?? null,
+    };
+  }
+
   addRttListener(listener: (message: GatewayRttMessage) => void): () => void {
     this.rttListeners.push(listener);
     return () => {
@@ -961,14 +986,19 @@ export class GatewayClient {
     return true;
   }
 
-  async ensureLocalVideoBeforeForegroundResume(reason: string = "app_foreground"): Promise<void> {
+  async ensureLocalVideoBeforeForegroundResume(reason: string = "app_foreground"): Promise<LocalVideoRecoveryResult> {
     try {
-      await this.ensureLocalVideoHealthyForIOS(reason);
+      return await this.ensureLocalVideoHealthyForIOS(reason);
     } catch (error) {
       console.warn("[Gateway] ⚠️ Local video foreground recovery failed:", {
         reason,
         error: error instanceof Error ? error.message : String(error),
       });
+      return {
+        status: "error",
+        reason,
+        senderSummary: error instanceof Error ? error.message : String(error),
+      };
     }
   }
 
@@ -1060,11 +1090,23 @@ export class GatewayClient {
         await this.getLocalMedia();
       }
 
+      if (this.shouldAbortResume(sessionId)) {
+        throw new Error("Resume aborted: session or call state changed before local video check");
+      }
+
       await this.ensureLocalVideoHealthyForIOS("resume_call");
+
+      if (this.shouldAbortResume(sessionId)) {
+        throw new Error("Resume aborted: session or call state changed before PeerConnection creation");
+      }
 
       // Create new PeerConnection for new ICE candidates
       console.log("[Gateway] 🔄 Creating new PeerConnection for resume...");
       await this.createPeerConnection();
+
+      if (this.shouldAbortResume(sessionId)) {
+        throw new Error("Resume aborted: session or call state changed after PeerConnection creation");
+      }
 
       // Get settings for bitrate and apply env cap
       const settings = getSettingsSync();
@@ -1078,20 +1120,36 @@ export class GatewayClient {
       // Apply outgoing video bitrate limit based on resolution profile (with env cap)
       await this.applyOutgoingVideoBitrateLimit(bitrateKbps);
 
+      if (this.shouldAbortResume(sessionId)) {
+        throw new Error("Resume aborted: session or call state changed before offer creation");
+      }
+
       // Create SDP offer for renegotiation
       console.log("[Gateway] 🔄 Creating SDP offer for resume...");
-      const offer = await this.pc!.createOffer({
+      const pc = this.pc;
+      if (!pc) {
+        throw new Error("Resume aborted: PeerConnection missing before createOffer");
+      }
+      const offer = await pc.createOffer({
         offerToReceiveAudio: true,
         offerToReceiveVideo: true,
       });
-      await this.pc!.setLocalDescription(offer);
+      await pc.setLocalDescription(offer);
 
       // Wait for ICE gathering to complete
       console.log("[Gateway] ⏳ Waiting for ICE gathering...");
       await this.waitForIceGathering();
 
+      if (this.shouldAbortResume(sessionId)) {
+        throw new Error("Resume aborted: session or call state changed before resume send");
+      }
+
       // Process SDP for compatibility with env-capped bitrate
-      const processedSdp = processSDPForLinphone(this.pc!.localDescription!.sdp!, bitrateKbps);
+      const localDescriptionSdp = this.pc?.localDescription?.sdp;
+      if (!localDescriptionSdp) {
+        throw new Error("Resume aborted: localDescription missing before resume send");
+      }
+      const processedSdp = processSDPForLinphone(localDescriptionSdp, bitrateKbps);
 
       // Log codecs in the resume offer
       logCodecsFromSdp(processedSdp, "Call resume offer");
@@ -1109,6 +1167,19 @@ export class GatewayClient {
       console.error("[Gateway] ❌ Failed to resume call:", error);
       throw error;
     }
+  }
+
+  private shouldAbortResume(expectedSessionId: string): boolean {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      return true;
+    }
+    if (this.sessionId !== expectedSessionId) {
+      return true;
+    }
+    if (this._callState === CallState.ENDED || this._callState === CallState.IDLE) {
+      return true;
+    }
+    return false;
   }
 
   // ===== PRIVATE RECONNECTION HELPERS =====
@@ -1556,6 +1627,9 @@ export class GatewayClient {
     switch (state) {
       case "active":
       case "answered":
+        // Active media implies SIP dialog is established; keep registration state
+        // true to avoid foreground resume deadlock waiting for late register events.
+        this.isRegistered = true;
         this._callState = CallState.INCALL;
         this.pendingCallIntent = null;
         this.isPublicIdentityRecoveryInProgress = false;
@@ -1979,41 +2053,299 @@ export class GatewayClient {
     });
   }
 
-  private async ensureLocalVideoHealthyForIOS(reason: string): Promise<void> {
+  private async ensureLocalVideoHealthyForIOS(reason: string): Promise<LocalVideoRecoveryResult> {
     if (Platform.OS !== "ios") {
-      return;
+      return { status: "not_ios", reason };
     }
 
     const now = Date.now();
     if (this.localVideoRecoveryInProgress) {
       console.log("[Gateway] ⏱️ Local video recovery skipped (already in progress):", reason);
-      return;
+      return { status: "healthy", reason, senderSummary: "recovery_in_progress" };
     }
     if (now - this.lastLocalVideoRecoveryAt < LOCAL_VIDEO_RECOVERY_THROTTLE_MS) {
       console.log("[Gateway] ⏱️ Local video recovery throttled:", reason);
-      return;
+      return { status: "healthy", reason, senderSummary: "recovery_throttled" };
     }
 
     const currentVideoTrack = this.localStream?.getVideoTracks()[0];
-    const isHealthy = !!currentVideoTrack &&
+    const hasHealthyTrackFlags = !!currentVideoTrack &&
       currentVideoTrack.readyState === "live" &&
       currentVideoTrack.enabled &&
       !currentVideoTrack.muted;
+    if (!this.pc && hasHealthyTrackFlags) {
+      console.log("[Gateway] ✅ Local video track healthy on iOS (no PC yet):", reason);
+      return {
+        status: "healthy",
+        reason,
+        senderSummary: "no_peer_connection_precheck",
+      };
+    }
+    const senderHealth = await this.sampleLocalVideoSenderHealth();
+    const isHealthy = hasHealthyTrackFlags && senderHealth.isHealthy;
 
     if (isHealthy) {
-      console.log("[Gateway] ✅ Local video track healthy on iOS:", reason);
-      return;
+      console.log("[Gateway] ✅ Local video track healthy on iOS:", {
+        reason,
+        sender: senderHealth.summary,
+      });
+      return {
+        status: "healthy",
+        reason,
+        senderSummary: senderHealth.summary,
+      };
     }
+
+    console.log("[Gateway] ⚠️ Local iOS video unhealthy - forcing recovery:", {
+      reason,
+      hasHealthyTrackFlags,
+      sender: senderHealth.summary,
+    });
 
     this.localVideoRecoveryInProgress = true;
     this.lastLocalVideoRecoveryAt = now;
     try {
-      const replaced = await this.reacquireLocalVideoTrack(reason);
-      if (!replaced) {
-        console.warn("[Gateway] ⚠️ Local video reacquire did not replace track:", reason);
+      let recovered = false;
+      let finalSenderSummary = senderHealth.summary;
+
+      for (let attempt = 1; attempt <= LOCAL_VIDEO_RECOVERY_MAX_ATTEMPTS; attempt += 1) {
+        const attemptReason = `${reason}:attempt_${attempt}`;
+        const replaced = await this.reacquireLocalVideoTrack(attemptReason);
+        if (!replaced) {
+          console.warn("[Gateway] ⚠️ Local video reacquire did not replace track:", attemptReason);
+          continue;
+        }
+
+        // Kick iOS encoder: brief enable toggle nudges the pipeline without camera restart
+        await this.nudgeLocalVideoEncoderForIOS(attemptReason);
+
+        // Wait for iOS encoder to warm up before reading stats
+        console.log("[Gateway] ⏳ Waiting for iOS encoder warm-up after replaceTrack:", attemptReason);
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, LOCAL_VIDEO_POST_REPLACE_WARMUP_MS);
+        });
+
+        const afterReplaceHealth = await this.sampleLocalVideoSenderHealth();
+        finalSenderSummary = afterReplaceHealth.summary;
+        if (afterReplaceHealth.isHealthy) {
+          console.log("[Gateway] ✅ Local iOS video recovery verified:", {
+            reason: attemptReason,
+            sender: afterReplaceHealth.summary,
+          });
+          recovered = true;
+          break;
+        }
+
+        console.warn("[Gateway] ⚠️ Local iOS video sender still stalled after warm-up:", {
+          reason: attemptReason,
+          sender: afterReplaceHealth.summary,
+        });
+
+        const pipelineReset = await this.resetLocalVideoSenderPipeline();
+        if (pipelineReset) {
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, LOCAL_VIDEO_POST_REPLACE_WARMUP_MS);
+          });
+          const afterResetHealth = await this.sampleLocalVideoSenderHealth();
+          finalSenderSummary = afterResetHealth.summary;
+          if (afterResetHealth.isHealthy) {
+            console.log("[Gateway] ✅ Local iOS sender pipeline reset recovered video:", {
+              reason: attemptReason,
+              sender: afterResetHealth.summary,
+            });
+            recovered = true;
+            break;
+          }
+        }
       }
+
+      if (!recovered) {
+        console.warn("[Gateway] ❌ Local iOS video recovery exhausted attempts:", reason);
+        return {
+          status: "exhausted",
+          reason,
+          senderSummary: finalSenderSummary,
+        };
+      }
+      return {
+        status: "recovered",
+        reason,
+        senderSummary: finalSenderSummary,
+      };
     } finally {
       this.localVideoRecoveryInProgress = false;
+    }
+  }
+
+  private async sampleLocalVideoSenderHealth(): Promise<{ isHealthy: boolean; summary: string }> {
+    if (!this.pc) {
+      return { isHealthy: false, summary: "no_peer_connection" };
+    }
+
+    const videoSender = this.pc.getSenders().find((sender) => sender.track?.kind === "video");
+    if (!videoSender) {
+      return { isHealthy: false, summary: "no_video_sender" };
+    }
+
+    const senderTrack = videoSender.track;
+    if (!senderTrack || senderTrack.readyState !== "live") {
+      return {
+        isHealthy: false,
+        summary: `sender_track_unhealthy:${senderTrack?.readyState ?? "missing"}`,
+      };
+    }
+
+    const first = await this.readOutboundVideoSenderSnapshot(videoSender);
+    if (!first) {
+      return { isHealthy: false, summary: "no_outbound_rtp_stats:first_sample" };
+    }
+
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, LOCAL_VIDEO_SENDER_HEALTH_SAMPLE_INTERVAL_MS);
+    });
+
+    const second = await this.readOutboundVideoSenderSnapshot(videoSender);
+    if (!second) {
+      return { isHealthy: false, summary: "no_outbound_rtp_stats:second_sample" };
+    }
+
+    const bytesDelta = second.bytesSent - first.bytesSent;
+    const framesDelta = second.framesEncoded - first.framesEncoded;
+    const packetsDelta = second.packetsSent - first.packetsSent;
+    const isHealthy = bytesDelta > 0 || framesDelta > 0 || packetsDelta > 0;
+
+    return {
+      isHealthy,
+      summary: `delta_bytes=${bytesDelta},delta_frames=${framesDelta},delta_packets=${packetsDelta}`,
+    };
+  }
+
+  private async readOutboundVideoSenderSnapshot(
+    sender: LocalRtpSender,
+  ): Promise<{ bytesSent: number; framesEncoded: number; packetsSent: number } | null> {
+    const senderWithStats = sender as LocalRtpSender & { getStats?: () => Promise<unknown> };
+    if (!senderWithStats.getStats) {
+      return null;
+    }
+
+    try {
+      const report = await senderWithStats.getStats();
+      const entries = this.extractStatsEntries(report);
+
+      let bytesSent = 0;
+      let framesEncoded = 0;
+      let packetsSent = 0;
+      let foundOutboundVideoStat = false;
+
+      for (const entry of entries) {
+        const statType = typeof entry.type === "string" ? entry.type : "";
+        const statKind = typeof entry.kind === "string"
+          ? entry.kind
+          : typeof entry.mediaType === "string"
+            ? entry.mediaType
+            : "";
+
+        if (statType !== "outbound-rtp" || statKind !== "video") {
+          continue;
+        }
+
+        foundOutboundVideoStat = true;
+        bytesSent = Math.max(bytesSent, this.toSafeStatNumber(entry.bytesSent));
+        framesEncoded = Math.max(framesEncoded, this.toSafeStatNumber(entry.framesEncoded));
+        packetsSent = Math.max(packetsSent, this.toSafeStatNumber(entry.packetsSent));
+      }
+
+      if (!foundOutboundVideoStat) {
+        return null;
+      }
+
+      return { bytesSent, framesEncoded, packetsSent };
+    } catch (error) {
+      console.log("[Gateway] ⚠️ Failed reading local video sender stats:", error);
+      return null;
+    }
+  }
+
+  private extractStatsEntries(report: unknown): Array<Record<string, unknown>> {
+    if (!report) {
+      return [];
+    }
+
+    if (Array.isArray(report)) {
+      return report.filter((entry): entry is Record<string, unknown> => typeof entry === "object" && entry !== null);
+    }
+
+    if (typeof report === "object" && report !== null) {
+      const reportWithForEach = report as { forEach?: (callback: (value: unknown) => void) => void };
+      if (typeof reportWithForEach.forEach === "function") {
+        const entries: Array<Record<string, unknown>> = [];
+        reportWithForEach.forEach((value) => {
+          if (typeof value === "object" && value !== null) {
+            entries.push(value as Record<string, unknown>);
+          }
+        });
+        return entries;
+      }
+    }
+
+    return [];
+  }
+
+  private toSafeStatNumber(value: unknown): number {
+    if (typeof value !== "number" || Number.isNaN(value)) {
+      return 0;
+    }
+    return value;
+  }
+
+  private async nudgeLocalVideoEncoderForIOS(reason: string): Promise<void> {
+    if (Platform.OS !== "ios" || !this.localStream) {
+      return;
+    }
+
+    const localVideoTrack = this.localStream.getVideoTracks()[0];
+    if (!localVideoTrack || localVideoTrack.readyState !== "live") {
+      return;
+    }
+
+    try {
+      localVideoTrack.enabled = false;
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, LOCAL_VIDEO_ENABLE_TOGGLE_DELAY_MS);
+      });
+      localVideoTrack.enabled = true;
+      console.log("[Gateway] 🔧 Nudged iOS encoder via enable toggle:", reason);
+    } catch (error) {
+      console.warn("[Gateway] ⚠️ Failed to nudge iOS encoder:", error);
+    }
+  }
+
+  private async resetLocalVideoSenderPipeline(): Promise<boolean> {
+    if (!this.pc || !this.localStream) {
+      return false;
+    }
+
+    const localVideoTrack = this.localStream.getVideoTracks()[0];
+    if (!localVideoTrack) {
+      return false;
+    }
+
+    const videoSender = this.pc.getSenders().find((sender) => sender.track?.kind === "video");
+    if (!videoSender || !videoSender.replaceTrack) {
+      return false;
+    }
+
+    try {
+      await videoSender.replaceTrack(null);
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, LOCAL_VIDEO_SENDER_RESET_DELAY_MS);
+      });
+      await videoSender.replaceTrack(localVideoTrack);
+      console.log("[Gateway] 🔧 Reset local video sender pipeline");
+      return true;
+    } catch (error) {
+      console.warn("[Gateway] ⚠️ Failed to reset local video sender pipeline:", error);
+      return false;
     }
   }
 

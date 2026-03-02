@@ -45,6 +45,13 @@ const safeInCallManager = {
 
 const FOREGROUND_RECOVERY_GRACE_MS = 30000;
 const FOREGROUND_RECOVERY_RETRY_OFFSETS_MS = [0, 3000, 7000, 12000] as const;
+const FORCED_RESUME_LOCAL_STALL_COOLDOWN_MS = 15000;
+const FORCED_RESUME_LOCAL_STALL_WINDOW_MS = 90000;
+const FORCED_RESUME_LOCAL_STALL_MAX_ATTEMPTS = 2;
+
+let forcedResumeLocalStallLastAt = 0;
+let forcedResumeLocalStallWindowStartedAt = 0;
+let forcedResumeLocalStallAttemptsInWindow = 0;
 
 type RecoveryMode = "idle" | "soft_recovering" | "hard_terminating";
 type RecoverableError = "PUBLIC_IDENTITY_CHANGED";
@@ -194,7 +201,11 @@ interface SipActions {
   setupNetworkMonitor: () => void;
   handleAppForegroundRecovery: () => Promise<void>;
   handleNetworkReconnect: () => Promise<void>;
-  handleCallResume: (savedState: SavedCallState, recoveryId?: string) => Promise<void>;
+  handleCallResume: (
+    savedState: SavedCallState,
+    recoveryId?: string,
+    options?: { bypassRegistrationWait?: boolean; source?: string },
+  ) => Promise<void>;
 
   // Permission error actions
   setPermissionError: (error: string | null, missingPerms?: ("camera" | "microphone")[]) => void;
@@ -1372,9 +1383,104 @@ export const useSipStore = create<SipStore>((set, get) => ({
         await gatewayClient.reconnectForNetworkChange();
       }
 
-      await gatewayClient.ensureLocalVideoBeforeForegroundResume("app_foreground");
+      const localVideoRecovery = await gatewayClient.ensureLocalVideoBeforeForegroundResume("app_foreground");
       console.log(`[SipStore] ${recoveryTag} Refreshing remote video after foreground`);
       gatewayClient.refreshRemoteVideo("app_foreground");
+
+      const transportSnapshot = gatewayClient.getPeerConnectionTransportSnapshot();
+      const hasSessionId = !!gatewayClient.getSessionId();
+      const hasLiveLocalTrack = !!localStream?.getTracks().some((track) => track.readyState === "live");
+      const hasLiveRemoteTrack = !!remoteStream?.getTracks().some((track) => track.readyState === "live");
+      const hasLiveMedia = hasLiveLocalTrack || hasLiveRemoteTrack;
+      const pcState = transportSnapshot.connectionState;
+      const iceState = transportSnapshot.iceConnectionState;
+      const transportLikelyAlive = (
+        pcState === "new" ||
+        pcState === "connecting" ||
+        pcState === "connected" ||
+        iceState === "checking" ||
+        iceState === "connected" ||
+        iceState === "completed"
+      );
+      const shouldSkipResumeBase = gatewayClient.isConnected && hasSessionId && hasLiveMedia && transportLikelyAlive;
+      const localVideoRecoveryExhausted = localVideoRecovery.status === "exhausted";
+      let forceResumeForLocalStall = false;
+
+      if (localVideoRecoveryExhausted) {
+        const now = Date.now();
+        const elapsedSinceLastForcedResume = now - forcedResumeLocalStallLastAt;
+        if (elapsedSinceLastForcedResume < FORCED_RESUME_LOCAL_STALL_COOLDOWN_MS) {
+          console.log(`[SipStore] ${recoveryTag} resume_required_local_stall cooldown`, {
+            elapsedSinceLastForcedResume,
+            cooldownMs: FORCED_RESUME_LOCAL_STALL_COOLDOWN_MS,
+            senderSummary: localVideoRecovery.senderSummary,
+          });
+        } else {
+          if (now - forcedResumeLocalStallWindowStartedAt > FORCED_RESUME_LOCAL_STALL_WINDOW_MS) {
+            forcedResumeLocalStallWindowStartedAt = now;
+            forcedResumeLocalStallAttemptsInWindow = 0;
+          }
+
+          if (forcedResumeLocalStallAttemptsInWindow >= FORCED_RESUME_LOCAL_STALL_MAX_ATTEMPTS) {
+            console.log(`[SipStore] ${recoveryTag} resume_required_local_stall max_attempts_exceeded`, {
+              attempts: forcedResumeLocalStallAttemptsInWindow,
+              windowMs: FORCED_RESUME_LOCAL_STALL_WINDOW_MS,
+              senderSummary: localVideoRecovery.senderSummary,
+            });
+            await get()._terminateCallAfterRecoveryFailure("Local video sender stalled after repeated forced resumes", {
+              recoveryId,
+              source: "forced_resume_local_stall_max_attempts",
+            });
+            return;
+          }
+
+          forcedResumeLocalStallAttemptsInWindow += 1;
+          forcedResumeLocalStallLastAt = now;
+          forceResumeForLocalStall = true;
+          console.log(`[SipStore] ${recoveryTag} resume_required_local_stall`, {
+            attempt: forcedResumeLocalStallAttemptsInWindow,
+            maxAttempts: FORCED_RESUME_LOCAL_STALL_MAX_ATTEMPTS,
+            senderSummary: localVideoRecovery.senderSummary,
+          });
+        }
+      } else {
+        forcedResumeLocalStallAttemptsInWindow = 0;
+        forcedResumeLocalStallWindowStartedAt = 0;
+      }
+
+      const shouldSkipResume = shouldSkipResumeBase && !forceResumeForLocalStall;
+
+      console.log(`[SipStore] ${recoveryTag} foreground_transport_check`, {
+        hasSessionId,
+        hasLiveLocalTrack,
+        hasLiveRemoteTrack,
+        hasPeerConnection: transportSnapshot.hasPeerConnection,
+        connectionState: pcState,
+        iceConnectionState: iceState,
+        localVideoRecoveryStatus: localVideoRecovery.status,
+        localVideoRecoverySenderSummary: localVideoRecovery.senderSummary,
+        forceResumeForLocalStall,
+        shouldSkipResume,
+      });
+
+      if (shouldSkipResume) {
+        console.log(`[SipStore] ${recoveryTag} resume_skip_healthy`);
+        get()._clearForegroundRecoveryTimers();
+        set({
+          _recoveryMode: "idle",
+          _activeRecoveryId: null,
+          _foregroundRecoveryStartedAt: null,
+          _foregroundRecoveryAttempts: 0,
+          networkReconnecting: false,
+          callResumePending: false,
+          connectionError: null,
+        });
+        return;
+      }
+
+      if (forceResumeForLocalStall) {
+        console.log(`[SipStore] ${recoveryTag} resume_forced_local_stall`);
+      }
 
       await get().handleCallResume(
         {
@@ -1384,6 +1490,10 @@ export const useSipStore = create<SipStore>((set, get) => ({
           timestamp: Date.now(),
         },
         recoveryId,
+        {
+          bypassRegistrationWait: forceResumeForLocalStall,
+          source: forceResumeForLocalStall ? "forced_local_stall" : "foreground_recovery",
+        },
       );
     } catch (error) {
       console.error(`[SipStore] ${recoveryTag} foreground_recovery_exception:`, error);
@@ -1424,7 +1534,7 @@ export const useSipStore = create<SipStore>((set, get) => ({
   /**
    * Handle call resumption after network reconnect
    */
-  handleCallResume: async (savedState: SavedCallState, recoveryId?: string) => {
+  handleCallResume: async (savedState: SavedCallState, recoveryId?: string, options?: { bypassRegistrationWait?: boolean; source?: string }) => {
     const { gatewayClient } = get();
     const activeRecoveryId = recoveryId ?? get()._activeRecoveryId ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
     const recoveryTag = `[Recovery:${activeRecoveryId}]`;
@@ -1452,6 +1562,8 @@ export const useSipStore = create<SipStore>((set, get) => ({
     console.log(`[SipStore] ${recoveryTag} resume_attempt_${currentAttempt}`, {
       hasSessionId: !!savedState.sessionId,
       remoteNumber: savedState.remoteNumber,
+      source: options?.source ?? "default",
+      bypassRegistrationWait: options?.bypassRegistrationWait ?? false,
     });
 
     try {
@@ -1467,7 +1579,7 @@ export const useSipStore = create<SipStore>((set, get) => ({
         return false;
       };
 
-      const registered = await waitForRegistration(5000);
+      const registered = options?.bypassRegistrationWait ? true : await waitForRegistration(5000);
 
       if (!registered) {
         console.log(`[SipStore] ${recoveryTag} resume_failed_soft registration_timeout`);

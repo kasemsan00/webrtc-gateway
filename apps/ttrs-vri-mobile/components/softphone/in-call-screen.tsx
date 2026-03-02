@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AppState, Keyboard, Modal, Platform, Pressable, ScrollView, View, type AppStateStatus } from "react-native";
+import { Keyboard, Modal, Platform, Pressable, ScrollView, View } from "react-native";
 
 import { Image } from "expo-image";
 import { MessageCircleMore, Volume1Icon, Volume2Icon } from "lucide-react-native";
@@ -124,7 +124,6 @@ export function InCallScreen({
   const controlsVisibility = useSharedValue(1);
   const reconnectingDotOpacity = useSharedValue(1);
   const [pinnedRemoteStreamUrl, setPinnedRemoteStreamUrl] = useState<string | null>(null);
-  const appStateRef = useRef<AppStateStatus>(AppState.currentState);
   const lastLoggedIncomingMessageIdRef = useRef<string | null>(null);
   const lastLoggedRemoteRttTextRef = useRef<string>("");
   const scrollViewRef = useRef<ScrollView>(null);
@@ -136,7 +135,7 @@ export function InCallScreen({
   const locationText = useMemo(() => currentLocation?.address ?? "ยังไม่ได้เลือกสถานที่", [currentLocation?.address]);
 
   // Get message state and actions from store
-  const { messages, unreadMessageCount, sendMessage: storeSendMessage, markMessagesAsRead, sendDtmf, refreshRemoteVideo } = useSipStore();
+  const { messages, unreadMessageCount, sendMessage: storeSendMessage, markMessagesAsRead, sendDtmf } = useSipStore();
 
   // Force re-render when tracks change (needed for Janus where tracks are added to existing stream)
   const [remoteTrackCount, setRemoteTrackCount] = useState(0);
@@ -351,28 +350,6 @@ export function InCallScreen({
       markMessagesAsRead();
     }
   }, [markMessagesAsRead, showChat, unreadMessageCount]);
-
-  useEffect(() => {
-    const subscription = AppState.addEventListener("change", (nextAppState) => {
-      const prevAppState = appStateRef.current;
-      appStateRef.current = nextAppState;
-
-      const isReturningToForeground = (prevAppState === "inactive" || prevAppState === "background") && nextAppState === "active";
-      const isCallActive =
-        callState === CallState.CONNECTING || callState === CallState.CALLING || callState === CallState.RINGING || callState === CallState.INCALL;
-
-      if (!isReturningToForeground || !visible || !isCallActive) {
-        return;
-      }
-
-      console.log("[InCallScreen] App foregrounded during active call - refreshing remote video");
-      refreshRemoteVideo("app_foreground");
-    });
-
-    return () => {
-      subscription.remove();
-    };
-  }, [callState, refreshRemoteVideo, visible]);
 
   const handleMessageTextChange = useCallback(
     (text: string) => {

@@ -11,6 +11,8 @@ import RNCallKeep from "react-native-callkeep";
 let currentCallUUID: string | null = null;
 let isSetupDone = false;
 let listenersRegistered = false;
+let ignoreEndCallEventsUntil = 0;
+const END_CALL_EVENT_SUPPRESSION_WINDOW_MS = 2000;
 
 function generateUUID(): string {
   return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
@@ -126,14 +128,12 @@ export function reportCallEnded(reason?: number): void {
 
   console.log("[CallKeep] reportCallEnded:", { uuid, reason });
   try {
-    void (RNCallKeep.reportEndCallWithUUID(uuid, reason ?? 2) as unknown as Promise<void>).catch(
-      (error: unknown) => {
-        console.warn("[CallKeep] reportEndCallWithUUID failed:", error);
-      }
-    );
+    RNCallKeep.reportEndCallWithUUID(uuid, reason ?? 2);
   } catch (error) {
     console.warn("[CallKeep] reportEndCallWithUUID failed:", error);
   }
+  // Prevent CallKit echo/stale endCall event from triggering an unintended second hangup path.
+  ignoreEndCallEventsUntil = Date.now() + END_CALL_EVENT_SUPPRESSION_WINDOW_MS;
   clearCallUUID();
 }
 
@@ -168,6 +168,24 @@ export function registerCallKeepListeners(actions: CallKeepActions): void {
 
   RNCallKeep.addEventListener("endCall", ({ callUUID }) => {
     console.log("[CallKeep] endCall event:", callUUID);
+    if (Date.now() < ignoreEndCallEventsUntil) {
+      console.log("[CallKeep] Ignoring endCall event (suppressed window):", callUUID);
+      return;
+    }
+
+    if (!currentCallUUID) {
+      console.log("[CallKeep] Ignoring endCall event (no active tracked UUID):", callUUID);
+      return;
+    }
+
+    if (callUUID && callUUID !== currentCallUUID) {
+      console.log("[CallKeep] Ignoring endCall event (UUID mismatch):", {
+        eventUUID: callUUID,
+        currentCallUUID,
+      });
+      return;
+    }
+
     actions.hangup();
     clearCallUUID();
   });
