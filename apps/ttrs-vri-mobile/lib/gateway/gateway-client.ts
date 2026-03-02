@@ -117,7 +117,7 @@ const LOCAL_VIDEO_SENDER_RESET_DELAY_MS = 120;
 const LOCAL_VIDEO_POST_REPLACE_WARMUP_MS = 700;
 const LOCAL_VIDEO_ENABLE_TOGGLE_DELAY_MS = 80;
 const DEFAULT_ICE_GATHER_TIMEOUT_MS = 3000;
-const RESUME_ICE_GATHER_TIMEOUT_MS = 1800;
+const RESUME_ICE_GATHER_TIMEOUT_MS = 800;
 
 interface PendingCallIntent {
   destination: string;
@@ -1198,14 +1198,6 @@ export class GatewayClient {
       if (this.shouldAbortResume(sessionId)) {
         throw new Error(
           'Resume aborted: session or call state changed before local video check',
-        );
-      }
-
-      await this.ensureLocalVideoHealthyForIOS('resume_call');
-
-      if (this.shouldAbortResume(sessionId)) {
-        throw new Error(
-          'Resume aborted: session or call state changed before PeerConnection creation',
         );
       }
 
@@ -2866,9 +2858,17 @@ export class GatewayClient {
         }
       });
 
-      console.log(
-        '[Gateway] 📸 Skipping WS requestKeyframe (not supported by gateway protocol)',
-      );
+      if (this.ws?.readyState === WebSocket.OPEN && this.sessionId) {
+        this.send({
+          type: 'request_keyframe',
+          sessionId: this.sessionId,
+        });
+        console.log('[Gateway] 📸 Sent request_keyframe via WebSocket');
+      } else {
+        console.log(
+          '[Gateway] 📸 Skipping request_keyframe - ws/session not ready',
+        );
+      }
     } catch (error) {
       console.log('[Gateway] ⚠️ Could not request keyframes:', error);
     }

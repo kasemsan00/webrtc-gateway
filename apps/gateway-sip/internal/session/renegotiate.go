@@ -14,7 +14,7 @@ import (
 	pkg_webrtc "k2-gateway/internal/pkg/webrtc"
 )
 
-const RENEGOTIATE_ICE_GATHER_TIMEOUT = 2 * time.Second
+const RENEGOTIATE_ICE_GATHER_TIMEOUT = 1 * time.Second
 const renegotiateVideoOnTrackWatchdog = 3 * time.Second
 
 type renegotiateVideoOfferDiagnostics struct {
@@ -326,10 +326,8 @@ func (s *Session) RenegotiatePeerConnection(newOfferSDP string, turnConfig confi
 				fmt.Printf("[%s] 🚀 Renegotiated - Sending FIR + PLI requests for fast video start (with SPS/PPS)\n", id)
 				// Send FIR first to request full keyframe with parameter sets
 				s.SendFIRToAsterisk()
-				time.Sleep(100 * time.Millisecond)
-				// Then send PLI multiple times with short delays
+				// Then send PLI burst immediately
 				for i := 0; i < 3; i++ {
-					time.Sleep(100 * time.Millisecond)
 					s.SendPLIToAsteriskForced("renegotiated-ice")
 					s.SendPLItoWebRTC() // PLI to browser
 				}

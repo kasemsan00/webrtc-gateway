@@ -5,7 +5,7 @@
 
 // WebSocket message types sent TO the server
 export interface RegisterMessage {
-  type: "register";
+  type: 'register';
   sipDomain: string;
   sipUsername: string;
   sipPassword: string;
@@ -13,7 +13,7 @@ export interface RegisterMessage {
 }
 
 export interface CallMessage {
-  type: "call";
+  type: 'call';
   sessionId: string;
   destination: string;
   from?: string;
@@ -27,47 +27,52 @@ export interface CallMessage {
 }
 
 export interface HangupMessage {
-  type: "hangup";
+  type: 'hangup';
   sessionId?: string;
 }
 
 export interface IceCandidateMessage {
-  type: "ice";
+  type: 'ice';
   candidate: RTCIceCandidateInit;
 }
 
 export interface OfferMessage {
-  type: "offer";
+  type: 'offer';
   sdp: string;
 }
 
 export interface UnregisterMessage {
-  type: "unregister";
+  type: 'unregister';
 }
 
 export interface PingMessage {
-  type: "ping";
+  type: 'ping';
 }
 
 // DTMF - Send DTMF digits during call
 export interface DtmfMessage {
-  type: "dtmf";
+  type: 'dtmf';
   sessionId: string;
   digits: string;
 }
 
 // SIP MESSAGE - Send text message during call
 export interface SendMessageMessage {
-  type: "send_message";
+  type: 'send_message';
   body: string;
   contentType?: string; // Default: 'text/plain;charset=UTF-8'
 }
 
 // Resume call after network change
 export interface ResumeMessage {
-  type: "resume";
+  type: 'resume';
   sessionId: string;
   sdp?: string; // SDP offer for PeerConnection renegotiation
+}
+
+export interface RequestKeyframeMessage {
+  type: 'request_keyframe';
+  sessionId: string;
 }
 
 export type OutgoingMessage =
@@ -80,84 +85,85 @@ export type OutgoingMessage =
   | PingMessage
   | DtmfMessage
   | SendMessageMessage
-  | ResumeMessage;
+  | ResumeMessage
+  | RequestKeyframeMessage;
 
 // WebSocket message types received FROM the server
 export interface RegisteredResponse {
-  type: "registered";
+  type: 'registered';
   username?: string;
 }
 
 export interface UnregisteredResponse {
-  type: "unregistered";
+  type: 'unregistered';
 }
 
 export interface RingingResponse {
-  type: "ringing";
+  type: 'ringing';
 }
 
 export interface AnsweredResponse {
-  type: "answered";
+  type: 'answered';
   sdp: string;
 }
 export interface AnswerResponse {
-  type: "answer";
+  type: 'answer';
   sdp: string;
 }
 export interface StateResponse {
-  type: "state";
+  type: 'state';
   state: string;
 }
 export interface EndedResponse {
-  type: "ended";
+  type: 'ended';
   reason?: string;
 }
 
 export interface IceResponse {
-  type: "ice";
+  type: 'ice';
   candidate: RTCIceCandidateInit;
 }
 
 export interface ErrorResponse {
-  type: "error";
+  type: 'error';
   code?: number;
   message?: string;
   error?: string; // Server may send error in this field
 }
 
 export interface PongResponse {
-  type: "pong";
+  type: 'pong';
 }
 
 export interface RegisterStatusResponse {
-  type: "registerStatus";
+  type: 'registerStatus';
   registered: boolean;
   sipDomain?: string;
 }
 
 // SIP MESSAGE - Incoming text message
 export interface MessageResponse {
-  type: "message";
+  type: 'message';
   from: string;
   body: string;
   contentType?: string;
 }
 
 export interface GatewayRttMessage {
-  via: "datachannel" | "sip";
+  via: 'datachannel' | 'sip';
   data: string | Uint8Array;
   contentType?: string;
 }
 
 // Call resume response after network change
 export interface ResumedResponse {
-  type: "resumed";
+  type: 'resumed';
   sessionId?: string;
   sdp?: string; // SDP answer for PeerConnection renegotiation
 }
 
 export interface ResumeFailedResponse {
-  type: "resume_failed";
+  type: 'resume_failed';
   reason?: string;
 }
 
@@ -178,9 +184,13 @@ export type IncomingMessage =
   | ResumeFailedResponse;
 
 // ===== CONNECTION STATE =====
-export type ConnectionState = "disconnected" | "connecting" | "connected" | "reconnecting";
-export type RecoveryState = "retrying_public_identity" | "retry_failed";
-export type RecoverableGatewayErrorCode = "PUBLIC_IDENTITY_CHANGED";
+export type ConnectionState =
+  | 'disconnected'
+  | 'connecting'
+  | 'connected'
+  | 'reconnecting';
+export type RecoveryState = 'retrying_public_identity' | 'retry_failed';
+export type RecoverableGatewayErrorCode = 'PUBLIC_IDENTITY_CHANGED';
 
 // ===== RECONNECTION CONFIG =====
 export interface ReconnectConfig {
@@ -199,24 +209,24 @@ export const DEFAULT_RECONNECT_CONFIG: ReconnectConfig = {
 
 // Gateway client state
 export enum GatewayState {
-  DISCONNECTED = "disconnected",
-  CONNECTING = "connecting",
-  CONNECTED = "connected",
-  REGISTERING = "registering",
-  REGISTERED = "registered",
-  CALLING = "calling",
-  RINGING = "ringing",
-  INCALL = "incall",
+  DISCONNECTED = 'disconnected',
+  CONNECTING = 'connecting',
+  CONNECTED = 'connected',
+  REGISTERING = 'registering',
+  REGISTERED = 'registered',
+  CALLING = 'calling',
+  RINGING = 'ringing',
+  INCALL = 'incall',
 }
 
 // Call state (compatible with existing UI)
 export enum CallState {
-  IDLE = "idle",
-  CALLING = "calling",
-  RINGING = "ringing",
-  CONNECTING = "connecting",
-  INCALL = "incall",
-  ENDED = "ended",
+  IDLE = 'idle',
+  CALLING = 'calling',
+  RINGING = 'ringing',
+  CONNECTING = 'connecting',
+  INCALL = 'incall',
+  ENDED = 'ended',
 }
 
 // Gateway configuration

@@ -356,8 +356,8 @@ export function hasCredentialReady(state: GatewayState) {
 
   return Boolean(
     state.publicCredentials.sipDomain.trim() &&
-    state.publicCredentials.sipUsername.trim() &&
-    state.publicCredentials.sipPassword,
+      state.publicCredentials.sipUsername.trim() &&
+      state.publicCredentials.sipPassword,
   )
 }
 
@@ -384,8 +384,8 @@ export function canResolveTrunk(state: GatewayState) {
     parseTrunkIdentifier(state.trunk.credentials.trunkId) !== null
   const hasResolvableCredentials = Boolean(
     state.trunk.credentials.sipDomain.trim() &&
-    state.trunk.credentials.sipUsername.trim() &&
-    state.trunk.credentials.sipPassword,
+      state.trunk.credentials.sipUsername.trim() &&
+      state.trunk.credentials.sipPassword,
   )
 
   return (
@@ -867,8 +867,12 @@ function bindPeerConnectionEvents(pc: RTCPeerConnection) {
       ...state,
       media: {
         ...state.media,
-        remoteVideoStream: hasVideo ? remoteStream : state.media.remoteVideoStream,
-        remoteAudioStream: hasAudio ? remoteStream : state.media.remoteAudioStream,
+        remoteVideoStream: hasVideo
+          ? remoteStream
+          : state.media.remoteVideoStream,
+        remoteAudioStream: hasAudio
+          ? remoteStream
+          : state.media.remoteAudioStream,
       },
     }))
 
@@ -907,7 +911,10 @@ async function requestLocalMediaForResume() {
     if (hasLiveTrack) return
   }
 
-  appendLog('Local media unavailable during resume, requesting access...', 'warning')
+  appendLog(
+    'Local media unavailable during resume, requesting access...',
+    'warning',
+  )
   runtime.localStream = await navigator.mediaDevices.getUserMedia({
     audio: true,
     video: {
@@ -977,13 +984,25 @@ async function sendResumeOffer(sessionId: string) {
   }
 }
 
+function sendRequestKeyframe(sessionId: string, source: string) {
+  const sent = sendJson(runtime.ws, {
+    type: 'request_keyframe',
+    sessionId,
+  })
+  if (sent) {
+    appendLog(`Requested keyframe (${source})`, 'info')
+  }
+}
+
 async function handleResumed(payload: {
   sessionId?: string
   sdp?: string
   state?: string
 }) {
   const resumedSessionId =
-    payload.sessionId || runtime.resumeSessionId || gatewayStore.state.call.sessionId
+    payload.sessionId ||
+    runtime.resumeSessionId ||
+    gatewayStore.state.call.sessionId
 
   if (resumedSessionId) {
     gatewayStore.setState((state) => ({
@@ -1019,7 +1038,13 @@ async function handleResumed(payload: {
   const resumedState =
     payload.state && payload.state !== 'reconnecting' ? payload.state : 'active'
   handleCallState(resumedState)
-  appendLog(`Call resumed${resumedSessionId ? `: ${resumedSessionId}` : ''}`, 'success')
+  if (resumedSessionId) {
+    sendRequestKeyframe(resumedSessionId, 'resume')
+  }
+  appendLog(
+    `Call resumed${resumedSessionId ? `: ${resumedSessionId}` : ''}`,
+    'success',
+  )
 }
 
 function handleResumeFailed(payload: { reason?: string }) {
@@ -1029,7 +1054,10 @@ function handleResumeFailed(payload: { reason?: string }) {
   handleCallState('ended')
 }
 
-function handleResumeRedirect(payload: { sessionId?: string; redirectUrl?: string }) {
+function handleResumeRedirect(payload: {
+  sessionId?: string
+  redirectUrl?: string
+}) {
   if (payload.sessionId) {
     runtime.resumeSessionId = payload.sessionId
   }
@@ -1059,7 +1087,9 @@ function handleTrunkResolved(payload: {
 }) {
   const trunkIdText = payload.trunkId ? String(payload.trunkId) : ''
   const trunkId = Number.parseInt(trunkIdText, 10)
-  const trunkPublicId = payload.trunkPublicId ? String(payload.trunkPublicId) : ''
+  const trunkPublicId = payload.trunkPublicId
+    ? String(payload.trunkPublicId)
+    : ''
   const hasPublicId = Boolean(trunkPublicId && UUID_PATTERN.test(trunkPublicId))
 
   if ((!Number.isInteger(trunkId) || trunkId <= 0) && !hasPublicId) {
@@ -1084,7 +1114,10 @@ function handleTrunkResolved(payload: {
       status: 'resolved',
       credentials: {
         ...state.trunk.credentials,
-        trunkId: Number.isInteger(trunkId) && trunkId > 0 ? String(trunkId) : trunkPublicId,
+        trunkId:
+          Number.isInteger(trunkId) && trunkId > 0
+            ? String(trunkId)
+            : trunkPublicId,
       },
     },
   }))

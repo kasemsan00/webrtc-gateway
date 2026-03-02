@@ -2,82 +2,50 @@
 
 # Copilot instructions — webrtc-gateway
 
-Purpose: short, actionable guidance to help an AI agent be immediately productive in this Nx monorepo.
+## Big picture
 
-1. Big picture
+- Nx monorepo with 3 active apps: `apps/gateway-sip` (Go WebRTC↔SIP gateway), `apps/gateway-frontend` (React/Vite operations UI), `apps/ttrs-vri-mobile` (Expo RN softphone).
+- Control plane is JSON over WebSocket/REST; media plane is WebRTC SRTP on client side bridged to SIP RTP/RTCP.
+- Runtime ownership: API/WebSocket in `internal/api`, per-call/media in `internal/session`, SIP/dialog/trunk logic in `internal/sip`.
 
-- Monorepo managed by Nx. Primary apps:
-  - `gateway-frontend` — React + Vite UI (apps/gateway-frontend).
-  - `gateway-sip` — Go WebRTC <-> SIP gateway (apps/gateway-sip).
-  - `ttrs-vri-mobile` — Expo/React Native softphone (apps/ttrs-vri-mobile).
-- Control plane: JSON over WebSocket/REST. Data plane: WebRTC SRTP ↔ RTP for media.
+## First files to read
 
-2. Where to start (key files)
+- Backend entry and wiring: [apps/gateway-sip/main.go](apps/gateway-sip/main.go)
+- WS contract + handlers: [apps/gateway-sip/internal/api/server.go](apps/gateway-sip/internal/api/server.go)
+- Media invariants and recovery: [apps/gateway-sip/internal/session/keyframe.go](apps/gateway-sip/internal/session/keyframe.go), [apps/gateway-sip/internal/session/h264_paramsets.go](apps/gateway-sip/internal/session/h264_paramsets.go), [apps/gateway-sip/internal/session/renegotiate.go](apps/gateway-sip/internal/session/renegotiate.go)
+- Frontend WS orchestration: [apps/gateway-frontend/src/features/gateway/store/gateway-store.ts](apps/gateway-frontend/src/features/gateway/store/gateway-store.ts)
+- Mobile call/recovery flow: [apps/ttrs-vri-mobile/store/sip-store.ts](apps/ttrs-vri-mobile/store/sip-store.ts), [apps/ttrs-vri-mobile/lib/gateway/gateway-client.ts](apps/ttrs-vri-mobile/lib/gateway/gateway-client.ts)
 
-- Backend entry: [apps/gateway-sip/main.go](apps/gateway-sip/main.go).
-- Backend API/ws handlers: [apps/gateway-sip/internal/api/server.go](apps/gateway-sip/internal/api/server.go).
-- Per-call lifecycle and media: [apps/gateway-sip/internal/session](apps/gateway-sip/internal/session).
-- SIP behavior and SDP: [apps/gateway-sip/internal/sip](apps/gateway-sip/internal/sip).
-- Frontend router & generated routes: [apps/gateway-frontend/src/routeTree.gen.ts](apps/gateway-frontend/src/routeTree.gen.ts).
-- Frontend WS/contract handling: [apps/gateway-frontend/src/features/gateway/store/gateway-store.ts](apps/gateway-frontend/src/features/gateway/store/gateway-store.ts).
+## Critical workflows
 
-3. Critical developer workflows (commands)
+- Discover projects/targets: `npx nx show projects`
+- Backend: `npx nx serve gateway-sip`, `npx nx test gateway-sip`, `npx nx build gateway-sip`
+- Frontend: `npx nx dev gateway-frontend`, `npx nx test gateway-frontend`, `npx nx build gateway-frontend`
+- Mobile: `npx nx dev ttrs-vri-mobile`, `npx nx lint ttrs-vri-mobile` (no Nx `test` target currently)
+- Use focused Nx targets first; avoid running toolchains directly unless target is missing.
 
-- Inspect projects: `npx nx show projects`
-- Frontend dev/build/test: `npx nx dev gateway-frontend`, `npx nx build gateway-frontend`, `npx nx test gateway-frontend`.
-- SIP (Go) serve/build/test: `npx nx serve gateway-sip`, `npx nx build gateway-sip`, `npx nx test gateway-sip` or `go test ./...` inside the Go app.
-- Use root npm scripts when convenient (see README). Prefer `npx nx` for focused targets.
+## Project-specific guardrails
 
-4. Runtime architecture (backend)
+- Gateway is stability-first: no panics in hot paths; protect shared mutable state with `sync.RWMutex`; never hold locks during network I/O.
+- Media invariants are product behavior: audio Opus passthrough, video H.264 only, preserve SPS/PPS caching + keyframe recovery logic.
+- Frontend/mobile TypeScript uses strict mode and `@/` alias; do not hand-edit generated [apps/gateway-frontend/src/routeTree.gen.ts](apps/gateway-frontend/src/routeTree.gen.ts).
 
-- `main.go` loads env config, initializes logger and LogStore (optional), and starts API/WS.
-- `internal/api/server.go` routes `/ws` messages and delegates to `internal/session` for lifecycle handling.
-- `internal/session/*` manages PeerConnection lifecycle, RTP forwarding, SDP H.264 paramset handling and keyframe injection.
-- `internal/sip/*` implements SIP dialog handling, trunk manager, public registry, and destination resolution.
+## WebSocket contract sync rules
 
-5. Critical media behaviors (do not regress)
+- Endpoint is `/ws`; contract changes are cross-app changes.
+- Client→server includes: `offer`, `call`, `hangup`, `accept`, `reject`, `dtmf`, `send_message`, `resume`, `request_keyframe`, `trunk_resolve`, `ping`.
+- Server→client includes: `answer`, `state`, `incoming`, `message`, `messageSent`, `resumed`, `resume_failed`, `resume_redirect`, `trunk_resolved`, `trunk_redirect`, `trunk_not_found`, `trunk_not_ready`, `pong`, `error`.
+- If message schema/type changes, update all three: backend handler switch (`server.go`), frontend store handler (`gateway-store.ts`), mobile message types/client (`lib/gateway/types.ts`, `gateway-client.ts`).
 
-- Audio: Opus passthrough only (no transcoding). DTMF uses RFC2833 (`telephone-event`).
-- Video: H.264 only — preserve SPS/PPS caching and keyframe injection (`internal/session/h264_paramsets.go`, `internal/session/keyframe.go`).
-- Session resume: implemented via `session_directory` + `gateway_instances` for cross-instance redirect — changes require DB + runtime checks.
+## Integration/config highlights
 
-6. Project-specific conventions and guardrails
+- Config source of truth: [apps/gateway-sip/internal/config/config.go](apps/gateway-sip/internal/config/config.go)
+- Multi-instance resume/redirect depends on DB-backed session directory (`GATEWAY_INSTANCE_ID`, `GATEWAY_PUBLIC_WS_URL`, `SESSION_DIRECTORY_TTL_SECONDS`).
+- Trunk/public identity behavior is tightly coupled to SIP + DB state; validate end-to-end when changing registration, destination resolution, or resume paths.
 
-- Backend (Go): Go 1.25.5. Stability-first: avoid panics, protect shared state with `sync.RWMutex`, and never hold locks during network I/O. See [apps/gateway-sip/AGENTS.md](apps/gateway-sip/AGENTS.md).
-- Frontend (TS): strict TypeScript, `@/` alias for `src/`, do not edit generated `src/routeTree.gen.ts`.
-- Mobile: single-use WS connection model. See `apps/ttrs-vri-mobile/AGENTS.md` for run/build notes.
+## Safe change checklist
 
-7. WebSocket contract (authoritative)
-
-- Endpoint `/ws`. Message types (client→server): `offer`, `call`, `hangup`, `accept`, `reject`, `dtmf`, `send_message`, `resume`, `trunk_resolve`, `ping`.
-- Server→client types: `answer`, `state`, `incoming`, `message`, `resumed`, `trunk_resolved`, `error`, `pong`.
-- If you add/change a message type, update both: backend switch/payloads (`internal/api/server.go`) and frontend handlers (`src/features/gateway/store/gateway-store.ts`).
-
-8. Testing and making safe changes
-
-- Add focused unit tests in the affected package (Go: `_test.go` in the same package; Frontend: Vitest files under `src/`).
-- After changes, run the minimal Nx target(s) first, then broader tests: `npx nx test <project>` → `npx nx build <project>`.
-
-9. Configuration highlights (see `apps/gateway-sip/internal/config/config.go`)
-
-- SIP bind/public IPs: `SIP_LOCAL_IP`, `SIP_PUBLIC_IP`, `SIP_PORT`.
-- API toggles: `API_PORT`, `API_ENABLE_WS`, `API_ENABLE_REST`, `API_CORS_ORIGINS`.
-- RTP range and tuning: `RTP_PORT_MIN`, `RTP_PORT_MAX`, `RTP_BUFFER_SIZE`.
-- DB / LogStore: `DB_ENABLE`, `DB_DSN`, `DB_BATCH_SIZE`, `DB_RETENTION_*`.
-- Trunk / multi-instance: `SIP_TRUNK_ENABLE`, `GATEWAY_INSTANCE_ID`, `GATEWAY_PUBLIC_WS_URL`, `SESSION_DIRECTORY_TTL_SECONDS`.
-
-10. Stability & concurrency guardrails
-
-- No panics in hot paths; prefer error logging and graceful degradation.
-- Protect shared state with `sync.RWMutex`; do not hold locks while performing network I/O.
-- Preserve media invariants — regressions here cause dropped calls or one-way audio.
-
-11. When to escalate reviewer attention
-
-- Any change touching media forwarding, SDP generation/parsing, keyframe logic, or SIP trunk registration must get a senior Go reviewer and extra runtime verification (no regressions allowed).
-
-12. Quick debugging tips
-
-- Check logs for session IDs, inspect DB partitions when persistence is enabled, reproduce with focused `go test` cases (see SIP tests in `internal/sip`).
-
-If anything is unclear or you'd like this trimmed or expanded (more examples, checklist for PRs, or automated test commands), say which sections to iterate.
+- Keep changes small and local to affected app/package.
+- For backend/media changes, run `npx nx test gateway-sip`.
+- For frontend contract/UI changes, run `npx nx test gateway-frontend` and note any environment-only dependency issues.
+- For mobile changes, run lint/type-check in app folder and validate foreground/reconnect call flows manually.
