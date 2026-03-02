@@ -1,6 +1,7 @@
 # AGENTS.md
 
 ## Workspace overview
+
 - Monorepo managed by Nx.
 - Main apps:
   - `gateway-frontend`: React + Vite + TanStack Start app in `apps/gateway-frontend`.
@@ -10,6 +11,7 @@
   - `apps/gateway-sip/project.json`
 
 ## Default execution rules
+
 - Prefer Nx commands from workspace root for all tasks.
 - Use `npx nx ...` (or root npm scripts) instead of calling local toolchains directly.
 - Prefer focused targets (`nx run <project>:<target>`) over global commands.
@@ -17,6 +19,7 @@
   - `npx nx show projects`
 
 ## Common commands
+
 - Show projects: `npx nx show projects`
 - Frontend:
   - `npx nx dev gateway-frontend`
@@ -29,6 +32,7 @@
   - `npx nx test gateway-sip`
 
 ## Change workflow
+
 1. Identify affected app(s) and files.
 2. Update code and config with minimal blast radius.
 3. Run only relevant Nx targets first.
@@ -36,47 +40,55 @@
 5. Summarize what changed and what was verified.
 
 ## Frontend guardrails (`gateway-frontend`)
+
 - Treat generated files as generated; do not hand-edit unless intentional.
 - Keep route and API contract changes aligned with backend message/schema changes.
 - Keep strict TypeScript and lint clean for touched files.
 - If build/lint fails due to missing deps, install at workspace root and re-run through Nx.
 
 ## Backend guardrails (`gateway-sip`)
+
 - Preserve media invariants and SIP/WebRTC behavior unless explicitly requested.
 - Prefer small, targeted Go changes; keep concurrency and error handling conservative.
 - Validate with `npx nx test gateway-sip` for behavior changes.
 
 ## Nx config guardrails
+
 - Prefer explicit targets in `project.json`.
 - Avoid reintroducing fragile plugin inference unless there is a clear reason.
 - Keep root scripts in `package.json` aligned with real Nx targets.
 
 ## Skills available in this session
+
 - `skill-creator`: `C:/Users/Kasemsan/.codex/skills/.system/skill-creator/SKILL.md`
 - `skill-installer`: `C:/Users/Kasemsan/.codex/skills/.system/skill-installer/SKILL.md`
 
 ## Skill usage policy
+
 - Use a listed skill when user explicitly names it or the request clearly matches it.
 - If a named skill is unavailable, say so briefly and continue with best fallback.
 - Read only the minimum needed from skill files and linked references.
 
 ## Skills
+
 A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list of skills that can be used. Each entry includes a name, description, and file path so you can open the source for full instructions when using a specific skill.
 
 ### Available skills
+
 - skill-creator: Guide for creating effective skills. This skill should be used when users want to create a new skill (or update an existing skill) that extends Codex's capabilities with specialized knowledge, workflows, or tool integrations. (file: C:/Users/Kasemsan/.codex/skills/.system/skill-creator/SKILL.md)
 - skill-installer: Install Codex skills into $CODEX_HOME/skills from a curated list or a GitHub repo path. Use when a user asks to list installable skills, install a curated skill, or install a skill from another repo (including private repos). (file: C:/Users/Kasemsan/.codex/skills/.system/skill-installer/SKILL.md)
 
 ### How to use skills
+
 - Discovery: The list above is the skills available in this session (name + description + file path). Skill bodies live on disk at the listed paths.
 - Trigger rules: If the user names a skill (with `$SkillName` or plain text) OR the task clearly matches a skill's description shown above, you must use that skill for that turn. Multiple mentions mean use them all. Do not carry skills across turns unless re-mentioned.
 - Missing/blocked: If a named skill isn't in the list or the path can't be read, say so briefly and continue with the best fallback.
 - How to use a skill (progressive disclosure):
-  1) After deciding to use a skill, open its `SKILL.md`. Read only enough to follow the workflow.
-  2) When `SKILL.md` references relative paths (e.g., `scripts/foo.py`), resolve them relative to the skill directory listed above first, and only consider other paths if needed.
-  3) If `SKILL.md` points to extra folders such as `references/`, load only the specific files needed for the request; don't bulk-load everything.
-  4) If `scripts/` exist, prefer running or patching them instead of retyping large code blocks.
-  5) If `assets/` or templates exist, reuse them instead of recreating from scratch.
+  1. After deciding to use a skill, open its `SKILL.md`. Read only enough to follow the workflow.
+  2. When `SKILL.md` references relative paths (e.g., `scripts/foo.py`), resolve them relative to the skill directory listed above first, and only consider other paths if needed.
+  3. If `SKILL.md` points to extra folders such as `references/`, load only the specific files needed for the request; don't bulk-load everything.
+  4. If `scripts/` exist, prefer running or patching them instead of retyping large code blocks.
+  5. If `assets/` or templates exist, reuse them instead of recreating from scratch.
 - Coordination and sequencing:
   - If multiple skills apply, choose the minimal set that covers the request and state the order you'll use them.
   - Announce which skill(s) you're using and why (one short line). If you skip an obvious skill, say why.
@@ -85,3 +97,27 @@ A skill is a set of local instructions to follow that is stored in a `SKILL.md` 
   - Avoid deep reference-chasing: prefer opening only files directly linked from `SKILL.md` unless you're blocked.
   - When variants exist (frameworks, providers, domains), pick only the relevant reference file(s) and note that choice.
 - Safety and fallback: If a skill can't be applied cleanly (missing files, unclear instructions), state the issue, pick the next-best approach, and continue.
+
+<!-- nx configuration start-->
+<!-- Leave the start & end comments to automatically receive updates. -->
+
+## General Guidelines for working with Nx
+
+- For navigating/exploring the workspace, invoke the `nx-workspace` skill first - it has patterns for querying projects, targets, and dependencies
+- When running tasks (for example build, lint, test, e2e, etc.), always prefer running the task through `nx` (i.e. `nx run`, `nx run-many`, `nx affected`) instead of using the underlying tooling directly
+- Prefix nx commands with the workspace's package manager (e.g., `pnpm nx build`, `npm exec nx test`) - avoids using globally installed CLI
+- You have access to the Nx MCP server and its tools, use them to help the user
+- For Nx plugin best practices, check `node_modules/@nx/<plugin>/PLUGIN.md`. Not all plugins have this file - proceed without it if unavailable.
+- NEVER guess CLI flags - always check nx_docs or `--help` first when unsure
+
+## Scaffolding & Generators
+
+- For scaffolding tasks (creating apps, libs, project structure, setup), ALWAYS invoke the `nx-generate` skill FIRST before exploring or calling MCP tools
+
+## When to use nx_docs
+
+- USE for: advanced config options, unfamiliar flags, migration guides, plugin configuration, edge cases
+- DON'T USE for: basic generator syntax (`nx g @nx/react:app`), standard commands, things you already know
+- The `nx-generate` skill handles generator discovery internally - don't call nx_docs just to look up generator syntax
+
+<!-- nx configuration end-->
