@@ -1275,6 +1275,7 @@ func (s *Server) handleWSResume(client *WSClient, msg WSMessage) {
 	}
 
 	log.Printf("🔄 Resume request for session: %s (has SDP: %v)", msg.SessionID, msg.SDP != "")
+	log.Printf("📊 Resume timing start: session=%s", msg.SessionID)
 
 	// Check session directory to see if this session is owned by another instance
 	ctx := context.Background()
@@ -1375,6 +1376,7 @@ func (s *Server) handleWSResume(client *WSClient, msg WSMessage) {
 	// If client provided SDP, renegotiate the PeerConnection
 	var answerSDP string
 	if msg.SDP != "" {
+		renegotiateStartedAt := time.Now()
 		log.Printf("🔄 Renegotiating PeerConnection for session %s", msg.SessionID)
 		videoDiag := analyzeResumeOfferVideoSDP(msg.SDP)
 		log.Printf("🔍 Resume SDP video diagnostics: session=%s hasVideoMLine=%v videoPort=%d videoDirection=%s",
@@ -1393,7 +1395,7 @@ func (s *Server) handleWSResume(client *WSClient, msg WSMessage) {
 
 		// Renegotiate with the new SDP offer
 		if err := sess.RenegotiatePeerConnection(msg.SDP, s.turnConfig, s.config.DebugTURN); err != nil {
-			log.Printf("❌ Resume renegotiation failed for session %s: %v", msg.SessionID, err)
+			log.Printf("❌ Resume renegotiation failed for session %s: %v (elapsed=%s)", msg.SessionID, err, time.Since(renegotiateStartedAt).Round(10*time.Millisecond))
 			response := WSMessage{
 				Type:      "resume_failed",
 				SessionID: msg.SessionID,
@@ -1402,6 +1404,7 @@ func (s *Server) handleWSResume(client *WSClient, msg WSMessage) {
 			s.sendWSMessage(client, response)
 			return
 		}
+		log.Printf("📊 Resume renegotiation elapsed: session=%s elapsed=%s", msg.SessionID, time.Since(renegotiateStartedAt).Round(10*time.Millisecond))
 
 		// Get the answer SDP to send back to client
 		if sess.PeerConnection != nil && sess.PeerConnection.LocalDescription() != nil {
@@ -1412,6 +1415,7 @@ func (s *Server) handleWSResume(client *WSClient, msg WSMessage) {
 	}
 
 	direction, _, _, _ := sess.GetCallInfo()
+	log.Printf("📊 Resume total elapsed: session=%s elapsed=%s", msg.SessionID, time.Since(resumeStartedAt).Round(10*time.Millisecond))
 	log.Printf("✅ Session %s resumed successfully (state: %s, direction: %s, wasReconnecting: %v, hasSDP: %v)", msg.SessionID, state, direction, wasReconnecting, answerSDP != "")
 
 	// Send success response with session details (and answer SDP if renegotiated)

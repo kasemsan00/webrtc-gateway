@@ -5,18 +5,31 @@
  * Uses K2 Gateway WebSocket approach (simplified from Janus/Asterisk dual backend)
  */
 
-import InCallManager from "react-native-incall-manager";
-import { MediaStream } from "react-native-webrtc";
-import { create } from "zustand";
+import InCallManager from 'react-native-incall-manager';
+import { MediaStream } from 'react-native-webrtc';
+import { create } from 'zustand';
 
-import { reportCallAnswered, reportCallEnded, reportMuteState, reportOutgoingCall, reportOutgoingCallConnecting } from "@/lib/callkeep";
-import { CallState, ConnectionState, GatewayClient, ReconnectConfig, getGatewayClient, type PublicCallAuth } from "@/lib/gateway";
-import { SavedCallState, getNetworkMonitor } from "@/lib/network";
-import { getGatewayServerFromEnv } from "@/store/settings-store";
+import {
+  reportCallAnswered,
+  reportCallEnded,
+  reportMuteState,
+  reportOutgoingCall,
+  reportOutgoingCallConnecting,
+} from '@/lib/callkeep';
+import {
+  CallState,
+  ConnectionState,
+  GatewayClient,
+  ReconnectConfig,
+  getGatewayClient,
+  type PublicCallAuth,
+} from '@/lib/gateway';
+import { SavedCallState, getNetworkMonitor } from '@/lib/network';
+import { getGatewayServerFromEnv } from '@/store/settings-store';
 
 // Re-export types
-export { CallState } from "@/lib/gateway";
-export type { ConnectionState } from "@/lib/gateway";
+export { CallState } from '@/lib/gateway';
+export type { ConnectionState } from '@/lib/gateway';
 
 // Safe wrapper functions for InCallManager
 const safeInCallManager = {
@@ -24,27 +37,32 @@ const safeInCallManager = {
     try {
       InCallManager?.start?.(options);
     } catch (e) {
-      console.warn("[SipStore] InCallManager.start failed:", e);
+      console.warn('[SipStore] InCallManager.start failed:', e);
     }
   },
   stop: () => {
     try {
       InCallManager?.stop?.();
     } catch (e) {
-      console.warn("[SipStore] InCallManager.stop failed:", e);
+      console.warn('[SipStore] InCallManager.stop failed:', e);
     }
   },
   setForceSpeakerphoneOn: (flag: boolean) => {
     try {
       InCallManager?.setForceSpeakerphoneOn?.(flag);
     } catch (e) {
-      console.warn("[SipStore] InCallManager.setForceSpeakerphoneOn failed:", e);
+      console.warn(
+        '[SipStore] InCallManager.setForceSpeakerphoneOn failed:',
+        e,
+      );
     }
   },
 };
 
 const FOREGROUND_RECOVERY_GRACE_MS = 30000;
 const FOREGROUND_RECOVERY_RETRY_OFFSETS_MS = [0, 3000, 7000, 12000] as const;
+const RESUME_REGISTRATION_WAIT_TIMEOUT_MS = 1500;
+const RESUME_RESPONSE_WAIT_TIMEOUT_MS = 2000;
 const FORCED_RESUME_LOCAL_STALL_COOLDOWN_MS = 15000;
 const FORCED_RESUME_LOCAL_STALL_WINDOW_MS = 90000;
 const FORCED_RESUME_LOCAL_STALL_MAX_ATTEMPTS = 2;
@@ -53,11 +71,12 @@ let forcedResumeLocalStallLastAt = 0;
 let forcedResumeLocalStallWindowStartedAt = 0;
 let forcedResumeLocalStallAttemptsInWindow = 0;
 
-type RecoveryMode = "idle" | "soft_recovering" | "hard_terminating";
-type RecoverableError = "PUBLIC_IDENTITY_CHANGED";
+type RecoveryMode = 'idle' | 'soft_recovering' | 'hard_terminating';
+type RecoverableError = 'PUBLIC_IDENTITY_CHANGED';
 
-const PUBLIC_IDENTITY_CHANGED_ERROR_SUBSTRING = "Public SIP identity changed";
-const PUBLIC_IDENTITY_ACTIONABLE_ERROR = "Session เดิมไม่ตรงกับ user ใหม่ กรุณาโทรใหม่";
+const PUBLIC_IDENTITY_CHANGED_ERROR_SUBSTRING = 'Public SIP identity changed';
+const PUBLIC_IDENTITY_ACTIONABLE_ERROR =
+  'Session เดิมไม่ตรงกับ user ใหม่ กรุณาโทรใหม่';
 
 function isPublicIdentityChangedError(error: string): boolean {
   return error.includes(PUBLIC_IDENTITY_CHANGED_ERROR_SUBSTRING);
@@ -79,8 +98,8 @@ interface ChatMessage {
   to: string;
   body: string;
   contentType?: string;
-  direction: "incoming" | "outgoing";
-  status: "sending" | "sent" | "failed";
+  direction: 'incoming' | 'outgoing';
+  status: 'sending' | 'sent' | 'failed';
   timestamp: number;
   read: boolean;
 }
@@ -126,7 +145,7 @@ interface SipState {
 
   // Video state
   isVideoEnabled: boolean;
-  cameraFacing: "front" | "back";
+  cameraFacing: 'front' | 'back';
 
   // Config
   sipConfig: SipConfig | null;
@@ -143,12 +162,12 @@ interface SipState {
   // Permission error state
   permissionError: string | null;
   permissionRetryCount: number;
-  missingPermissions: ("camera" | "microphone")[];
+  missingPermissions: ('camera' | 'microphone')[];
 
   // Internal refs
   _callTimer: ReturnType<typeof setInterval> | null;
   _callStartTime: Date | null;
-  _callDirection: "incoming" | "outgoing" | null;
+  _callDirection: 'incoming' | 'outgoing' | null;
   _activeRecoveryId: string | null;
   _recoveryTerminationInProgress: boolean;
   _recoveryMode: RecoveryMode;
@@ -156,6 +175,8 @@ interface SipState {
   _foregroundRecoveryAttempts: number;
   _foregroundRecoveryTimer: ReturnType<typeof setTimeout> | null;
   _foregroundRecoveryRetryTimer: ReturnType<typeof setTimeout> | null;
+  _resumeAttemptStartedAt: number | null;
+  _resumeAttemptSource: string | null;
   _publicCallAuthInMemory: PublicCallAuth | null;
 }
 
@@ -169,7 +190,10 @@ interface SipActions {
   unregister: () => Promise<void>;
 
   // Call actions
-  call: (number: string, auth?: import("@/lib/gateway").CallAuth) => Promise<void>;
+  call: (
+    number: string,
+    auth?: import('@/lib/gateway').CallAuth,
+  ) => Promise<void>;
   hangup: () => Promise<void>;
   resetCallRuntimeState: () => void;
 
@@ -209,16 +233,27 @@ interface SipActions {
   ) => Promise<void>;
 
   // Permission error actions
-  setPermissionError: (error: string | null, missingPerms?: ("camera" | "microphone")[]) => void;
+  setPermissionError: (
+    error: string | null,
+    missingPerms?: ('camera' | 'microphone')[],
+  ) => void;
   incrementPermissionRetry: () => void;
   resetPermissionRetry: () => void;
 
   // Internal actions
-  _terminateCallAfterRecoveryFailure: (reason: string, context?: { recoveryId?: string; source?: string }) => Promise<void>;
+  _terminateCallAfterRecoveryFailure: (
+    reason: string,
+    context?: { recoveryId?: string; source?: string },
+  ) => Promise<void>;
   _isCallLikelyAlive: () => boolean;
   _clearForegroundRecoveryTimers: () => void;
   _clearForegroundRecoveryRetryTimer: () => void;
-  _scheduleForegroundRecoveryRetry: (savedState: SavedCallState, recoveryId: string, reason: string, source: string) => void;
+  _scheduleForegroundRecoveryRetry: (
+    savedState: SavedCallState,
+    recoveryId: string,
+    reason: string,
+    source: string,
+  ) => void;
   _startCallTimer: () => void;
   _stopCallTimer: () => void;
   _reset: () => void;
@@ -235,7 +270,7 @@ const initialState: SipState = {
   lastRecoverableError: null,
   isReconnecting: false,
   reconnectAttempt: 0,
-  connectionState: "disconnected",
+  connectionState: 'disconnected',
   maxReconnectAttempts: 5,
   reconnectFailed: false,
   isRegistered: false,
@@ -251,7 +286,7 @@ const initialState: SipState = {
   isMuted: false,
   isSpeaker: false,
   isVideoEnabled: true,
-  cameraFacing: "front",
+  cameraFacing: 'front',
   sipConfig: null,
   messages: [],
   unreadMessageCount: 0,
@@ -266,11 +301,13 @@ const initialState: SipState = {
   _callDirection: null,
   _activeRecoveryId: null,
   _recoveryTerminationInProgress: false,
-  _recoveryMode: "idle",
+  _recoveryMode: 'idle',
   _foregroundRecoveryStartedAt: null,
   _foregroundRecoveryAttempts: 0,
   _foregroundRecoveryTimer: null,
   _foregroundRecoveryRetryTimer: null,
+  _resumeAttemptStartedAt: null,
+  _resumeAttemptSource: null,
   _publicCallAuthInMemory: null,
 };
 
@@ -281,7 +318,7 @@ export const useSipStore = create<SipStore>((set, get) => ({
   connect: async () => {
     const { gatewayClient: existingClient } = get();
     if (existingClient?.isConnected) {
-      console.log("[SipStore] Already connected");
+      console.log('[SipStore] Already connected');
       return;
     }
 
@@ -293,7 +330,7 @@ export const useSipStore = create<SipStore>((set, get) => ({
       // Set up callbacks
       client.setCallbacks({
         onConnected: () => {
-          console.log("[SipStore] Gateway connected");
+          console.log('[SipStore] Gateway connected');
           const wasNetworkReconnecting = get().networkReconnecting;
           set({
             isConnected: true,
@@ -307,16 +344,28 @@ export const useSipStore = create<SipStore>((set, get) => ({
           });
 
           if (wasNetworkReconnecting) {
-            console.log("[SipStore] Reconnected after network change - call state preserved");
+            console.log(
+              '[SipStore] Reconnected after network change - call state preserved',
+            );
           }
         },
         onDisconnected: (reason) => {
-          console.log("[SipStore] Gateway disconnected:", reason);
-          const { callState, networkReconnecting: alreadyReconnecting, _recoveryTerminationInProgress, _recoveryMode } = get();
+          console.log('[SipStore] Gateway disconnected:', reason);
+          const {
+            callState,
+            networkReconnecting: alreadyReconnecting,
+            _recoveryTerminationInProgress,
+            _recoveryMode,
+          } = get();
           const client = get().gatewayClient;
 
-          if (_recoveryTerminationInProgress || _recoveryMode === "hard_terminating") {
-            console.log("[SipStore] Disconnect received during recovery termination - skipping reconnect preservation");
+          if (
+            _recoveryTerminationInProgress ||
+            _recoveryMode === 'hard_terminating'
+          ) {
+            console.log(
+              '[SipStore] Disconnect received during recovery termination - skipping reconnect preservation',
+            );
             set({
               isConnected: false,
               isRegistered: false,
@@ -326,13 +375,14 @@ export const useSipStore = create<SipStore>((set, get) => ({
               isAutoRecovering: false,
               lastRecoverableError: null,
               _publicCallAuthInMemory: null,
-              _recoveryMode: "idle",
+              _recoveryMode: 'idle',
             });
             return;
           }
 
           // Check if this is a network-triggered disconnect (WiFi <-> Cellular switch)
-          const isNetworkDisconnect = client?.isNetworkTriggeredDisconnect ?? false;
+          const isNetworkDisconnect =
+            client?.isNetworkTriggeredDisconnect ?? false;
           // Check if this was a manual/intentional disconnect
           const wasManual = client?.wasManualDisconnect ?? false;
           const isInCall =
@@ -347,8 +397,13 @@ export const useSipStore = create<SipStore>((set, get) => ({
           // has a chance to set networkReconnecting flag (WiFi -> Cellular switch)
           const shouldPreserveCallState = isInCall && !wasManual;
 
-          if (_recoveryMode === "soft_recovering" && get()._isCallLikelyAlive()) {
-            console.log("[SipStore] onDisconnected during soft recovery - preserving active call");
+          if (
+            _recoveryMode === 'soft_recovering' &&
+            get()._isCallLikelyAlive()
+          ) {
+            console.log(
+              '[SipStore] onDisconnected during soft recovery - preserving active call',
+            );
             set({
               isConnected: false,
               isRegistered: false,
@@ -361,13 +416,15 @@ export const useSipStore = create<SipStore>((set, get) => ({
 
           if (shouldPreserveCallState) {
             // Unexpected disconnect during a call - preserve call state for reconnection
-            console.log("[SipStore] Unexpected disconnect during call - preserving call state for reconnection");
             console.log(
-              "[SipStore] Flags: isNetworkDisconnect=",
+              '[SipStore] Unexpected disconnect during call - preserving call state for reconnection',
+            );
+            console.log(
+              '[SipStore] Flags: isNetworkDisconnect=',
               isNetworkDisconnect,
-              "alreadyReconnecting=",
+              'alreadyReconnecting=',
               alreadyReconnecting,
-              "wasManual=",
+              'wasManual=',
               wasManual,
             );
             client?.clearNetworkTriggeredDisconnect();
@@ -390,24 +447,35 @@ export const useSipStore = create<SipStore>((set, get) => ({
                 currentState.networkReconnecting &&
                 !currentState.isConnected &&
                 !currentState._recoveryTerminationInProgress &&
-                currentState._recoveryMode !== "soft_recovering" &&
+                currentState._recoveryMode !== 'soft_recovering' &&
                 !currentState._isCallLikelyAlive()
               ) {
-                const timeoutRecoveryId = currentState._activeRecoveryId ?? undefined;
-                console.log("[SipStore] Network reconnection timeout - force terminating call session");
+                const timeoutRecoveryId =
+                  currentState._activeRecoveryId ?? undefined;
+                console.log(
+                  '[SipStore] Network reconnection timeout - force terminating call session',
+                );
                 void currentState
-                  ._terminateCallAfterRecoveryFailure("Call dropped - network reconnection failed", {
-                    recoveryId: timeoutRecoveryId,
-                    source: "disconnect_timeout",
-                  })
+                  ._terminateCallAfterRecoveryFailure(
+                    'Call dropped - network reconnection failed',
+                    {
+                      recoveryId: timeoutRecoveryId,
+                      source: 'disconnect_timeout',
+                    },
+                  )
                   .catch((error) => {
-                    console.error("[SipStore] Failed to terminate call after reconnect timeout:", error);
+                    console.error(
+                      '[SipStore] Failed to terminate call after reconnect timeout:',
+                      error,
+                    );
                   });
               }
             }, 30000); // 30 second timeout
           } else if (!alreadyReconnecting) {
             // Manual disconnect OR not in call - reset all state
-            console.log("[SipStore] Manual disconnect or not in call - resetting state");
+            console.log(
+              '[SipStore] Manual disconnect or not in call - resetting state',
+            );
             safeInCallManager.stop();
             get()._stopCallTimer();
             client?.clearNetworkTriggeredDisconnect();
@@ -424,7 +492,7 @@ export const useSipStore = create<SipStore>((set, get) => ({
               isMuted: false,
               isSpeaker: false,
               isVideoEnabled: true,
-              cameraFacing: "front",
+              cameraFacing: 'front',
               localStream: null,
               remoteStream: null,
               _callDirection: null,
@@ -432,7 +500,9 @@ export const useSipStore = create<SipStore>((set, get) => ({
             });
           } else {
             // Network reconnecting but not in call - just update connection state
-            console.log("[SipStore] Network disconnect (not in call) - preserving reconnect state");
+            console.log(
+              '[SipStore] Network disconnect (not in call) - preserving reconnect state',
+            );
             set({
               isConnected: false,
               isRegistered: false,
@@ -442,7 +512,7 @@ export const useSipStore = create<SipStore>((set, get) => ({
           }
         },
         onRegistered: (username) => {
-          console.log("[SipStore] Registered as:", username);
+          console.log('[SipStore] Registered as:', username);
           set({
             isRegistered: true,
             isRegistering: false,
@@ -453,7 +523,7 @@ export const useSipStore = create<SipStore>((set, get) => ({
           set({ isRegistered: false });
         },
         onRegistrationFailed: (error) => {
-          console.error("[SipStore] Registration failed:", error);
+          console.error('[SipStore] Registration failed:', error);
           set({
             isRegistered: false,
             isRegistering: false,
@@ -461,7 +531,7 @@ export const useSipStore = create<SipStore>((set, get) => ({
           });
         },
         onCalling: () => {
-          set({ callState: CallState.CALLING, _callDirection: "outgoing" });
+          set({ callState: CallState.CALLING, _callDirection: 'outgoing' });
           const number = get().remoteNumber;
           if (number) {
             reportOutgoingCall(number);
@@ -469,19 +539,19 @@ export const useSipStore = create<SipStore>((set, get) => ({
         },
         onRinging: () => {
           set({ callState: CallState.RINGING });
-          if (get()._callDirection === "outgoing") {
+          if (get()._callDirection === 'outgoing') {
             reportOutgoingCallConnecting();
           }
         },
         onAnswered: () => {
-          const isOutgoing = get()._callDirection === "outgoing";
+          const isOutgoing = get()._callDirection === 'outgoing';
           set({ callState: CallState.INCALL });
           get()._startCallTimer();
-          safeInCallManager.start({ media: "audio" });
+          safeInCallManager.start({ media: 'audio' });
           reportCallAnswered(isOutgoing);
         },
         onCallEnded: (reason) => {
-          console.log("[SipStore] Call ended:", reason);
+          console.log('[SipStore] Call ended:', reason);
           get()._clearForegroundRecoveryTimers();
           safeInCallManager.stop();
           reportCallEnded(2);
@@ -495,7 +565,7 @@ export const useSipStore = create<SipStore>((set, get) => ({
             isMuted: false,
             isSpeaker: false,
             isVideoEnabled: true,
-            cameraFacing: "front",
+            cameraFacing: 'front',
             localStream: null,
             remoteStream: null,
             _callDirection: null,
@@ -503,7 +573,7 @@ export const useSipStore = create<SipStore>((set, get) => ({
             messages: [],
             unreadMessageCount: 0,
             _activeRecoveryId: null,
-            _recoveryMode: "idle",
+            _recoveryMode: 'idle',
             _foregroundRecoveryStartedAt: null,
             _foregroundRecoveryAttempts: 0,
             _publicCallAuthInMemory: null,
@@ -511,73 +581,90 @@ export const useSipStore = create<SipStore>((set, get) => ({
           get()._stopCallTimer();
           const disconnect = get().disconnect;
           void disconnect().catch((error) => {
-            console.error("[SipStore] Disconnect after call ended failed:", error);
+            console.error(
+              '[SipStore] Disconnect after call ended failed:',
+              error,
+            );
           });
         },
         onError: (error) => {
-          console.error("[SipStore] Gateway Error:", error);
+          console.error('[SipStore] Gateway Error:', error);
           const identityChanged = isPublicIdentityChangedError(error);
           set({
-            connectionError: identityChanged ? PUBLIC_IDENTITY_ACTIONABLE_ERROR : error,
+            connectionError: identityChanged
+              ? PUBLIC_IDENTITY_ACTIONABLE_ERROR
+              : error,
             isAutoRecovering: false,
-            lastRecoverableError: identityChanged ? "PUBLIC_IDENTITY_CHANGED" : null,
-            _publicCallAuthInMemory: identityChanged ? null : get()._publicCallAuthInMemory,
+            lastRecoverableError: identityChanged
+              ? 'PUBLIC_IDENTITY_CHANGED'
+              : null,
+            _publicCallAuthInMemory: identityChanged
+              ? null
+              : get()._publicCallAuthInMemory,
           });
         },
         onRecoveryState: (state) => {
-          if (state === "retrying_public_identity") {
+          if (state === 'retrying_public_identity') {
             set({
               isAutoRecovering: true,
-              lastRecoverableError: "PUBLIC_IDENTITY_CHANGED",
-              connectionError: "กำลังสร้าง session ใหม่...",
+              lastRecoverableError: 'PUBLIC_IDENTITY_CHANGED',
+              connectionError: 'กำลังสร้าง session ใหม่...',
             });
             return;
           }
 
           set({
             isAutoRecovering: false,
-            lastRecoverableError: "PUBLIC_IDENTITY_CHANGED",
+            lastRecoverableError: 'PUBLIC_IDENTITY_CHANGED',
             connectionError: PUBLIC_IDENTITY_ACTIONABLE_ERROR,
             _publicCallAuthInMemory: null,
           });
         },
         onLocalStream: (stream) => {
-          console.log("[SipStore] Local stream received");
-          set((state) => ({ localStream: stream, localStreamVersion: state.localStreamVersion + 1 }));
+          console.log('[SipStore] Local stream received');
+          set((state) => ({
+            localStream: stream,
+            localStreamVersion: state.localStreamVersion + 1,
+          }));
         },
         onRemoteStream: (stream) => {
-          console.log("[SipStore] Remote stream received");
+          console.log('[SipStore] Remote stream received');
           set({ remoteStream: stream });
         },
         onMessage: (from, body, contentType) => {
           // Filter out RTT messages - they should only appear in LiveTextViewer, not Chat
           const isRttMessage =
-            body?.trimStart().startsWith("<rtt") ||
-            contentType?.includes("t140") ||
-            contentType?.includes("rtte+xml") ||
-            contentType?.includes("xmpp+xml");
+            body?.trimStart().startsWith('<rtt') ||
+            contentType?.includes('t140') ||
+            contentType?.includes('rtte+xml') ||
+            contentType?.includes('xmpp+xml');
 
           if (isRttMessage) {
-            console.log("[SipStore] RTT message filtered out from chat (will show in LiveTextViewer)");
+            console.log(
+              '[SipStore] RTT message filtered out from chat (will show in LiveTextViewer)',
+            );
             return; // Don't add RTT messages to chat
           }
 
           // Filter out special control messages (e.g., @switch:, @open_chat)
-          const isControlMessage = body?.startsWith("@");
+          const isControlMessage = body?.startsWith('@');
           if (isControlMessage) {
-            console.log("[SipStore] Control message filtered out from chat:", body.substring(0, 30));
+            console.log(
+              '[SipStore] Control message filtered out from chat:',
+              body.substring(0, 30),
+            );
             return; // Don't add control messages to chat
           }
 
-          console.log("[SipStore] Message received from:", from);
+          console.log('[SipStore] Message received from:', from);
           const newMessage: ChatMessage = {
             id: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
             from,
-            to: get().sipConfig?.sipUsername || "",
+            to: get().sipConfig?.sipUsername || '',
             body,
             contentType,
-            direction: "incoming",
-            status: "sent",
+            direction: 'incoming',
+            status: 'sent',
             timestamp: Date.now(),
             read: false,
           };
@@ -601,52 +688,86 @@ export const useSipStore = create<SipStore>((set, get) => ({
           set({
             isReconnecting: false,
             reconnectFailed: true,
-            connectionError: "Connection lost. Tap to reconnect.",
+            connectionError: 'Connection lost. Tap to reconnect.',
           });
         },
         // Call resume callbacks for network change recovery
         onCallResumed: (sessionId) => {
           const recoveryId = get()._activeRecoveryId;
-          const recoveryTag = recoveryId ? `[Recovery:${recoveryId}] ` : "";
-          console.log(`[SipStore] ${recoveryTag}resumed_success sessionId:`, sessionId);
+          const recoveryTag = recoveryId ? `[Recovery:${recoveryId}] ` : '';
+          const resumeStartedAt = get()._resumeAttemptStartedAt;
+          const resumeSource = get()._resumeAttemptSource;
+          if (resumeStartedAt) {
+            const resumeElapsedMs = Date.now() - resumeStartedAt;
+            console.log(
+              `[SipStore] ${recoveryTag}resumed_latency_ms=${resumeElapsedMs} source=${resumeSource ?? 'unknown'}`,
+            );
+          }
+          console.log(
+            `[SipStore] ${recoveryTag}resumed_success sessionId:`,
+            sessionId,
+          );
           get()._clearForegroundRecoveryTimers();
           set({
             callResumePending: false,
             networkReconnecting: false,
             callState: CallState.INCALL,
             _activeRecoveryId: null,
-            _recoveryMode: "idle",
+            _recoveryMode: 'idle',
             _foregroundRecoveryStartedAt: null,
             _foregroundRecoveryAttempts: 0,
+            _resumeAttemptStartedAt: null,
+            _resumeAttemptSource: null,
           });
           get()._startCallTimer();
-          safeInCallManager.start({ media: "audio" });
+          safeInCallManager.start({ media: 'audio' });
         },
         onCallResumeFailed: (reason) => {
           const state = get();
-          const recoveryId = state._activeRecoveryId ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
-          const recoveryTag = recoveryId ? `[Recovery:${recoveryId}] ` : "";
-          console.log(`[SipStore] ${recoveryTag}resume_failed_soft reason:`, reason);
-          set({ callResumePending: false, _activeRecoveryId: recoveryId });
+          const recoveryId =
+            state._activeRecoveryId ??
+            `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+          const recoveryTag = recoveryId ? `[Recovery:${recoveryId}] ` : '';
+          console.log(
+            `[SipStore] ${recoveryTag}resume_failed_soft reason:`,
+            reason,
+          );
+          set({
+            callResumePending: false,
+            _activeRecoveryId: recoveryId,
+            _resumeAttemptStartedAt: null,
+            _resumeAttemptSource: null,
+          });
 
-          if (state._recoveryMode === "soft_recovering" && state._isCallLikelyAlive()) {
+          if (
+            state._recoveryMode === 'soft_recovering' &&
+            state._isCallLikelyAlive()
+          ) {
             const savedState: SavedCallState = {
               sessionId: state.gatewayClient?.getSessionId() ?? null,
               remoteNumber: state.remoteNumber,
               wasInCall: true,
               timestamp: Date.now(),
             };
-            state._scheduleForegroundRecoveryRetry(savedState, recoveryId, reason, "resume_failed_event");
+            state._scheduleForegroundRecoveryRetry(
+              savedState,
+              recoveryId,
+              reason,
+              'resume_failed_event',
+            );
             return;
           }
 
           void state
             ._terminateCallAfterRecoveryFailure(`Call dropped: ${reason}`, {
               recoveryId,
-              source: "resume_failed_event",
+              source: 'resume_failed_event',
             })
             .catch((error) => {
-              console.error("[SipStore] Failed to terminate call after resume_failed event:", error);
+              console.error(
+                '[SipStore] Failed to terminate call after resume_failed event:',
+                error,
+              );
             });
         },
       });
@@ -656,7 +777,8 @@ export const useSipStore = create<SipStore>((set, get) => ({
 
       set({ isConnected: true });
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Connection failed";
+      const errorMessage =
+        error instanceof Error ? error.message : 'Connection failed';
       set({
         connectionError: errorMessage,
         isConnected: false,
@@ -685,9 +807,11 @@ export const useSipStore = create<SipStore>((set, get) => ({
       isReconnecting: false,
       reconnectAttempt: 0,
       _activeRecoveryId: null,
-      _recoveryMode: "idle",
+      _recoveryMode: 'idle',
       _foregroundRecoveryStartedAt: null,
       _foregroundRecoveryAttempts: 0,
+      _resumeAttemptStartedAt: null,
+      _resumeAttemptSource: null,
       callResumePending: false,
       networkReconnecting: false,
       _recoveryTerminationInProgress: false,
@@ -699,7 +823,7 @@ export const useSipStore = create<SipStore>((set, get) => ({
   register: async (config: SipConfig) => {
     const { gatewayClient } = get();
     if (!gatewayClient) {
-      throw new Error("Gateway client not connected");
+      throw new Error('Gateway client not connected');
     }
 
     set({ sipConfig: config, registrationError: null, isRegistering: true });
@@ -712,7 +836,8 @@ export const useSipStore = create<SipStore>((set, get) => ({
         sipPort: config.sipPort,
       });
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Registration failed";
+      const errorMessage =
+        error instanceof Error ? error.message : 'Registration failed';
       set({ isRegistering: false, registrationError: errorMessage });
       throw error;
     }
@@ -728,18 +853,18 @@ export const useSipStore = create<SipStore>((set, get) => ({
   },
 
   // Make outgoing call
-  call: async (number: string, auth?: import("@/lib/gateway").CallAuth) => {
+  call: async (number: string, auth?: import('@/lib/gateway').CallAuth) => {
     const { gatewayClient, sipConfig } = get();
     if (!gatewayClient) {
-      throw new Error("Gateway client not connected");
+      throw new Error('Gateway client not connected');
     }
 
     try {
-      console.log("[SipStore] Outbound call to:", number);
+      console.log('[SipStore] Outbound call to:', number);
 
       // If auth is provided, use per-call auth (no registration needed)
       if (auth) {
-        if (auth.mode === "public") {
+        if (auth.mode === 'public') {
           get().resetCallRuntimeState();
           set({
             _publicCallAuthInMemory: { ...auth },
@@ -747,7 +872,11 @@ export const useSipStore = create<SipStore>((set, get) => ({
           });
         }
 
-        set({ remoteNumber: number, _callDirection: "outgoing", connectionError: null });
+        set({
+          remoteNumber: number,
+          _callDirection: 'outgoing',
+          connectionError: null,
+        });
         await gatewayClient.call(number, auth);
         return;
       }
@@ -759,9 +888,9 @@ export const useSipStore = create<SipStore>((set, get) => ({
           set({
             isRegistered: false,
             isRegistering: false,
-            registrationError: "SIP not registered. Configure SIP in Settings.",
+            registrationError: 'SIP not registered. Configure SIP in Settings.',
           });
-          throw new Error("SIP not registered. Configure SIP in Settings.");
+          throw new Error('SIP not registered. Configure SIP in Settings.');
         }
 
         set({ registrationError: null });
@@ -773,19 +902,24 @@ export const useSipStore = create<SipStore>((set, get) => ({
         });
       }
 
-      set({ remoteNumber: number, _callDirection: "outgoing" });
+      set({ remoteNumber: number, _callDirection: 'outgoing' });
       await gatewayClient.call(number);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to make call";
-      console.error("[SipStore] Outbound call failed:", message);
+      const message =
+        error instanceof Error ? error.message : 'Failed to make call';
+      console.error('[SipStore] Outbound call failed:', message);
       const identityChanged = isPublicIdentityChangedError(message);
       set({
         callState: CallState.IDLE,
         _callDirection: null,
         _publicCallAuthInMemory: null,
         isAutoRecovering: false,
-        lastRecoverableError: identityChanged ? "PUBLIC_IDENTITY_CHANGED" : null,
-        connectionError: identityChanged ? PUBLIC_IDENTITY_ACTIONABLE_ERROR : message,
+        lastRecoverableError: identityChanged
+          ? 'PUBLIC_IDENTITY_CHANGED'
+          : null,
+        connectionError: identityChanged
+          ? PUBLIC_IDENTITY_ACTIONABLE_ERROR
+          : message,
       });
       throw error;
     }
@@ -805,7 +939,7 @@ export const useSipStore = create<SipStore>((set, get) => ({
       isMuted: false,
       isSpeaker: false,
       isVideoEnabled: true,
-      cameraFacing: "front",
+      cameraFacing: 'front',
       localStream: null,
       remoteStream: null,
       _callDirection: null,
@@ -815,7 +949,7 @@ export const useSipStore = create<SipStore>((set, get) => ({
       networkReconnecting: false,
       _activeRecoveryId: null,
       _recoveryTerminationInProgress: false,
-      _recoveryMode: "idle",
+      _recoveryMode: 'idle',
       _foregroundRecoveryStartedAt: null,
       _foregroundRecoveryAttempts: 0,
       _publicCallAuthInMemory: null,
@@ -842,7 +976,7 @@ export const useSipStore = create<SipStore>((set, get) => ({
       isMuted: false,
       isSpeaker: false,
       isVideoEnabled: true,
-      cameraFacing: "front",
+      cameraFacing: 'front',
       localStream: null,
       remoteStream: null,
       _callDirection: null,
@@ -850,7 +984,7 @@ export const useSipStore = create<SipStore>((set, get) => ({
       messages: [],
       unreadMessageCount: 0,
       _activeRecoveryId: null,
-      _recoveryMode: "idle",
+      _recoveryMode: 'idle',
       _foregroundRecoveryStartedAt: null,
       _foregroundRecoveryAttempts: 0,
       callResumePending: false,
@@ -898,7 +1032,7 @@ export const useSipStore = create<SipStore>((set, get) => ({
     if (gatewayClient) {
       await gatewayClient.switchCamera();
       set((state) => ({
-        cameraFacing: state.cameraFacing === "front" ? "back" : "front",
+        cameraFacing: state.cameraFacing === 'front' ? 'back' : 'front',
       }));
     }
   },
@@ -911,14 +1045,17 @@ export const useSipStore = create<SipStore>((set, get) => ({
     }
   },
 
-  refreshRemoteVideo: (reason = "manual") => {
+  refreshRemoteVideo: (reason = 'manual') => {
     const { gatewayClient, callState } = get();
     if (!gatewayClient) {
       return;
     }
 
     const isCallActive =
-      callState === CallState.CONNECTING || callState === CallState.CALLING || callState === CallState.RINGING || callState === CallState.INCALL;
+      callState === CallState.CONNECTING ||
+      callState === CallState.CALLING ||
+      callState === CallState.RINGING ||
+      callState === CallState.INCALL;
 
     if (!isCallActive) {
       return;
@@ -932,17 +1069,17 @@ export const useSipStore = create<SipStore>((set, get) => ({
     const { gatewayClient, remoteNumber, sipConfig } = get();
 
     if (!gatewayClient || !remoteNumber) {
-      console.warn("[SipStore] Cannot send message - no active call");
+      console.warn('[SipStore] Cannot send message - no active call');
       return;
     }
 
     const newMessage: ChatMessage = {
       id: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-      from: sipConfig?.sipUsername || "me",
+      from: sipConfig?.sipUsername || 'me',
       to: remoteNumber,
       body,
-      direction: "outgoing",
-      status: "sending",
+      direction: 'outgoing',
+      status: 'sending',
       timestamp: Date.now(),
       read: true,
     };
@@ -958,7 +1095,9 @@ export const useSipStore = create<SipStore>((set, get) => ({
     // Mark as sent after a short delay (in real impl, wait for server confirmation)
     setTimeout(() => {
       set((state) => ({
-        messages: state.messages.map((m) => (m.id === newMessage.id ? { ...m, status: "sent" as const } : m)),
+        messages: state.messages.map((m) =>
+          m.id === newMessage.id ? { ...m, status: 'sent' as const } : m,
+        ),
       }));
     }, 100);
   },
@@ -997,7 +1136,10 @@ export const useSipStore = create<SipStore>((set, get) => ({
 
   // Set local stream
   setLocalStream: (stream) => {
-    set((state) => ({ localStream: stream, localStreamVersion: state.localStreamVersion + 1 }));
+    set((state) => ({
+      localStream: stream,
+      localStreamVersion: state.localStreamVersion + 1,
+    }));
   },
 
   // Set remote stream
@@ -1008,13 +1150,22 @@ export const useSipStore = create<SipStore>((set, get) => ({
   _isCallLikelyAlive: () => {
     const { callState, gatewayClient, localStream, remoteStream } = get();
     const callStateActive =
-      callState === CallState.INCALL || callState === CallState.CALLING || callState === CallState.RINGING || callState === CallState.CONNECTING;
+      callState === CallState.INCALL ||
+      callState === CallState.CALLING ||
+      callState === CallState.RINGING ||
+      callState === CallState.CONNECTING;
 
     const hasSessionId = !!gatewayClient?.getSessionId();
-    const hasLiveLocalTrack = !!localStream?.getTracks().some((track) => track.readyState === "live");
-    const hasLiveRemoteTrack = !!remoteStream?.getTracks().some((track) => track.readyState === "live");
+    const hasLiveLocalTrack = !!localStream
+      ?.getTracks()
+      .some((track) => track.readyState === 'live');
+    const hasLiveRemoteTrack = !!remoteStream
+      ?.getTracks()
+      .some((track) => track.readyState === 'live');
 
-    return callStateActive || hasSessionId || hasLiveLocalTrack || hasLiveRemoteTrack;
+    return (
+      callStateActive || hasSessionId || hasLiveLocalTrack || hasLiveRemoteTrack
+    );
   },
 
   _clearForegroundRecoveryTimers: () => {
@@ -1042,11 +1193,19 @@ export const useSipStore = create<SipStore>((set, get) => ({
     }
   },
 
-  _scheduleForegroundRecoveryRetry: (savedState, recoveryId, reason, source) => {
+  _scheduleForegroundRecoveryRetry: (
+    savedState,
+    recoveryId,
+    reason,
+    source,
+  ) => {
     const state = get();
     const recoveryTag = `[Recovery:${recoveryId}]`;
 
-    if (state._recoveryMode !== "soft_recovering" || state._activeRecoveryId !== recoveryId) {
+    if (
+      state._recoveryMode !== 'soft_recovering' ||
+      state._activeRecoveryId !== recoveryId
+    ) {
       return;
     }
 
@@ -1055,14 +1214,20 @@ export const useSipStore = create<SipStore>((set, get) => ({
     const attempts = state._foregroundRecoveryAttempts;
 
     if (elapsed >= FOREGROUND_RECOVERY_GRACE_MS) {
-      console.log(`[SipStore] ${recoveryTag} grace_expired_no_retry (${source})`, { reason, elapsedMs: elapsed });
+      console.log(
+        `[SipStore] ${recoveryTag} grace_expired_no_retry (${source})`,
+        { reason, elapsedMs: elapsed },
+      );
       return;
     }
 
     const nextAttempt = attempts + 1;
     const nextOffset = FOREGROUND_RECOVERY_RETRY_OFFSETS_MS[nextAttempt];
     if (nextOffset === undefined) {
-      console.log(`[SipStore] ${recoveryTag} no_more_retry_slots (${source})`, { reason, attempts });
+      console.log(`[SipStore] ${recoveryTag} no_more_retry_slots (${source})`, {
+        reason,
+        attempts,
+      });
       return;
     }
 
@@ -1070,15 +1235,21 @@ export const useSipStore = create<SipStore>((set, get) => ({
     const delay = Math.max(0, Math.min(nextOffset - elapsed, remaining));
 
     state._clearForegroundRecoveryRetryTimer();
-    console.log(`[SipStore] ${recoveryTag} scheduling_retry_${nextAttempt} in ${delay}ms`, {
-      source,
-      reason,
-      elapsedMs: elapsed,
-    });
+    console.log(
+      `[SipStore] ${recoveryTag} scheduling_retry_${nextAttempt} in ${delay}ms`,
+      {
+        source,
+        reason,
+        elapsedMs: elapsed,
+      },
+    );
 
     const retryTimer = setTimeout(() => {
       const current = get();
-      if (current._recoveryMode !== "soft_recovering" || current._activeRecoveryId !== recoveryId) {
+      if (
+        current._recoveryMode !== 'soft_recovering' ||
+        current._activeRecoveryId !== recoveryId
+      ) {
         return;
       }
 
@@ -1099,19 +1270,27 @@ export const useSipStore = create<SipStore>((set, get) => ({
   _terminateCallAfterRecoveryFailure: async (reason, context) => {
     const { _recoveryTerminationInProgress } = get();
     const recoveryId = context?.recoveryId;
-    const recoveryTag = recoveryId ? `[Recovery:${recoveryId}] ` : "";
+    const recoveryTag = recoveryId ? `[Recovery:${recoveryId}] ` : '';
 
     if (_recoveryTerminationInProgress) {
-      console.log(`[SipStore] ${recoveryTag}Recovery termination already in progress - skipping duplicate request`);
+      console.log(
+        `[SipStore] ${recoveryTag}Recovery termination already in progress - skipping duplicate request`,
+      );
       return;
     }
 
     get()._clearForegroundRecoveryTimers();
-    set({ _recoveryTerminationInProgress: true, _recoveryMode: "hard_terminating" });
-    console.log(`[SipStore] ${recoveryTag}Force terminating call after recovery failure`, {
-      source: context?.source ?? "unknown",
-      reason,
+    set({
+      _recoveryTerminationInProgress: true,
+      _recoveryMode: 'hard_terminating',
     });
+    console.log(
+      `[SipStore] ${recoveryTag}Force terminating call after recovery failure`,
+      {
+        source: context?.source ?? 'unknown',
+        reason,
+      },
+    );
 
     try {
       const { gatewayClient } = get();
@@ -1120,18 +1299,31 @@ export const useSipStore = create<SipStore>((set, get) => ({
       if (gatewayClient && sessionId) {
         try {
           gatewayClient.hangup();
-          console.log(`[SipStore] ${recoveryTag}Hangup sent for sessionId:`, sessionId);
+          console.log(
+            `[SipStore] ${recoveryTag}Hangup sent for sessionId:`,
+            sessionId,
+          );
         } catch (error) {
-          console.error(`[SipStore] ${recoveryTag}Failed to send hangup during recovery termination:`, error);
+          console.error(
+            `[SipStore] ${recoveryTag}Failed to send hangup during recovery termination:`,
+            error,
+          );
         }
       } else {
-        console.log(`[SipStore] ${recoveryTag}Skipping hangup (no active session)`);
+        console.log(
+          `[SipStore] ${recoveryTag}Skipping hangup (no active session)`,
+        );
       }
 
       await get().disconnect();
-      console.log(`[SipStore] ${recoveryTag}Disconnect completed after recovery failure`);
+      console.log(
+        `[SipStore] ${recoveryTag}Disconnect completed after recovery failure`,
+      );
     } catch (error) {
-      console.error(`[SipStore] ${recoveryTag}Disconnect failed during recovery termination:`, error);
+      console.error(
+        `[SipStore] ${recoveryTag}Disconnect failed during recovery termination:`,
+        error,
+      );
     } finally {
       safeInCallManager.stop();
       get()._stopCallTimer();
@@ -1146,7 +1338,7 @@ export const useSipStore = create<SipStore>((set, get) => ({
         isMuted: false,
         isSpeaker: false,
         isVideoEnabled: true,
-        cameraFacing: "front",
+        cameraFacing: 'front',
         localStream: null,
         remoteStream: null,
         _callDirection: null,
@@ -1155,7 +1347,7 @@ export const useSipStore = create<SipStore>((set, get) => ({
         connectionError: reason,
         _activeRecoveryId: null,
         _recoveryTerminationInProgress: false,
-        _recoveryMode: "idle",
+        _recoveryMode: 'idle',
         _foregroundRecoveryStartedAt: null,
         _foregroundRecoveryAttempts: 0,
         _publicCallAuthInMemory: null,
@@ -1171,7 +1363,9 @@ export const useSipStore = create<SipStore>((set, get) => ({
     const timer = setInterval(() => {
       const { _callStartTime } = get();
       if (_callStartTime) {
-        const elapsed = Math.floor((Date.now() - _callStartTime.getTime()) / 1000);
+        const elapsed = Math.floor(
+          (Date.now() - _callStartTime.getTime()) / 1000,
+        );
         set({ callDuration: elapsed });
       }
     }, 1000);
@@ -1200,12 +1394,20 @@ export const useSipStore = create<SipStore>((set, get) => ({
   /**
    * Set permission error and missing permissions
    */
-  setPermissionError: (error: string | null, missingPerms?: ("camera" | "microphone")[]) => {
+  setPermissionError: (
+    error: string | null,
+    missingPerms?: ('camera' | 'microphone')[],
+  ) => {
     set({
       permissionError: error,
       missingPermissions: missingPerms || [],
     });
-    console.log("[SipStore] Permission error set:", error, "Missing:", missingPerms);
+    console.log(
+      '[SipStore] Permission error set:',
+      error,
+      'Missing:',
+      missingPerms,
+    );
   },
 
   /**
@@ -1215,7 +1417,7 @@ export const useSipStore = create<SipStore>((set, get) => ({
     const { permissionRetryCount } = get();
     const newCount = permissionRetryCount + 1;
     set({ permissionRetryCount: newCount });
-    console.log("[SipStore] Permission retry count:", newCount);
+    console.log('[SipStore] Permission retry count:', newCount);
   },
 
   /**
@@ -1227,7 +1429,7 @@ export const useSipStore = create<SipStore>((set, get) => ({
       permissionError: null,
       missingPermissions: [],
     });
-    console.log("[SipStore] Permission retry count reset");
+    console.log('[SipStore] Permission retry count reset');
   },
 
   // ===== NETWORK RECONNECT ACTIONS =====
@@ -1245,7 +1447,10 @@ export const useSipStore = create<SipStore>((set, get) => ({
       const { gatewayClient, callState, remoteNumber } = get();
 
       // Save call state before reconnecting
-      const isInCall = callState === CallState.INCALL || callState === CallState.CALLING || callState === CallState.RINGING;
+      const isInCall =
+        callState === CallState.INCALL ||
+        callState === CallState.CALLING ||
+        callState === CallState.RINGING;
       if (isInCall && gatewayClient) {
         const sessionId = gatewayClient.getSessionId();
         networkMonitor.saveCallState(sessionId, remoteNumber, isInCall);
@@ -1253,7 +1458,9 @@ export const useSipStore = create<SipStore>((set, get) => ({
         // CRITICAL: Set networkReconnecting BEFORE forceDisconnect to prevent race condition
         // When WiFi disconnects faster than cellular, onDisconnected fires before the flag check
         // Setting this first ensures the in-call screen stays open during fast network switches
-        console.log("[SipStore] Setting networkReconnecting before forceDisconnect");
+        console.log(
+          '[SipStore] Setting networkReconnecting before forceDisconnect',
+        );
         set({ networkReconnecting: true });
       }
 
@@ -1280,7 +1487,7 @@ export const useSipStore = create<SipStore>((set, get) => ({
       await get().handleCallResume(savedState);
     });
 
-    console.log("[SipStore] Network monitor handlers configured");
+    console.log('[SipStore] Network monitor handlers configured');
   },
 
   /**
@@ -1288,7 +1495,15 @@ export const useSipStore = create<SipStore>((set, get) => ({
    * This path is independent from NetInfo changes and prevents missed in-call resume.
    */
   handleAppForegroundRecovery: async () => {
-    const { gatewayClient, callState, remoteNumber, localStream, remoteStream, _recoveryTerminationInProgress, _recoveryMode } = get();
+    const {
+      gatewayClient,
+      callState,
+      remoteNumber,
+      localStream,
+      remoteStream,
+      _recoveryTerminationInProgress,
+      _recoveryMode,
+    } = get();
 
     if (!gatewayClient?.isConnected) {
       const hasStaleRuntimeState =
@@ -1299,36 +1514,45 @@ export const useSipStore = create<SipStore>((set, get) => ({
         get().isAutoRecovering ||
         !!get()._publicCallAuthInMemory;
       if (hasStaleRuntimeState) {
-        console.log("[SipStore] Foreground stale state detected without active WebSocket - hard reset");
+        console.log(
+          '[SipStore] Foreground stale state detected without active WebSocket - hard reset',
+        );
         get().resetCallRuntimeState();
       }
     }
 
     const isInCall =
-      callState === CallState.INCALL || callState === CallState.CALLING || callState === CallState.RINGING || callState === CallState.CONNECTING;
+      callState === CallState.INCALL ||
+      callState === CallState.CALLING ||
+      callState === CallState.RINGING ||
+      callState === CallState.CONNECTING;
 
     if (!isInCall) {
       return;
     }
 
     if (!gatewayClient) {
-      console.log("[SipStore] Foreground recovery skipped - no gateway client");
+      console.log('[SipStore] Foreground recovery skipped - no gateway client');
       return;
     }
 
     if (_recoveryTerminationInProgress) {
-      console.log("[SipStore] Foreground recovery skipped - termination already in progress");
+      console.log(
+        '[SipStore] Foreground recovery skipped - termination already in progress',
+      );
       return;
     }
 
-    if (_recoveryMode !== "idle") {
-      console.log("[SipStore] Foreground recovery skipped - recovery already in progress");
+    if (_recoveryMode !== 'idle') {
+      console.log(
+        '[SipStore] Foreground recovery skipped - recovery already in progress',
+      );
       return;
     }
 
     const sessionId = gatewayClient.getSessionId();
     if (!sessionId) {
-      console.log("[SipStore] Foreground recovery skipped - no sessionId");
+      console.log('[SipStore] Foreground recovery skipped - no sessionId');
       return;
     }
 
@@ -1340,7 +1564,7 @@ export const useSipStore = create<SipStore>((set, get) => ({
     set({
       networkReconnecting: true,
       _activeRecoveryId: recoveryId,
-      _recoveryMode: "soft_recovering",
+      _recoveryMode: 'soft_recovering',
       _foregroundRecoveryStartedAt: startedAt,
       _foregroundRecoveryAttempts: 0,
       callResumePending: false,
@@ -1349,7 +1573,10 @@ export const useSipStore = create<SipStore>((set, get) => ({
 
     const watchdogTimer = setTimeout(() => {
       const current = get();
-      if (current._activeRecoveryId !== recoveryId || current._recoveryMode !== "soft_recovering") {
+      if (
+        current._activeRecoveryId !== recoveryId ||
+        current._recoveryMode !== 'soft_recovering'
+      ) {
         return;
       }
 
@@ -1357,7 +1584,7 @@ export const useSipStore = create<SipStore>((set, get) => ({
         console.log(`[SipStore] ${recoveryTag} grace_expired_alive`);
         current._clearForegroundRecoveryTimers();
         set({
-          _recoveryMode: "idle",
+          _recoveryMode: 'idle',
           _activeRecoveryId: null,
           _foregroundRecoveryStartedAt: null,
           _foregroundRecoveryAttempts: 0,
@@ -1369,70 +1596,109 @@ export const useSipStore = create<SipStore>((set, get) => ({
 
       console.log(`[SipStore] ${recoveryTag} grace_expired_terminate`);
       void current
-        ._terminateCallAfterRecoveryFailure("Call dropped - could not recover after app resumed", {
-          recoveryId,
-          source: "grace_expired_terminate",
-        })
+        ._terminateCallAfterRecoveryFailure(
+          'Call dropped - could not recover after app resumed',
+          {
+            recoveryId,
+            source: 'grace_expired_terminate',
+          },
+        )
         .catch((error) => {
-          console.error("[SipStore] Failed to terminate after grace expiry:", error);
+          console.error(
+            '[SipStore] Failed to terminate after grace expiry:',
+            error,
+          );
         });
     }, FOREGROUND_RECOVERY_GRACE_MS);
     set({ _foregroundRecoveryTimer: watchdogTimer });
 
     try {
       if (!gatewayClient.isConnected) {
-        console.log(`[SipStore] ${recoveryTag} Gateway not connected - reconnecting before resume`);
+        console.log(
+          `[SipStore] ${recoveryTag} Gateway not connected - reconnecting before resume`,
+        );
         await gatewayClient.reconnectForNetworkChange();
       }
 
-      const localVideoRecovery = await gatewayClient.ensureLocalVideoBeforeForegroundResume("app_foreground");
-      console.log(`[SipStore] ${recoveryTag} Refreshing remote video after foreground`);
-      gatewayClient.refreshRemoteVideo("app_foreground");
+      const localVideoRecovery =
+        await gatewayClient.ensureLocalVideoBeforeForegroundResume(
+          'app_foreground',
+        );
+      console.log(
+        `[SipStore] ${recoveryTag} Refreshing remote video after foreground`,
+      );
+      gatewayClient.refreshRemoteVideo('app_foreground');
 
-      const transportSnapshot = gatewayClient.getPeerConnectionTransportSnapshot();
+      const transportSnapshot =
+        gatewayClient.getPeerConnectionTransportSnapshot();
       const hasSessionId = !!gatewayClient.getSessionId();
-      const hasLiveLocalTrack = !!localStream?.getTracks().some((track) => track.readyState === "live");
-      const hasLiveRemoteTrack = !!remoteStream?.getTracks().some((track) => track.readyState === "live");
+      const hasLiveLocalTrack = !!localStream
+        ?.getTracks()
+        .some((track) => track.readyState === 'live');
+      const hasLiveRemoteTrack = !!remoteStream
+        ?.getTracks()
+        .some((track) => track.readyState === 'live');
       const hasLiveMedia = hasLiveLocalTrack || hasLiveRemoteTrack;
       const pcState = transportSnapshot.connectionState;
       const iceState = transportSnapshot.iceConnectionState;
-      const transportLikelyAlive = (
-        pcState === "new" ||
-        pcState === "connecting" ||
-        pcState === "connected" ||
-        iceState === "checking" ||
-        iceState === "connected" ||
-        iceState === "completed"
-      );
-      const shouldSkipResumeBase = gatewayClient.isConnected && hasSessionId && hasLiveMedia && transportLikelyAlive;
-      const localVideoRecoveryExhausted = localVideoRecovery.status === "exhausted";
+      const transportLikelyAlive =
+        pcState === 'new' ||
+        pcState === 'connecting' ||
+        pcState === 'connected' ||
+        iceState === 'checking' ||
+        iceState === 'connected' ||
+        iceState === 'completed';
+      const shouldSkipResumeBase =
+        gatewayClient.isConnected &&
+        hasSessionId &&
+        hasLiveMedia &&
+        transportLikelyAlive;
+      const localVideoRecoveryExhausted =
+        localVideoRecovery.status === 'exhausted';
       let forceResumeForLocalStall = false;
 
       if (localVideoRecoveryExhausted) {
         const now = Date.now();
         const elapsedSinceLastForcedResume = now - forcedResumeLocalStallLastAt;
-        if (elapsedSinceLastForcedResume < FORCED_RESUME_LOCAL_STALL_COOLDOWN_MS) {
-          console.log(`[SipStore] ${recoveryTag} resume_required_local_stall cooldown`, {
-            elapsedSinceLastForcedResume,
-            cooldownMs: FORCED_RESUME_LOCAL_STALL_COOLDOWN_MS,
-            senderSummary: localVideoRecovery.senderSummary,
-          });
+        if (
+          elapsedSinceLastForcedResume < FORCED_RESUME_LOCAL_STALL_COOLDOWN_MS
+        ) {
+          console.log(
+            `[SipStore] ${recoveryTag} resume_required_local_stall cooldown`,
+            {
+              elapsedSinceLastForcedResume,
+              cooldownMs: FORCED_RESUME_LOCAL_STALL_COOLDOWN_MS,
+              senderSummary: localVideoRecovery.senderSummary,
+            },
+          );
         } else {
-          if (now - forcedResumeLocalStallWindowStartedAt > FORCED_RESUME_LOCAL_STALL_WINDOW_MS) {
+          if (
+            now - forcedResumeLocalStallWindowStartedAt >
+            FORCED_RESUME_LOCAL_STALL_WINDOW_MS
+          ) {
             forcedResumeLocalStallWindowStartedAt = now;
             forcedResumeLocalStallAttemptsInWindow = 0;
           }
 
-          if (forcedResumeLocalStallAttemptsInWindow >= FORCED_RESUME_LOCAL_STALL_MAX_ATTEMPTS) {
-            console.log(`[SipStore] ${recoveryTag} resume_required_local_stall max_attempts_exceeded`, {
-              attempts: forcedResumeLocalStallAttemptsInWindow,
-              windowMs: FORCED_RESUME_LOCAL_STALL_WINDOW_MS,
-              senderSummary: localVideoRecovery.senderSummary,
-            });
-            await get()._terminateCallAfterRecoveryFailure("Local video sender stalled after repeated forced resumes", {
-              recoveryId,
-              source: "forced_resume_local_stall_max_attempts",
-            });
+          if (
+            forcedResumeLocalStallAttemptsInWindow >=
+            FORCED_RESUME_LOCAL_STALL_MAX_ATTEMPTS
+          ) {
+            console.log(
+              `[SipStore] ${recoveryTag} resume_required_local_stall max_attempts_exceeded`,
+              {
+                attempts: forcedResumeLocalStallAttemptsInWindow,
+                windowMs: FORCED_RESUME_LOCAL_STALL_WINDOW_MS,
+                senderSummary: localVideoRecovery.senderSummary,
+              },
+            );
+            await get()._terminateCallAfterRecoveryFailure(
+              'Local video sender stalled after repeated forced resumes',
+              {
+                recoveryId,
+                source: 'forced_resume_local_stall_max_attempts',
+              },
+            );
             return;
           }
 
@@ -1450,7 +1716,8 @@ export const useSipStore = create<SipStore>((set, get) => ({
         forcedResumeLocalStallWindowStartedAt = 0;
       }
 
-      const shouldSkipResume = shouldSkipResumeBase && !forceResumeForLocalStall;
+      const shouldSkipResume =
+        shouldSkipResumeBase && !forceResumeForLocalStall;
 
       console.log(`[SipStore] ${recoveryTag} foreground_transport_check`, {
         hasSessionId,
@@ -1469,7 +1736,7 @@ export const useSipStore = create<SipStore>((set, get) => ({
         console.log(`[SipStore] ${recoveryTag} resume_skip_healthy`);
         get()._clearForegroundRecoveryTimers();
         set({
-          _recoveryMode: "idle",
+          _recoveryMode: 'idle',
           _activeRecoveryId: null,
           _foregroundRecoveryStartedAt: null,
           _foregroundRecoveryAttempts: 0,
@@ -1494,11 +1761,16 @@ export const useSipStore = create<SipStore>((set, get) => ({
         recoveryId,
         {
           bypassRegistrationWait: forceResumeForLocalStall,
-          source: forceResumeForLocalStall ? "forced_local_stall" : "foreground_recovery",
+          source: forceResumeForLocalStall
+            ? 'forced_local_stall'
+            : 'foreground_recovery',
         },
       );
     } catch (error) {
-      console.error(`[SipStore] ${recoveryTag} foreground_recovery_exception:`, error);
+      console.error(
+        `[SipStore] ${recoveryTag} foreground_recovery_exception:`,
+        error,
+      );
       const current = get();
       const savedState: SavedCallState = {
         sessionId: gatewayClient.getSessionId() ?? sessionId,
@@ -1506,7 +1778,12 @@ export const useSipStore = create<SipStore>((set, get) => ({
         wasInCall: true,
         timestamp: Date.now(),
       };
-      current._scheduleForegroundRecoveryRetry(savedState, recoveryId, "Foreground recovery exception", "foreground_recovery_exception");
+      current._scheduleForegroundRecoveryRetry(
+        savedState,
+        recoveryId,
+        'Foreground recovery exception',
+        'foreground_recovery_exception',
+      );
     }
   },
 
@@ -1516,7 +1793,7 @@ export const useSipStore = create<SipStore>((set, get) => ({
   handleNetworkReconnect: async () => {
     const { gatewayClient } = get();
     if (!gatewayClient) {
-      console.log("[SipStore] No gateway client - cannot reconnect");
+      console.log('[SipStore] No gateway client - cannot reconnect');
       return;
     }
 
@@ -1527,7 +1804,7 @@ export const useSipStore = create<SipStore>((set, get) => ({
       await new Promise((resolve) => setTimeout(resolve, 200));
       await gatewayClient.reconnect();
     } catch (error) {
-      console.error("[SipStore] Network reconnect failed:", error);
+      console.error('[SipStore] Network reconnect failed:', error);
     } finally {
       set({ networkReconnecting: false });
     }
@@ -1536,41 +1813,61 @@ export const useSipStore = create<SipStore>((set, get) => ({
   /**
    * Handle call resumption after network reconnect
    */
-  handleCallResume: async (savedState: SavedCallState, recoveryId?: string, options?: { bypassRegistrationWait?: boolean; source?: string }) => {
+  handleCallResume: async (
+    savedState: SavedCallState,
+    recoveryId?: string,
+    options?: { bypassRegistrationWait?: boolean; source?: string },
+  ) => {
     const { gatewayClient } = get();
-    const activeRecoveryId = recoveryId ?? get()._activeRecoveryId ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+    const activeRecoveryId =
+      recoveryId ??
+      get()._activeRecoveryId ??
+      `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
     const recoveryTag = `[Recovery:${activeRecoveryId}]`;
 
     if (get()._recoveryTerminationInProgress) {
-      console.log(`[SipStore] ${recoveryTag} Resume skipped - termination already in progress`);
+      console.log(
+        `[SipStore] ${recoveryTag} Resume skipped - termination already in progress`,
+      );
       return;
     }
 
     if (!gatewayClient) {
-      console.log(`[SipStore] ${recoveryTag} No gateway client - cannot resume call`);
+      console.log(
+        `[SipStore] ${recoveryTag} No gateway client - cannot resume call`,
+      );
       return;
     }
 
-    if (get()._recoveryMode !== "soft_recovering") {
+    if (get()._recoveryMode !== 'soft_recovering') {
       set({
-        _recoveryMode: "soft_recovering",
+        _recoveryMode: 'soft_recovering',
         _foregroundRecoveryStartedAt: Date.now(),
         _foregroundRecoveryAttempts: 0,
       });
     }
 
     const currentAttempt = get()._foregroundRecoveryAttempts;
-    set({ callResumePending: true, _activeRecoveryId: activeRecoveryId });
+    const resumeAttemptStartedAt = Date.now();
+    const resumeSource = options?.source ?? 'default';
+    set({
+      callResumePending: true,
+      _activeRecoveryId: activeRecoveryId,
+      _resumeAttemptStartedAt: resumeAttemptStartedAt,
+      _resumeAttemptSource: resumeSource,
+    });
     console.log(`[SipStore] ${recoveryTag} resume_attempt_${currentAttempt}`, {
       hasSessionId: !!savedState.sessionId,
       remoteNumber: savedState.remoteNumber,
-      source: options?.source ?? "default",
+      source: resumeSource,
       bypassRegistrationWait: options?.bypassRegistrationWait ?? false,
     });
 
     try {
       // Wait for registration to complete (with timeout)
-      const waitForRegistration = async (timeoutMs: number): Promise<boolean> => {
+      const waitForRegistration = async (
+        timeoutMs: number,
+      ): Promise<boolean> => {
         const startTime = Date.now();
         while (Date.now() - startTime < timeoutMs) {
           if (gatewayClient.isRegisteredState) {
@@ -1581,22 +1878,43 @@ export const useSipStore = create<SipStore>((set, get) => ({
         return false;
       };
 
-      const registered = options?.bypassRegistrationWait ? true : await waitForRegistration(5000);
+      const registered = options?.bypassRegistrationWait
+        ? true
+        : await waitForRegistration(RESUME_REGISTRATION_WAIT_TIMEOUT_MS);
+      console.log(
+        `[SipStore] ${recoveryTag} registration_wait_ms=${Date.now() - resumeAttemptStartedAt} registered=${registered}`,
+      );
 
       if (!registered) {
-        console.log(`[SipStore] ${recoveryTag} resume_failed_soft registration_timeout`);
-        set({ callResumePending: false });
-        get()._scheduleForegroundRecoveryRetry(savedState, activeRecoveryId, "Not registered", "registration_timeout");
+        console.log(
+          `[SipStore] ${recoveryTag} resume_failed_soft registration_timeout`,
+        );
+        set({
+          callResumePending: false,
+          _resumeAttemptStartedAt: null,
+          _resumeAttemptSource: null,
+        });
+        get()._scheduleForegroundRecoveryRetry(
+          savedState,
+          activeRecoveryId,
+          'Not registered',
+          'registration_timeout',
+        );
         return;
       }
 
       // Try to resume with session ID
       if (savedState.sessionId) {
-        console.log(`[SipStore] ${recoveryTag} Attempting call resume with sessionId:`, savedState.sessionId);
+        console.log(
+          `[SipStore] ${recoveryTag} Attempting call resume with sessionId:`,
+          savedState.sessionId,
+        );
         await gatewayClient.resumeCall(savedState.sessionId);
 
-        // Wait for resumed/resume_failed response (timeout after 3 seconds)
-        await new Promise((resolve) => setTimeout(resolve, 3000));
+        // Wait for resumed/resume_failed response (timeout after configured threshold)
+        await new Promise((resolve) =>
+          setTimeout(resolve, RESUME_RESPONSE_WAIT_TIMEOUT_MS),
+        );
 
         // If still pending, resume failed - end session instead of callback
         const currentState = get();
@@ -1604,35 +1922,75 @@ export const useSipStore = create<SipStore>((set, get) => ({
           currentState.callResumePending &&
           currentState._activeRecoveryId === activeRecoveryId &&
           !currentState._recoveryTerminationInProgress &&
-          currentState._recoveryMode === "soft_recovering";
+          currentState._recoveryMode === 'soft_recovering';
         if (stillPendingForThisRecovery) {
-          console.log(`[SipStore] ${recoveryTag} resume_failed_soft resume_timeout`);
-          set({ callResumePending: false });
-          currentState._scheduleForegroundRecoveryRetry(savedState, activeRecoveryId, "Resume timeout", "resume_timeout");
+          console.log(
+            `[SipStore] ${recoveryTag} resume_failed_soft resume_timeout`,
+          );
+          set({
+            callResumePending: false,
+            _resumeAttemptStartedAt: null,
+            _resumeAttemptSource: null,
+          });
+          currentState._scheduleForegroundRecoveryRetry(
+            savedState,
+            activeRecoveryId,
+            'Resume timeout',
+            'resume_timeout',
+          );
         }
       } else {
-        console.log(`[SipStore] ${recoveryTag} resume_failed_soft missing_session_id`);
-        set({ callResumePending: false });
+        console.log(
+          `[SipStore] ${recoveryTag} resume_failed_soft missing_session_id`,
+        );
+        set({
+          callResumePending: false,
+          _resumeAttemptStartedAt: null,
+          _resumeAttemptSource: null,
+        });
         if (get()._isCallLikelyAlive()) {
-          get()._scheduleForegroundRecoveryRetry(savedState, activeRecoveryId, "No sessionId", "missing_session_id");
+          get()._scheduleForegroundRecoveryRetry(
+            savedState,
+            activeRecoveryId,
+            'No sessionId',
+            'missing_session_id',
+          );
           return;
         }
-        await get()._terminateCallAfterRecoveryFailure("Call dropped - no session to resume", {
-          recoveryId: activeRecoveryId,
-          source: "missing_session_id_dead",
-        });
+        await get()._terminateCallAfterRecoveryFailure(
+          'Call dropped - no session to resume',
+          {
+            recoveryId: activeRecoveryId,
+            source: 'missing_session_id_dead',
+          },
+        );
       }
     } catch (error) {
-      console.error(`[SipStore] ${recoveryTag} resume_failed_soft resume_exception:`, error);
-      set({ callResumePending: false });
+      console.error(
+        `[SipStore] ${recoveryTag} resume_failed_soft resume_exception:`,
+        error,
+      );
+      set({
+        callResumePending: false,
+        _resumeAttemptStartedAt: null,
+        _resumeAttemptSource: null,
+      });
       if (get()._isCallLikelyAlive()) {
-        get()._scheduleForegroundRecoveryRetry(savedState, activeRecoveryId, "Resume exception", "resume_exception");
+        get()._scheduleForegroundRecoveryRetry(
+          savedState,
+          activeRecoveryId,
+          'Resume exception',
+          'resume_exception',
+        );
         return;
       }
-      await get()._terminateCallAfterRecoveryFailure("Call dropped due to network change", {
-        recoveryId: activeRecoveryId,
-        source: "resume_exception_dead",
-      });
+      await get()._terminateCallAfterRecoveryFailure(
+        'Call dropped due to network change',
+        {
+          recoveryId: activeRecoveryId,
+          source: 'resume_exception_dead',
+        },
+      );
     }
   },
 }));

@@ -4,13 +4,23 @@
  * Based on webrtc-gateway-sip approach
  */
 
-import { MediaStream, RTCIceCandidate, RTCPeerConnection, RTCSessionDescription, mediaDevices } from "react-native-webrtc";
-import type RtcMessageEvent from "react-native-webrtc/lib/typescript/MessageEvent";
-import { Platform } from "react-native";
+import {
+  MediaStream,
+  RTCIceCandidate,
+  RTCPeerConnection,
+  RTCSessionDescription,
+  mediaDevices,
+} from 'react-native-webrtc';
+import type RtcMessageEvent from 'react-native-webrtc/lib/typescript/MessageEvent';
+import { Platform } from 'react-native';
 
-import { VIDEO_BITRATE_KBPS } from "@/constants/webrtc";
-import { ensureMediaPermissions } from "@/lib/request-permissions";
-import { getBitrateForResolution, getGatewayServerFromEnv, getSettingsSync } from "@/store/settings-store";
+import { VIDEO_BITRATE_KBPS } from '@/constants/webrtc';
+import { ensureMediaPermissions } from '@/lib/request-permissions';
+import {
+  getBitrateForResolution,
+  getGatewayServerFromEnv,
+  getSettingsSync,
+} from '@/store/settings-store';
 
 import {
   CallState,
@@ -24,10 +34,10 @@ import {
   OutgoingMessage,
   ReconnectConfig,
   RecoverableGatewayErrorCode,
-} from "./types";
+} from './types';
 
-type RtcDataChannel = ReturnType<RTCPeerConnection["createDataChannel"]>;
-type LocalRtpSender = ReturnType<RTCPeerConnection["getSenders"]>[number];
+type RtcDataChannel = ReturnType<RTCPeerConnection['createDataChannel']>;
+type LocalRtpSender = ReturnType<RTCPeerConnection['getSenders']>[number];
 
 /**
  * Strip port from SIP domain for register payload.
@@ -39,15 +49,15 @@ function stripPortFromDomain(domain: string): string {
   }
 
   // [IPv6]:port -> IPv6
-  if (domain.startsWith("[") && domain.includes("]")) {
-    const closingIndex = domain.indexOf("]");
+  if (domain.startsWith('[') && domain.includes(']')) {
+    const closingIndex = domain.indexOf(']');
     const hostPart = domain.substring(1, closingIndex);
     return hostPart;
   }
 
   // hostname:port or IPv4:port -> hostname / IPv4
   if (/:[0-9]+$/.test(domain)) {
-    return domain.replace(/:[0-9]+$/, "");
+    return domain.replace(/:[0-9]+$/, '');
   }
 
   return domain;
@@ -57,18 +67,20 @@ type RtcDataChannelWithEventListeners = RtcDataChannel & {
   addEventListener: (type: string, listener: (event: unknown) => void) => void;
 };
 
-function hasAddEventListener(channel: RtcDataChannel): channel is RtcDataChannelWithEventListeners {
+function hasAddEventListener(
+  channel: RtcDataChannel,
+): channel is RtcDataChannelWithEventListeners {
   return (
-    typeof channel === "object" &&
+    typeof channel === 'object' &&
     channel !== null &&
-    "addEventListener" in channel &&
-    typeof (channel as Record<string, unknown>).addEventListener === "function"
+    'addEventListener' in channel &&
+    typeof (channel as Record<string, unknown>).addEventListener === 'function'
   );
 }
 
 // Call auth types
 export interface PublicCallAuth {
-  mode: "public";
+  mode: 'public';
   sipDomain: string;
   sipUsername: string;
   sipPassword: string;
@@ -77,27 +89,35 @@ export interface PublicCallAuth {
 }
 
 export interface TrunkCallAuth {
-  mode: "siptrunk";
+  mode: 'siptrunk';
   trunkId: number;
   from?: string;
 }
 
 export type CallAuth = PublicCallAuth | TrunkCallAuth;
 
-export type LocalVideoRecoveryStatus = "not_ios" | "healthy" | "recovered" | "exhausted" | "error";
+export type LocalVideoRecoveryStatus =
+  | 'not_ios'
+  | 'healthy'
+  | 'recovered'
+  | 'exhausted'
+  | 'error';
 export interface LocalVideoRecoveryResult {
   status: LocalVideoRecoveryStatus;
   reason: string;
   senderSummary?: string;
 }
 
-const PUBLIC_IDENTITY_CHANGED_ERROR_MESSAGE = "Public SIP identity changed (username/domain). Send a new offer to create a new session.";
+const PUBLIC_IDENTITY_CHANGED_ERROR_MESSAGE =
+  'Public SIP identity changed (username/domain). Send a new offer to create a new session.';
 const LOCAL_VIDEO_RECOVERY_THROTTLE_MS = 2000;
 const LOCAL_VIDEO_SENDER_HEALTH_SAMPLE_INTERVAL_MS = 350;
 const LOCAL_VIDEO_RECOVERY_MAX_ATTEMPTS = 2;
 const LOCAL_VIDEO_SENDER_RESET_DELAY_MS = 120;
 const LOCAL_VIDEO_POST_REPLACE_WARMUP_MS = 700;
 const LOCAL_VIDEO_ENABLE_TOGGLE_DELAY_MS = 80;
+const DEFAULT_ICE_GATHER_TIMEOUT_MS = 3000;
+const RESUME_ICE_GATHER_TIMEOUT_MS = 1800;
 
 interface PendingCallIntent {
   destination: string;
@@ -116,7 +136,7 @@ interface PendingCallIntent {
  * This ensures Linphone receives H264-only which it handles well
  */
 function preferH264InSdp(sdp: string): string {
-  const lines = sdp.split("\r\n");
+  const lines = sdp.split('\r\n');
   const result: string[] = [];
 
   let inVideoSection = false;
@@ -127,9 +147,9 @@ function preferH264InSdp(sdp: string): string {
 
   // First pass: collect payload type information
   for (const line of lines) {
-    if (line.startsWith("m=video")) {
+    if (line.startsWith('m=video')) {
       inVideoSection = true;
-    } else if (line.startsWith("m=") && !line.startsWith("m=video")) {
+    } else if (line.startsWith('m=') && !line.startsWith('m=video')) {
       inVideoSection = false;
     }
 
@@ -141,9 +161,13 @@ function preferH264InSdp(sdp: string): string {
         const codec = rtpMapMatch[2];
         rtpMapLines.set(pt, line);
 
-        if (codec.toLowerCase().startsWith("h264/")) {
+        if (codec.toLowerCase().startsWith('h264/')) {
           h264PayloadTypes.push(pt);
-        } else if (codec.toLowerCase().startsWith("vp8/") || codec.toLowerCase().startsWith("vp9/") || codec.toLowerCase().startsWith("av1/")) {
+        } else if (
+          codec.toLowerCase().startsWith('vp8/') ||
+          codec.toLowerCase().startsWith('vp9/') ||
+          codec.toLowerCase().startsWith('av1/')
+        ) {
           otherPayloadTypes.push(pt);
         }
       }
@@ -159,26 +183,28 @@ function preferH264InSdp(sdp: string): string {
   // Second pass: rebuild SDP with H264-only
   inVideoSection = false;
   for (const line of lines) {
-    if (line.startsWith("m=video")) {
+    if (line.startsWith('m=video')) {
       inVideoSection = true;
 
       // Rebuild m=video line with only H264 payload types
-      const parts = line.split(" ");
+      const parts = line.split(' ');
       const newPayloads = parts.slice(3).filter((pt: string) => {
         // Keep if it's H264 or RTX for H264
         if (h264PayloadTypes.includes(pt)) return true;
         // Check if it's RTX for H264
         const fmtp = fmtpLines.get(pt);
-        if (fmtp && fmtp.includes("apt=")) {
+        if (fmtp && fmtp.includes('apt=')) {
           const aptMatch = fmtp.match(/apt=(\d+)/);
           if (aptMatch && h264PayloadTypes.includes(aptMatch[1])) return true;
         }
         return false;
       });
 
-      result.push(`${parts[0]} ${parts[1]} ${parts[2]} ${newPayloads.join(" ")}`);
+      result.push(
+        `${parts[0]} ${parts[1]} ${parts[2]} ${newPayloads.join(' ')}`,
+      );
       continue;
-    } else if (line.startsWith("m=") && !line.startsWith("m=video")) {
+    } else if (line.startsWith('m=') && !line.startsWith('m=video')) {
       inVideoSection = false;
     }
 
@@ -205,7 +231,7 @@ function preferH264InSdp(sdp: string): string {
     result.push(line);
   }
 
-  return result.join("\r\n");
+  return result.join('\r\n');
 }
 
 /**
@@ -217,15 +243,21 @@ function forceH264BaselineProfile(sdp: string): string {
   // 42 = Baseline profile
   // e0 = level 3.0 constraints
   // 1f = level 3.1
-  let result = sdp.replace(/profile-level-id=[0-9a-fA-F]{6}/g, "profile-level-id=42e01f");
+  let result = sdp.replace(
+    /profile-level-id=[0-9a-fA-F]{6}/g,
+    'profile-level-id=42e01f',
+  );
 
   // Also ensure packetization-mode=1 is present
-  result = result.replace(/(a=fmtp:\d+\s+.*profile-level-id=42e01f)/g, (match) => {
-    if (!match.includes("packetization-mode=1")) {
-      return match + ";packetization-mode=1";
-    }
-    return match;
-  });
+  result = result.replace(
+    /(a=fmtp:\d+\s+.*profile-level-id=42e01f)/g,
+    (match) => {
+      if (!match.includes('packetization-mode=1')) {
+        return match + ';packetization-mode=1';
+      }
+      return match;
+    },
+  );
 
   return result;
 }
@@ -237,8 +269,11 @@ function forceH264BaselineProfile(sdp: string): string {
  * @param bitrateKbps - Bandwidth limit in kilobits per second (default: 1500)
  * @returns Modified SDP string with b=AS parameter set
  */
-function limitIncomingVideoBandwidth(sdp: string, bitrateKbps: number = 1500): string {
-  const lines = sdp.split("\r\n");
+function limitIncomingVideoBandwidth(
+  sdp: string,
+  bitrateKbps: number = 1500,
+): string {
+  const lines = sdp.split('\r\n');
   const result: string[] = [];
   let inVideoSection = false;
   let hasBandwidthLine = false;
@@ -247,15 +282,15 @@ function limitIncomingVideoBandwidth(sdp: string, bitrateKbps: number = 1500): s
   // First pass: find video section and check if b=AS already exists
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    if (line.startsWith("m=video")) {
+    if (line.startsWith('m=video')) {
       inVideoSection = true;
       videoSectionStartIdx = i;
       hasBandwidthLine = false;
-    } else if (line.startsWith("m=") && !line.startsWith("m=video")) {
+    } else if (line.startsWith('m=') && !line.startsWith('m=video')) {
       inVideoSection = false;
     }
 
-    if (inVideoSection && line.startsWith("b=AS:")) {
+    if (inVideoSection && line.startsWith('b=AS:')) {
       hasBandwidthLine = true;
     }
   }
@@ -267,21 +302,23 @@ function limitIncomingVideoBandwidth(sdp: string, bitrateKbps: number = 1500): s
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
 
-    if (line.startsWith("m=video")) {
+    if (line.startsWith('m=video')) {
       inVideoSection = true;
       insertedBandwidth = false;
       result.push(line);
       continue;
-    } else if (line.startsWith("m=") && !line.startsWith("m=video")) {
+    } else if (line.startsWith('m=') && !line.startsWith('m=video')) {
       inVideoSection = false;
     }
 
     if (inVideoSection) {
       // Replace existing b=AS line
-      if (line.startsWith("b=AS:")) {
+      if (line.startsWith('b=AS:')) {
         result.push(`b=AS:${bitrateKbps}`);
         insertedBandwidth = true;
-        console.log(`[Gateway] 📊 Replaced bandwidth limit: b=AS:${bitrateKbps} (${bitrateKbps}kbps)`);
+        console.log(
+          `[Gateway] 📊 Replaced bandwidth limit: b=AS:${bitrateKbps} (${bitrateKbps}kbps)`,
+        );
         continue;
       }
 
@@ -289,15 +326,17 @@ function limitIncomingVideoBandwidth(sdp: string, bitrateKbps: number = 1500): s
       if (!insertedBandwidth && !hasBandwidthLine) {
         // Check if we've passed the connection line or other key attributes
         // Insert after m=video if we haven't seen c= line, or after c= line if we have
-        const isConnectionLine = line.startsWith("c=");
-        const isAttributeLine = line.startsWith("a=");
+        const isConnectionLine = line.startsWith('c=');
+        const isAttributeLine = line.startsWith('a=');
 
         // If we see a connection line, insert after it
         if (isConnectionLine) {
           result.push(line);
           result.push(`b=AS:${bitrateKbps}`);
           insertedBandwidth = true;
-          console.log(`[Gateway] 📊 Added bandwidth limit: b=AS:${bitrateKbps} (${bitrateKbps}kbps)`);
+          console.log(
+            `[Gateway] 📊 Added bandwidth limit: b=AS:${bitrateKbps} (${bitrateKbps}kbps)`,
+          );
           continue;
         }
 
@@ -306,17 +345,22 @@ function limitIncomingVideoBandwidth(sdp: string, bitrateKbps: number = 1500): s
           // Check if there was a connection line before this
           let hasConnectionLine = false;
           for (let j = i - 1; j >= 0 && j >= videoSectionStartIdx; j--) {
-            if (lines[j].startsWith("c=")) {
+            if (lines[j].startsWith('c=')) {
               hasConnectionLine = true;
               break;
             }
           }
 
           // Insert b=AS before first attribute if connection line exists, otherwise after m=video
-          if (!hasConnectionLine || (i === videoSectionStartIdx + 1 && !lines[i - 1]?.startsWith("c="))) {
+          if (
+            !hasConnectionLine ||
+            (i === videoSectionStartIdx + 1 && !lines[i - 1]?.startsWith('c='))
+          ) {
             result.push(`b=AS:${bitrateKbps}`);
             insertedBandwidth = true;
-            console.log(`[Gateway] 📊 Added bandwidth limit: b=AS:${bitrateKbps} (${bitrateKbps}kbps)`);
+            console.log(
+              `[Gateway] 📊 Added bandwidth limit: b=AS:${bitrateKbps} (${bitrateKbps}kbps)`,
+            );
           }
         }
       }
@@ -328,11 +372,16 @@ function limitIncomingVideoBandwidth(sdp: string, bitrateKbps: number = 1500): s
   }
 
   // If video section exists but we never inserted b=AS, add it at the end of video section
-  if (inVideoSection && !insertedBandwidth && !hasBandwidthLine && videoSectionStartIdx >= 0) {
+  if (
+    inVideoSection &&
+    !insertedBandwidth &&
+    !hasBandwidthLine &&
+    videoSectionStartIdx >= 0
+  ) {
     // Find where video section ends
     let videoSectionEndIdx = lines.length;
     for (let i = videoSectionStartIdx + 1; i < lines.length; i++) {
-      if (lines[i].startsWith("m=")) {
+      if (lines[i].startsWith('m=')) {
         videoSectionEndIdx = i;
         break;
       }
@@ -341,10 +390,12 @@ function limitIncomingVideoBandwidth(sdp: string, bitrateKbps: number = 1500): s
     // Insert b=AS at the end of video section
     const insertIdx = result.length - (lines.length - videoSectionEndIdx);
     result.splice(insertIdx, 0, `b=AS:${bitrateKbps}`);
-    console.log(`[Gateway] 📊 Added bandwidth limit at end of video section: b=AS:${bitrateKbps} (${bitrateKbps}kbps)`);
+    console.log(
+      `[Gateway] 📊 Added bandwidth limit at end of video section: b=AS:${bitrateKbps} (${bitrateKbps}kbps)`,
+    );
   }
 
-  return result.join("\r\n");
+  return result.join('\r\n');
 }
 
 /**
@@ -361,9 +412,12 @@ function processSDPForLinphone(sdp: string, bitrateKbps?: number): string {
   processed = forceH264BaselineProfile(processed);
 
   // 4. Limit incoming video bandwidth to configured kbps
-  processed = limitIncomingVideoBandwidth(processed, bitrateKbps ?? VIDEO_BITRATE_KBPS);
+  processed = limitIncomingVideoBandwidth(
+    processed,
+    bitrateKbps ?? VIDEO_BITRATE_KBPS,
+  );
 
-  console.log("[Gateway] 📝 SDP processed for Linphone compatibility");
+  console.log('[Gateway] 📝 SDP processed for Linphone compatibility');
   return processed;
 }
 
@@ -372,9 +426,14 @@ function processSDPForLinphone(sdp: string, bitrateKbps?: number): string {
  * Logs audio and video codecs with their payload types and parameters
  */
 function logCodecsFromSdp(sdp: string, context: string): void {
-  const lines = sdp.split("\r\n");
+  const lines = sdp.split('\r\n');
   const audioCodecs: { pt: string; codec: string; fmtp?: string }[] = [];
-  const videoCodecs: { pt: string; codec: string; fmtp?: string; profile?: string }[] = [];
+  const videoCodecs: {
+    pt: string;
+    codec: string;
+    fmtp?: string;
+    profile?: string;
+  }[] = [];
 
   let inAudioSection = false;
   let inVideoSection = false;
@@ -382,13 +441,13 @@ function logCodecsFromSdp(sdp: string, context: string): void {
 
   // First pass: collect all codecs and fmtp lines
   for (const line of lines) {
-    if (line.startsWith("m=audio")) {
+    if (line.startsWith('m=audio')) {
       inAudioSection = true;
       inVideoSection = false;
-    } else if (line.startsWith("m=video")) {
+    } else if (line.startsWith('m=video')) {
       inVideoSection = true;
       inAudioSection = false;
-    } else if (line.startsWith("m=")) {
+    } else if (line.startsWith('m=')) {
       inAudioSection = false;
       inVideoSection = false;
     }
@@ -431,7 +490,7 @@ function logCodecsFromSdp(sdp: string, context: string): void {
         const profile = profileMatch[1];
         const profileType = profile.substring(0, 2);
         codec.profile = profile;
-        codec.codec += ` (${profileType === "42" ? "Baseline" : profileType === "4d" ? "Main" : profileType === "64" ? "High" : "Unknown"})`;
+        codec.codec += ` (${profileType === '42' ? 'Baseline' : profileType === '4d' ? 'Main' : profileType === '64' ? 'High' : 'Unknown'})`;
       }
     }
   });
@@ -441,7 +500,7 @@ function logCodecsFromSdp(sdp: string, context: string): void {
     console.log(`[Gateway] 🎵 ${context} - Audio codecs:`);
     audioCodecs.forEach((codec) => {
       const info = `  PT${codec.pt}: ${codec.codec}`;
-      console.log(`[Gateway] ${info}${codec.fmtp ? ` (${codec.fmtp})` : ""}`);
+      console.log(`[Gateway] ${info}${codec.fmtp ? ` (${codec.fmtp})` : ''}`);
     });
   } else {
     console.log(`[Gateway] 🎵 ${context} - No audio codecs found`);
@@ -452,7 +511,7 @@ function logCodecsFromSdp(sdp: string, context: string): void {
     console.log(`[Gateway] 📹 ${context} - Video codecs:`);
     videoCodecs.forEach((codec) => {
       const info = `  PT${codec.pt}: ${codec.codec}`;
-      console.log(`[Gateway] ${info}${codec.fmtp ? ` (${codec.fmtp})` : ""}`);
+      console.log(`[Gateway] ${info}${codec.fmtp ? ` (${codec.fmtp})` : ''}`);
     });
   } else {
     console.log(`[Gateway] 📹 ${context} - No video codecs found`);
@@ -475,10 +534,11 @@ export class GatewayClient {
   private pendingDestination: string | null = null; // Destination to call after session is created
   private pendingCallAuth: CallAuth | null = null; // Call auth to send after session is created
   private pendingCallIntent: PendingCallIntent | null = null; // Last outbound intent for one-shot recovery
-  private lastSentMessageType: string = ""; // Track last sent message for debugging
+  private lastSentMessageType: string = ''; // Track last sent message for debugging
   private rttListeners: ((message: GatewayRttMessage) => void)[] = [];
   private keyframeRetryTimer: ReturnType<typeof setInterval> | null = null;
-  private backgroundVideoRecoveryTimer: ReturnType<typeof setInterval> | null = null;
+  private backgroundVideoRecoveryTimer: ReturnType<typeof setInterval> | null =
+    null;
   private backgroundVideoRecoveryAttempts = 0;
   private hasReceivedVideoFrame = false;
   private localVideoRecoveryInProgress = false;
@@ -493,16 +553,16 @@ export class GatewayClient {
   // Reconnection state
   private reconnectConfig: ReconnectConfig = { ...DEFAULT_RECONNECT_CONFIG };
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  private connectionState: ConnectionState = "disconnected";
+  private connectionState: ConnectionState = 'disconnected';
   private isManualDisconnect = false;
-  private lastServerUrl: string = "";
+  private lastServerUrl: string = '';
 
   // Network-triggered disconnect flag (to preserve call state during network switches)
   private _isNetworkTriggeredDisconnect = false;
   private isPublicIdentityRecoveryInProgress = false;
 
   constructor() {
-    console.log("[Gateway] Client initialized");
+    console.log('[Gateway] Client initialized');
   }
 
   // Getters
@@ -581,16 +641,16 @@ export class GatewayClient {
   }
 
   isRttDataChannelOpen(): boolean {
-    return this.rttDataChannel?.readyState === "open";
+    return this.rttDataChannel?.readyState === 'open';
   }
 
   sendRttData(payload: string | Uint8Array): void {
-    if (!this.rttDataChannel || this.rttDataChannel.readyState !== "open") {
-      console.warn("[Gateway] RTT DataChannel is not open");
+    if (!this.rttDataChannel || this.rttDataChannel.readyState !== 'open') {
+      console.warn('[Gateway] RTT DataChannel is not open');
       return;
     }
 
-    if (typeof payload === "string") {
+    if (typeof payload === 'string') {
       this.rttDataChannel.send(payload);
       return;
     }
@@ -604,11 +664,11 @@ export class GatewayClient {
    * This closes the WebSocket immediately without waiting for timeout
    */
   forceDisconnect(): void {
-    console.log("[Gateway] 📡 Force disconnect for network change");
+    console.log('[Gateway] 📡 Force disconnect for network change');
     this._isNetworkTriggeredDisconnect = true; // Mark as network-triggered disconnect
     if (this.ws) {
       this.isManualDisconnect = false; // Allow auto-reconnect
-      this.ws.close(1000, "Network change");
+      this.ws.close(1000, 'Network change');
     }
   }
 
@@ -620,43 +680,43 @@ export class GatewayClient {
   // Connect to Gateway server
   async connect(serverUrl?: string): Promise<void> {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      console.log("[Gateway] Already connected");
+      console.log('[Gateway] Already connected');
       return;
     }
 
     const url = serverUrl || getGatewayServerFromEnv();
 
     if (!url) {
-      throw new Error("Gateway server URL is required");
+      throw new Error('Gateway server URL is required');
     }
 
-    console.log("[Gateway] Connecting to:", url);
+    console.log('[Gateway] Connecting to:', url);
     this._isConnecting = true;
     this.isManualDisconnect = false;
     this.lastServerUrl = url;
-    this.setConnectionState("connecting");
+    this.setConnectionState('connecting');
 
     return new Promise((resolve, reject) => {
       try {
         this.ws = new WebSocket(url);
 
         this.ws.onopen = () => {
-          console.log("[Gateway] ✅ Connected");
+          console.log('[Gateway] ✅ Connected');
           this._isConnected = true;
           this._isConnecting = false;
           this.reconnectAttempts = 0;
-          this.setConnectionState("connected");
+          this.setConnectionState('connected');
           this.startPing();
           this.callbacks.onConnected?.();
 
           // Auto-register if we were registered before disconnect (app sleep/websocket drop)
           if (this.wasRegisteredBeforeDisconnect && this.config) {
-            console.log("[Gateway] 🔄 Auto-registering after reconnect...");
+            console.log('[Gateway] 🔄 Auto-registering after reconnect...');
             this.wasRegisteredBeforeDisconnect = false; // Reset flag
             // Small delay to ensure connection is stable
             setTimeout(() => {
               this.register().catch((err) => {
-                console.error("[Gateway] ❌ Auto-register failed:", err);
+                console.error('[Gateway] ❌ Auto-register failed:', err);
               });
             }, 500);
           }
@@ -665,20 +725,24 @@ export class GatewayClient {
         };
 
         this.ws.onclose = (event) => {
-          console.log("[Gateway] ❌ Disconnected:", event.code, event.reason);
+          console.log('[Gateway] ❌ Disconnected:', event.code, event.reason);
           this._isConnected = false;
           this._isConnecting = false;
-          this.setConnectionState("disconnected");
+          this.setConnectionState('disconnected');
 
           // Remember if we were registered before disconnect for auto-register on reconnect
           if (this.isRegistered) {
             this.wasRegisteredBeforeDisconnect = true;
-            console.log("[Gateway] 📝 Was registered, will auto-register on reconnect");
+            console.log(
+              '[Gateway] 📝 Was registered, will auto-register on reconnect',
+            );
           }
           this.isRegistered = false;
           this.stopPing();
           if (this.isPublicIdentityRecoveryInProgress) {
-            console.log("[Gateway] ℹ️ Suppressing onDisconnected during public identity recovery");
+            console.log(
+              '[Gateway] ℹ️ Suppressing onDisconnected during public identity recovery',
+            );
           } else {
             this.callbacks.onDisconnected?.(event.reason);
           }
@@ -692,10 +756,10 @@ export class GatewayClient {
         this.ws.onerror = (error) => {
           // Extract meaningful error info instead of logging Event object
           // WebSocket error events don't have a message property, so we log the type
-          const errorType = (error as Event)?.type || "unknown";
-          console.error("[Gateway] WebSocket error: type=" + errorType);
+          const errorType = (error as Event)?.type || 'unknown';
+          console.error('[Gateway] WebSocket error: type=' + errorType);
           this._isConnecting = false;
-          reject(new Error("WebSocket connection failed"));
+          reject(new Error('WebSocket connection failed'));
         };
 
         this.ws.onmessage = (event) => {
@@ -710,7 +774,7 @@ export class GatewayClient {
 
   // Disconnect from Gateway server
   disconnect(): void {
-    console.log("[Gateway] Disconnecting...");
+    console.log('[Gateway] Disconnecting...');
     this.isManualDisconnect = true;
     this.isPublicIdentityRecoveryInProgress = false;
     this.cancelReconnect();
@@ -718,7 +782,7 @@ export class GatewayClient {
     this.cleanup();
 
     if (this.ws) {
-      this.ws.close(1000, "User disconnect");
+      this.ws.close(1000, 'User disconnect');
       this.ws = null;
     }
 
@@ -726,13 +790,13 @@ export class GatewayClient {
     this.isRegistered = false;
     this.wasRegisteredBeforeDisconnect = false; // Don't auto-register on intentional disconnect
     this.reconnectAttempts = 0;
-    this.setConnectionState("disconnected");
+    this.setConnectionState('disconnected');
   }
 
   // Register SIP account
   async register(config?: Partial<GatewayConfig>): Promise<void> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      throw new Error("Not connected to Gateway");
+      throw new Error('Not connected to Gateway');
     }
 
     const settings = getSettingsSync();
@@ -749,22 +813,35 @@ export class GatewayClient {
 
     // Validate SIP credentials before sending
     if (!this.config.sipDomain) {
-      throw new Error("SIP domain is not configured. Please configure SIP settings.");
+      throw new Error(
+        'SIP domain is not configured. Please configure SIP settings.',
+      );
     }
     if (!this.config.sipUsername) {
-      throw new Error("SIP username is not configured. Please configure SIP settings.");
+      throw new Error(
+        'SIP username is not configured. Please configure SIP settings.',
+      );
     }
     if (!this.config.sipPassword) {
-      throw new Error("SIP password is not configured. Please configure SIP settings.");
+      throw new Error(
+        'SIP password is not configured. Please configure SIP settings.',
+      );
     }
 
     const sipPort = this.config.sipPort ?? 5060;
     const hostOnlyDomain = stripPortFromDomain(this.config.sipDomain);
 
-    console.log("[Gateway] Registering:", this.config.sipUsername, "@", hostOnlyDomain, "port:", sipPort);
+    console.log(
+      '[Gateway] Registering:',
+      this.config.sipUsername,
+      '@',
+      hostOnlyDomain,
+      'port:',
+      sipPort,
+    );
 
     this.send({
-      type: "register",
+      type: 'register',
       sipDomain: hostOnlyDomain,
       sipUsername: this.config.sipUsername,
       sipPassword: this.config.sipPassword,
@@ -778,8 +855,8 @@ export class GatewayClient {
       return;
     }
 
-    console.log("[Gateway] Unregistering...");
-    this.send({ type: "unregister" });
+    console.log('[Gateway] Unregistering...');
+    this.send({ type: 'unregister' });
     this.isRegistered = false;
     this.wasRegisteredBeforeDisconnect = false; // Don't auto-register after intentional unregister
     this.callbacks.onUnregistered?.();
@@ -799,13 +876,15 @@ export class GatewayClient {
   private async startCallIntent(intent: PendingCallIntent): Promise<void> {
     // If auth is provided, skip registration check (per-call auth)
     if (!intent.auth && !this.isRegistered) {
-      throw new Error("Not registered");
+      throw new Error('Not registered');
     }
 
     if (intent.auth) {
-      console.log(`[Gateway] 📞 Calling: ${intent.destination} (mode: ${intent.auth.mode})`);
+      console.log(
+        `[Gateway] 📞 Calling: ${intent.destination} (mode: ${intent.auth.mode})`,
+      );
     } else {
-      console.log("[Gateway] 📞 Calling:", intent.destination);
+      console.log('[Gateway] 📞 Calling:', intent.destination);
     }
     this._callState = CallState.CALLING;
     this.callbacks.onCalling?.();
@@ -828,7 +907,9 @@ export class GatewayClient {
       const bitrateKbps = Math.min(profileBitrate, VIDEO_BITRATE_KBPS);
 
       if (bitrateKbps < profileBitrate) {
-        console.log(`[Gateway] 📊 Bitrate capped by env: ${profileBitrate}kbps → ${bitrateKbps}kbps`);
+        console.log(
+          `[Gateway] 📊 Bitrate capped by env: ${profileBitrate}kbps → ${bitrateKbps}kbps`,
+        );
       }
 
       // Apply outgoing video bitrate limit based on resolution profile (with env cap)
@@ -841,30 +922,35 @@ export class GatewayClient {
       });
 
       await this.pc!.setLocalDescription(offer);
-      console.log("[Gateway] ⏳ Waiting for ICE gathering to complete...");
+      console.log('[Gateway] ⏳ Waiting for ICE gathering to complete...');
 
       // Wait for ICE gathering to complete
       // This ensures all ICE candidates are included in the SDP
       await this.waitForIceGathering();
 
-      console.log("[Gateway] ➡️ Sending offer (video enabled, ICE complete)...");
+      console.log(
+        '[Gateway] ➡️ Sending offer (video enabled, ICE complete)...',
+      );
 
       // Process SDP for Linphone compatibility (H264 Baseline) with env-capped bitrate
-      const processedSdp = processSDPForLinphone(this.pc!.localDescription!.sdp!, bitrateKbps);
+      const processedSdp = processSDPForLinphone(
+        this.pc!.localDescription!.sdp!,
+        bitrateKbps,
+      );
 
       // Log codecs in the offer
-      logCodecsFromSdp(processedSdp, "Outgoing call offer");
+      logCodecsFromSdp(processedSdp, 'Outgoing call offer');
 
       // Send offer with processed SDP
       this.send({
-        type: "offer",
+        type: 'offer',
         sdp: processedSdp,
       });
 
       // Note: The actual call message will be sent after receiving answer with sessionId
       // See handleAnswer() method
     } catch (error) {
-      console.error("[Gateway] Call failed:", error);
+      console.error('[Gateway] Call failed:', error);
       this._callState = CallState.IDLE;
       this.pendingDestination = null;
       this.pendingCallAuth = null;
@@ -876,12 +962,12 @@ export class GatewayClient {
 
   // Hangup call
   hangup(): void {
-    console.log("[Gateway] 📴 Hanging up...", "sessionId:", this.sessionId);
-    this.send({ type: "hangup", sessionId: this.sessionId || undefined });
+    console.log('[Gateway] 📴 Hanging up...', 'sessionId:', this.sessionId);
+    this.send({ type: 'hangup', sessionId: this.sessionId || undefined });
     this.pendingCallIntent = null;
     this.isPublicIdentityRecoveryInProgress = false;
     this._callState = CallState.ENDED;
-    this.callbacks.onCallEnded?.("User hangup");
+    this.callbacks.onCallEnded?.('User hangup');
     this.cleanup();
     this._callState = CallState.IDLE;
   }
@@ -894,7 +980,7 @@ export class GatewayClient {
         track.enabled = !track.enabled;
       });
       const isMuted = audioTracks.length > 0 && !audioTracks[0].enabled;
-      console.log("[Gateway] 🔇 Mute:", isMuted);
+      console.log('[Gateway] 🔇 Mute:', isMuted);
       return isMuted;
     }
     return false;
@@ -908,7 +994,7 @@ export class GatewayClient {
         track.enabled = !track.enabled;
       });
       const isVideoEnabled = videoTracks.length > 0 && videoTracks[0].enabled;
-      console.log("[Gateway] 📹 Video:", isVideoEnabled);
+      console.log('[Gateway] 📹 Video:', isVideoEnabled);
       return isVideoEnabled;
     }
     return true;
@@ -921,7 +1007,7 @@ export class GatewayClient {
       if (videoTracks.length > 0) {
         // @ts-ignore - React Native WebRTC specific
         videoTracks[0]._switchCamera();
-        console.log("[Gateway] 🔄 Camera switched");
+        console.log('[Gateway] 🔄 Camera switched');
       }
     }
   }
@@ -929,13 +1015,13 @@ export class GatewayClient {
   // Send DTMF
   sendDtmf(digit: string): void {
     if (!this.sessionId) {
-      console.warn("[Gateway] Cannot send DTMF - no active session");
+      console.warn('[Gateway] Cannot send DTMF - no active session');
       return;
     }
 
-    console.log("[Gateway] 🔢 DTMF:", digit, "sessionId:", this.sessionId);
+    console.log('[Gateway] 🔢 DTMF:', digit, 'sessionId:', this.sessionId);
     this.send({
-      type: "dtmf",
+      type: 'dtmf',
       sessionId: this.sessionId,
       digits: digit,
     });
@@ -946,21 +1032,27 @@ export class GatewayClient {
    * @param body - Message content
    * @param contentType - MIME type (default: text/plain;charset=UTF-8)
    */
-  sendMessage(body: string, contentType: string = "text/plain;charset=UTF-8"): void {
+  sendMessage(
+    body: string,
+    contentType: string = 'text/plain;charset=UTF-8',
+  ): void {
     if (!this._isConnected) {
-      console.warn("[Gateway] Cannot send message - not connected");
+      console.warn('[Gateway] Cannot send message - not connected');
       return;
     }
 
-    console.log("[Gateway] 💬 Sending message:", body.substring(0, 50) + (body.length > 50 ? "..." : ""));
+    console.log(
+      '[Gateway] 💬 Sending message:',
+      body.substring(0, 50) + (body.length > 50 ? '...' : ''),
+    );
     this.send({
-      type: "send_message",
+      type: 'send_message',
       body,
       contentType,
     });
   }
 
-  refreshRemoteVideo(reason: string = "manual"): boolean {
+  refreshRemoteVideo(reason: string = 'manual'): boolean {
     const hasActiveCall =
       this._callState === CallState.CONNECTING ||
       this._callState === CallState.CALLING ||
@@ -968,7 +1060,7 @@ export class GatewayClient {
       this._callState === CallState.INCALL;
 
     if (!this.pc || !hasActiveCall) {
-      console.log("[Gateway] 📺 refreshRemoteVideo skipped:", {
+      console.log('[Gateway] 📺 refreshRemoteVideo skipped:', {
         reason,
         hasPeerConnection: !!this.pc,
         callState: this._callState,
@@ -976,7 +1068,7 @@ export class GatewayClient {
       return false;
     }
 
-    console.log("[Gateway] 📺 Refreshing remote video:", reason);
+    console.log('[Gateway] 📺 Refreshing remote video:', reason);
     this.startKeyframeRetry();
 
     if (this.remoteStream) {
@@ -986,16 +1078,18 @@ export class GatewayClient {
     return true;
   }
 
-  async ensureLocalVideoBeforeForegroundResume(reason: string = "app_foreground"): Promise<LocalVideoRecoveryResult> {
+  async ensureLocalVideoBeforeForegroundResume(
+    reason: string = 'app_foreground',
+  ): Promise<LocalVideoRecoveryResult> {
     try {
       return await this.ensureLocalVideoHealthyForIOS(reason);
     } catch (error) {
-      console.warn("[Gateway] ⚠️ Local video foreground recovery failed:", {
+      console.warn('[Gateway] ⚠️ Local video foreground recovery failed:', {
         reason,
         error: error instanceof Error ? error.message : String(error),
       });
       return {
-        status: "error",
+        status: 'error',
         reason,
         senderSummary: error instanceof Error ? error.message : String(error),
       };
@@ -1009,7 +1103,7 @@ export class GatewayClient {
    */
   setReconnectConfig(config: Partial<ReconnectConfig>): void {
     this.reconnectConfig = { ...this.reconnectConfig, ...config };
-    console.log("[Gateway] Reconnect config updated:", this.reconnectConfig);
+    console.log('[Gateway] Reconnect config updated:', this.reconnectConfig);
   }
 
   /**
@@ -1023,7 +1117,7 @@ export class GatewayClient {
    * Manual reconnect (resets attempt counter)
    */
   async reconnect(): Promise<void> {
-    console.log("[Gateway] 🔄 Manual reconnect requested");
+    console.log('[Gateway] 🔄 Manual reconnect requested');
     this.cancelReconnect();
     this.cleanup();
     this.reconnectAttempts = 0;
@@ -1036,7 +1130,9 @@ export class GatewayClient {
    * Used when switching between WiFi and Cellular during a call
    */
   async reconnectForNetworkChange(): Promise<void> {
-    console.log("[Gateway] 🔄 Network change reconnect (preserving localStream)");
+    console.log(
+      '[Gateway] 🔄 Network change reconnect (preserving localStream)',
+    );
     this.cancelReconnect();
     this.cleanupForResume(); // Use cleanupForResume instead of cleanup
     this.reconnectAttempts = 0;
@@ -1051,7 +1147,7 @@ export class GatewayClient {
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
-      console.log("[Gateway] Reconnection cancelled");
+      console.log('[Gateway] Reconnection cancelled');
     }
   }
 
@@ -1063,14 +1159,17 @@ export class GatewayClient {
    */
   async resumeCall(sessionId: string): Promise<void> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      throw new Error("WebSocket not connected");
+      throw new Error('WebSocket not connected');
     }
 
     if (!this.isRegistered) {
-      throw new Error("Not registered - cannot resume call");
+      throw new Error('Not registered - cannot resume call');
     }
 
-    console.log("[Gateway] 📞 Attempting to resume call with sessionId:", sessionId);
+    console.log(
+      '[Gateway] 📞 Attempting to resume call with sessionId:',
+      sessionId,
+    );
 
     try {
       // Clean up PeerConnection but PRESERVE localStream to prevent video flicker
@@ -1080,32 +1179,44 @@ export class GatewayClient {
       this.sessionId = sessionId;
 
       // Check if we can reuse existing localStream
-      const hasActiveLocalStream = this.localStream && this.localStream.getTracks().some((track) => track.readyState === "live");
+      const hasActiveLocalStream =
+        this.localStream &&
+        this.localStream
+          .getTracks()
+          .some((track) => track.readyState === 'live');
 
       if (hasActiveLocalStream) {
-        console.log("[Gateway] ✅ Reusing existing localStream (no video flicker)");
+        console.log(
+          '[Gateway] ✅ Reusing existing localStream (no video flicker)',
+        );
       } else {
         // Only recreate if we don't have active tracks
-        console.log("[Gateway] 🔄 No active localStream - recreating media...");
+        console.log('[Gateway] 🔄 No active localStream - recreating media...');
         await this.getLocalMedia();
       }
 
       if (this.shouldAbortResume(sessionId)) {
-        throw new Error("Resume aborted: session or call state changed before local video check");
+        throw new Error(
+          'Resume aborted: session or call state changed before local video check',
+        );
       }
 
-      await this.ensureLocalVideoHealthyForIOS("resume_call");
+      await this.ensureLocalVideoHealthyForIOS('resume_call');
 
       if (this.shouldAbortResume(sessionId)) {
-        throw new Error("Resume aborted: session or call state changed before PeerConnection creation");
+        throw new Error(
+          'Resume aborted: session or call state changed before PeerConnection creation',
+        );
       }
 
       // Create new PeerConnection for new ICE candidates
-      console.log("[Gateway] 🔄 Creating new PeerConnection for resume...");
+      console.log('[Gateway] 🔄 Creating new PeerConnection for resume...');
       await this.createPeerConnection();
 
       if (this.shouldAbortResume(sessionId)) {
-        throw new Error("Resume aborted: session or call state changed after PeerConnection creation");
+        throw new Error(
+          'Resume aborted: session or call state changed after PeerConnection creation',
+        );
       }
 
       // Get settings for bitrate and apply env cap
@@ -1114,21 +1225,27 @@ export class GatewayClient {
       const bitrateKbps = Math.min(profileBitrate, VIDEO_BITRATE_KBPS);
 
       if (bitrateKbps < profileBitrate) {
-        console.log(`[Gateway] 📊 Bitrate capped by env: ${profileBitrate}kbps → ${bitrateKbps}kbps`);
+        console.log(
+          `[Gateway] 📊 Bitrate capped by env: ${profileBitrate}kbps → ${bitrateKbps}kbps`,
+        );
       }
 
       // Apply outgoing video bitrate limit based on resolution profile (with env cap)
       await this.applyOutgoingVideoBitrateLimit(bitrateKbps);
 
       if (this.shouldAbortResume(sessionId)) {
-        throw new Error("Resume aborted: session or call state changed before offer creation");
+        throw new Error(
+          'Resume aborted: session or call state changed before offer creation',
+        );
       }
 
       // Create SDP offer for renegotiation
-      console.log("[Gateway] 🔄 Creating SDP offer for resume...");
+      console.log('[Gateway] 🔄 Creating SDP offer for resume...');
       const pc = this.pc;
       if (!pc) {
-        throw new Error("Resume aborted: PeerConnection missing before createOffer");
+        throw new Error(
+          'Resume aborted: PeerConnection missing before createOffer',
+        );
       }
       const offer = await pc.createOffer({
         offerToReceiveAudio: true,
@@ -1137,34 +1254,41 @@ export class GatewayClient {
       await pc.setLocalDescription(offer);
 
       // Wait for ICE gathering to complete
-      console.log("[Gateway] ⏳ Waiting for ICE gathering...");
-      await this.waitForIceGathering();
+      console.log('[Gateway] ⏳ Waiting for ICE gathering...');
+      await this.waitForIceGathering(RESUME_ICE_GATHER_TIMEOUT_MS, 'resume');
 
       if (this.shouldAbortResume(sessionId)) {
-        throw new Error("Resume aborted: session or call state changed before resume send");
+        throw new Error(
+          'Resume aborted: session or call state changed before resume send',
+        );
       }
 
       // Process SDP for compatibility with env-capped bitrate
       const localDescriptionSdp = this.pc?.localDescription?.sdp;
       if (!localDescriptionSdp) {
-        throw new Error("Resume aborted: localDescription missing before resume send");
+        throw new Error(
+          'Resume aborted: localDescription missing before resume send',
+        );
       }
-      const processedSdp = processSDPForLinphone(localDescriptionSdp, bitrateKbps);
+      const processedSdp = processSDPForLinphone(
+        localDescriptionSdp,
+        bitrateKbps,
+      );
 
       // Log codecs in the resume offer
-      logCodecsFromSdp(processedSdp, "Call resume offer");
+      logCodecsFromSdp(processedSdp, 'Call resume offer');
 
       // Send resume message with SDP offer to server
-      console.log("[Gateway] ➡️ Sending resume with SDP offer...");
+      console.log('[Gateway] ➡️ Sending resume with SDP offer...');
       this.send({
-        type: "resume",
+        type: 'resume',
         sessionId: sessionId,
         sdp: processedSdp,
       });
       // Server will respond with "resumed" message containing SDP answer
       // handleMessage will process it in the "resumed" case
     } catch (error) {
-      console.error("[Gateway] ❌ Failed to resume call:", error);
+      console.error('[Gateway] ❌ Failed to resume call:', error);
       throw error;
     }
   }
@@ -1176,7 +1300,10 @@ export class GatewayClient {
     if (this.sessionId !== expectedSessionId) {
       return true;
     }
-    if (this._callState === CallState.ENDED || this._callState === CallState.IDLE) {
+    if (
+      this._callState === CallState.ENDED ||
+      this._callState === CallState.IDLE
+    ) {
       return true;
     }
     return false;
@@ -1186,7 +1313,12 @@ export class GatewayClient {
 
   private setConnectionState(state: ConnectionState): void {
     if (this.connectionState !== state) {
-      console.log("[Gateway] 📶 Connection state:", this.connectionState, "→", state);
+      console.log(
+        '[Gateway] 📶 Connection state:',
+        this.connectionState,
+        '→',
+        state,
+      );
       this.connectionState = state;
       this.callbacks.onConnectionStateChange?.(state);
     }
@@ -1194,7 +1326,11 @@ export class GatewayClient {
 
   private getReconnectDelay(): number {
     const delay = Math.min(
-      this.reconnectConfig.baseDelay * Math.pow(this.reconnectConfig.backoffMultiplier, this.reconnectAttempts),
+      this.reconnectConfig.baseDelay *
+        Math.pow(
+          this.reconnectConfig.backoffMultiplier,
+          this.reconnectAttempts,
+        ),
       this.reconnectConfig.maxDelay,
     );
     // Add jitter (±20%) to prevent thundering herd
@@ -1205,8 +1341,8 @@ export class GatewayClient {
   private scheduleReconnect(url: string): void {
     // Give up after max attempts
     if (this.reconnectAttempts >= this.reconnectConfig.maxAttempts) {
-      console.log("[Gateway] ❌ Max reconnect attempts reached - giving up");
-      this.setConnectionState("disconnected");
+      console.log('[Gateway] ❌ Max reconnect attempts reached - giving up');
+      this.setConnectionState('disconnected');
       this.callbacks.onReconnectFailed?.();
       return;
     }
@@ -1214,16 +1350,21 @@ export class GatewayClient {
     const delay = this.getReconnectDelay();
     this.reconnectAttempts++;
 
-    console.log(`[Gateway] 🔄 Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts}/${this.reconnectConfig.maxAttempts})`);
+    console.log(
+      `[Gateway] 🔄 Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts}/${this.reconnectConfig.maxAttempts})`,
+    );
 
-    this.setConnectionState("reconnecting");
-    this.callbacks.onReconnecting?.(this.reconnectAttempts, this.reconnectConfig.maxAttempts);
+    this.setConnectionState('reconnecting');
+    this.callbacks.onReconnecting?.(
+      this.reconnectAttempts,
+      this.reconnectConfig.maxAttempts,
+    );
 
     this.reconnectTimer = setTimeout(async () => {
       try {
         await this.connect(url);
       } catch (error) {
-        console.error("[Gateway] Reconnect attempt failed:", error);
+        console.error('[Gateway] Reconnect attempt failed:', error);
         // Will be called again via onclose if connection fails
       }
     }, delay);
@@ -1232,9 +1373,15 @@ export class GatewayClient {
   // Private methods
 
   private sanitizeOutgoingMessageForLog(message: OutgoingMessage): string {
-    const payload = JSON.parse(JSON.stringify(message)) as Record<string, unknown>;
-    if (typeof payload.sipPassword === "string" && payload.sipPassword.length > 0) {
-      payload.sipPassword = "***";
+    const payload = JSON.parse(JSON.stringify(message)) as Record<
+      string,
+      unknown
+    >;
+    if (
+      typeof payload.sipPassword === 'string' &&
+      payload.sipPassword.length > 0
+    ) {
+      payload.sipPassword = '***';
     }
     return JSON.stringify(payload);
   }
@@ -1242,13 +1389,16 @@ export class GatewayClient {
   private isPublicIdentityChangedError(errorMessage: string): boolean {
     return (
       errorMessage === PUBLIC_IDENTITY_CHANGED_ERROR_MESSAGE ||
-      (errorMessage.includes("Public SIP identity changed") && errorMessage.includes("new offer"))
+      (errorMessage.includes('Public SIP identity changed') &&
+        errorMessage.includes('new offer'))
     );
   }
 
-  private classifyRecoverableError(errorMessage: string): RecoverableGatewayErrorCode | null {
+  private classifyRecoverableError(
+    errorMessage: string,
+  ): RecoverableGatewayErrorCode | null {
     if (this.isPublicIdentityChangedError(errorMessage)) {
-      return "PUBLIC_IDENTITY_CHANGED";
+      return 'PUBLIC_IDENTITY_CHANGED';
     }
     return null;
   }
@@ -1260,9 +1410,16 @@ export class GatewayClient {
     await this.connect(targetUrl);
   }
 
-  private async retryPublicIdentityCall(errorMessage: string): Promise<boolean> {
+  private async retryPublicIdentityCall(
+    errorMessage: string,
+  ): Promise<boolean> {
     const intent = this.pendingCallIntent;
-    if (!intent || intent.attempt !== 0 || !intent.auth || intent.auth.mode !== "public") {
+    if (
+      !intent ||
+      intent.attempt !== 0 ||
+      !intent.auth ||
+      intent.auth.mode !== 'public'
+    ) {
       return false;
     }
 
@@ -1273,10 +1430,12 @@ export class GatewayClient {
     const retryIntent: PendingCallIntent = { ...intent, attempt: 1 };
     this.pendingCallIntent = retryIntent;
     this.isPublicIdentityRecoveryInProgress = true;
-    this.callbacks.onRecoveryState?.("retrying_public_identity");
+    this.callbacks.onRecoveryState?.('retrying_public_identity');
 
     try {
-      console.warn("[Gateway] 🔄 Public identity mismatch detected, forcing new offer/session");
+      console.warn(
+        '[Gateway] 🔄 Public identity mismatch detected, forcing new offer/session',
+      );
       await this.forceNewSessionForRecovery();
       await this.startCallIntent(retryIntent);
       this.isPublicIdentityRecoveryInProgress = false;
@@ -1284,8 +1443,9 @@ export class GatewayClient {
     } catch (error) {
       this.isPublicIdentityRecoveryInProgress = false;
       this.pendingCallIntent = null;
-      const retryMessage = error instanceof Error ? error.message : errorMessage;
-      this.callbacks.onRecoveryState?.("retry_failed");
+      const retryMessage =
+        error instanceof Error ? error.message : errorMessage;
+      this.callbacks.onRecoveryState?.('retry_failed');
       this.callbacks.onError?.(retryMessage);
       return true;
     }
@@ -1295,82 +1455,96 @@ export class GatewayClient {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       const data = JSON.stringify(message);
       this.lastSentMessageType = message.type; // Track for debugging
-      console.log("[Gateway] ➡️ Send:", message.type);
-      console.log("[Gateway] ➡️ Payload:", this.sanitizeOutgoingMessageForLog(message));
+      console.log('[Gateway] ➡️ Send:', message.type);
+      console.log(
+        '[Gateway] ➡️ Payload:',
+        this.sanitizeOutgoingMessageForLog(message),
+      );
       this.ws.send(data);
     } else {
-      console.warn("[Gateway] Cannot send - not connected");
+      console.warn('[Gateway] Cannot send - not connected');
     }
   }
 
   private handleMessage(data: string): void {
     try {
-      console.log("[Gateway] ⬅️ Raw:", data);
+      console.log('[Gateway] ⬅️ Raw:', data);
       const message: IncomingMessage = JSON.parse(data);
-      console.log("[Gateway] ⬅️ Received:", message.type);
+      console.log('[Gateway] ⬅️ Received:', message.type);
 
       switch (message.type) {
-        case "registered":
+        case 'registered':
           this.isRegistered = true;
-          this.callbacks.onRegistered?.(message.username || this.config?.sipUsername || "");
+          this.callbacks.onRegistered?.(
+            message.username || this.config?.sipUsername || '',
+          );
           break;
 
-        case "unregistered":
+        case 'unregistered':
           this.isRegistered = false;
           this.callbacks.onUnregistered?.();
           break;
 
-        case "ringing":
+        case 'ringing':
           this._callState = CallState.RINGING;
           this.callbacks.onRinging?.();
           break;
 
-        case "answer":
+        case 'answer':
           // Server sends "answer" with sessionId after receiving offer
           this.handleAnswer((message as any).sdp, (message as any).sessionId);
           break;
 
-        case "answered":
+        case 'answered':
           // Keep for backwards compatibility
           this.handleAnswer((message as any).sdp, (message as any).sessionId);
           break;
 
-        case "state":
+        case 'state':
           // Handle call state updates from server
           this.handleCallState((message as any).state);
           break;
 
-        case "ended":
+        case 'ended':
           this._callState = CallState.ENDED;
           this.callbacks.onCallEnded?.(message.reason);
           this.cleanup();
           this._callState = CallState.IDLE;
           break;
 
-        case "ice":
+        case 'ice':
           this.handleRemoteIceCandidate(message.candidate);
           break;
 
-        case "error": {
+        case 'error': {
           // Server may send error in either 'message' or 'error' field
-          const errorMessage = message.message || message.error || "Unknown error";
+          const errorMessage =
+            message.message || message.error || 'Unknown error';
 
           // Ignore "Unknown message type" errors - these are non-critical
           // They typically occur when client/server versions have different message type support
           // For example, ICE candidates may not be supported on older server versions
-          if (errorMessage === "Unknown message type" || errorMessage.includes("Unknown message type")) {
-            console.log(`[Gateway] ℹ️ Server doesn't support message type: ${this.lastSentMessageType} (this is okay)`);
+          if (
+            errorMessage === 'Unknown message type' ||
+            errorMessage.includes('Unknown message type')
+          ) {
+            console.log(
+              `[Gateway] ℹ️ Server doesn't support message type: ${this.lastSentMessageType} (this is okay)`,
+            );
             break;
           }
 
           // Log real errors
-          console.error("[Gateway] ❌ Error response:", JSON.stringify(message));
-          console.error("[Gateway] ❌ Error:", errorMessage);
+          console.error(
+            '[Gateway] ❌ Error response:',
+            JSON.stringify(message),
+          );
+          console.error('[Gateway] ❌ Error:', errorMessage);
 
           const recoverableError = this.classifyRecoverableError(errorMessage);
-          if (recoverableError === "PUBLIC_IDENTITY_CHANGED") {
+          if (recoverableError === 'PUBLIC_IDENTITY_CHANGED') {
             const pendingIntent = this.pendingCallIntent;
-            const isPublicIntent = pendingIntent?.auth?.mode === "public";
+            const isPublicIntent = pendingIntent?.auth?.mode === 'public';
             const attempt = pendingIntent?.attempt ?? -1;
 
             if (isPublicIntent && attempt === 0) {
@@ -1379,65 +1553,88 @@ export class GatewayClient {
               break;
             }
             if (isPublicIntent && attempt > 0) {
-              this.callbacks.onRecoveryState?.("retry_failed");
+              this.callbacks.onRecoveryState?.('retry_failed');
             }
           }
 
           this.callbacks.onError?.(errorMessage);
-          if (errorMessage && errorMessage.includes("registration")) {
+          if (errorMessage && errorMessage.includes('registration')) {
             this.callbacks.onRegistrationFailed?.(errorMessage);
           }
           break;
         }
 
-        case "pong":
+        case 'pong':
           // Heartbeat response
           break;
 
-        case "registerStatus": {
+        case 'registerStatus': {
           // Handle registration status from server (same as web client)
-          const statusMsg = message as import("./types").RegisterStatusResponse;
+          const statusMsg = message as import('./types').RegisterStatusResponse;
           if (statusMsg.registered) {
-            console.log("[Gateway] ✅ SIP Registered:", statusMsg.sipDomain || this.config?.sipDomain);
+            console.log(
+              '[Gateway] ✅ SIP Registered:',
+              statusMsg.sipDomain || this.config?.sipDomain,
+            );
             this.isRegistered = true;
-            this.callbacks.onRegistered?.(statusMsg.sipDomain || this.config?.sipUsername || "");
+            this.callbacks.onRegistered?.(
+              statusMsg.sipDomain || this.config?.sipUsername || '',
+            );
           } else {
-            console.log("[Gateway] SIP Unregistered");
+            console.log('[Gateway] SIP Unregistered');
             this.isRegistered = false;
             this.callbacks.onUnregistered?.();
           }
           break;
         }
 
-        case "message": {
+        case 'message': {
           // Handle incoming SIP MESSAGE
           const msgData = message as MessageResponse;
-          console.log("[Gateway] 💬 Message from:", msgData.from, "body:", msgData.body?.substring(0, 50));
+          console.log(
+            '[Gateway] 💬 Message from:',
+            msgData.from,
+            'body:',
+            msgData.body?.substring(0, 50),
+          );
 
           // Check if body contains RTT XML even if contentType is text/plain
-          const isRttXml = msgData.body?.trimStart().startsWith("<rtt");
+          const isRttXml = msgData.body?.trimStart().startsWith('<rtt');
           const isRttContentType =
-            msgData.contentType?.includes("t140") || msgData.contentType?.includes("rtte+xml") || msgData.contentType?.includes("xmpp+xml");
+            msgData.contentType?.includes('t140') ||
+            msgData.contentType?.includes('rtte+xml') ||
+            msgData.contentType?.includes('xmpp+xml');
 
           if (isRttXml || isRttContentType) {
-            const normalizedContentType = msgData.contentType ?? (isRttXml ? "application/xmpp+xml" : undefined);
+            const normalizedContentType =
+              msgData.contentType ??
+              (isRttXml ? 'application/xmpp+xml' : undefined);
             this.emitRttMessage({
-              via: "sip",
+              via: 'sip',
               data: msgData.body,
               contentType: normalizedContentType,
             });
           }
 
           // Always call onMessage callback (will be filtered in sip-store to exclude RTT)
-          this.callbacks.onMessage?.(msgData.from, msgData.body, msgData.contentType);
+          this.callbacks.onMessage?.(
+            msgData.from,
+            msgData.body,
+            msgData.contentType,
+          );
           break;
         }
 
-        case "resumed": {
+        case 'resumed': {
           // Call successfully resumed after network change
           const sessionId = (message as any).sessionId;
           const sdpAnswer = (message as any).sdp;
-          console.log("[Gateway] ✅ Call resumed, sessionId:", sessionId, "hasAnswer:", !!sdpAnswer);
+          console.log(
+            '[Gateway] ✅ Call resumed, sessionId:',
+            sessionId,
+            'hasAnswer:',
+            !!sdpAnswer,
+          );
 
           if (sessionId) {
             this.sessionId = sessionId;
@@ -1447,13 +1644,17 @@ export class GatewayClient {
           if (sdpAnswer && this.pc) {
             (async () => {
               try {
-                console.log("[Gateway] 🔄 Setting remote description from resume answer...");
+                console.log(
+                  '[Gateway] 🔄 Setting remote description from resume answer...',
+                );
                 const remoteDesc = new RTCSessionDescription({
-                  type: "answer",
+                  type: 'answer',
                   sdp: sdpAnswer,
                 });
                 await this.pc!.setRemoteDescription(remoteDesc);
-                console.log("[Gateway] ✅ Remote description set for resumed call");
+                console.log(
+                  '[Gateway] ✅ Remote description set for resumed call',
+                );
 
                 // Add any pending ICE candidates
                 for (const candidate of this.pendingCandidates) {
@@ -1461,72 +1662,93 @@ export class GatewayClient {
                 }
                 this.pendingCandidates = [];
               } catch (error) {
-                console.error("[Gateway] ❌ Failed to set remote description for resume:", error);
+                console.error(
+                  '[Gateway] ❌ Failed to set remote description for resume:',
+                  error,
+                );
               }
             })();
           }
 
           this._callState = CallState.INCALL;
-          this.callbacks.onCallResumed?.(sessionId || this.sessionId || "");
+          this.callbacks.onCallResumed?.(sessionId || this.sessionId || '');
           break;
         }
 
-        case "resume_failed": {
+        case 'resume_failed': {
           // Call resume failed
-          const reason = (message as any).reason || "Unknown error";
-          console.log("[Gateway] ❌ Call resume failed:", reason);
+          const reason = (message as any).reason || 'Unknown error';
+          console.log('[Gateway] ❌ Call resume failed:', reason);
           this.callbacks.onCallResumeFailed?.(reason);
           break;
         }
 
         default:
-          console.log("[Gateway] Unknown message type:", message);
+          console.log('[Gateway] Unknown message type:', message);
       }
     } catch (error) {
-      console.error("[Gateway] Failed to parse message:", error);
+      console.error('[Gateway] Failed to parse message:', error);
     }
   }
 
   private async handleAnswer(sdp: string, sessionId?: string): Promise<void> {
-    console.log("[Gateway] 📱 Received answer, sessionId:", sessionId);
+    console.log('[Gateway] 📱 Received answer, sessionId:', sessionId);
 
     // Log codecs in the answer
-    logCodecsFromSdp(sdp, "Call answer");
+    logCodecsFromSdp(sdp, 'Call answer');
 
     // Debug: Log remote SDP to analyze video content
-    console.log("[Gateway] 📱 Remote SDP length:", sdp?.length || 0);
+    console.log('[Gateway] 📱 Remote SDP length:', sdp?.length || 0);
 
     // Check for video in remote SDP
-    const hasVideoInSdp = sdp?.includes("m=video");
+    const hasVideoInSdp = sdp?.includes('m=video');
     const videoLineMatch = sdp?.match(/m=video\s+(\d+)\s+/);
-    const videoPort = videoLineMatch ? videoLineMatch[1] : "N/A";
-    console.log("[Gateway] 📹 Remote SDP has video:", hasVideoInSdp, "port:", videoPort);
+    const videoPort = videoLineMatch ? videoLineMatch[1] : 'N/A';
+    console.log(
+      '[Gateway] 📹 Remote SDP has video:',
+      hasVideoInSdp,
+      'port:',
+      videoPort,
+    );
 
     // Check if video is disabled (port 0)
-    if (videoPort === "0") {
-      console.warn("[Gateway] ⚠️ VIDEO IS DISABLED in remote SDP (port=0)!");
+    if (videoPort === '0') {
+      console.warn('[Gateway] ⚠️ VIDEO IS DISABLED in remote SDP (port=0)!');
     }
 
     // Log video codec info from remote SDP
     const h264Match = sdp?.match(/a=rtpmap:(\d+)\s+H264/gi);
-    console.log("[Gateway] 📹 Remote H264 codecs:", h264Match?.length || 0);
+    console.log('[Gateway] 📹 Remote H264 codecs:', h264Match?.length || 0);
 
     // Check video direction in SDP
     const videoSectionMatch = sdp?.match(/m=video[\s\S]*?(?=m=|$)/);
     if (videoSectionMatch) {
       const videoSection = videoSectionMatch[0];
-      const direction = videoSection.match(/a=(sendrecv|sendonly|recvonly|inactive)/);
-      console.log("[Gateway] 📹 Video direction:", direction ? direction[1] : "not specified (default: sendrecv)");
+      const direction = videoSection.match(
+        /a=(sendrecv|sendonly|recvonly|inactive)/,
+      );
+      console.log(
+        '[Gateway] 📹 Video direction:',
+        direction ? direction[1] : 'not specified (default: sendrecv)',
+      );
 
       // Check for H264 profile
-      const profileMatch = videoSection.match(/profile-level-id=([0-9a-fA-F]{6})/);
+      const profileMatch = videoSection.match(
+        /profile-level-id=([0-9a-fA-F]{6})/,
+      );
       if (profileMatch) {
         const profile = profileMatch[1];
         const profileType = profile.substring(0, 2);
         console.log(
-          "[Gateway] 📹 H264 profile-level-id:",
+          '[Gateway] 📹 H264 profile-level-id:',
           profile,
-          profileType === "42" ? "(Baseline)" : profileType === "4d" ? "(Main)" : profileType === "64" ? "(High)" : "(Unknown)",
+          profileType === '42'
+            ? '(Baseline)'
+            : profileType === '4d'
+              ? '(Main)'
+              : profileType === '64'
+                ? '(High)'
+                : '(Unknown)',
         );
       }
     }
@@ -1539,18 +1761,23 @@ export class GatewayClient {
     if (this.pc) {
       try {
         const remoteDesc = new RTCSessionDescription({
-          type: "answer",
+          type: 'answer',
           sdp,
         });
         await this.pc.setRemoteDescription(remoteDesc);
-        console.log("[Gateway] ✅ Remote description set");
+        console.log('[Gateway] ✅ Remote description set');
 
         // Debug: Check transceivers after setting remote description
         // @ts-ignore - getTransceivers may not be in RN WebRTC types
         const transceivers = this.pc.getTransceivers?.() || [];
-        console.log("[Gateway] 📊 Transceivers after setRemoteDescription:", transceivers.length);
+        console.log(
+          '[Gateway] 📊 Transceivers after setRemoteDescription:',
+          transceivers.length,
+        );
         transceivers.forEach((t: any, i: number) => {
-          console.log(`[Gateway] 📊 Transceiver ${i}: direction=${t.direction}, currentDirection=${t.currentDirection}, mid=${t.mid}`);
+          console.log(
+            `[Gateway] 📊 Transceiver ${i}: direction=${t.direction}, currentDirection=${t.currentDirection}, mid=${t.mid}`,
+          );
           if (t.receiver?.track) {
             console.log(
               `[Gateway] 📊 Transceiver ${i} receiver track: kind=${t.receiver.track.kind}, enabled=${t.receiver.track.enabled}, readyState=${t.receiver.track.readyState}`,
@@ -1560,9 +1787,11 @@ export class GatewayClient {
 
         // Debug: Check receivers
         const receivers = this.pc.getReceivers?.() || [];
-        console.log("[Gateway] 📊 Receivers:", receivers.length);
+        console.log('[Gateway] 📊 Receivers:', receivers.length);
         receivers.forEach((r: any, i: number) => {
-          console.log(`[Gateway] 📊 Receiver ${i}: track kind=${r.track?.kind}, enabled=${r.track?.enabled}, readyState=${r.track?.readyState}`);
+          console.log(
+            `[Gateway] 📊 Receiver ${i}: track kind=${r.track?.kind}, enabled=${r.track?.enabled}, readyState=${r.track?.readyState}`,
+          );
         });
 
         // Add pending ICE candidates
@@ -1574,16 +1803,18 @@ export class GatewayClient {
         // Check what type of call this is
         if (this.pendingDestination && this.sessionId && this.pendingCallAuth) {
           // OUTGOING CALL: Send the call message now with sessionId + auth
-          console.log(`[Gateway] ➡️ Sending call with sessionId: ${this.sessionId} (mode: ${this.pendingCallAuth.mode})`);
+          console.log(
+            `[Gateway] ➡️ Sending call with sessionId: ${this.sessionId} (mode: ${this.pendingCallAuth.mode})`,
+          );
 
           const callMessage: any = {
-            type: "call",
+            type: 'call',
             sessionId: this.sessionId,
             destination: this.pendingDestination,
           };
 
           // Add auth fields based on mode
-          if (this.pendingCallAuth.mode === "public") {
+          if (this.pendingCallAuth.mode === 'public') {
             callMessage.sipDomain = this.pendingCallAuth.sipDomain;
             callMessage.sipUsername = this.pendingCallAuth.sipUsername;
             callMessage.sipPassword = this.pendingCallAuth.sipPassword;
@@ -1591,7 +1822,7 @@ export class GatewayClient {
             if (this.pendingCallAuth.from) {
               callMessage.from = this.pendingCallAuth.from;
             }
-          } else if (this.pendingCallAuth.mode === "siptrunk") {
+          } else if (this.pendingCallAuth.mode === 'siptrunk') {
             callMessage.trunkId = this.pendingCallAuth.trunkId;
             if (this.pendingCallAuth.from) {
               callMessage.from = this.pendingCallAuth.from;
@@ -1603,9 +1834,12 @@ export class GatewayClient {
           this.pendingCallAuth = null;
         } else if (this.pendingDestination && this.sessionId) {
           // OUTGOING CALL: Send the call message now with sessionId (no auth - pre-registered)
-          console.log("[Gateway] ➡️ Sending call with sessionId:", this.sessionId);
+          console.log(
+            '[Gateway] ➡️ Sending call with sessionId:',
+            this.sessionId,
+          );
           this.send({
-            type: "call",
+            type: 'call',
             sessionId: this.sessionId,
             destination: this.pendingDestination,
           });
@@ -1616,17 +1850,17 @@ export class GatewayClient {
           this.callbacks.onAnswered?.();
         }
       } catch (error) {
-        console.error("[Gateway] Failed to set remote description:", error);
+        console.error('[Gateway] Failed to set remote description:', error);
       }
     }
   }
 
   private handleCallState(state: string): void {
-    console.log("[Gateway] 📞 Call state update:", state);
+    console.log('[Gateway] 📞 Call state update:', state);
 
     switch (state) {
-      case "active":
-      case "answered":
+      case 'active':
+      case 'answered':
         // Active media implies SIP dialog is established; keep registration state
         // true to avoid foreground resume deadlock waiting for late register events.
         this.isRegistered = true;
@@ -1635,13 +1869,13 @@ export class GatewayClient {
         this.isPublicIdentityRecoveryInProgress = false;
         this.callbacks.onAnswered?.();
         break;
-      case "ringing":
-      case "trying":
+      case 'ringing':
+      case 'trying':
         this._callState = CallState.RINGING;
         this.callbacks.onRinging?.();
         break;
-      case "ended":
-      case "failed":
+      case 'ended':
+      case 'failed':
         this._callState = CallState.ENDED;
         this.pendingCallIntent = null;
         this.isPublicIdentityRecoveryInProgress = false;
@@ -1650,11 +1884,13 @@ export class GatewayClient {
         this._callState = CallState.IDLE;
         break;
       default:
-        console.log("[Gateway] Unknown call state:", state);
+        console.log('[Gateway] Unknown call state:', state);
     }
   }
 
-  private async handleRemoteIceCandidate(candidate: RTCIceCandidateInit): Promise<void> {
+  private async handleRemoteIceCandidate(
+    candidate: RTCIceCandidateInit,
+  ): Promise<void> {
     if (!candidate || !candidate.candidate) return;
 
     const iceCandidate = new RTCIceCandidate(candidate);
@@ -1663,7 +1899,7 @@ export class GatewayClient {
       try {
         await this.pc.addIceCandidate(iceCandidate);
       } catch (error) {
-        console.error("[Gateway] Failed to add ICE candidate:", error);
+        console.error('[Gateway] Failed to add ICE candidate:', error);
       }
     } else {
       // Queue candidate until remote description is set
@@ -1675,40 +1911,46 @@ export class GatewayClient {
     // Check if existing stream has active tracks
     if (this.localStream) {
       const tracks = this.localStream.getTracks();
-      const hasActiveTracks = tracks.some((track) => track.readyState === "live");
+      const hasActiveTracks = tracks.some(
+        (track) => track.readyState === 'live',
+      );
       if (hasActiveTracks) {
-        console.log("[Gateway] Local stream already exists with active tracks");
+        console.log('[Gateway] Local stream already exists with active tracks');
         return;
       }
       // Stream exists but tracks are stopped - need to recreate
-      console.log("[Gateway] 🔄 Local stream exists but tracks are stopped - recreating");
+      console.log(
+        '[Gateway] 🔄 Local stream exists but tracks are stopped - recreating',
+      );
       this.localStream = null;
     }
 
     const settings = getSettingsSync();
 
     // ALWAYS require both camera and microphone permissions for video calls
-    console.log("[Gateway] 📹 Requesting camera and microphone permissions...");
+    console.log('[Gateway] 📹 Requesting camera and microphone permissions...');
     const permissions = await ensureMediaPermissions();
 
     // Check both permissions - throw error if either is denied
     if (!permissions.microphone || !permissions.camera) {
       const missingPerms = [];
-      if (!permissions.microphone) missingPerms.push("Microphone");
-      if (!permissions.camera) missingPerms.push("Camera");
+      if (!permissions.microphone) missingPerms.push('Microphone');
+      if (!permissions.camera) missingPerms.push('Camera');
 
-      const errorMessage = `${missingPerms.join(" and ")} permission required for video calls. Please grant permissions in settings and try again.`;
+      const errorMessage = `${missingPerms.join(' and ')} permission required for video calls. Please grant permissions in settings and try again.`;
       console.error(`[Gateway] ❌ ${errorMessage}`);
       throw new Error(errorMessage);
     }
 
     // Always use video mode with settings from store
     const { videoResolution, videoFrameRate } = settings;
-    console.log(`[Gateway] 📹 Getting local media: ${videoResolution}p @ ${videoFrameRate}fps`);
+    console.log(
+      `[Gateway] 📹 Getting local media: ${videoResolution}p @ ${videoFrameRate}fps`,
+    );
 
     try {
       // Import helper to get video constraints from settings
-      const { getVideoConstraints } = await import("@/store/settings-store");
+      const { getVideoConstraints } = await import('@/store/settings-store');
       const videoConstraints = getVideoConstraints();
 
       this.localStream = await mediaDevices.getUserMedia({
@@ -1721,22 +1963,32 @@ export class GatewayClient {
       if (videoTrack) {
         // @ts-ignore - getSettings may not be in all RN WebRTC types
         const trackSettings = videoTrack.getSettings?.() || {};
-        console.log("[Gateway] 📹 Actual video settings:", {
+        console.log('[Gateway] 📹 Actual video settings:', {
           width: trackSettings.width,
           height: trackSettings.height,
           frameRate: trackSettings.frameRate,
         });
 
         // Warn if video is in portrait mode (height > width)
-        if (trackSettings.height && trackSettings.width && trackSettings.height > trackSettings.width) {
-          console.warn("[Gateway] ⚠️ Video is in PORTRAIT mode! This may cause Linphone to crash.");
+        if (
+          trackSettings.height &&
+          trackSettings.width &&
+          trackSettings.height > trackSettings.width
+        ) {
+          console.warn(
+            '[Gateway] ⚠️ Video is in PORTRAIT mode! This may cause Linphone to crash.',
+          );
         }
       }
 
-      console.log("[Gateway] ✅ Got local stream with", this.localStream.getTracks().length, "tracks");
+      console.log(
+        '[Gateway] ✅ Got local stream with',
+        this.localStream.getTracks().length,
+        'tracks',
+      );
       this.callbacks.onLocalStream?.(this.localStream);
     } catch (error) {
-      console.error("[Gateway] ❌ Failed to get local media:", error);
+      console.error('[Gateway] ❌ Failed to get local media:', error);
       throw error;
     }
   }
@@ -1745,13 +1997,25 @@ export class GatewayClient {
     // Close existing peer connection if it's not connected
     if (this.pc) {
       // @ts-ignore - connectionState may not be in RN WebRTC types
-      const connectionState = this.pc.connectionState || this.pc.iceConnectionState;
-      if (connectionState === "connected" || connectionState === "new" || connectionState === "connecting") {
-        console.log("[Gateway] Peer connection already exists and is", connectionState);
+      const connectionState =
+        this.pc.connectionState || this.pc.iceConnectionState;
+      if (
+        connectionState === 'connected' ||
+        connectionState === 'new' ||
+        connectionState === 'connecting'
+      ) {
+        console.log(
+          '[Gateway] Peer connection already exists and is',
+          connectionState,
+        );
         return;
       }
       // Close stale peer connection
-      console.log("[Gateway] 🔄 Closing stale peer connection (state:", connectionState, ")");
+      console.log(
+        '[Gateway] 🔄 Closing stale peer connection (state:',
+        connectionState,
+        ')',
+      );
       this.pc.close();
       this.pc = null;
     }
@@ -1770,19 +2034,19 @@ export class GatewayClient {
     }
 
     // Add default STUN servers
-    iceServers.push({ urls: "stun:stun.l.google.com:19302" });
+    iceServers.push({ urls: 'stun:stun.l.google.com:19302' });
 
     const config: RTCConfiguration = {
       iceServers,
-      iceTransportPolicy: settings.turnEnabled ? "relay" : "all",
+      iceTransportPolicy: settings.turnEnabled ? 'relay' : 'all',
     };
 
-    console.log("[Gateway] 🔗 Creating peer connection");
+    console.log('[Gateway] 🔗 Creating peer connection');
 
     this.pc = new RTCPeerConnection(config);
 
     // RTT DataChannel (ordered + partially reliable)
-    const rttChannel = this.pc.createDataChannel("rtt", {
+    const rttChannel = this.pc.createDataChannel('rtt', {
       ordered: true,
       maxPacketLifeTime: 1000,
     });
@@ -1791,7 +2055,7 @@ export class GatewayClient {
     // Handle remote-created data channels
     // @ts-ignore - react-native-webrtc types missing ondatachannel
     this.pc.ondatachannel = (event: { channel: RtcDataChannel }) => {
-      if (event.channel.label === "rtt") {
+      if (event.channel.label === 'rtt') {
         this.setupRttDataChannel(event.channel);
       }
     };
@@ -1799,9 +2063,14 @@ export class GatewayClient {
     // ICE connection state handler
     // @ts-ignore - event handler exists at runtime but not in RN WebRTC types
     this.pc.oniceconnectionstatechange = () => {
-      console.log("[Gateway] 🧊 ICE connection state:", this.pc?.iceConnectionState);
-      if (this.pc?.iceConnectionState === "connected") {
-        console.log("[Gateway] 🚀 ICE Connected - Starting keyframe retry mechanism");
+      console.log(
+        '[Gateway] 🧊 ICE connection state:',
+        this.pc?.iceConnectionState,
+      );
+      if (this.pc?.iceConnectionState === 'connected') {
+        console.log(
+          '[Gateway] 🚀 ICE Connected - Starting keyframe retry mechanism',
+        );
         this.startKeyframeRetry();
       }
     };
@@ -1809,29 +2078,35 @@ export class GatewayClient {
     // ICE gathering state handler
     // @ts-ignore - event handler exists at runtime but not in RN WebRTC types
     this.pc.onicegatheringstatechange = () => {
-      console.log("[Gateway] 🧊 ICE gathering state:", this.pc?.iceGatheringState);
+      console.log(
+        '[Gateway] 🧊 ICE gathering state:',
+        this.pc?.iceGatheringState,
+      );
     };
 
     // Signaling state handler
     // @ts-ignore - event handler exists at runtime but not in RN WebRTC types
     this.pc.onsignalingstatechange = () => {
-      console.log("[Gateway] 📶 Signaling state:", this.pc?.signalingState);
+      console.log('[Gateway] 📶 Signaling state:', this.pc?.signalingState);
     };
 
     // Connection state handler
     // @ts-ignore - connectionState may not be in RN WebRTC types
     this.pc.onconnectionstatechange = () => {
       // @ts-ignore
-      console.log("[Gateway] 🔌 Connection state:", this.pc?.connectionState);
+      console.log('[Gateway] 🔌 Connection state:', this.pc?.connectionState);
     };
 
     // ICE candidate handler
     // @ts-ignore - event handler exists at runtime but not in RN WebRTC types
     this.pc.onicecandidate = (event: any) => {
       if (event.candidate) {
-        console.log("[Gateway] 🧊 ICE candidate:", event.candidate.candidate?.substring(0, 50));
+        console.log(
+          '[Gateway] 🧊 ICE candidate:',
+          event.candidate.candidate?.substring(0, 50),
+        );
         this.send({
-          type: "ice",
+          type: 'ice',
           candidate: event.candidate,
         });
       }
@@ -1842,19 +2117,21 @@ export class GatewayClient {
     if (this.localStream) {
       this.localStream.getTracks().forEach((track) => {
         this.pc!.addTrack(track, this.localStream!);
-        console.log(`[Gateway] 🔗 Added ${track.kind} track to PeerConnection (readyState: ${track.readyState})`);
+        console.log(
+          `[Gateway] 🔗 Added ${track.kind} track to PeerConnection (readyState: ${track.readyState})`,
+        );
       });
     }
 
     // Handle remote tracks
     // @ts-ignore - react-native-webrtc types missing ontrack
     this.pc.ontrack = (event: any) => {
-      console.log("[Gateway] 🎵 Remote track received:", event.track.kind);
-      console.log("[Gateway] 🎵 Track id:", event.track.id);
-      console.log("[Gateway] 🎵 Track enabled:", event.track.enabled);
-      console.log("[Gateway] 🎵 Track readyState:", event.track.readyState);
-      console.log("[Gateway] 🎵 Track muted:", event.track.muted);
-      console.log("[Gateway] 🎵 Streams count:", event.streams?.length || 0);
+      console.log('[Gateway] 🎵 Remote track received:', event.track.kind);
+      console.log('[Gateway] 🎵 Track id:', event.track.id);
+      console.log('[Gateway] 🎵 Track enabled:', event.track.enabled);
+      console.log('[Gateway] 🎵 Track readyState:', event.track.readyState);
+      console.log('[Gateway] 🎵 Track muted:', event.track.muted);
+      console.log('[Gateway] 🎵 Streams count:', event.streams?.length || 0);
 
       const incomingTrack = event.track;
 
@@ -1865,27 +2142,31 @@ export class GatewayClient {
       };
 
       const handleTrackEnded = () => {
-        console.log(`[Gateway] ⚠️ ${incomingTrack.kind} track ENDED - may cause black screen`);
-        if (incomingTrack.kind === "video") {
-          console.log("[Gateway] 🔄 Video track ended - requesting keyframe");
+        console.log(
+          `[Gateway] ⚠️ ${incomingTrack.kind} track ENDED - may cause black screen`,
+        );
+        if (incomingTrack.kind === 'video') {
+          console.log('[Gateway] 🔄 Video track ended - requesting keyframe');
           this.requestKeyframes();
         }
       };
 
       const handleTrackMute = () => {
         console.log(`[Gateway] 🔇 ${incomingTrack.kind} track MUTED`);
-        if (incomingTrack.kind === "video") {
-          console.log("[Gateway] 📸 Video track muted - requesting keyframe burst");
+        if (incomingTrack.kind === 'video') {
+          console.log(
+            '[Gateway] 📸 Video track muted - requesting keyframe burst',
+          );
           this.requestKeyframes();
           setTimeout(() => this.requestKeyframes(), 250);
           setTimeout(() => this.requestKeyframes(), 700);
-          this.startBackgroundVideoRecovery("track_muted");
+          this.startBackgroundVideoRecovery('track_muted');
         }
       };
 
       const handleTrackUnmute = () => {
         console.log(`[Gateway] 🔊 ${incomingTrack.kind} track UNMUTED`);
-        if (incomingTrack.kind === "video") {
+        if (incomingTrack.kind === 'video') {
           this.hasReceivedVideoFrame = true;
           this.stopKeyframeRetry();
           this.stopBackgroundVideoRecovery();
@@ -1895,27 +2176,42 @@ export class GatewayClient {
         }
       };
 
-      trackWithEvents.addEventListener?.("ended", handleTrackEnded);
-      trackWithEvents.addEventListener?.("mute", handleTrackMute);
-      trackWithEvents.addEventListener?.("unmute", handleTrackUnmute);
+      trackWithEvents.addEventListener?.('ended', handleTrackEnded);
+      trackWithEvents.addEventListener?.('mute', handleTrackMute);
+      trackWithEvents.addEventListener?.('unmute', handleTrackUnmute);
 
-      if (incomingTrack.kind === "video" && incomingTrack.readyState === "live" && !incomingTrack.muted && incomingTrack.enabled) {
+      if (
+        incomingTrack.kind === 'video' &&
+        incomingTrack.readyState === 'live' &&
+        !incomingTrack.muted &&
+        incomingTrack.enabled
+      ) {
         this.hasReceivedVideoFrame = true;
-        console.log("[Gateway] ✅ Video track is live and enabled - marking frame received");
+        console.log(
+          '[Gateway] ✅ Video track is live and enabled - marking frame received',
+        );
       }
 
       // Prefer remote-provided stream from ontrack. Building synthetic streams can
       // keep remote video track muted/frozen on some react-native-webrtc versions.
-      const incomingStreams = Array.isArray(event.streams) ? (event.streams as MediaStream[]) : [];
+      const incomingStreams = Array.isArray(event.streams)
+        ? (event.streams as MediaStream[])
+        : [];
       const primaryIncomingStream = incomingStreams[0];
 
       if (primaryIncomingStream) {
         this.remoteStream = primaryIncomingStream;
-        console.log("[Gateway] 📺 Using remote stream from ontrack:");
-        console.log("[Gateway] 📺 - Stream ID:", this.remoteStream.id);
-        console.log("[Gateway] 📺 - Stream URL:", this.remoteStream.toURL?.());
-        console.log("[Gateway] 📺 - Video tracks:", this.remoteStream.getVideoTracks().length);
-        console.log("[Gateway] 📺 - Audio tracks:", this.remoteStream.getAudioTracks().length);
+        console.log('[Gateway] 📺 Using remote stream from ontrack:');
+        console.log('[Gateway] 📺 - Stream ID:', this.remoteStream.id);
+        console.log('[Gateway] 📺 - Stream URL:', this.remoteStream.toURL?.());
+        console.log(
+          '[Gateway] 📺 - Video tracks:',
+          this.remoteStream.getVideoTracks().length,
+        );
+        console.log(
+          '[Gateway] 📺 - Audio tracks:',
+          this.remoteStream.getAudioTracks().length,
+        );
         this.callbacks.onRemoteStream?.(this.remoteStream);
         return;
       }
@@ -1926,29 +2222,48 @@ export class GatewayClient {
         this.remoteStream = new MediaStream();
       }
 
-      const hasTrackAlready = this.remoteStream.getTracks().some((track) => track.id === incomingTrack.id);
+      const hasTrackAlready = this.remoteStream
+        .getTracks()
+        .some((track) => track.id === incomingTrack.id);
       if (!hasTrackAlready) {
         this.remoteStream.addTrack(incomingTrack);
       }
 
-      console.log("[Gateway] 📺 Using fallback remote stream assembly:");
-      console.log("[Gateway] 📺 - Stream ID:", this.remoteStream.id);
-      console.log("[Gateway] 📺 - Video tracks:", this.remoteStream.getVideoTracks().length);
-      console.log("[Gateway] 📺 - Audio tracks:", this.remoteStream.getAudioTracks().length);
+      console.log('[Gateway] 📺 Using fallback remote stream assembly:');
+      console.log('[Gateway] 📺 - Stream ID:', this.remoteStream.id);
+      console.log(
+        '[Gateway] 📺 - Video tracks:',
+        this.remoteStream.getVideoTracks().length,
+      );
+      console.log(
+        '[Gateway] 📺 - Audio tracks:',
+        this.remoteStream.getAudioTracks().length,
+      );
       this.callbacks.onRemoteStream?.(this.remoteStream);
     };
 
     // Fallback: onaddstream for older react-native-webrtc versions
     // @ts-ignore - deprecated event but still supported in some RN WebRTC versions
     this.pc.onaddstream = (event: any) => {
-      console.log("[Gateway] 📺 onaddstream fired (fallback)");
+      console.log('[Gateway] 📺 onaddstream fired (fallback)');
       if (event.stream) {
-        console.log("[Gateway] 📺 Stream received via onaddstream, tracks:", event.stream.getTracks().length);
+        console.log(
+          '[Gateway] 📺 Stream received via onaddstream, tracks:',
+          event.stream.getTracks().length,
+        );
         const videoTracks = event.stream.getVideoTracks();
         const audioTracks = event.stream.getAudioTracks();
-        console.log("[Gateway] 📺 Video tracks:", videoTracks.length, "Audio tracks:", audioTracks.length);
+        console.log(
+          '[Gateway] 📺 Video tracks:',
+          videoTracks.length,
+          'Audio tracks:',
+          audioTracks.length,
+        );
 
-        if (!this.remoteStream || this.remoteStream.getVideoTracks().length === 0) {
+        if (
+          !this.remoteStream ||
+          this.remoteStream.getVideoTracks().length === 0
+        ) {
           this.remoteStream = event.stream;
           this.callbacks.onRemoteStream?.(this.remoteStream);
         }
@@ -1961,9 +2276,13 @@ export class GatewayClient {
    * This caps our outgoing video bitrate to the specified limit in kbps
    * @param bitrateKbps - Maximum bitrate in kilobits per second (default: 1500)
    */
-  private async applyOutgoingVideoBitrateLimit(bitrateKbps: number = 1500): Promise<void> {
+  private async applyOutgoingVideoBitrateLimit(
+    bitrateKbps: number = 1500,
+  ): Promise<void> {
     if (!this.pc) {
-      console.warn("[Gateway] ⚠️ Cannot apply bitrate limit: PeerConnection not initialized");
+      console.warn(
+        '[Gateway] ⚠️ Cannot apply bitrate limit: PeerConnection not initialized',
+      );
       return;
     }
 
@@ -1971,11 +2290,13 @@ export class GatewayClient {
       const senders = this.pc.getSenders();
       const videoSenders = senders.filter((sender) => {
         if (!sender.track) return false;
-        return sender.track.kind === "video";
+        return sender.track.kind === 'video';
       });
 
       if (videoSenders.length === 0) {
-        console.log("[Gateway] 📊 No video senders found - bitrate limit not applied");
+        console.log(
+          '[Gateway] 📊 No video senders found - bitrate limit not applied',
+        );
         return;
       }
 
@@ -1998,14 +2319,20 @@ export class GatewayClient {
           await sender.setParameters(params);
 
           console.log(
-            `[Gateway] 📊 Applied outgoing video bitrate limit: ${bitrateKbps} kbps (${bitrateBps} bps) on sender ${sender.track?.id || "unknown"}`,
+            `[Gateway] 📊 Applied outgoing video bitrate limit: ${bitrateKbps} kbps (${bitrateBps} bps) on sender ${sender.track?.id || 'unknown'}`,
           );
         } catch (error) {
-          console.error("[Gateway] ❌ Failed to set bitrate on video sender:", error);
+          console.error(
+            '[Gateway] ❌ Failed to set bitrate on video sender:',
+            error,
+          );
         }
       }
     } catch (error) {
-      console.error("[Gateway] ❌ Failed to apply outgoing video bitrate limit:", error);
+      console.error(
+        '[Gateway] ❌ Failed to apply outgoing video bitrate limit:',
+        error,
+      );
     }
   }
 
@@ -2014,22 +2341,27 @@ export class GatewayClient {
    * This is critical for stable connections - without this, the SDP may not include
    * all ICE candidates and the connection may be slow or freeze
    */
-  private async waitForIceGathering(): Promise<void> {
+  private async waitForIceGathering(
+    timeoutMs: number = DEFAULT_ICE_GATHER_TIMEOUT_MS,
+    context: string = 'default',
+  ): Promise<void> {
     if (!this.pc) return;
 
     // Already complete
     // @ts-ignore - iceGatheringState may not be in RN WebRTC types
-    if (this.pc.iceGatheringState === "complete") {
-      console.log("[Gateway] 🧊 ICE gathering already complete");
+    if (this.pc.iceGatheringState === 'complete') {
+      console.log('[Gateway] 🧊 ICE gathering already complete');
       return;
     }
 
     return new Promise((resolve) => {
-      // Timeout after 3 seconds (ICE gathering should be fast with TURN)
+      // Timeout-based fallback keeps resume responsive on network transitions.
       const timeout = setTimeout(() => {
-        console.log("[Gateway] ⏰ ICE gathering timeout (3s) - proceeding with available candidates");
+        console.log(
+          `[Gateway] ⏰ ICE gathering timeout (${timeoutMs}ms, context=${context}) - proceeding with available candidates`,
+        );
         resolve();
-      }, 3000);
+      }, timeoutMs);
 
       // @ts-ignore - event handler exists at runtime
       const originalHandler = this.pc!.onicegatheringstatechange;
@@ -2041,62 +2373,81 @@ export class GatewayClient {
           originalHandler.call(this.pc, event);
         }
 
-        console.log("[Gateway] 🧊 ICE gathering state:", this.pc?.iceGatheringState);
+        console.log(
+          '[Gateway] 🧊 ICE gathering state:',
+          this.pc?.iceGatheringState,
+        );
 
         // @ts-ignore
-        if (this.pc?.iceGatheringState === "complete") {
+        if (this.pc?.iceGatheringState === 'complete') {
           clearTimeout(timeout);
-          console.log("[Gateway] ✅ ICE gathering complete");
+          console.log('[Gateway] ✅ ICE gathering complete');
           resolve();
         }
       };
     });
   }
 
-  private async ensureLocalVideoHealthyForIOS(reason: string): Promise<LocalVideoRecoveryResult> {
-    if (Platform.OS !== "ios") {
-      return { status: "not_ios", reason };
+  private async ensureLocalVideoHealthyForIOS(
+    reason: string,
+  ): Promise<LocalVideoRecoveryResult> {
+    if (Platform.OS !== 'ios') {
+      return { status: 'not_ios', reason };
     }
 
     const now = Date.now();
     if (this.localVideoRecoveryInProgress) {
-      console.log("[Gateway] ⏱️ Local video recovery skipped (already in progress):", reason);
-      return { status: "healthy", reason, senderSummary: "recovery_in_progress" };
+      console.log(
+        '[Gateway] ⏱️ Local video recovery skipped (already in progress):',
+        reason,
+      );
+      return {
+        status: 'healthy',
+        reason,
+        senderSummary: 'recovery_in_progress',
+      };
     }
-    if (now - this.lastLocalVideoRecoveryAt < LOCAL_VIDEO_RECOVERY_THROTTLE_MS) {
-      console.log("[Gateway] ⏱️ Local video recovery throttled:", reason);
-      return { status: "healthy", reason, senderSummary: "recovery_throttled" };
+    if (
+      now - this.lastLocalVideoRecoveryAt <
+      LOCAL_VIDEO_RECOVERY_THROTTLE_MS
+    ) {
+      console.log('[Gateway] ⏱️ Local video recovery throttled:', reason);
+      return { status: 'healthy', reason, senderSummary: 'recovery_throttled' };
     }
 
     const currentVideoTrack = this.localStream?.getVideoTracks()[0];
-    const hasHealthyTrackFlags = !!currentVideoTrack &&
-      currentVideoTrack.readyState === "live" &&
+    const hasHealthyTrackFlags =
+      !!currentVideoTrack &&
+      currentVideoTrack.readyState === 'live' &&
       currentVideoTrack.enabled &&
       !currentVideoTrack.muted;
     if (!this.pc && hasHealthyTrackFlags) {
-      console.log("[Gateway] ✅ Local video track healthy on iOS (no PC yet):", reason);
-      return {
-        status: "healthy",
+      console.log(
+        '[Gateway] ✅ Local video track healthy on iOS (no PC yet):',
         reason,
-        senderSummary: "no_peer_connection_precheck",
+      );
+      return {
+        status: 'healthy',
+        reason,
+        senderSummary: 'no_peer_connection_precheck',
       };
     }
     const senderHealth = await this.sampleLocalVideoSenderHealth();
     const isHealthy = hasHealthyTrackFlags && senderHealth.isHealthy;
 
     if (isHealthy) {
-      console.log("[Gateway] ✅ Local video track healthy on iOS:", {
+      console.log('[Gateway] ✅ Local video track healthy on iOS:', {
         reason,
         sender: senderHealth.summary,
       });
       return {
-        status: "healthy",
+        status: 'healthy',
         reason,
         senderSummary: senderHealth.summary,
       };
     }
 
-    console.log("[Gateway] ⚠️ Local iOS video unhealthy - forcing recovery:", {
+    console.log('[Gateway] ⚠️ Local iOS video unhealthy - forcing recovery:', {
       reason,
       hasHealthyTrackFlags,
       sender: senderHealth.summary,
@@ -2108,11 +2459,18 @@ export class GatewayClient {
       let recovered = false;
       let finalSenderSummary = senderHealth.summary;
 
-      for (let attempt = 1; attempt <= LOCAL_VIDEO_RECOVERY_MAX_ATTEMPTS; attempt += 1) {
+      for (
+        let attempt = 1;
+        attempt <= LOCAL_VIDEO_RECOVERY_MAX_ATTEMPTS;
+        attempt += 1
+      ) {
         const attemptReason = `${reason}:attempt_${attempt}`;
         const replaced = await this.reacquireLocalVideoTrack(attemptReason);
         if (!replaced) {
-          console.warn("[Gateway] ⚠️ Local video reacquire did not replace track:", attemptReason);
+          console.warn(
+            '[Gateway] ⚠️ Local video reacquire did not replace track:',
+            attemptReason,
+          );
           continue;
         }
 
@@ -2120,7 +2478,10 @@ export class GatewayClient {
         await this.nudgeLocalVideoEncoderForIOS(attemptReason);
 
         // Wait for iOS encoder to warm up before reading stats
-        console.log("[Gateway] ⏳ Waiting for iOS encoder warm-up after replaceTrack:", attemptReason);
+        console.log(
+          '[Gateway] ⏳ Waiting for iOS encoder warm-up after replaceTrack:',
+          attemptReason,
+        );
         await new Promise<void>((resolve) => {
           setTimeout(resolve, LOCAL_VIDEO_POST_REPLACE_WARMUP_MS);
         });
@@ -2128,7 +2489,7 @@ export class GatewayClient {
         const afterReplaceHealth = await this.sampleLocalVideoSenderHealth();
         finalSenderSummary = afterReplaceHealth.summary;
         if (afterReplaceHealth.isHealthy) {
-          console.log("[Gateway] ✅ Local iOS video recovery verified:", {
+          console.log('[Gateway] ✅ Local iOS video recovery verified:', {
             reason: attemptReason,
             sender: afterReplaceHealth.summary,
           });
@@ -2136,10 +2497,13 @@ export class GatewayClient {
           break;
         }
 
-        console.warn("[Gateway] ⚠️ Local iOS video sender still stalled after warm-up:", {
-          reason: attemptReason,
-          sender: afterReplaceHealth.summary,
-        });
+        console.warn(
+          '[Gateway] ⚠️ Local iOS video sender still stalled after warm-up:',
+          {
+            reason: attemptReason,
+            sender: afterReplaceHealth.summary,
+          },
+        );
 
         const pipelineReset = await this.resetLocalVideoSenderPipeline();
         if (pipelineReset) {
@@ -2149,10 +2513,13 @@ export class GatewayClient {
           const afterResetHealth = await this.sampleLocalVideoSenderHealth();
           finalSenderSummary = afterResetHealth.summary;
           if (afterResetHealth.isHealthy) {
-            console.log("[Gateway] ✅ Local iOS sender pipeline reset recovered video:", {
-              reason: attemptReason,
-              sender: afterResetHealth.summary,
-            });
+            console.log(
+              '[Gateway] ✅ Local iOS sender pipeline reset recovered video:',
+              {
+                reason: attemptReason,
+                sender: afterResetHealth.summary,
+              },
+            );
             recovered = true;
             break;
           }
@@ -2160,15 +2527,18 @@ export class GatewayClient {
       }
 
       if (!recovered) {
-        console.warn("[Gateway] ❌ Local iOS video recovery exhausted attempts:", reason);
+        console.warn(
+          '[Gateway] ❌ Local iOS video recovery exhausted attempts:',
+          reason,
+        );
         return {
-          status: "exhausted",
+          status: 'exhausted',
           reason,
           senderSummary: finalSenderSummary,
         };
       }
       return {
-        status: "recovered",
+        status: 'recovered',
         reason,
         senderSummary: finalSenderSummary,
       };
@@ -2177,27 +2547,35 @@ export class GatewayClient {
     }
   }
 
-  private async sampleLocalVideoSenderHealth(): Promise<{ isHealthy: boolean; summary: string }> {
+  private async sampleLocalVideoSenderHealth(): Promise<{
+    isHealthy: boolean;
+    summary: string;
+  }> {
     if (!this.pc) {
-      return { isHealthy: false, summary: "no_peer_connection" };
+      return { isHealthy: false, summary: 'no_peer_connection' };
     }
 
-    const videoSender = this.pc.getSenders().find((sender) => sender.track?.kind === "video");
+    const videoSender = this.pc
+      .getSenders()
+      .find((sender) => sender.track?.kind === 'video');
     if (!videoSender) {
-      return { isHealthy: false, summary: "no_video_sender" };
+      return { isHealthy: false, summary: 'no_video_sender' };
     }
 
     const senderTrack = videoSender.track;
-    if (!senderTrack || senderTrack.readyState !== "live") {
+    if (!senderTrack || senderTrack.readyState !== 'live') {
       return {
         isHealthy: false,
-        summary: `sender_track_unhealthy:${senderTrack?.readyState ?? "missing"}`,
+        summary: `sender_track_unhealthy:${senderTrack?.readyState ?? 'missing'}`,
       };
     }
 
     const first = await this.readOutboundVideoSenderSnapshot(videoSender);
     if (!first) {
-      return { isHealthy: false, summary: "no_outbound_rtp_stats:first_sample" };
+      return {
+        isHealthy: false,
+        summary: 'no_outbound_rtp_stats:first_sample',
+      };
     }
 
     await new Promise<void>((resolve) => {
@@ -2206,7 +2584,10 @@ export class GatewayClient {
 
     const second = await this.readOutboundVideoSenderSnapshot(videoSender);
     if (!second) {
-      return { isHealthy: false, summary: "no_outbound_rtp_stats:second_sample" };
+      return {
+        isHealthy: false,
+        summary: 'no_outbound_rtp_stats:second_sample',
+      };
     }
 
     const bytesDelta = second.bytesSent - first.bytesSent;
@@ -2222,8 +2603,14 @@ export class GatewayClient {
 
   private async readOutboundVideoSenderSnapshot(
     sender: LocalRtpSender,
-  ): Promise<{ bytesSent: number; framesEncoded: number; packetsSent: number } | null> {
-    const senderWithStats = sender as LocalRtpSender & { getStats?: () => Promise<unknown> };
+  ): Promise<{
+    bytesSent: number;
+    framesEncoded: number;
+    packetsSent: number;
+  } | null> {
+    const senderWithStats = sender as LocalRtpSender & {
+      getStats?: () => Promise<unknown>;
+    };
     if (!senderWithStats.getStats) {
       return null;
     }
@@ -2238,21 +2625,28 @@ export class GatewayClient {
       let foundOutboundVideoStat = false;
 
       for (const entry of entries) {
-        const statType = typeof entry.type === "string" ? entry.type : "";
-        const statKind = typeof entry.kind === "string"
-          ? entry.kind
-          : typeof entry.mediaType === "string"
-            ? entry.mediaType
-            : "";
+        const statType = typeof entry.type === 'string' ? entry.type : '';
+        const statKind =
+          typeof entry.kind === 'string'
+            ? entry.kind
+            : typeof entry.mediaType === 'string'
+              ? entry.mediaType
+              : '';
 
-        if (statType !== "outbound-rtp" || statKind !== "video") {
+        if (statType !== 'outbound-rtp' || statKind !== 'video') {
           continue;
         }
 
         foundOutboundVideoStat = true;
         bytesSent = Math.max(bytesSent, this.toSafeStatNumber(entry.bytesSent));
-        framesEncoded = Math.max(framesEncoded, this.toSafeStatNumber(entry.framesEncoded));
-        packetsSent = Math.max(packetsSent, this.toSafeStatNumber(entry.packetsSent));
+        framesEncoded = Math.max(
+          framesEncoded,
+          this.toSafeStatNumber(entry.framesEncoded),
+        );
+        packetsSent = Math.max(
+          packetsSent,
+          this.toSafeStatNumber(entry.packetsSent),
+        );
       }
 
       if (!foundOutboundVideoStat) {
@@ -2261,7 +2655,10 @@ export class GatewayClient {
 
       return { bytesSent, framesEncoded, packetsSent };
     } catch (error) {
-      console.log("[Gateway] ⚠️ Failed reading local video sender stats:", error);
+      console.log(
+        '[Gateway] ⚠️ Failed reading local video sender stats:',
+        error,
+      );
       return null;
     }
   }
@@ -2272,15 +2669,20 @@ export class GatewayClient {
     }
 
     if (Array.isArray(report)) {
-      return report.filter((entry): entry is Record<string, unknown> => typeof entry === "object" && entry !== null);
+      return report.filter(
+        (entry): entry is Record<string, unknown> =>
+          typeof entry === 'object' && entry !== null,
+      );
     }
 
-    if (typeof report === "object" && report !== null) {
-      const reportWithForEach = report as { forEach?: (callback: (value: unknown) => void) => void };
-      if (typeof reportWithForEach.forEach === "function") {
+    if (typeof report === 'object' && report !== null) {
+      const reportWithForEach = report as {
+        forEach?: (callback: (value: unknown) => void) => void;
+      };
+      if (typeof reportWithForEach.forEach === 'function') {
         const entries: Array<Record<string, unknown>> = [];
         reportWithForEach.forEach((value) => {
-          if (typeof value === "object" && value !== null) {
+          if (typeof value === 'object' && value !== null) {
             entries.push(value as Record<string, unknown>);
           }
         });
@@ -2292,19 +2694,19 @@ export class GatewayClient {
   }
 
   private toSafeStatNumber(value: unknown): number {
-    if (typeof value !== "number" || Number.isNaN(value)) {
+    if (typeof value !== 'number' || Number.isNaN(value)) {
       return 0;
     }
     return value;
   }
 
   private async nudgeLocalVideoEncoderForIOS(reason: string): Promise<void> {
-    if (Platform.OS !== "ios" || !this.localStream) {
+    if (Platform.OS !== 'ios' || !this.localStream) {
       return;
     }
 
     const localVideoTrack = this.localStream.getVideoTracks()[0];
-    if (!localVideoTrack || localVideoTrack.readyState !== "live") {
+    if (!localVideoTrack || localVideoTrack.readyState !== 'live') {
       return;
     }
 
@@ -2314,9 +2716,9 @@ export class GatewayClient {
         setTimeout(resolve, LOCAL_VIDEO_ENABLE_TOGGLE_DELAY_MS);
       });
       localVideoTrack.enabled = true;
-      console.log("[Gateway] 🔧 Nudged iOS encoder via enable toggle:", reason);
+      console.log('[Gateway] 🔧 Nudged iOS encoder via enable toggle:', reason);
     } catch (error) {
-      console.warn("[Gateway] ⚠️ Failed to nudge iOS encoder:", error);
+      console.warn('[Gateway] ⚠️ Failed to nudge iOS encoder:', error);
     }
   }
 
@@ -2330,7 +2732,9 @@ export class GatewayClient {
       return false;
     }
 
-    const videoSender = this.pc.getSenders().find((sender) => sender.track?.kind === "video");
+    const videoSender = this.pc
+      .getSenders()
+      .find((sender) => sender.track?.kind === 'video');
     if (!videoSender || !videoSender.replaceTrack) {
       return false;
     }
@@ -2341,21 +2745,24 @@ export class GatewayClient {
         setTimeout(resolve, LOCAL_VIDEO_SENDER_RESET_DELAY_MS);
       });
       await videoSender.replaceTrack(localVideoTrack);
-      console.log("[Gateway] 🔧 Reset local video sender pipeline");
+      console.log('[Gateway] 🔧 Reset local video sender pipeline');
       return true;
     } catch (error) {
-      console.warn("[Gateway] ⚠️ Failed to reset local video sender pipeline:", error);
+      console.warn(
+        '[Gateway] ⚠️ Failed to reset local video sender pipeline:',
+        error,
+      );
       return false;
     }
   }
 
   private async reacquireLocalVideoTrack(reason: string): Promise<boolean> {
-    if (Platform.OS !== "ios") {
+    if (Platform.OS !== 'ios') {
       return false;
     }
 
-    const { getVideoConstraints } = await import("@/store/settings-store");
-    console.log("[Gateway] 🔄 Reacquiring local iOS video track:", reason);
+    const { getVideoConstraints } = await import('@/store/settings-store');
+    console.log('[Gateway] 🔄 Reacquiring local iOS video track:', reason);
     const refreshedVideoStream = await mediaDevices.getUserMedia({
       audio: false,
       video: getVideoConstraints(),
@@ -2381,7 +2788,10 @@ export class GatewayClient {
       try {
         localStreamWithOps.removeTrack?.(track);
       } catch (error) {
-        console.log("[Gateway] removeTrack unavailable or failed during video recovery:", error);
+        console.log(
+          '[Gateway] removeTrack unavailable or failed during video recovery:',
+          error,
+        );
       }
       track.stop();
     });
@@ -2397,7 +2807,7 @@ export class GatewayClient {
 
     await this.attachOrReplaceLocalVideoSender();
 
-    console.log("[Gateway] ✅ Reacquired local iOS video track:", {
+    console.log('[Gateway] ✅ Reacquired local iOS video track:', {
       reason,
       trackId: newVideoTrack.id,
       readyState: newVideoTrack.readyState,
@@ -2414,20 +2824,22 @@ export class GatewayClient {
 
     const localVideoTrack = this.localStream.getVideoTracks()[0];
     if (!localVideoTrack) {
-      console.warn("[Gateway] ⚠️ No local video track available for sender recovery");
+      console.warn(
+        '[Gateway] ⚠️ No local video track available for sender recovery',
+      );
       return;
     }
 
     const videoSender = this.pc
       .getSenders()
-      .find((sender) => sender.track?.kind === "video");
+      .find((sender) => sender.track?.kind === 'video');
 
     if (videoSender?.replaceTrack) {
       await videoSender.replaceTrack(localVideoTrack);
-      console.log("[Gateway] 🔁 Replaced local video sender track");
+      console.log('[Gateway] 🔁 Replaced local video sender track');
     } else {
       this.pc.addTrack(localVideoTrack, this.localStream);
-      console.log("[Gateway] ➕ Added local video sender track");
+      console.log('[Gateway] ➕ Added local video sender track');
     }
   }
 
@@ -2437,22 +2849,28 @@ export class GatewayClient {
     try {
       const receivers = this.pc.getReceivers?.() || [];
       receivers.forEach((receiver: any, index: number) => {
-        if (receiver.track?.kind === "video") {
-          console.log(`[Gateway] 📸 Video receiver ${index}: requesting stats (may trigger PLI)`);
+        if (receiver.track?.kind === 'video') {
+          console.log(
+            `[Gateway] 📸 Video receiver ${index}: requesting stats (may trigger PLI)`,
+          );
           receiver
             .getStats?.()
             .then((stats: any) => {
               if (stats) {
-                console.log(`[Gateway] 📸 Video receiver ${index} stats received`);
+                console.log(
+                  `[Gateway] 📸 Video receiver ${index} stats received`,
+                );
               }
             })
             .catch(() => {});
         }
       });
 
-      console.log("[Gateway] 📸 Skipping WS requestKeyframe (not supported by gateway protocol)");
+      console.log(
+        '[Gateway] 📸 Skipping WS requestKeyframe (not supported by gateway protocol)',
+      );
     } catch (error) {
-      console.log("[Gateway] ⚠️ Could not request keyframes:", error);
+      console.log('[Gateway] ⚠️ Could not request keyframes:', error);
     }
   }
 
@@ -2460,7 +2878,7 @@ export class GatewayClient {
     this.stopKeyframeRetry();
     this.hasReceivedVideoFrame = false;
 
-    console.log("[Gateway] 🔄 Starting keyframe retry mechanism");
+    console.log('[Gateway] 🔄 Starting keyframe retry mechanism');
     this.requestKeyframes();
 
     let attempts = 0;
@@ -2470,18 +2888,26 @@ export class GatewayClient {
       attempts++;
 
       if (this.hasReceivedVideoFrame) {
-        console.log("[Gateway] ✅ Video frame received - stopping keyframe retry");
+        console.log(
+          '[Gateway] ✅ Video frame received - stopping keyframe retry',
+        );
         this.stopKeyframeRetry();
         return;
       }
 
       if (attempts >= maxAttempts) {
-        console.log("[Gateway] ⏰ Keyframe retry timeout - giving up after", maxAttempts, "attempts");
+        console.log(
+          '[Gateway] ⏰ Keyframe retry timeout - giving up after',
+          maxAttempts,
+          'attempts',
+        );
         this.stopKeyframeRetry();
         return;
       }
 
-      console.log(`[Gateway] 🔄 Keyframe retry attempt ${attempts}/${maxAttempts}`);
+      console.log(
+        `[Gateway] 🔄 Keyframe retry attempt ${attempts}/${maxAttempts}`,
+      );
       this.requestKeyframes();
     }, 1000);
   }
@@ -2493,7 +2919,7 @@ export class GatewayClient {
     }
   }
 
-  private startBackgroundVideoRecovery(reason: string = "unknown"): void {
+  private startBackgroundVideoRecovery(reason: string = 'unknown'): void {
     if (!this.pc) {
       return;
     }
@@ -2502,24 +2928,28 @@ export class GatewayClient {
     this.backgroundVideoRecoveryAttempts = 0;
     const maxAttempts = 8;
 
-    console.log("[Gateway] 🩹 Starting background video recovery:", reason);
+    console.log('[Gateway] 🩹 Starting background video recovery:', reason);
 
     this.backgroundVideoRecoveryTimer = setInterval(() => {
       this.backgroundVideoRecoveryAttempts += 1;
 
       if (this.hasReceivedVideoFrame) {
-        console.log("[Gateway] ✅ Background recovery complete - video frame received");
+        console.log(
+          '[Gateway] ✅ Background recovery complete - video frame received',
+        );
         this.stopBackgroundVideoRecovery();
         return;
       }
 
       if (this.backgroundVideoRecoveryAttempts > maxAttempts) {
-        console.log("[Gateway] ⏰ Background video recovery timeout");
+        console.log('[Gateway] ⏰ Background video recovery timeout');
         this.stopBackgroundVideoRecovery();
         return;
       }
 
-      console.log(`[Gateway] 🩹 Background recovery attempt ${this.backgroundVideoRecoveryAttempts}/${maxAttempts}`);
+      console.log(
+        `[Gateway] 🩹 Background recovery attempt ${this.backgroundVideoRecoveryAttempts}/${maxAttempts}`,
+      );
       this.requestKeyframes();
       if (this.remoteStream) {
         this.callbacks.onRemoteStream?.(this.remoteStream);
@@ -2536,7 +2966,7 @@ export class GatewayClient {
   }
 
   private cleanup(): void {
-    console.log("[Gateway] 🧹 Cleaning up...");
+    console.log('[Gateway] 🧹 Cleaning up...');
     this.stopKeyframeRetry();
     this.stopBackgroundVideoRecovery();
     this.hasReceivedVideoFrame = false;
@@ -2580,38 +3010,41 @@ export class GatewayClient {
 
     this.rttDataChannel = channel;
 
-    if ("binaryType" in channel) {
-      channel.binaryType = "arraybuffer";
+    if ('binaryType' in channel) {
+      channel.binaryType = 'arraybuffer';
     }
 
     if (!hasAddEventListener(channel)) {
-      console.warn("[Gateway] RTT DataChannel missing addEventListener()");
+      console.warn('[Gateway] RTT DataChannel missing addEventListener()');
       return;
     }
 
-    channel.addEventListener("open", () => {
-      console.log("[Gateway] ✅ RTT DataChannel open");
+    channel.addEventListener('open', () => {
+      console.log('[Gateway] ✅ RTT DataChannel open');
     });
 
-    channel.addEventListener("close", () => {
-      console.log("[Gateway] ❌ RTT DataChannel closed");
+    channel.addEventListener('close', () => {
+      console.log('[Gateway] ❌ RTT DataChannel closed');
       if (this.rttDataChannel === channel) {
         this.rttDataChannel = null;
       }
     });
 
-    channel.addEventListener("error", () => {
-      console.warn("[Gateway] ⚠️ RTT DataChannel error");
+    channel.addEventListener('error', () => {
+      console.warn('[Gateway] ⚠️ RTT DataChannel error');
     });
 
-    channel.addEventListener("message", (event: unknown) => {
-      const data = typeof event === "object" && event !== null && "data" in event ? (event as RtcMessageEvent<"message">).data : undefined;
-      if (typeof data === "string") {
-        this.emitRttMessage({ via: "datachannel", data });
+    channel.addEventListener('message', (event: unknown) => {
+      const data =
+        typeof event === 'object' && event !== null && 'data' in event
+          ? (event as RtcMessageEvent<'message'>).data
+          : undefined;
+      if (typeof data === 'string') {
+        this.emitRttMessage({ via: 'datachannel', data });
         return;
       }
       if (data instanceof ArrayBuffer) {
-        this.emitRttMessage({ via: "datachannel", data: new Uint8Array(data) });
+        this.emitRttMessage({ via: 'datachannel', data: new Uint8Array(data) });
       }
     });
   }
@@ -2621,7 +3054,9 @@ export class GatewayClient {
    * Only closes PeerConnection and clears remote state
    */
   private cleanupForResume(): void {
-    console.log("[Gateway] 🧹 Cleaning up for resume (preserving localStream)...");
+    console.log(
+      '[Gateway] 🧹 Cleaning up for resume (preserving localStream)...',
+    );
     this.stopKeyframeRetry();
     this.stopBackgroundVideoRecovery();
     this.hasReceivedVideoFrame = false;
@@ -2656,8 +3091,8 @@ export class GatewayClient {
     // Send heartbeat ping every 20 seconds to keep connection alive
     this.pingInterval = setInterval(() => {
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-        console.log("[Gateway] 💓 Sending heartbeat ping");
-        this.send({ type: "ping" });
+        console.log('[Gateway] 💓 Sending heartbeat ping');
+        this.send({ type: 'ping' });
       }
     }, 20000);
   }

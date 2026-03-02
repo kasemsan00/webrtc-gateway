@@ -11,11 +11,13 @@ K2 Gateway supports call resumption after client network changes (e.g., WiFi to 
 ### Session Preservation
 
 When a WebSocket client disconnects:
+
 1. **Session is NOT deleted** - only the WebSocket client mapping is removed
 2. **SIP call continues** - RTP media keeps flowing between SIP endpoints
 3. **Session waits for reconnection** - client can resume within the call duration
 
 Sessions are only deleted when:
+
 - Client sends `hangup` message
 - Client sends `reject` message (for incoming calls)
 - Remote party sends SIP `BYE`
@@ -65,10 +67,10 @@ Sessions are only deleted when:
 }
 ```
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| type | string | Yes | Must be `"resume"` |
-| sessionId | string | Yes | The session ID from the original call |
+| Field     | Type   | Required | Description                           |
+| --------- | ------ | -------- | ------------------------------------- |
+| type      | string | Yes      | Must be `"resume"`                    |
+| sessionId | string | Yes      | The session ID from the original call |
 
 ### Resume Success (Server → Client)
 
@@ -82,13 +84,13 @@ Sessions are only deleted when:
 }
 ```
 
-| Field | Type | Description |
-|-------|------|-------------|
-| type | string | `"resumed"` |
-| sessionId | string | The resumed session ID |
-| state | string | Current session state (`active`, `connecting`, `ringing`) |
-| from | string | Caller number/URI |
-| to | string | Callee number/URI |
+| Field     | Type   | Description                                               |
+| --------- | ------ | --------------------------------------------------------- |
+| type      | string | `"resumed"`                                               |
+| sessionId | string | The resumed session ID                                    |
+| state     | string | Current session state (`active`, `connecting`, `ringing`) |
+| from      | string | Caller number/URI                                         |
+| to        | string | Callee number/URI                                         |
 
 ### Resume Failed (Server → Client)
 
@@ -100,19 +102,19 @@ Sessions are only deleted when:
 }
 ```
 
-| Field | Type | Description |
-|-------|------|-------------|
-| type | string | `"resume_failed"` |
-| sessionId | string | The requested session ID |
-| reason | string | Human-readable error message |
+| Field     | Type   | Description                  |
+| --------- | ------ | ---------------------------- |
+| type      | string | `"resume_failed"`            |
+| sessionId | string | The requested session ID     |
+| reason    | string | Human-readable error message |
 
 ### Possible Failure Reasons
 
-| Reason | Description |
-|--------|-------------|
-| `Session not found or expired` | Session ID doesn't exist (call ended or invalid ID) |
-| `Session is in state 'ended', cannot resume` | Call already terminated |
-| `Session is in state 'new', cannot resume` | Session not yet in a call |
+| Reason                                       | Description                                         |
+| -------------------------------------------- | --------------------------------------------------- |
+| `Session not found or expired`               | Session ID doesn't exist (call ended or invalid ID) |
+| `Session is in state 'ended', cannot resume` | Call already terminated                             |
+| `Session is in state 'new', cannot resume`   | Session not yet in a call                           |
 
 ---
 
@@ -191,22 +193,22 @@ The mobile client should:
 
 ## Session States
 
-| State | Resumable | Description |
-|-------|-----------|-------------|
-| `new` | ❌ | Session created but no call initiated |
-| `incoming` | ❌ | Incoming call waiting for answer |
-| `connecting` | ✅ | Outbound call in progress |
-| `ringing` | ✅ | Remote party ringing |
-| `active` | ✅ | Call connected and active |
-| `ended` | ❌ | Call terminated |
+| State        | Resumable | Description                           |
+| ------------ | --------- | ------------------------------------- |
+| `new`        | ❌        | Session created but no call initiated |
+| `incoming`   | ❌        | Incoming call waiting for answer      |
+| `connecting` | ✅        | Outbound call in progress             |
+| `ringing`    | ✅        | Remote party ringing                  |
+| `active`     | ✅        | Call connected and active             |
+| `ended`      | ❌        | Call terminated                       |
 
 ---
 
 ## Limitations
 
-1. **No media renegotiation** - Resume only re-associates the WebSocket client, it doesn't restart WebRTC. If the client's IP changed significantly, media may not flow correctly.
+1. **Media renegotiation is best-effort with timeout** - When client sends SDP in `resume`, server recreates PeerConnection and waits for ICE gathering with a bounded timeout before proceeding with partial candidates. This improves recovery speed but does not guarantee media on severely degraded paths.
 
-2. **No timeout** - Sessions persist until the SIP call ends. If the remote party hangs up while client is reconnecting, the resume will fail.
+2. **Resume still depends on active SIP session** - Sessions persist while SIP dialog is active. If the remote side has already ended the call, resume will return `resume_failed`.
 
 3. **Single client per session** - Only one WebSocket client can be associated with a session at a time. Resuming replaces any previous client mapping.
 
@@ -214,7 +216,7 @@ The mobile client should:
 
 ## Future Enhancements
 
-1. **ICE Restart** - Send re-INVITE to update media endpoints when client IP changes
+1. **Adaptive resume tuning** - Adjust client/server ICE and registration waits by network quality profile
 2. **Session timeout** - Add configurable grace period for orphaned sessions
 3. **State sync** - Send full call state (duration, mute status) on resume
-4. **Media restart** - Re-establish WebRTC peer connection on resume
+4. **Protocol-level recovery hints** - Optional explicit recovery/keyframe hints in WS contract (if contract is extended)
