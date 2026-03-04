@@ -2,7 +2,7 @@
 
 FROM node:22-alpine AS deps
 WORKDIR /app
-COPY package.json package-lock.json ./
+COPY package.json ./
 RUN npm i
 
 FROM node:22-alpine AS build
@@ -18,6 +18,6 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY --from=build /app/dist/server ./dist/server
 COPY --from=build /app/dist/client ./dist/client
 COPY docker-server.mjs ./docker-server.mjs
-COPY package.json package-lock.json ./
+COPY package.json ./ 
 EXPOSE 4173
 CMD ["node", "docker-server.mjs"]
