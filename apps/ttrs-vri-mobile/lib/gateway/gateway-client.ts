@@ -2759,10 +2759,24 @@ export class GatewayClient {
     }
 
     const { getVideoConstraints } = await import('@/store/settings-store');
-    console.log('[Gateway] 🔄 Reacquiring local iOS video track:', reason);
+    // Preserve the user's camera selection (front/back) during recovery.
+    // getVideoConstraints() hardcodes facingMode:'user', so we override it
+    // with the current cameraFacing state from sip-store.
+    const { useSipStore } = await import('@/store/sip-store');
+    const cameraFacing = useSipStore.getState().cameraFacing;
+    const videoConstraints = {
+      ...getVideoConstraints(),
+      facingMode: cameraFacing === 'back' ? 'environment' : 'user',
+    };
+    console.log(
+      '[Gateway] 🔄 Reacquiring local iOS video track:',
+      reason,
+      'camera:',
+      cameraFacing,
+    );
     const refreshedVideoStream = await mediaDevices.getUserMedia({
       audio: false,
-      video: getVideoConstraints(),
+      video: videoConstraints,
     });
 
     const newVideoTrack = refreshedVideoStream.getVideoTracks()[0];
