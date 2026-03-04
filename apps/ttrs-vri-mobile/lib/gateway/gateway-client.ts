@@ -111,13 +111,13 @@ export interface LocalVideoRecoveryResult {
 const PUBLIC_IDENTITY_CHANGED_ERROR_MESSAGE =
   'Public SIP identity changed (username/domain). Send a new offer to create a new session.';
 const LOCAL_VIDEO_RECOVERY_THROTTLE_MS = 2000;
-const LOCAL_VIDEO_SENDER_HEALTH_SAMPLE_INTERVAL_MS = 350;
+const LOCAL_VIDEO_SENDER_HEALTH_SAMPLE_INTERVAL_MS = 150; // Reduced from 350ms - 150ms is enough to detect encoder activity
 const LOCAL_VIDEO_RECOVERY_MAX_ATTEMPTS = 2;
 const LOCAL_VIDEO_SENDER_RESET_DELAY_MS = 120;
-const LOCAL_VIDEO_POST_REPLACE_WARMUP_MS = 700;
+const LOCAL_VIDEO_POST_REPLACE_WARMUP_MS = 300; // Reduced from 700ms - iOS encoder warms up in ~250ms
 const LOCAL_VIDEO_ENABLE_TOGGLE_DELAY_MS = 80;
 const DEFAULT_ICE_GATHER_TIMEOUT_MS = 3000;
-const RESUME_ICE_GATHER_TIMEOUT_MS = 800;
+const RESUME_ICE_GATHER_TIMEOUT_MS = 400; // Reduced from 800ms - ICE gathers in <200ms on good networks
 
 interface PendingCallIntent {
   destination: string;
@@ -713,12 +713,12 @@ export class GatewayClient {
           if (this.wasRegisteredBeforeDisconnect && this.config) {
             console.log('[Gateway] 🔄 Auto-registering after reconnect...');
             this.wasRegisteredBeforeDisconnect = false; // Reset flag
-            // Small delay to ensure connection is stable
+            // Short delay to ensure connection is stable before registering
             setTimeout(() => {
               this.register().catch((err) => {
                 console.error('[Gateway] ❌ Auto-register failed:', err);
               });
-            }, 500);
+            }, 100); // Reduced from 500ms - connection is ready immediately after onopen
           }
 
           resolve();
@@ -2424,6 +2424,28 @@ export class GatewayClient {
         senderSummary: 'no_peer_connection_precheck',
       };
     }
+
+    // Fast-exit: if track flags are healthy and ICE is already connected/completed,
+    // skip the expensive 2-sample RTP stats poll (saves ~300ms on every healthy foreground return).
+    if (hasHealthyTrackFlags && this.pc) {
+      const iceState = this.pc.iceConnectionState;
+      const isIceEstablished =
+        iceState === 'connected' || iceState === 'completed';
+      if (isIceEstablished) {
+        console.log(
+          '[Gateway] ✅ Local video track healthy on iOS (fast exit - ICE connected):',
+          reason,
+          'iceState:',
+          iceState,
+        );
+        return {
+          status: 'healthy',
+          reason,
+          senderSummary: 'fast_exit_ice_connected',
+        };
+      }
+    }
+
     const senderHealth = await this.sampleLocalVideoSenderHealth();
     const isHealthy = hasHealthyTrackFlags && senderHealth.isHealthy;
 
