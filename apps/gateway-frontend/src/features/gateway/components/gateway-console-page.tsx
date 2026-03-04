@@ -58,6 +58,12 @@ function logPrefix(type: string) {
   return ''
 }
 
+function parsePortInput(raw: string, fallback: number) {
+  const parsed = Number.parseInt(raw, 10)
+  if (!Number.isInteger(parsed)) return fallback
+  return Math.max(0, Math.min(65535, parsed))
+}
+
 /* ------------------------------------------------------------------ */
 /*  Tiny reusable bits                                                 */
 /* ------------------------------------------------------------------ */
@@ -314,9 +320,9 @@ export function GatewayConsolePage() {
                     ? 'Connecting...'
                     : state.connection.status === 'reconnecting'
                       ? 'Reconnecting...'
-                    : state.connection.status === 'connected'
-                      ? 'Disconnect'
-                      : 'Connect'}
+                      : state.connection.status === 'connected'
+                        ? 'Disconnect'
+                        : 'Connect'}
                 </Button>
               </div>
               <Separator />
@@ -425,14 +431,14 @@ export function GatewayConsolePage() {
                     id="pub-port"
                     className="h-7 text-xs"
                     type="number"
-                    min={1}
+                    min={0}
                     max={65535}
-                    placeholder="5060"
+                    placeholder="5060 (0 = SRV)"
                     value={state.publicCredentials.sipPort}
                     onChange={(e) =>
                       gatewayActions.setPublicCredential(
                         'sipPort',
-                        Number.parseInt(e.target.value || '5060', 10),
+                        parsePortInput(e.target.value, 5060),
                       )
                     }
                   />
@@ -585,14 +591,14 @@ export function GatewayConsolePage() {
                     id="t-port"
                     className="h-7 text-xs"
                     type="number"
-                    min={1}
+                    min={0}
                     max={65535}
-                    placeholder="5060"
+                    placeholder="5060 (0 = SRV)"
                     value={state.trunk.credentials.sipPort}
                     onChange={(e) =>
                       gatewayActions.setTrunkCredential(
                         'sipPort',
-                        Number.parseInt(e.target.value || '5060', 10),
+                        parsePortInput(e.target.value, 5060),
                       )
                     }
                   />

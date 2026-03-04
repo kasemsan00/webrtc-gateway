@@ -739,6 +739,30 @@ function flushPendingCallQueue() {
   sendCallPayload(pending)
 }
 
+function handlePublicIdentityChangedError() {
+  const pending = buildCallParams()
+  if (!pending) {
+    appendLog(
+      'Public SIP identity changed. Start a new media session before calling again.',
+      'warning',
+    )
+    return
+  }
+
+  appendLog(
+    'Public SIP identity changed. Rebuilding media session for new identity...',
+    'warning',
+  )
+
+  clearResumeRecovery()
+  teardownFullSession()
+  gatewayStore.setState((state) => ({
+    ...state,
+    pendingCallRequest: pending,
+  }))
+  ensureMediaSessionForCall()
+}
+
 function handleIncomingCall(payload: {
   from?: string
   to?: string
@@ -1333,6 +1357,10 @@ function handleMessage(event: MessageEvent<string>) {
         break
       }
       appendLog(`Server Error: ${error}`, 'error')
+      if (error.includes('Public SIP identity changed')) {
+        handlePublicIdentityChangedError()
+        break
+      }
       if (error.includes('Session not found')) {
         handleCallState('ended')
       }

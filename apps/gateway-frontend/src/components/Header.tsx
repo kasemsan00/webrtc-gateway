@@ -2,11 +2,13 @@ import { Link } from '@tanstack/react-router'
 import { AnimatePresence, motion } from 'motion/react'
 
 import {
+  RiAccountCircleLine,
   RiCloseLine,
   RiComputerLine,
   RiHistoryLine,
   RiMenuLine,
   RiPhoneLine,
+  RiPulseLine,
   RiRouteLine,
   RiServerLine,
 } from '@remixicon/react'
@@ -141,6 +143,30 @@ export default function Header({ children }: { children?: React.ReactNode }) {
                 >
                   <RiHistoryLine size={16} />
                   <span className="font-medium">Call Sessions</span>
+                </Link>
+                <Link
+                  to="/active-sessions"
+                  onClick={close}
+                  className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors hover:bg-muted"
+                  activeProps={{
+                    className:
+                      'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm bg-cyan-600/10 text-cyan-700 dark:bg-cyan-600/20 dark:text-cyan-300 hover:bg-cyan-600/20 dark:hover:bg-cyan-600/30 transition-colors',
+                  }}
+                >
+                  <RiPulseLine size={16} />
+                  <span className="font-medium">Active Sessions</span>
+                </Link>
+                <Link
+                  to="/public-accounts"
+                  onClick={close}
+                  className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors hover:bg-muted"
+                  activeProps={{
+                    className:
+                      'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm bg-cyan-600/10 text-cyan-700 dark:bg-cyan-600/20 dark:text-cyan-300 hover:bg-cyan-600/20 dark:hover:bg-cyan-600/30 transition-colors',
+                  }}
+                >
+                  <RiAccountCircleLine size={16} />
+                  <span className="font-medium">Public Accounts</span>
                 </Link>
                 <Link
                   to="/instances"
