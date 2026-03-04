@@ -2660,7 +2660,7 @@ export class GatewayClient {
     }
   }
 
-  private extractStatsEntries(report: unknown): Array<Record<string, unknown>> {
+  private extractStatsEntries(report: unknown): Record<string, unknown>[] {
     if (!report) {
       return [];
     }
@@ -2677,7 +2677,7 @@ export class GatewayClient {
         forEach?: (callback: (value: unknown) => void) => void;
       };
       if (typeof reportWithForEach.forEach === 'function') {
-        const entries: Array<Record<string, unknown>> = [];
+        const entries: Record<string, unknown>[] = [];
         reportWithForEach.forEach((value) => {
           if (typeof value === 'object' && value !== null) {
             entries.push(value as Record<string, unknown>);
