@@ -825,27 +825,59 @@ func (tm *TrunkManager) GetDefaultTrunk() (interface{}, bool) {
 	return nil, false
 }
 
-// MatchTrunkFromInvite matches an incoming INVITE to a trunk based on Request-URI or To header
-// Returns (trunk, owned) where owned indicates if this instance owns the trunk's lease
+// MatchTrunkFromInvite matches an incoming INVITE to a trunk.
+// Priority:
+// 1) Strict Request-URI domain+port match
+// 2) Strict To header domain+port match
+// 3) Request-URI username+domain match (port-agnostic)
+// 4) To header username+domain match (port-agnostic)
+// Returns (trunk, owned) where owned indicates if this instance owns the trunk's lease.
 func (tm *TrunkManager) MatchTrunkFromInvite(req *sip.Request) (*Trunk, bool) {
 	tm.mu.RLock()
 	defer tm.mu.RUnlock()
 
-	// Extract domain from Request-URI
 	ruri := req.Recipient
-	if ruri.Host == "" {
-		return nil, false
+	to := req.To()
+
+	ruriHost := strings.ToLower(strings.TrimSpace(ruri.Host))
+	ruriUser := strings.TrimSpace(ruri.User)
+	ruriPort := ruri.Port
+	if ruriPort == 0 {
+		ruriPort = 5060
 	}
 
-	domain := ruri.Host
-	port := ruri.Port
-	if port == 0 {
-		port = 5060 // Default SIP port
+	toHost := ""
+	toUser := ""
+	toPort := 5060
+	if to != nil {
+		toHost = strings.ToLower(strings.TrimSpace(to.Address.Host))
+		toUser = strings.TrimSpace(to.Address.User)
+		if to.Address.Port != 0 {
+			toPort = to.Address.Port
+		}
 	}
 
-	// Match trunk by domain:port
+	trunkMatch := func(trunk *Trunk) bool {
+		trunkDomain := strings.ToLower(strings.TrimSpace(trunk.Domain))
+
+		if ruriHost != "" && trunkDomain == ruriHost && trunk.Port == ruriPort {
+			return true
+		}
+		if toHost != "" && trunkDomain == toHost && trunk.Port == toPort {
+			return true
+		}
+		if ruriHost != "" && ruriUser != "" && trunkDomain == ruriHost && trunk.Username == ruriUser {
+			return true
+		}
+		if toHost != "" && toUser != "" && trunkDomain == toHost && trunk.Username == toUser {
+			return true
+		}
+
+		return false
+	}
+
 	for _, trunk := range tm.trunks {
-		if trunk.Domain == domain && trunk.Port == port {
+		if trunkMatch(trunk) {
 			owned := tm.ownedLeases[trunk.ID]
 			return trunk, owned
 		}
