@@ -447,6 +447,14 @@ func (tm *TrunkManager) registerTrunk(trunkID int64) error {
 	if err != nil {
 		return fmt.Errorf("failed to resolve destination: %w", err)
 	}
+	fmt.Printf("📞 [TrunkManager] Trunk %d REGISTER target=%s transport=%s contact=sip:%s@%s:%d\n",
+		trunkID,
+		destination,
+		trunk.Transport,
+		trunk.Username,
+		tm.publicIP,
+		tm.localPort,
+	)
 	req.SetDestination(destination)
 
 	// CRITICAL: Force transport to prevent sipgo DoDigestAuth from switching transports

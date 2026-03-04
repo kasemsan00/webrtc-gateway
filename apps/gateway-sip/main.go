@@ -49,6 +49,9 @@ func main() {
 
 	// Display configuration
 	cfg.Display()
+	if cfg.SIP.Port != cfg.SIP.LocalPort {
+		fmt.Printf("⚠️ SIP_PORT (%d) differs from SIP_LOCAL_PORT (%d). Listener binds SIP_LOCAL_PORT; ensure upstream INVITEs target that port.\n", cfg.SIP.Port, cfg.SIP.LocalPort)
+	}
 
 	// Override LocalPort if flag is set to non-default value
 	if *sipPort != 5060 {
