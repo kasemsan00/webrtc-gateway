@@ -1,0 +1,77 @@
+{
+  "expo": {
+    "name": "SoftPhone",
+    "slug": "SoftPhone",
+    "version": "1.0.0",
+    "orientation": "default",
+    "backgroundColor": "#0F172A",
+    "icon": "./assets/images/icon.png",
+    "scheme": "softphone",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "th.or.nectec.kasemsan.softphone",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "This app requires access to your microphone to make and receive phone calls.",
+        "NSCameraUsageDescription": "This app requires access to your camera for video calls.",
+        "ITSAppUsesNonExemptEncryption": false,
+        "UIBackgroundModes": ["audio", "voip"]
+      },
+      "appleTeamId": "96775H948U"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/images/android-icon-foreground.png",
+        "backgroundImage": "./assets/images/android-icon-background.png",
+        "monochromeImage": "./assets/images/android-icon-monochrome.png"
+      },
+      "edgeToEdgeEnabled": true,
+      "predictiveBackGestureEnabled": false,
+      "package": "th.or.nectec.kasemsan.softphone",
+      "permissions": [
+        "CAMERA",
+        "RECORD_AUDIO",
+        "WAKE_LOCK",
+        "BIND_TELECOM_CONNECTION_SERVICE",
+        "FOREGROUND_SERVICE",
+        "READ_PHONE_STATE",
+        "CALL_PHONE",
+        "FOREGROUND_SERVICE_MICROPHONE",
+        "FOREGROUND_SERVICE_CAMERA",
+        "READ_CALL_LOG",
+        "MANAGE_OWN_CALLS"
+      ]
+    },
+    "web": {
+      "output": "static",
+      "favicon": "./assets/images/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/images/splash-icon.png",
+          "imageWidth": 200,
+          "resizeMode": "contain",
+          "backgroundColor": "#ffffff",
+          "dark": {
+            "backgroundColor": "#000000"
+          }
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "edd099de-a358-47c2-a8ae-23cfe2e12415"
+      }
+    }
+  }
+}

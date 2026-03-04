@@ -1,0 +1,58 @@
+{
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "name": "soft-phone",
+  "projectType": "application",
+  "sourceRoot": "apps/soft-phone",
+  "tags": ["scope:gateway", "type:mobile"],
+  "targets": {
+    "dev": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "apps/soft-phone",
+        "command": "npm run start"
+      }
+    },
+    "android": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "apps/soft-phone",
+        "command": "npm run android"
+      }
+    },
+    "ios": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "apps/soft-phone",
+        "command": "npm run ios"
+      }
+    },
+    "ios:device": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "apps/soft-phone",
+        "command": "npm run ios:device"
+      }
+    },
+    "ios:build:local": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "apps/soft-phone",
+        "command": "npm run ios:build:local"
+      }
+    },
+    "web": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "apps/soft-phone",
+        "command": "npm run web"
+      }
+    },
+    "lint": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "apps/soft-phone",
+        "command": "npm run lint"
+      }
+    }
+  }
+}

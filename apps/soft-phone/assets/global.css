@@ -1,0 +1,42 @@
+/* Custom CSS Variables for Softphone Theme */
+:root {
+  --color-background: #111111;
+  --color-foreground: #f2f2f7;
+  --color-muted: #636366;
+  --color-muted-foreground: #8e8e93;
+  --color-primary: #48484a;
+  --color-primary-foreground: #ffffff;
+  --color-secondary: #1c1c1e;
+  --color-secondary-foreground: #f2f2f7;
+  --color-accent: #2c2c2e;
+  --color-accent-foreground: #f2f2f7;
+  --color-destructive: #ef4444;
+  --color-destructive-foreground: #ffffff;
+  --color-border: #2c2c2e;
+  --color-input: #2c2c2e;
+  --color-ring: #48484a;
+  --color-card: #1c1c1e;
+  --color-card-foreground: #f2f2f7;
+
+  /* Semantic Colors */
+  --color-success: #10b981;
+  --color-warning: #f59e0b;
+  --color-info: #636366;
+
+  /* Call-specific colors */
+  --color-call-active: #10b981;
+  --color-call-ended: #ef4444;
+  --color-call-missed: #f59e0b;
+  --color-call-incoming: #10b981;
+  --color-call-outgoing: #636366;
+}
+
+/* Base styles */
+* {
+  border-color: var(--color-border);
+}
+
+body {
+  background-color: var(--color-background);
+  color: var(--color-foreground);
+}
