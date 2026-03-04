@@ -27,7 +27,7 @@ import {
   type PublicCallAuth,
 } from '@/lib/gateway';
 import { SavedCallState, getNetworkMonitor } from '@/lib/network';
-import { getSettingsSync } from '@/store/settings-store';
+import { getSettingsSync, useSettingsStore } from '@/store/settings-store';
 
 // Re-export types
 export { CallState } from '@/lib/gateway';
@@ -812,6 +812,7 @@ export const useSipStore = create<SipStore>((set, get) => ({
         // Trunk resolve callbacks (soft-phone specific)
         onTrunkResolved: (trunkId: number) => {
           console.log('[SipStore] Trunk resolved:', trunkId);
+          useSettingsStore.getState().setResolvedTrunkId(trunkId);
           set({
             trunkResolveStatus: 'resolved',
             trunkResolveError: null,
@@ -838,6 +839,7 @@ export const useSipStore = create<SipStore>((set, get) => ({
               '[SipStore] Trunk ID from registerStatus:',
               status.trunkId,
             );
+            useSettingsStore.getState().setResolvedTrunkId(status.trunkId);
             set({ resolvedTrunkId: status.trunkId });
           }
         },
@@ -947,12 +949,31 @@ export const useSipStore = create<SipStore>((set, get) => ({
     try {
       console.log('[SipStore] Outbound call to:', number);
 
-      // If auth is provided, use per-call auth (no registration needed)
-      if (auth) {
-        if (auth.mode === 'public') {
+      const settings = getSettingsSync();
+      const effectiveAuth =
+        auth ??
+        (settings.callMode === 'siptrunk'
+          ? settings.trunkId && settings.trunkId > 0
+            ? {
+                mode: 'siptrunk' as const,
+                trunkId: settings.trunkId,
+              }
+            : null
+          : {
+              mode: 'public' as const,
+              sipDomain: settings.sipDomain,
+              sipUsername: settings.sipUsername,
+              sipPassword: settings.sipPassword,
+              sipPort: settings.sipPort,
+              from: settings.sipDisplayName || settings.sipUsername,
+            });
+
+      // Use per-call auth whenever available (frontend parity)
+      if (effectiveAuth) {
+        if (effectiveAuth.mode === 'public') {
           get().resetCallRuntimeState();
           set({
-            _publicCallAuthInMemory: { ...auth },
+            _publicCallAuthInMemory: { ...effectiveAuth },
             lastRecoverableError: null,
           });
         }
@@ -962,8 +983,17 @@ export const useSipStore = create<SipStore>((set, get) => ({
           _callDirection: 'outgoing',
           connectionError: null,
         });
-        await gatewayClient.call(number, auth);
+        await gatewayClient.call(number, effectiveAuth);
         return;
+      }
+
+      if (settings.callMode === 'siptrunk') {
+        set({
+          isRegistered: false,
+          isRegistering: false,
+          registrationError: 'SIP trunk not ready. Resolve trunk in Settings.',
+        });
+        throw new Error('SIP trunk not ready. Resolve trunk in Settings.');
       }
 
       // Otherwise, use pre-registration flow (existing behavior)
@@ -2085,15 +2115,38 @@ export const useSipStore = create<SipStore>((set, get) => ({
 
   // ===== SOFT-PHONE SPECIFIC ACTIONS =====
 
-  // Resolve SIP trunk from current SIP config
+  // Resolve SIP trunk from configured trunkId (preferred) or SIP credentials
   resolveTrunk: () => {
-    const { gatewayClient, sipConfig } = get();
+    const { gatewayClient } = get();
     if (!gatewayClient) {
       console.warn('[SipStore] Cannot resolve trunk: not connected');
       return;
     }
-    if (!sipConfig) {
-      console.warn('[SipStore] Cannot resolve trunk: no SIP config');
+
+    const settings = getSettingsSync();
+    const configuredTrunkId = settings.trunkId;
+
+    if (configuredTrunkId && configuredTrunkId > 0) {
+      console.log(
+        '[SipStore] Trunk resolved from configured trunkId:',
+        configuredTrunkId,
+      );
+      set({
+        trunkResolveStatus: 'resolved',
+        trunkResolveError: null,
+        resolvedTrunkId: configuredTrunkId,
+      });
+      return;
+    }
+
+    if (!settings.sipDomain || !settings.sipUsername || !settings.sipPassword) {
+      console.warn(
+        '[SipStore] Cannot resolve trunk: missing SIP credentials in settings',
+      );
+      set({
+        trunkResolveStatus: 'failed',
+        trunkResolveError: 'Missing SIP credentials',
+      });
       return;
     }
 
@@ -2101,10 +2154,10 @@ export const useSipStore = create<SipStore>((set, get) => ({
 
     try {
       gatewayClient.resolveTrunk({
-        sipDomain: sipConfig.sipDomain,
-        sipUsername: sipConfig.sipUsername,
-        sipPassword: sipConfig.sipPassword,
-        sipPort: sipConfig.sipPort,
+        sipDomain: settings.sipDomain,
+        sipUsername: settings.sipUsername,
+        sipPassword: settings.sipPassword,
+        sipPort: settings.sipPort,
       });
     } catch (error) {
       console.error('[SipStore] resolveTrunk error:', error);
@@ -2141,7 +2194,11 @@ export const useSipStore = create<SipStore>((set, get) => ({
       get()._startCallTimer();
     } catch (error) {
       console.error('[SipStore] Answer failed:', error);
-      set({ incomingCall: null, callState: CallState.IDLE, _callDirection: null });
+      set({
+        incomingCall: null,
+        callState: CallState.IDLE,
+        _callDirection: null,
+      });
     }
   },
 
@@ -2154,7 +2211,11 @@ export const useSipStore = create<SipStore>((set, get) => ({
     }
 
     gatewayClient.decline();
-    set({ incomingCall: null, callState: CallState.IDLE, _callDirection: null });
+    set({
+      incomingCall: null,
+      callState: CallState.IDLE,
+      _callDirection: null,
+    });
     reportCallEnded();
   },
 
