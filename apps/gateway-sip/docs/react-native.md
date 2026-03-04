@@ -246,6 +246,8 @@ class WebRTCService {
   }
 
   acceptCall(incomingSessionId: string): void {
+    // Incoming flow (API mode): create/maintain WebRTC session via offer/answer first,
+    // then send accept with the inbound SIP sessionId.
     this.send({
       type: "accept",
       sessionId: incomingSessionId,
@@ -679,6 +681,8 @@ class WebRTCService {
   }
 
   acceptCall(incomingSessionId: string): void {
+    // Incoming flow (API mode): create/maintain WebRTC session via offer/answer first,
+    // then send accept with the inbound SIP sessionId.
     this.send({
       type: "accept",
       sessionId: incomingSessionId,
@@ -1435,6 +1439,13 @@ import Dialpad from "../components/Dialpad";
 | S → C     | `dtmf`           | Receive DTMF from SIP peer (RFC 2833)      |
 | C → S     | `send_message`   | Send SIP MESSAGE                           |
 | S → C     | `message`        | Incoming SIP MESSAGE                       |
+
+Incoming accept flow in current API mode:
+1. Receive `incoming` with SIP inbound `sessionId`
+2. Ensure client has an active WebRTC session (offer/answer)
+3. Send `accept` using the incoming SIP `sessionId`
+
+Do not send a client-side incoming `answer` message; the API handler only processes `accept`/`reject` for inbound SIP calls.
 
 > Public SIP identity guard: if a session already uses public credentials and the next `call`
 > changes `sipUsername` or `sipDomain`, gateway returns `type: "error"`.

@@ -313,6 +313,8 @@ export interface GatewayConfig {
 export interface IncomingCallInfo {
   caller: string;
   displayName?: string;
+  sessionId: string | null;
+  to?: string;
 }
 
 // Gateway event callbacks

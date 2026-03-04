@@ -1,3 +1,4 @@
+<!-- markdownlint-disable -->
 <!-- Copilot instructions for AI coding agents in this repository -->
 
 # Copilot instructions — webrtc-gateway
@@ -49,3 +50,75 @@
 - For backend/media changes, run `npx nx test gateway-sip`.
 - For frontend contract/UI changes, run `npx nx test gateway-frontend` and note any environment-only dependency issues.
 - For mobile changes, run lint/type-check in app folder and validate foreground/reconnect call flows manually.
+
+## Workspace execution rules ⚙️
+
+These guidelines are pulled from the monorepo’s `AGENTS.md` and apply to all AI agents interacting with the code.
+
+- Prefer Nx commands from the workspace root for all tasks.
+- Use `npx nx ...` (or root npm scripts) instead of calling local toolchains directly.
+- Prefer focused targets (`nx run <project>:<target>`) over global commands.
+- Before assumptions, inspect the project list with `npx nx show projects`.
+
+### Common Nx commands
+
+- Show projects: `npx nx show projects`
+- Frontend:
+  - `npx nx dev gateway-frontend`
+  - `npx nx build gateway-frontend`
+  - `npx nx test gateway-frontend`
+  - `npx nx lint gateway-frontend`
+- SIP gateway:
+  - `npx nx serve gateway-sip`
+  - `npx nx build gateway-sip`
+  - `npx nx test gateway-sip`
+
+### Nx configuration guardrails
+
+- Prefer explicit targets in `project.json`.
+- Avoid reintroducing fragile plugin inference unless there is a clear reason.
+- Keep root scripts in `package.json` aligned with real Nx targets.
+
+### Helpful skills and workflows
+
+- For navigating/exploring the workspace, invoke the `nx-workspace` skill first; it has patterns for querying projects, targets, and dependencies.
+- When running tasks (build, test, lint, serve, etc.), always prefer running them through `nx` (i.e. `nx run`, `nx run-many`, `nx affected`) instead of using the underlying tooling directly.
+- Prefix nx commands with the workspace's package manager (e.g., `pnpm nx build`, `npm exec nx test`) to avoid relying on globally installed CLIs.
+- For scaffolding tasks (apps, libs, project structure, setup), use the `nx-generate` skill before exploring or calling docs.
+- For plugin discovery or adding new tech support, the `nx-plugins` skill is your go‑to.
+- When uncertain about flags or options, consult `nx_docs` or the built-in help; never guess.
+
+### Skills available in this session 🧠
+
+- `skill-creator` — create or update skills (see `C:/Users/Kasemsan/.codex/skills/.system/skill-creator/SKILL.md`).
+- `skill-installer` — install new skills from curated lists or GitHub (see `C:/Users/Kasemsan/.codex/skills/.system/skill-installer/SKILL.md`).
+
+Skill usage policy mirrors the policies stated in `AGENTS.md`:
+
+- Use a listed skill when explicitly named or when the request clearly matches its description.
+- If a named skill isn’t available, note that and proceed with the best fallback.
+- Read minimal necessary sections of a skill file and prefer running provided scripts/assets when relevant.
+
+<!-- nx configuration start-->
+<!-- Leave the start & end comments to automatically receive updates. -->
+
+## General Guidelines for working with Nx
+
+- For navigating/exploring the workspace, invoke the `nx-workspace` skill first - it has patterns for querying projects, targets, and dependencies
+- When running tasks (for example build, lint, test, e2e, etc.), always prefer running the task through `nx` (i.e. `nx run`, `nx run-many`, `nx affected`) instead of using the underlying tooling directly
+- Prefix nx commands with the workspace's package manager (e.g., `pnpm nx build`, `npm exec nx test`) - avoids using globally installed CLI
+- You have access to the Nx MCP server and its tools, use them to help the user
+- For Nx plugin best practices, check `node_modules/@nx/<plugin>/PLUGIN.md`. Not all plugins have this file - proceed without it if unavailable.
+- NEVER guess CLI flags - always check nx_docs or `--help` first when unsure
+
+## Scaffolding & Generators
+
+- For scaffolding tasks (creating apps, libs, project structure, setup), ALWAYS invoke the `nx-generate` skill FIRST before exploring or calling MCP tools
+
+## When to use nx_docs
+
+- USE for: advanced config options, unfamiliar flags, migration guides, plugin configuration, edge cases
+- DON'T USE for: basic generator syntax (`nx g @nx/react:app`), standard commands, things you already know
+- The `nx-generate` skill handles generator discovery internally - don't call nx_docs just to look up generator syntax
+
+<!-- nx configuration end-->

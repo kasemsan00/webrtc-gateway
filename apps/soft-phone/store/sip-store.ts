@@ -184,7 +184,7 @@ interface SipState {
   // Trunk resolve state (soft-phone specific)
   trunkResolveStatus: 'idle' | 'resolving' | 'resolved' | 'failed';
   trunkResolveError: string | null;
-  resolvedTrunkId: string | null;
+  resolvedTrunkId: number | null;
 
   // Incoming call state (soft-phone specific)
   incomingCall: IncomingCallInfo | null;
@@ -810,7 +810,7 @@ export const useSipStore = create<SipStore>((set, get) => ({
         },
 
         // Trunk resolve callbacks (soft-phone specific)
-        onTrunkResolved: (trunkId: string) => {
+        onTrunkResolved: (trunkId: number) => {
           console.log('[SipStore] Trunk resolved:', trunkId);
           set({
             trunkResolveStatus: 'resolved',
@@ -846,6 +846,7 @@ export const useSipStore = create<SipStore>((set, get) => ({
         onIncomingCall: (info: IncomingCallInfo, _sdp?: string) => {
           console.log('[SipStore] Incoming call from:', info.caller);
           set({
+            callState: CallState.INCOMING,
             incomingCall: info,
             remoteNumber: info.caller,
             _callDirection: 'incoming',
@@ -2140,7 +2141,7 @@ export const useSipStore = create<SipStore>((set, get) => ({
       get()._startCallTimer();
     } catch (error) {
       console.error('[SipStore] Answer failed:', error);
-      set({ incomingCall: null });
+      set({ incomingCall: null, callState: CallState.IDLE, _callDirection: null });
     }
   },
 
@@ -2153,7 +2154,7 @@ export const useSipStore = create<SipStore>((set, get) => ({
     }
 
     gatewayClient.decline();
-    set({ incomingCall: null });
+    set({ incomingCall: null, callState: CallState.IDLE, _callDirection: null });
     reportCallEnded();
   },
 

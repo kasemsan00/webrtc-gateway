@@ -556,7 +556,8 @@ export class GatewayClient {
   private reconnectAttempts = 0;
   private isRegistered = false;
   private pendingCandidates: RTCIceCandidate[] = [];
-  private sessionId: string | null = null; // Session ID from server
+  private activeSessionId: string | null = null; // Active WebRTC session ID from server
+  private incomingSessionId: string | null = null; // Incoming SIP session ID from server
   private pendingDestination: string | null = null; // Destination to call after session is created
   private pendingCallAuth: CallAuth | null = null; // Call auth to send after session is created
   private pendingCallIntent: PendingCallIntent | null = null; // Last outbound intent for one-shot recovery
@@ -648,7 +649,7 @@ export class GatewayClient {
    * Get current session ID (for call resumption after network change)
    */
   getSessionId(): string | null {
-    return this.sessionId;
+    return this.activeSessionId;
   }
 
   getPeerConnectionTransportSnapshot(): {
@@ -944,6 +945,10 @@ export class GatewayClient {
     console.log('[Gateway] 📞 Answering incoming call...');
 
     try {
+      if (!this.incomingSessionId) {
+        throw new Error('No incoming session to accept');
+      }
+
       // Get local media
       await this.getLocalMedia();
 
@@ -956,31 +961,30 @@ export class GatewayClient {
       // Apply outgoing video bitrate limit
       await this.applyOutgoingVideoBitrateLimit(bitrateKbps);
 
-      // Create answer SDP
-      const answer = await this.pc!.createAnswer();
-      await this.pc!.setLocalDescription(answer);
-
-      console.log('[Gateway] ⏳ Waiting for ICE gathering to complete...');
-      await this.waitForIceGathering();
-
-      // Process SDP for incoming (prefer H264 but don't force baseline)
-      const processedSdp = processSDPForIncoming(
-        this.pc!.localDescription!.sdp!,
-        bitrateKbps,
-      );
-
-      logCodecsFromSdp(processedSdp, 'Incoming call answer');
-
-      // Send answer to gateway
-      this.send({
-        type: 'answer',
-        sdp: processedSdp,
-      });
+      if (!this.activeSessionId) {
+        // Current API mode requires a WebRTC session first, then accept incoming SIP.
+        const offer = await this.pc!.createOffer({
+          offerToReceiveAudio: true,
+          offerToReceiveVideo: true,
+        });
+        await this.pc!.setLocalDescription(offer);
+        await this.waitForIceGathering();
+        const processedOfferSdp = processSDPForIncoming(
+          this.pc!.localDescription!.sdp!,
+          bitrateKbps,
+        );
+        logCodecsFromSdp(processedOfferSdp, 'Incoming call pre-accept offer');
+        this.send({
+          type: 'offer',
+          sdp: processedOfferSdp,
+        });
+        await this.waitForActiveSessionId();
+      }
 
       // Send accept message
       this.send({
         type: 'accept',
-        sessionId: this.sessionId || undefined,
+        sessionId: this.incomingSessionId || undefined,
       });
 
       this._callState = CallState.INCALL;
@@ -1001,8 +1005,9 @@ export class GatewayClient {
     console.log('[Gateway] 📵 Declining incoming call...');
     this.send({
       type: 'reject',
-      sessionId: this.sessionId || undefined,
+      sessionId: this.incomingSessionId || undefined,
     });
+    this.incomingSessionId = null;
     this._callState = CallState.IDLE;
     this.callbacks.onCallEnded?.('Declined');
     this.cleanup();
@@ -1108,8 +1113,8 @@ export class GatewayClient {
 
   // Hangup call
   hangup(): void {
-    console.log('[Gateway] 📴 Hanging up...', 'sessionId:', this.sessionId);
-    this.send({ type: 'hangup', sessionId: this.sessionId || undefined });
+    console.log('[Gateway] 📴 Hanging up...', 'sessionId:', this.activeSessionId);
+    this.send({ type: 'hangup', sessionId: this.activeSessionId || undefined });
     this.pendingCallIntent = null;
     this.isPublicIdentityRecoveryInProgress = false;
     this._callState = CallState.ENDED;
@@ -1160,15 +1165,15 @@ export class GatewayClient {
 
   // Send DTMF
   sendDtmf(digit: string): void {
-    if (!this.sessionId) {
+    if (!this.activeSessionId) {
       console.warn('[Gateway] Cannot send DTMF - no active session');
       return;
     }
 
-    console.log('[Gateway] 🔢 DTMF:', digit, 'sessionId:', this.sessionId);
+    console.log('[Gateway] 🔢 DTMF:', digit, 'sessionId:', this.activeSessionId);
     this.send({
       type: 'dtmf',
-      sessionId: this.sessionId,
+      sessionId: this.activeSessionId,
       digits: digit,
     });
   }
@@ -1322,7 +1327,7 @@ export class GatewayClient {
       this.cleanupForResume();
 
       // Store the session ID
-      this.sessionId = sessionId;
+      this.activeSessionId = sessionId;
 
       // Check if we can reuse existing localStream
       const hasActiveLocalStream =
@@ -1435,7 +1440,7 @@ export class GatewayClient {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       return true;
     }
-    if (this.sessionId !== expectedSessionId) {
+    if (this.activeSessionId !== expectedSessionId) {
       return true;
     }
     if (
@@ -1656,6 +1661,7 @@ export class GatewayClient {
           this.handleIncomingCall(
             caller,
             incomingMsg.sessionId,
+            incomingMsg.to,
             incomingMsg.sdp,
           );
           break;
@@ -1833,7 +1839,7 @@ export class GatewayClient {
           );
 
           if (sessionId) {
-            this.sessionId = sessionId;
+            this.activeSessionId = sessionId;
           }
 
           // If server sent SDP answer, set it as remote description
@@ -1867,7 +1873,7 @@ export class GatewayClient {
           }
 
           this._callState = CallState.INCALL;
-          this.callbacks.onCallResumed?.(sessionId || this.sessionId || '');
+          this.callbacks.onCallResumed?.(sessionId || this.activeSessionId || '');
           break;
         }
 
@@ -1951,7 +1957,7 @@ export class GatewayClient {
 
     // Store session ID from server
     if (sessionId) {
-      this.sessionId = sessionId;
+      this.activeSessionId = sessionId;
     }
 
     if (this.pc) {
@@ -1997,15 +2003,19 @@ export class GatewayClient {
         this.pendingCandidates = [];
 
         // Check what type of call this is
-        if (this.pendingDestination && this.sessionId && this.pendingCallAuth) {
+        if (
+          this.pendingDestination &&
+          this.activeSessionId &&
+          this.pendingCallAuth
+        ) {
           // OUTGOING CALL: Send the call message now with sessionId + auth
           console.log(
-            `[Gateway] ➡️ Sending call with sessionId: ${this.sessionId} (mode: ${this.pendingCallAuth.mode})`,
+            `[Gateway] ➡️ Sending call with sessionId: ${this.activeSessionId} (mode: ${this.pendingCallAuth.mode})`,
           );
 
           const callMessage: any = {
             type: 'call',
-            sessionId: this.sessionId,
+            sessionId: this.activeSessionId,
             destination: this.pendingDestination,
           };
 
@@ -2028,15 +2038,15 @@ export class GatewayClient {
           this.send(callMessage);
           this.pendingDestination = null;
           this.pendingCallAuth = null;
-        } else if (this.pendingDestination && this.sessionId) {
+        } else if (this.pendingDestination && this.activeSessionId) {
           // OUTGOING CALL: Send the call message now with sessionId (no auth - pre-registered)
           console.log(
             '[Gateway] ➡️ Sending call with sessionId:',
-            this.sessionId,
+            this.activeSessionId,
           );
           this.send({
             type: 'call',
-            sessionId: this.sessionId,
+            sessionId: this.activeSessionId,
             destination: this.pendingDestination,
           });
           this.pendingDestination = null;
@@ -2087,9 +2097,10 @@ export class GatewayClient {
   private async handleIncomingCall(
     caller: string,
     sessionId?: string,
+    to?: string,
     sdp?: string,
   ): Promise<void> {
-    this.sessionId = sessionId || null;
+    this.incomingSessionId = sessionId || null;
     this._callState = CallState.INCOMING;
 
     // If remote SDP is provided, set it as remote description
@@ -2106,7 +2117,10 @@ export class GatewayClient {
       }
     }
 
-    this.callbacks.onIncomingCall?.({ caller }, sdp);
+    this.callbacks.onIncomingCall?.(
+      { caller, sessionId: sessionId || null, to },
+      sdp,
+    );
   }
 
   private async handleTrunkRedirect(redirectUrl?: string): Promise<void> {
@@ -2623,6 +2637,17 @@ export class GatewayClient {
         error,
       );
     }
+  }
+
+  private async waitForActiveSessionId(timeoutMs: number = 3000): Promise<void> {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < timeoutMs) {
+      if (this.activeSessionId) {
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    throw new Error('Timed out waiting for active session ID');
   }
 
   /**
@@ -3174,10 +3199,10 @@ export class GatewayClient {
         }
       });
 
-      if (this.ws?.readyState === WebSocket.OPEN && this.sessionId) {
+      if (this.ws?.readyState === WebSocket.OPEN && this.activeSessionId) {
         this.send({
           type: 'request_keyframe',
-          sessionId: this.sessionId,
+          sessionId: this.activeSessionId,
         });
         console.log('[Gateway] 📸 Sent request_keyframe via WebSocket');
       } else {
@@ -3306,7 +3331,8 @@ export class GatewayClient {
 
     this.remoteStream = null;
     this.pendingCandidates = [];
-    this.sessionId = null;
+    this.activeSessionId = null;
+    this.incomingSessionId = null;
     this.pendingDestination = null;
     this.pendingCallAuth = null; // Clear pending auth
     this.pendingCallIntent = null;
