@@ -784,7 +784,21 @@ func (s *Server) AcceptCall(sess *session.Session) error {
 
 	// Send 200 OK
 	if err := tx.Respond(okRes); err != nil {
-		return fmt.Errorf("failed to send 200 OK: %w", err)
+		// Some proxies/retransmission races can return "transaction terminated"
+		// even when final response handling continues via ACK fallback.
+		if isBenignIncomingAcceptRespondError(err) {
+			fmt.Printf("⚠️ [%s] Non-fatal 200 OK response warning: %v\n", sess.ID, err)
+			s.logEvent(&logstore.Event{
+				Timestamp: time.Now(),
+				SessionID: sess.ID,
+				Category:  "sip",
+				Name:      "sip_200_ok_send_warning",
+				SIPCallID: req.CallID().Value(),
+				Data:      map[string]interface{}{"warning": err.Error()},
+			})
+		} else {
+			return fmt.Errorf("failed to send 200 OK: %w", err)
+		}
 	}
 
 	answerPayloadID := s.storePayload(ctx, &logstore.PayloadRecord{
@@ -849,6 +863,14 @@ func (s *Server) AcceptCall(sess *session.Session) error {
 	cleanupOnError = false
 	fmt.Printf("✅ [%s] Incoming call accepted - 200 OK sent\n", sess.ID)
 	return nil
+}
+
+func isBenignIncomingAcceptRespondError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errMsg := strings.ToLower(err.Error())
+	return strings.Contains(errMsg, "transaction terminated")
 }
 
 // RejectCall rejects an incoming SIP call by sending 486 Busy Here
