@@ -617,6 +617,15 @@ export const useSipStore = create<SipStore>((set, get) => ({
             _publicCallAuthInMemory: null,
           });
           get()._stopCallTimer();
+
+          const settings = getSettingsSync();
+          if (settings.callMode === 'siptrunk') {
+            console.log(
+              '[SipStore] Call ended in siptrunk mode - keeping WebSocket connected',
+            );
+            return;
+          }
+
           const disconnect = get().disconnect;
           void disconnect().catch((error) => {
             console.error(
