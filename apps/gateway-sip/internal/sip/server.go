@@ -217,31 +217,45 @@ func (s *Server) InitializeAndRegisterSIPServer(ctx context.Context) error {
 	return nil
 }
 
-// Start starts the SIP server on TCP transport only
-// UDP is disabled because some clients (Linphone via Kamailio) send malformed
-// SIP messages without Content-Length header which causes parse errors
+// Start starts SIP listeners based on configured transports.
+// TCP is enabled by default; UDP can be enabled for providers/clients that route INVITE over UDP.
 func (s *Server) Start(ctx context.Context) error {
-	fmt.Println("Starting SIP Listener (TCP only)")
+	fmt.Println("Starting SIP Listener")
 
 	// Use LocalIP from config to bind listeners
 	// If set to specific IPv4 address, prevents IPv6 Via headers
 	listenAddr := fmt.Sprintf("%s:%d", s.config.LocalIP, s.sipPort)
+	listenTCP := s.config.ListenTCP
+	listenUDP := s.config.ListenUDP
 
-	// NOTE: UDP listener disabled due to malformed SIP messages from some clients
-	// Uncomment if you need UDP and clients send proper Content-Length headers
-	// go func() {
-	// 	fmt.Printf("Starting UDP listener on %s\n", listenAddr)
-	// 	if err := s.sipServer.ListenAndServe(ctx, "udp", listenAddr); err != nil {
-	// 		fmt.Printf("SIP UDP server error: %v\n", err)
-	// 	}
-	// }()
-
-	// Start TCP listener (blocks)
-	// TCP requires Content-Length header per RFC 3261
-	fmt.Printf("Starting TCP listener on %s\n", listenAddr)
-	if err := s.sipServer.ListenAndServe(ctx, "tcp", listenAddr); err != nil {
-		return fmt.Errorf("SIP TCP server error: %w", err)
+	if !listenTCP && !listenUDP {
+		return fmt.Errorf("SIP server error: both TCP and UDP listeners are disabled")
 	}
 
-	return nil
+	errCh := make(chan error, 2)
+
+	if listenUDP {
+		go func() {
+			fmt.Printf("Starting UDP listener on %s\n", listenAddr)
+			if err := s.sipServer.ListenAndServe(ctx, "udp", listenAddr); err != nil && ctx.Err() == nil {
+				errCh <- fmt.Errorf("SIP UDP server error: %w", err)
+			}
+		}()
+	}
+
+	if listenTCP {
+		go func() {
+			fmt.Printf("Starting TCP listener on %s\n", listenAddr)
+			if err := s.sipServer.ListenAndServe(ctx, "tcp", listenAddr); err != nil && ctx.Err() == nil {
+				errCh <- fmt.Errorf("SIP TCP server error: %w", err)
+			}
+		}()
+	}
+
+	select {
+	case <-ctx.Done():
+		return nil
+	case err := <-errCh:
+		return err
+	}
 }

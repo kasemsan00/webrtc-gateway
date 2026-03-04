@@ -57,6 +57,8 @@ type SIPConfig struct {
 	LocalPort          int
 	LocalIP            string // Local IP to bind listeners (prevents IPv6, default: 0.0.0.0)
 	PublicIP           string // Public IP address for NAT traversal (optional)
+	ListenTCP          bool   // Enable SIP TCP listener (default: true)
+	ListenUDP          bool   // Enable SIP UDP listener (default: false)
 	DebugSIPMessage    bool   // Enable verbose SIP MESSAGE logging
 	DebugSIPInvite     bool   // Enable verbose SIP INVITE logging (header dump)
 	SwitchPLIDelayMS   int    // Delay in milliseconds before sending PLI on @switch message (default: 1000)
@@ -139,6 +141,8 @@ func Load() (*Config, error) {
 			LocalPort:                       sipLocalPortNum,
 			LocalIP:                         getEnvWithDefault("SIP_LOCAL_IP", "0.0.0.0"),
 			PublicIP:                        os.Getenv("SIP_PUBLIC_IP"),
+			ListenTCP:                       getEnvAsBool("SIP_LISTEN_TCP", true),
+			ListenUDP:                       getEnvAsBool("SIP_LISTEN_UDP", false),
 			DebugSIPMessage:                 getEnvAsBool("DEBUG_SIP_MESSAGE", false),
 			DebugSIPInvite:                  getEnvAsBool("DEBUG_SIP_INVITE", false),
 			SwitchPLIDelayMS:                getEnvAsInt("SWITCH_PLI_DELAY_MS", 1000),
@@ -234,6 +238,8 @@ func (c *Config) Display() {
 	}
 	fmt.Printf("  Debug SIP MESSAGE: %v\n", c.SIP.DebugSIPMessage)
 	fmt.Printf("  Debug SIP INVITE: %v\n", c.SIP.DebugSIPInvite)
+	fmt.Printf("  SIP Listen TCP: %v\n", c.SIP.ListenTCP)
+	fmt.Printf("  SIP Listen UDP: %v\n", c.SIP.ListenUDP)
 	fmt.Printf("  Audio Use AVPF: %v\n", c.SIP.AudioUseAVPF)
 	fmt.Printf("  Video Use AVPF: %v\n", c.SIP.VideoUseAVPF)
 	fmt.Printf("  Video Preserve STAP-A: %v\n", c.SIP.VideoPreserveSTAPA)
