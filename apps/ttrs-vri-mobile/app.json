@@ -2,7 +2,7 @@
   "expo": {
     "name": "TTRS VRI",
     "slug": "thorttrsvrstablet",
-    "version": "1.2.1",
+    "version": "1.2.2",
     "orientation": "default",
     "backgroundColor": "#FFFFFF",
     "icon": "./assets/images/drawable-xhdpi/logo.png",
