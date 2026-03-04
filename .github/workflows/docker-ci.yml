@@ -16,7 +16,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: registry.kasemsan.com/k2-gateway
+          images: registry.kasemsan.com/gateway-sip
           tags: |
             type=ref,event=branch
             type=ref,event=tag
@@ -37,7 +37,8 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
-          context: .
+          context: apps/gateway-sip
+          file: apps/gateway-sip/Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
