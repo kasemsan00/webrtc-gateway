@@ -1,18 +1,31 @@
-import { ms } from "@/lib/scale";
-import { clearPipRef, setPipRef } from "@/lib/pip";
-import { CallState, useSipStore } from "@/store/sip-store";
-import { styles } from "@/styles/components/InCallScreen.styles";
-import { getPipEnabled } from "@/constants/webrtc";
-import { MessageCircleMore, Volume1Icon, Volume2Icon } from "lucide-react-native";
-import React, { useCallback, useEffect, useRef, useState } from "react";
-import { AppState, type AppStateStatus, Keyboard, Modal, Platform, Pressable, ScrollView, View } from "react-native";
-import { MediaStream, RTCView } from "react-native-webrtc";
-import { Avatar, AvatarFallback } from "../ui/avatar";
-import { AppIcon } from "../ui/icon";
-import { Text } from "../ui/text";
-import { Chat } from "./chat";
-import { DtmfKeypad } from "./dtmf-keypad";
-import { LiveTextViewer } from "./live-text-viewer";
+import { ms } from '@/lib/scale';
+import { clearPipRef, setPipRef } from '@/lib/pip';
+import { CallState, useSipStore } from '@/store/sip-store';
+import { styles } from '@/styles/components/InCallScreen.styles';
+import { getPipEnabled } from '@/constants/webrtc';
+import {
+  MessageCircleMore,
+  Volume1Icon,
+  Volume2Icon,
+} from 'lucide-react-native';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  AppState,
+  type AppStateStatus,
+  Keyboard,
+  Modal,
+  Platform,
+  Pressable,
+  ScrollView,
+  View,
+} from 'react-native';
+import { MediaStream, RTCView } from 'react-native-webrtc';
+import { Avatar, AvatarFallback } from '../ui/avatar';
+import { AppIcon } from '../ui/icon';
+import { Text } from '../ui/text';
+import { Chat } from './chat';
+import { DtmfKeypad } from './dtmf-keypad';
+import { LiveTextViewer } from './live-text-viewer';
 
 interface InCallScreenProps {
   visible: boolean;
@@ -36,28 +49,28 @@ interface InCallScreenProps {
 function formatDuration(seconds: number): string {
   const mins = Math.floor(seconds / 60);
   const secs = seconds % 60;
-  return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+  return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
 }
 
 function getInitials(name?: string, phone?: string): string {
   if (name) {
-    const parts = name.split(" ");
+    const parts = name.split(' ');
     if (parts.length >= 2) {
       return (parts[0][0] + parts[1][0]).toUpperCase();
     }
     return name.substring(0, 2).toUpperCase();
   }
-  return phone?.substring(0, 2) || "??";
+  return phone?.substring(0, 2) || '??';
 }
 
 function getCallStatusText(callState: CallState): string | null {
   switch (callState) {
     case CallState.CONNECTING:
-      return "Connecting...";
+      return 'Connecting...';
     case CallState.CALLING:
-      return "Calling...";
+      return 'Calling...';
     case CallState.RINGING:
-      return "Ringing...";
+      return 'Ringing...';
     default:
       return null;
   }
@@ -83,7 +96,7 @@ export function InCallScreen({
 }: InCallScreenProps) {
   const [showChat, setShowChat] = useState(false);
   const [showKeypad, setShowKeypad] = useState(false);
-  const [messageText, setMessageText] = useState("");
+  const [messageText, setMessageText] = useState('');
   const [remoteVideoRenderVersion, setRemoteVideoRenderVersion] = useState(0);
   const scrollViewRef = useRef<ScrollView>(null);
   const remoteVideoRef = useRef<React.ElementRef<typeof RTCView>>(null);
@@ -96,7 +109,7 @@ export function InCallScreen({
   // Get message state and actions from store (use individual selectors to avoid re-render on every store change)
   const messages = useSipStore((s) => s.messages);
   const unreadMessageCount = useSipStore((s) => s.unreadMessageCount);
-  const rtt = useSipStore((s) => s.rtt);
+  const remoteRttPreview = useSipStore((s) => s.remoteRttPreview);
   const storeSendMessage = useSipStore((s) => s.sendMessage);
   const updateOutgoingRttDraft = useSipStore((s) => s.updateOutgoingRttDraft);
   const clearRemoteRttPreview = useSipStore((s) => s.clearRemoteRttPreview);
@@ -120,26 +133,26 @@ export function InCallScreen({
 
     // Listen for track added/removed
     const handleTrackAdded = () => {
-      console.log("[InCallScreen] Remote track added, forcing re-render");
+      console.log('[InCallScreen] Remote track added, forcing re-render');
       setRemoteTrackCount(remoteStream.getTracks().length);
       setRemoteVideoRenderVersion((prev) => prev + 1);
     };
     const handleTrackRemoved = () => {
-      console.log("[InCallScreen] Remote track removed, forcing re-render");
+      console.log('[InCallScreen] Remote track removed, forcing re-render');
       setRemoteTrackCount(remoteStream.getTracks().length);
       setRemoteVideoRenderVersion((prev) => prev + 1);
     };
 
     // @ts-ignore - React Native WebRTC event handling
-    remoteStream.addEventListener?.("addtrack", handleTrackAdded);
+    remoteStream.addEventListener?.('addtrack', handleTrackAdded);
     // @ts-ignore
-    remoteStream.addEventListener?.("removetrack", handleTrackRemoved);
+    remoteStream.addEventListener?.('removetrack', handleTrackRemoved);
 
     return () => {
       // @ts-ignore
-      remoteStream.removeEventListener?.("addtrack", handleTrackAdded);
+      remoteStream.removeEventListener?.('addtrack', handleTrackAdded);
       // @ts-ignore
-      remoteStream.removeEventListener?.("removetrack", handleTrackRemoved);
+      remoteStream.removeEventListener?.('removetrack', handleTrackRemoved);
     };
   }, [remoteStream]);
 
@@ -156,9 +169,9 @@ export function InCallScreen({
         addEventListener?: (type: string, listener: () => void) => void;
         removeEventListener?: (type: string, listener: () => void) => void;
       };
-      trackWithEvents.addEventListener?.("mute", handleRemoteVideoEvent);
-      trackWithEvents.addEventListener?.("unmute", handleRemoteVideoEvent);
-      trackWithEvents.addEventListener?.("ended", handleRemoteVideoEvent);
+      trackWithEvents.addEventListener?.('mute', handleRemoteVideoEvent);
+      trackWithEvents.addEventListener?.('unmute', handleRemoteVideoEvent);
+      trackWithEvents.addEventListener?.('ended', handleRemoteVideoEvent);
     });
 
     return () => {
@@ -166,9 +179,9 @@ export function InCallScreen({
         const trackWithEvents = track as unknown as {
           removeEventListener?: (type: string, listener: () => void) => void;
         };
-        trackWithEvents.removeEventListener?.("mute", handleRemoteVideoEvent);
-        trackWithEvents.removeEventListener?.("unmute", handleRemoteVideoEvent);
-        trackWithEvents.removeEventListener?.("ended", handleRemoteVideoEvent);
+        trackWithEvents.removeEventListener?.('mute', handleRemoteVideoEvent);
+        trackWithEvents.removeEventListener?.('unmute', handleRemoteVideoEvent);
+        trackWithEvents.removeEventListener?.('ended', handleRemoteVideoEvent);
       });
     };
   }, [remoteStream, remoteTrackCount]);
@@ -190,30 +203,33 @@ export function InCallScreen({
     };
 
     // @ts-ignore
-    localStream.addEventListener?.("addtrack", handleTrackAdded);
+    localStream.addEventListener?.('addtrack', handleTrackAdded);
     // @ts-ignore
-    localStream.addEventListener?.("removetrack", handleTrackRemoved);
+    localStream.addEventListener?.('removetrack', handleTrackRemoved);
 
     return () => {
       // @ts-ignore
-      localStream.removeEventListener?.("addtrack", handleTrackAdded);
+      localStream.removeEventListener?.('addtrack', handleTrackAdded);
       // @ts-ignore
-      localStream.removeEventListener?.("removetrack", handleTrackRemoved);
+      localStream.removeEventListener?.('removetrack', handleTrackRemoved);
     };
   }, [localStream]);
 
   // Compute video availability using track counts to trigger re-render when they change
-  const hasRemoteVideo = remoteStream && remoteStream.getVideoTracks().length > 0;
+  const hasRemoteVideo =
+    remoteStream && remoteStream.getVideoTracks().length > 0;
   const hasLocalVideo = localStream && localStream.getVideoTracks().length > 0;
   const remoteVideoTrack = remoteStream?.getVideoTracks?.()[0];
   const remoteStreamUrl = remoteStream?.toURL?.();
-  const remoteStreamKeyBase = remoteStreamUrl ? `remote-${remoteStreamUrl}` : `remote-${remoteStream?.id || "none"}`;
+  const remoteStreamKeyBase = remoteStreamUrl
+    ? `remote-${remoteStreamUrl}`
+    : `remote-${remoteStream?.id || 'none'}`;
   const remoteStreamKey = `${remoteStreamKeyBase}-v${remoteVideoRenderVersion}`;
 
   // Register/clear PiP ref for remote video (iOS only, and only if PiP is enabled)
   useEffect(() => {
     const pipEnabled = getPipEnabled();
-    if (hasRemoteVideo && Platform.OS === "ios" && pipEnabled) {
+    if (hasRemoteVideo && Platform.OS === 'ios' && pipEnabled) {
       setPipRef(remoteVideoRef);
     }
     return () => {
@@ -225,7 +241,7 @@ export function InCallScreen({
   useEffect(() => {
     const remoteURL = remoteStream?.toURL?.();
     const videoTracks = remoteStream?.getVideoTracks?.() || [];
-    console.log("[InCallScreen] Video state:", {
+    console.log('[InCallScreen] Video state:', {
       remoteStream: !!remoteStream,
       remoteStreamId: remoteStream?.id,
       remoteURL,
@@ -241,13 +257,20 @@ export function InCallScreen({
       localTrackCount,
       hasLocalVideo,
     });
-  }, [remoteStream, remoteTrackCount, hasRemoteVideo, localStream, localTrackCount, hasLocalVideo]);
+  }, [
+    remoteStream,
+    remoteTrackCount,
+    hasRemoteVideo,
+    localStream,
+    localTrackCount,
+    hasLocalVideo,
+  ]);
 
   // No filtering needed - just show all messages during call
 
   // Debug: log messages when they change
   useEffect(() => {
-    console.log("[InCallScreen] Messages updated:", messages.length, messages);
+    console.log('[InCallScreen] Messages updated:', messages.length, messages);
   }, [messages]);
 
   // Auto-scroll to bottom when new messages arrive
@@ -270,7 +293,7 @@ export function InCallScreen({
     if (!messageText.trim()) return;
 
     storeSendMessage(messageText.trim());
-    setMessageText("");
+    setMessageText('');
     Keyboard.dismiss();
   }, [messageText, storeSendMessage]);
 
@@ -285,16 +308,18 @@ export function InCallScreen({
   useEffect(() => {
     if (!visible) {
       clearRemoteRttPreview();
-      updateOutgoingRttDraft("");
+      updateOutgoingRttDraft('');
     }
   }, [clearRemoteRttPreview, updateOutgoingRttDraft, visible]);
 
   useEffect(() => {
-    const subscription = AppState.addEventListener("change", (nextAppState) => {
+    const subscription = AppState.addEventListener('change', (nextAppState) => {
       const prevAppState = appStateRef.current;
       appStateRef.current = nextAppState;
 
-      const isReturningToForeground = (prevAppState === "inactive" || prevAppState === "background") && nextAppState === "active";
+      const isReturningToForeground =
+        (prevAppState === 'inactive' || prevAppState === 'background') &&
+        nextAppState === 'active';
       const isCallActive =
         callState === CallState.CONNECTING ||
         callState === CallState.CALLING ||
@@ -305,9 +330,11 @@ export function InCallScreen({
         return;
       }
 
-      console.log("[InCallScreen] App foregrounded during active call - refreshing remote video");
+      console.log(
+        '[InCallScreen] App foregrounded during active call - refreshing remote video',
+      );
       setRemoteVideoRenderVersion((prev) => prev + 1);
-      refreshRemoteVideo("app_foreground");
+      refreshRemoteVideo('app_foreground');
     });
 
     return () => {
@@ -323,20 +350,39 @@ export function InCallScreen({
   };
 
   return (
-    <Modal visible={visible} animationType="slide" presentationStyle="fullScreen">
+    <Modal
+      visible={visible}
+      animationType="slide"
+      presentationStyle="fullScreen"
+    >
       <View style={styles.container}>
         {/* Video or Avatar Background */}
         {hasRemoteVideo ? (
           <View style={styles.remoteVideoContainer}>
             {(() => {
               const streamUrl = remoteStream.toURL();
-              console.log("[InCallScreen] 🎬 Rendering RTCView with streamURL:", streamUrl, "key:", remoteStreamKey);
-              console.log("[InCallScreen] 🎬 Video track state:", {
+              console.log(
+                '[InCallScreen] 🎬 Rendering RTCView with streamURL:',
+                streamUrl,
+                'key:',
+                remoteStreamKey,
+              );
+              console.log('[InCallScreen] 🎬 Video track state:', {
                 enabled: remoteVideoTrack?.enabled,
                 muted: remoteVideoTrack?.muted,
                 readyState: remoteVideoTrack?.readyState,
               });
-              return <RTCView ref={remoteVideoRef} key={remoteStreamKey} streamURL={streamUrl} style={styles.remoteVideo} objectFit="contain" zOrder={1} mirror={false} />;
+              return (
+                <RTCView
+                  ref={remoteVideoRef}
+                  key={remoteStreamKey}
+                  streamURL={streamUrl}
+                  style={styles.remoteVideo}
+                  objectFit="contain"
+                  zOrder={1}
+                  mirror={false}
+                />
+              );
             })()}
           </View>
         ) : (
@@ -346,7 +392,9 @@ export function InCallScreen({
             <View style={styles.contactSection}>
               <Avatar size="xl">
                 <AvatarFallback>
-                  <Text style={styles.avatarText}>{getInitials(contactName, phoneNumber)}</Text>
+                  <Text style={styles.avatarText}>
+                    {getInitials(contactName, phoneNumber)}
+                  </Text>
                 </AvatarFallback>
               </Avatar>
             </View>
@@ -356,7 +404,14 @@ export function InCallScreen({
         {/* Local Video (Picture-in-Picture) with flip animation */}
         {hasLocalVideo && (
           <View style={styles.localVideoContainer}>
-            <RTCView key="local-video-stable" streamURL={localStream.toURL()} style={styles.localVideo} objectFit="cover" zOrder={2} mirror={true} />
+            <RTCView
+              key="local-video-stable"
+              streamURL={localStream.toURL()}
+              style={styles.localVideo}
+              objectFit="cover"
+              zOrder={2}
+              mirror={true}
+            />
           </View>
         )}
 
@@ -372,7 +427,9 @@ export function InCallScreen({
           ) : getCallStatusText(callState) ? (
             <View style={styles.connectingContainer}>
               <View style={styles.connectingDot} />
-              <Text style={styles.connectingText}>{getCallStatusText(callState)}</Text>
+              <Text style={styles.connectingText}>
+                {getCallStatusText(callState)}
+              </Text>
             </View>
           ) : (
             <View style={styles.statusContainer}>
@@ -383,9 +440,12 @@ export function InCallScreen({
         </View>
 
         {/* Action Buttons */}
-        {(rtt.remotePreviewText.trim().length > 0 || rtt.remoteActive) && (
+        {remoteRttPreview.trim().length > 0 && (
           <View style={styles.rttContainer}>
-            <LiveTextViewer text={rtt.remotePreviewText} isTyping={rtt.remoteActive} />
+            <LiveTextViewer
+              text={remoteRttPreview}
+              isTyping={remoteRttPreview.trim().length > 0}
+            />
           </View>
         )}
 
@@ -394,12 +454,19 @@ export function InCallScreen({
           <View style={styles.actionRow}>
             <Pressable style={styles.actionButton} onPress={onMuteToggle}>
               <View style={styles.iconPlaceholder}>
-                <AppIcon name={isMuted ? "micOff" : "mic"} size={ms(24)} color="#fff" />
+                <AppIcon
+                  name={isMuted ? 'micOff' : 'mic'}
+                  size={ms(24)}
+                  color="#fff"
+                />
               </View>
               <Text style={styles.actionLabel}>Mute</Text>
             </Pressable>
 
-            <Pressable style={styles.actionButton} onPress={() => setShowKeypad(true)}>
+            <Pressable
+              style={styles.actionButton}
+              onPress={() => setShowKeypad(true)}
+            >
               <View style={styles.iconPlaceholder}>
                 <AppIcon name="dialpad" size={ms(24)} color="#fff" />
               </View>
@@ -408,9 +475,15 @@ export function InCallScreen({
 
             <Pressable style={[styles.actionButton]} onPress={onSpeakerToggle}>
               <View style={styles.iconPlaceholder}>
-                {isSpeaker ? <Volume2Icon size={ms(24)} color="#fff" /> : <Volume1Icon size={ms(24)} color="#fff" />}
+                {isSpeaker ? (
+                  <Volume2Icon size={ms(24)} color="#fff" />
+                ) : (
+                  <Volume1Icon size={ms(24)} color="#fff" />
+                )}
               </View>
-              <Text style={styles.actionLabel}>{isSpeaker ? "Speaker On" : "Speaker Off"}</Text>
+              <Text style={styles.actionLabel}>
+                {isSpeaker ? 'Speaker On' : 'Speaker Off'}
+              </Text>
             </Pressable>
           </View>
 
@@ -421,7 +494,9 @@ export function InCallScreen({
                 <MessageCircleMore size={ms(24)} color="#fff" />
                 {!showChat && unreadMessageCount > 0 && (
                   <View style={styles.unreadBadge}>
-                    <Text style={styles.unreadBadgeText}>{unreadMessageCount > 9 ? "9+" : unreadMessageCount}</Text>
+                    <Text style={styles.unreadBadgeText}>
+                      {unreadMessageCount > 9 ? '9+' : unreadMessageCount}
+                    </Text>
                   </View>
                 )}
               </View>
@@ -435,11 +510,23 @@ export function InCallScreen({
               <Text style={styles.actionLabel}>Switch Cam</Text>
             </Pressable>
 
-            <Pressable style={[styles.actionButton, !isVideoEnabled && styles.actionButtonActive]} onPress={onVideoToggle}>
+            <Pressable
+              style={[
+                styles.actionButton,
+                !isVideoEnabled && styles.actionButtonActive,
+              ]}
+              onPress={onVideoToggle}
+            >
               <View style={styles.iconPlaceholder}>
-                <AppIcon name={isVideoEnabled ? "video" : "videoOff"} size={ms(24)} color="#fff" />
+                <AppIcon
+                  name={isVideoEnabled ? 'video' : 'videoOff'}
+                  size={ms(24)}
+                  color="#fff"
+                />
               </View>
-              <Text style={styles.actionLabel}>{isVideoEnabled ? "Video On" : "Video Off"}</Text>
+              <Text style={styles.actionLabel}>
+                {isVideoEnabled ? 'Video On' : 'Video Off'}
+              </Text>
             </Pressable>
           </View>
 
@@ -459,11 +546,21 @@ export function InCallScreen({
         />
 
         {/* DTMF Keypad Overlay */}
-        <DtmfKeypad visible={showKeypad} onClose={() => setShowKeypad(false)} onDigitPress={sendDtmf} />
+        <DtmfKeypad
+          visible={showKeypad}
+          onClose={() => setShowKeypad(false)}
+          onDigitPress={sendDtmf}
+        />
 
         {/* Hangup Button */}
         <View style={styles.hangupContainer}>
-          <Pressable style={({ pressed }) => [styles.hangupButton, pressed && styles.hangupButtonPressed]} onPress={onHangup}>
+          <Pressable
+            style={({ pressed }) => [
+              styles.hangupButton,
+              pressed && styles.hangupButtonPressed,
+            ]}
+            onPress={onHangup}
+          >
             <AppIcon name="phone" size={ms(28)} color="#fff" />
           </Pressable>
           <Text style={styles.hangupLabel}>End Call</Text>

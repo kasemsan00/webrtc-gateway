@@ -16,6 +16,7 @@
     "ios:local": "nx run ttrs-vri-mobile:ios:build:local",
     "dev:softphone": "nx dev soft-phone",
     "android:softphone": "nx android soft-phone",
+    "ios:softphone:device": "nx run soft-phone:ios:build:device",
     "ios:softphone": "nx ios soft-phone",
     "lint:softphone": "nx lint soft-phone",
     "serve:sip": "nx serve gateway-sip",

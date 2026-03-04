@@ -1,30 +1,75 @@
-import { Card, CardContent } from "@/components/ui/card";
-import { Text } from "@/components/ui/text";
-import { useThemeColors } from "@/hooks/use-theme-color";
-import { BITRATE_MAP, CallMode, ThemePreference, VideoFrameRate, VideoResolution, useSettingsStore } from "@/store/settings-store";
-import { useSipStore } from "@/store/sip-store";
-import { createSettingsStyles } from "@/styles/screens/Settings.styles";
-import * as Clipboard from "expo-clipboard";
-import { AlertCircle, CheckCircle2, Copy, Info, RefreshCcw, XCircle } from "lucide-react-native";
-import React, { useEffect, useMemo, useState } from "react";
-import { Alert, Pressable, ScrollView, TextInput, View, useWindowDimensions } from "react-native";
-import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import { Card, CardContent } from '@/components/ui/card';
+import { Text } from '@/components/ui/text';
+import { useThemeColors } from '@/hooks/use-theme-color';
+import {
+  BITRATE_MAP,
+  CallMode,
+  ThemePreference,
+  VideoFrameRate,
+  VideoResolution,
+  useSettingsStore,
+} from '@/store/settings-store';
+import { useSipStore } from '@/store/sip-store';
+import { createSettingsStyles } from '@/styles/screens/Settings.styles';
+import * as Clipboard from 'expo-clipboard';
+import {
+  AlertCircle,
+  CheckCircle2,
+  Copy,
+  Info,
+  RefreshCcw,
+  XCircle,
+} from 'lucide-react-native';
+import React, { useEffect, useMemo, useState } from 'react';
+import {
+  Alert,
+  Pressable,
+  ScrollView,
+  TextInput,
+  View,
+  useWindowDimensions,
+} from 'react-native';
+import {
+  SafeAreaView,
+  useSafeAreaInsets,
+} from 'react-native-safe-area-context';
 
-import { AnimatedTabScreen } from "@/components/ui/animated-tab-screen";
+import { AnimatedTabScreen } from '@/components/ui/animated-tab-screen';
 
 // Video resolution options
-const RESOLUTION_OPTIONS: { label: string; value: VideoResolution; height: number; width: number }[] = [
-  { label: "1080p", value: "1080", height: 1080, width: 1920 },
-  { label: "720p", value: "720", height: 720, width: 1280 },
-  { label: "480p", value: "480", height: 480, width: 854 },
-  { label: "360p", value: "360", height: 360, width: 640 },
+const RESOLUTION_OPTIONS: {
+  label: string;
+  value: VideoResolution;
+  height: number;
+  width: number;
+}[] = [
+  { label: '1080p', value: '1080', height: 1080, width: 1920 },
+  { label: '720p', value: '720', height: 720, width: 1280 },
+  { label: '480p', value: '480', height: 480, width: 854 },
+  { label: '360p', value: '360', height: 360, width: 640 },
 ];
 
 // Theme options
-const THEME_OPTIONS: { label: string; value: ThemePreference; description: string }[] = [
-  { label: "System", value: "system", description: "Match your device appearance automatically" },
-  { label: "Light", value: "light", description: "Bright background with dark text" },
-  { label: "Dark", value: "dark", description: "Dim background with light text" },
+const THEME_OPTIONS: {
+  label: string;
+  value: ThemePreference;
+  description: string;
+}[] = [
+  {
+    label: 'System',
+    value: 'system',
+    description: 'Match your device appearance automatically',
+  },
+  {
+    label: 'Light',
+    value: 'light',
+    description: 'Bright background with dark text',
+  },
+  {
+    label: 'Dark',
+    value: 'dark',
+    description: 'Dim background with light text',
+  },
 ];
 
 // Helper to format bitrate
@@ -37,9 +82,9 @@ const formatBitrate = (kbps: number): string => {
 
 // Video frame rate options
 const FRAMERATE_OPTIONS: { label: string; value: VideoFrameRate }[] = [
-  { label: "15 fps", value: 15 },
-  { label: "30 fps", value: 30 },
-  { label: "60 fps", value: 60 },
+  { label: '15 fps', value: 15 },
+  { label: '30 fps', value: 30 },
+  { label: '60 fps', value: 60 },
 ];
 
 export default function SettingsScreen() {
@@ -49,10 +94,18 @@ export default function SettingsScreen() {
 
   // Local state synced from store
   const [callMode, setCallMode] = useState<CallMode>(settingsStore.callMode);
-  const [videoResolution, setVideoResolution] = useState<VideoResolution>(settingsStore.videoResolution);
-  const [videoFrameRate, setVideoFrameRate] = useState<VideoFrameRate>(settingsStore.videoFrameRate);
-  const [themePreference, setThemePreference] = useState<ThemePreference>(settingsStore.themePreference);
-  const [trunkIdInput, setTrunkIdInput] = useState(settingsStore.trunkId ? String(settingsStore.trunkId) : "");
+  const [videoResolution, setVideoResolution] = useState<VideoResolution>(
+    settingsStore.videoResolution,
+  );
+  const [videoFrameRate, setVideoFrameRate] = useState<VideoFrameRate>(
+    settingsStore.videoFrameRate,
+  );
+  const [themePreference, setThemePreference] = useState<ThemePreference>(
+    settingsStore.themePreference,
+  );
+  const [trunkIdInput, setTrunkIdInput] = useState(
+    settingsStore.trunkId ? String(settingsStore.trunkId) : '',
+  );
 
   // SIP store values
   const isConnected = useSipStore((s) => s.isConnected);
@@ -71,17 +124,24 @@ export default function SettingsScreen() {
     setVideoResolution(settingsStore.videoResolution);
     setVideoFrameRate(settingsStore.videoFrameRate);
     setThemePreference(settingsStore.themePreference);
-  }, [settingsStore.callMode, settingsStore.videoResolution, settingsStore.videoFrameRate, settingsStore.themePreference]);
+  }, [
+    settingsStore.callMode,
+    settingsStore.videoResolution,
+    settingsStore.videoFrameRate,
+    settingsStore.themePreference,
+  ]);
 
   useEffect(() => {
-    setTrunkIdInput(settingsStore.trunkId ? String(settingsStore.trunkId) : "");
+    setTrunkIdInput(settingsStore.trunkId ? String(settingsStore.trunkId) : '');
   }, [settingsStore.trunkId]);
 
   useEffect(() => {
-    if (callMode === "siptrunk" && isConnected && trunkResolveStatus === "idle") {
-      void resolveTrunk().catch((error) => {
-        console.warn("[SettingsScreen] Initial trunk resolve failed:", error);
-      });
+    if (
+      callMode === 'siptrunk' &&
+      isConnected &&
+      trunkResolveStatus === 'idle'
+    ) {
+      resolveTrunk();
     }
   }, [callMode, isConnected, trunkResolveStatus, resolveTrunk]);
 
@@ -100,14 +160,12 @@ export default function SettingsScreen() {
     setCallMode(mode);
     settingsStore.setCallMode(mode);
 
-    if (previousMode === "siptrunk" && mode === "public") {
+    if (previousMode === 'siptrunk' && mode === 'public') {
       clearTrunkResolveState();
     }
 
-    if (mode === "siptrunk" && isConnected) {
-      void resolveTrunk().catch((error) => {
-        console.warn("[SettingsScreen] Trunk resolve failed after mode change:", error);
-      });
+    if (mode === 'siptrunk' && isConnected) {
+      resolveTrunk();
     }
   };
 
@@ -117,7 +175,7 @@ export default function SettingsScreen() {
   };
 
   const handleTrunkIdChange = (text: string) => {
-    const digitsOnly = text.replace(/\D/g, "");
+    const digitsOnly = text.replace(/\D/g, '');
     setTrunkIdInput(digitsOnly);
 
     if (!digitsOnly) {
@@ -126,35 +184,49 @@ export default function SettingsScreen() {
     }
 
     const parsed = Number(digitsOnly);
-    settingsStore.setTrunkId(Number.isFinite(parsed) && parsed > 0 ? parsed : null);
+    settingsStore.setTrunkId(
+      Number.isFinite(parsed) && parsed > 0 ? parsed : null,
+    );
   };
 
   const copyToClipboard = async (text: string) => {
     await Clipboard.setStringAsync(text);
-    Alert.alert("Copied", "Server URL copied to clipboard");
+    Alert.alert('Copied', 'Server URL copied to clipboard');
   };
 
   // Status display helpers
   const getConnectionStatus = () => {
-    if (isReconnecting) return { text: `Reconnecting (${reconnectAttempt})`, color: "#F59E0B", icon: RefreshCcw };
-    if (isConnecting) return { text: "Connecting...", color: "#F59E0B", icon: AlertCircle };
-    if (isConnected) return { text: "Connected", color: "#10B981", icon: CheckCircle2 };
-    if (connectionError) return { text: "Error", color: "#EF4444", icon: XCircle };
-    return { text: "Disconnected", color: "#636366", icon: AlertCircle };
+    if (isReconnecting)
+      return {
+        text: `Reconnecting (${reconnectAttempt})`,
+        color: '#F59E0B',
+        icon: RefreshCcw,
+      };
+    if (isConnecting)
+      return { text: 'Connecting...', color: '#F59E0B', icon: AlertCircle };
+    if (isConnected)
+      return { text: 'Connected', color: '#10B981', icon: CheckCircle2 };
+    if (connectionError)
+      return { text: 'Error', color: '#EF4444', icon: XCircle };
+    return { text: 'Disconnected', color: '#636366', icon: AlertCircle };
   };
 
   const getRegistrationStatus = () => {
-    if (callMode === "public") {
-      return { text: "Per-call auth", color: "#10B981", icon: CheckCircle2 };
+    if (callMode === 'public') {
+      return { text: 'Per-call auth', color: '#10B981', icon: CheckCircle2 };
     }
-    if (!isConnected) return { text: "Not Connected", color: "#636366", icon: AlertCircle };
-    if (trunkResolveStatus === "resolving" || trunkResolveStatus === "redirecting") {
-      return { text: "Resolving...", color: "#F59E0B", icon: RefreshCcw };
+    if (!isConnected)
+      return { text: 'Not Connected', color: '#636366', icon: AlertCircle };
+    if (
+      trunkResolveStatus === 'resolving'
+    ) {
+      return { text: 'Resolving...', color: '#F59E0B', icon: RefreshCcw };
     }
-    if (trunkResolveStatus === "resolved") return { text: "Resolved", color: "#10B981", icon: CheckCircle2 };
-    if (trunkResolveStatus === "not_ready") return { text: "Not Ready", color: "#F59E0B", icon: AlertCircle };
-    if (trunkResolveStatus === "not_found" || trunkResolveStatus === "failed") return { text: "Failed", color: "#EF4444", icon: XCircle };
-    return { text: "Waiting", color: "#636366", icon: AlertCircle };
+    if (trunkResolveStatus === 'resolved')
+      return { text: 'Resolved', color: '#10B981', icon: CheckCircle2 };
+    if (trunkResolveStatus === 'failed')
+      return { text: 'Failed', color: '#EF4444', icon: XCircle };
+    return { text: 'Waiting', color: '#636366', icon: AlertCircle };
   };
 
   const connStatus = getConnectionStatus();
@@ -172,17 +244,22 @@ export default function SettingsScreen() {
 
   return (
     <AnimatedTabScreen>
-      <SafeAreaView style={styles.container} edges={["top"]}>
+      <SafeAreaView style={styles.container} edges={['top']}>
         <ScrollView
           style={styles.scrollView}
-          contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 24 }]}
+          contentContainerStyle={[
+            styles.scrollContent,
+            { paddingBottom: insets.bottom + 24 },
+          ]}
           showsVerticalScrollIndicator={false}
         >
           <View
             style={[
               styles.contentWrapper,
               { paddingHorizontal: horizontalPadding },
-              maxContentWidth ? { maxWidth: maxContentWidth, alignSelf: "center" } : null,
+              maxContentWidth
+                ? { maxWidth: maxContentWidth, alignSelf: 'center' }
+                : null,
             ]}
           >
             {/* Header */}
@@ -204,8 +281,17 @@ export default function SettingsScreen() {
                     <View style={styles.statusInfo}>
                       <connStatus.icon size={20} color={connStatus.color} />
                       <View style={styles.statusTextContainer}>
-                        <Text style={styles.statusLabel}>Gateway Connection</Text>
-                        <Text style={[styles.statusValue, { color: connStatus.color }]}>{connStatus.text}</Text>
+                        <Text style={styles.statusLabel}>
+                          Gateway Connection
+                        </Text>
+                        <Text
+                          style={[
+                            styles.statusValue,
+                            { color: connStatus.color },
+                          ]}
+                        >
+                          {connStatus.text}
+                        </Text>
                       </View>
                     </View>
                   </View>
@@ -214,8 +300,19 @@ export default function SettingsScreen() {
                     <View style={styles.statusInfo}>
                       <regStatus.icon size={20} color={regStatus.color} />
                       <View style={styles.statusTextContainer}>
-                        <Text style={styles.statusLabel}>{callMode === "public" ? "Public Auth" : "Trunk Resolve"}</Text>
-                        <Text style={[styles.statusValue, { color: regStatus.color }]}>{regStatus.text}</Text>
+                        <Text style={styles.statusLabel}>
+                          {callMode === 'public'
+                            ? 'Public Auth'
+                            : 'Trunk Resolve'}
+                        </Text>
+                        <Text
+                          style={[
+                            styles.statusValue,
+                            { color: regStatus.color },
+                          ]}
+                        >
+                          {regStatus.text}
+                        </Text>
                       </View>
                     </View>
                   </View>
@@ -232,8 +329,17 @@ export default function SettingsScreen() {
                   <View style={styles.settingRow}>
                     <View style={styles.settingInfo}>
                       <Text style={styles.settingLabel}>Gateway Server</Text>
-                      <Pressable onPress={() => copyToClipboard(settingsStore.gatewayServer)} style={styles.readOnlyContainer}>
-                        <Text style={styles.readOnlyText} numberOfLines={1} ellipsizeMode="middle">
+                      <Pressable
+                        onPress={() =>
+                          copyToClipboard(settingsStore.gatewayServer)
+                        }
+                        style={styles.readOnlyContainer}
+                      >
+                        <Text
+                          style={styles.readOnlyText}
+                          numberOfLines={1}
+                          ellipsizeMode="middle"
+                        >
                           {settingsStore.gatewayServer}
                         </Text>
                         <Copy size={14} color={colors.mutedForeground} />
@@ -254,27 +360,53 @@ export default function SettingsScreen() {
                   <View style={styles.settingRow}>
                     <View style={styles.settingInfo}>
                       <Text style={styles.settingLabel}>Theme</Text>
-                      <Text style={styles.settingDescription}>Choose how the app looks</Text>
+                      <Text style={styles.settingDescription}>
+                        Choose how the app looks
+                      </Text>
                     </View>
                   </View>
 
-                  <View style={[styles.segmentedControl, styles.themeSegmentedControl]}>
+                  <View
+                    style={[
+                      styles.segmentedControl,
+                      styles.themeSegmentedControl,
+                    ]}
+                  >
                     {THEME_OPTIONS.map((option) => (
                       <Pressable
                         key={option.value}
-                        onPress={() => handleThemePreferenceChange(option.value)}
-                        style={[styles.segment, themePreference === option.value && styles.segmentActive]}
+                        onPress={() =>
+                          handleThemePreferenceChange(option.value)
+                        }
+                        style={[
+                          styles.segment,
+                          themePreference === option.value &&
+                            styles.segmentActive,
+                        ]}
                       >
-                        <Text style={[styles.segmentText, themePreference === option.value && styles.segmentTextActive]}>{option.label}</Text>
+                        <Text
+                          style={[
+                            styles.segmentText,
+                            themePreference === option.value &&
+                              styles.segmentTextActive,
+                          ]}
+                        >
+                          {option.label}
+                        </Text>
                       </Pressable>
                     ))}
                   </View>
 
                   <View style={styles.themeDescriptionList}>
                     {THEME_OPTIONS.map((option) => (
-                      <View key={`${option.value}-description`} style={styles.themeDescriptionRow}>
+                      <View
+                        key={`${option.value}-description`}
+                        style={styles.themeDescriptionRow}
+                      >
                         <View style={styles.themeDescriptionBullet} />
-                        <Text style={styles.themeDescriptionText}>{option.description}</Text>
+                        <Text style={styles.themeDescriptionText}>
+                          {option.description}
+                        </Text>
                       </View>
                     ))}
                   </View>
@@ -288,32 +420,62 @@ export default function SettingsScreen() {
               <Card style={styles.card}>
                 <CardContent style={styles.cardContent}>
                   <View style={styles.segmentedControl}>
-                    <Pressable onPress={() => handleCallModeChange("public")} style={[styles.segment, callMode === "public" && styles.segmentActive]}>
-                      <Text style={[styles.segmentText, callMode === "public" && styles.segmentTextActive]}>Public</Text>
+                    <Pressable
+                      onPress={() => handleCallModeChange('public')}
+                      style={[
+                        styles.segment,
+                        callMode === 'public' && styles.segmentActive,
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.segmentText,
+                          callMode === 'public' && styles.segmentTextActive,
+                        ]}
+                      >
+                        Public
+                      </Text>
                     </Pressable>
                     <Pressable
-                      onPress={() => handleCallModeChange("siptrunk")}
-                      style={[styles.segment, callMode === "siptrunk" && styles.segmentActive]}
+                      onPress={() => handleCallModeChange('siptrunk')}
+                      style={[
+                        styles.segment,
+                        callMode === 'siptrunk' && styles.segmentActive,
+                      ]}
                     >
-                      <Text style={[styles.segmentText, callMode === "siptrunk" && styles.segmentTextActive]}>SIP Trunk</Text>
+                      <Text
+                        style={[
+                          styles.segmentText,
+                          callMode === 'siptrunk' && styles.segmentTextActive,
+                        ]}
+                      >
+                        SIP Trunk
+                      </Text>
                     </Pressable>
                   </View>
 
                   <View style={styles.modeDescriptionContainer}>
                     <Info size={14} color={colors.muted} />
                     <Text style={styles.modeDescription}>
-                      {callMode === "public"
-                        ? "Credentials fetched automatically from VRS API for each call"
-                        : "Trunk ID is resolved from SIP credentials before each trunk call"}
+                      {callMode === 'public'
+                        ? 'Credentials fetched automatically from VRS API for each call'
+                        : 'Trunk ID is resolved from SIP credentials before each trunk call'}
                     </Text>
                   </View>
 
-                  {callMode === "siptrunk" && (
+                  {callMode === 'siptrunk' && (
                     <View style={styles.trunkInputContainer}>
                       <View style={styles.trunkHeaderRow}>
                         <Text style={styles.inputLabel}>Resolved Trunk ID</Text>
                         <View style={styles.trunkStatusBadge}>
-                          <Text style={[styles.trunkStatusText, { color: regStatus.color }]}>{regStatus.text}</Text>
+                          <Text
+                            style={[
+                              styles.trunkStatusText,
+                              { color: regStatus.color },
+                            ]}
+                          >
+                            {regStatus.text}
+                          </Text>
                         </View>
                       </View>
 
@@ -326,24 +488,35 @@ export default function SettingsScreen() {
                         onChangeText={handleTrunkIdChange}
                       />
 
-                      {trunkResolveError ? <Text style={styles.trunkErrorText}>{trunkResolveError}</Text> : null}
+                      {trunkResolveError ? (
+                        <Text style={styles.trunkErrorText}>
+                          {trunkResolveError}
+                        </Text>
+                      ) : null}
 
                       <Pressable
                         style={({ pressed }) => [
                           styles.resolveButton,
-                          (!isConnected || trunkResolveStatus === "resolving" || trunkResolveStatus === "redirecting") &&
+                          (!isConnected ||
+                            trunkResolveStatus === 'resolving') &&
                             styles.resolveButtonDisabled,
                           pressed && styles.resolveButtonPressed,
                         ]}
-                        disabled={!isConnected || trunkResolveStatus === "resolving" || trunkResolveStatus === "redirecting"}
+                        disabled={
+                          !isConnected ||
+                          trunkResolveStatus === 'resolving'
+                        }
                         onPress={() => {
-                          void resolveTrunk().catch((error) => {
-                            console.warn("[SettingsScreen] Resolve trunk failed:", error);
-                          });
+                          resolveTrunk();
                         }}
                       >
-                        <RefreshCcw size={14} color={colors.resolveButtonText} />
-                        <Text style={styles.resolveButtonText}>Resolve Trunk</Text>
+                        <RefreshCcw
+                          size={14}
+                          color={colors.resolveButtonText}
+                        />
+                        <Text style={styles.resolveButtonText}>
+                          Resolve Trunk
+                        </Text>
                       </Pressable>
                     </View>
                   )}
@@ -354,7 +527,9 @@ export default function SettingsScreen() {
             {/* Video Settings Section */}
             <View style={styles.section}>
               <View style={styles.sectionHeaderRow}>
-                <Text style={[styles.sectionTitle, styles.sectionTitleCompact]}>Video Quality</Text>
+                <Text style={[styles.sectionTitle, styles.sectionTitleCompact]}>
+                  Video Quality
+                </Text>
                 <View style={styles.summaryBadge}>
                   <Text style={styles.summaryText}>{currentVideoSummary}</Text>
                 </View>
@@ -367,11 +542,32 @@ export default function SettingsScreen() {
                     {RESOLUTION_OPTIONS.map((option) => (
                       <Pressable
                         key={option.value}
-                        style={[styles.gridItem, isTablet && styles.gridItemTablet, videoResolution === option.value && styles.gridItemActive]}
-                        onPress={() => handleVideoResolutionChange(option.value)}
+                        style={[
+                          styles.gridItem,
+                          isTablet && styles.gridItemTablet,
+                          videoResolution === option.value &&
+                            styles.gridItemActive,
+                        ]}
+                        onPress={() =>
+                          handleVideoResolutionChange(option.value)
+                        }
                       >
-                        <Text style={[styles.gridItemLabel, videoResolution === option.value && styles.gridItemLabelActive]}>{option.label}</Text>
-                        <Text style={[styles.gridItemSub, videoResolution === option.value && styles.gridItemSubActive]}>
+                        <Text
+                          style={[
+                            styles.gridItemLabel,
+                            videoResolution === option.value &&
+                              styles.gridItemLabelActive,
+                          ]}
+                        >
+                          {option.label}
+                        </Text>
+                        <Text
+                          style={[
+                            styles.gridItemSub,
+                            videoResolution === option.value &&
+                              styles.gridItemSubActive,
+                          ]}
+                        >
                           {formatBitrate(BITRATE_MAP[option.value])}
                         </Text>
                       </Pressable>
@@ -385,10 +581,22 @@ export default function SettingsScreen() {
                     {FRAMERATE_OPTIONS.map((option) => (
                       <Pressable
                         key={option.value}
-                        style={[styles.frameRateItem, videoFrameRate === option.value && styles.gridItemActive]}
+                        style={[
+                          styles.frameRateItem,
+                          videoFrameRate === option.value &&
+                            styles.gridItemActive,
+                        ]}
                         onPress={() => handleVideoFrameRateChange(option.value)}
                       >
-                        <Text style={[styles.gridItemLabel, videoFrameRate === option.value && styles.gridItemLabelActive]}>{option.label}</Text>
+                        <Text
+                          style={[
+                            styles.gridItemLabel,
+                            videoFrameRate === option.value &&
+                              styles.gridItemLabelActive,
+                          ]}
+                        >
+                          {option.label}
+                        </Text>
                       </Pressable>
                     ))}
                   </View>

@@ -16,6 +16,7 @@
     "ios:build:device": "npx expo run:ios --device"
   },
   "dependencies": {
+    "@expo/metro-runtime": "6.1.2",
     "@react-native-community/netinfo": "11.4.1",
     "@react-navigation/bottom-tabs": "^7.4.0",
     "@react-navigation/elements": "^2.9.5",

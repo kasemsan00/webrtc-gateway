@@ -1,22 +1,30 @@
-import { DarkTheme, DefaultTheme, ThemeProvider } from "@react-navigation/native";
-import { Stack } from "expo-router";
-import { StatusBar } from "expo-status-bar";
-import { useEffect } from "react";
-import { AppState, AppStateStatus } from "react-native";
-import "react-native-reanimated";
-import "../assets/global.css";
+import {
+  DarkTheme,
+  DefaultTheme,
+  ThemeProvider,
+} from '@react-navigation/native';
+import { Stack } from 'expo-router';
+import { StatusBar } from 'expo-status-bar';
+import { useEffect } from 'react';
+import { AppState, AppStateStatus } from 'react-native';
+import 'react-native-reanimated';
+import '../assets/global.css';
 
-import { CallOverlays } from "@/components/softphone/call-overlays";
-import { useColorScheme } from "@/hooks/use-color-scheme";
-import { initializeAutoConnect } from "@/lib/auto-connect";
-import { registerCallKeepListeners, removeCallKeepListeners, setupCallKeep } from "@/lib/callkeep";
-import { getNetworkMonitor, resetNetworkMonitor } from "@/lib/network";
-import { requestMediaPermissions } from "@/lib/request-permissions";
-import { useSipStore } from "@/store/sip-store";
-import { Colors } from "@/theme";
+import { CallOverlays } from '@/components/softphone/call-overlays';
+import { useColorScheme } from '@/hooks/use-color-scheme';
+import { initializeAutoConnect } from '@/lib/auto-connect';
+import {
+  registerCallKeepListeners,
+  removeCallKeepListeners,
+  setupCallKeep,
+} from '@/lib/callkeep';
+import { getNetworkMonitor, resetNetworkMonitor } from '@/lib/network';
+import { requestMediaPermissions } from '@/lib/request-permissions';
+import { useSipStore } from '@/store/sip-store';
+import { Colors } from '@/theme';
 
 export const unstable_settings = {
-  anchor: "(tabs)",
+  anchor: '(tabs)',
 };
 
 const AppDarkTheme = {
@@ -49,19 +57,37 @@ export default function RootLayout() {
   useEffect(() => {
     const appStateRef = { current: AppState.currentState };
 
-    const subscription = AppState.addEventListener("change", (nextAppState: AppStateStatus) => {
-      const prevState = appStateRef.current;
-      appStateRef.current = nextAppState;
-      console.log("[RootLayout] AppState changed:", prevState, "->", nextAppState);
+    const subscription = AppState.addEventListener(
+      'change',
+      (nextAppState: AppStateStatus) => {
+        const prevState = appStateRef.current;
+        appStateRef.current = nextAppState;
+        console.log(
+          '[RootLayout] AppState changed:',
+          prevState,
+          '->',
+          nextAppState,
+        );
 
-      if (prevState === "active" && (nextAppState === "inactive" || nextAppState === "background")) {
-        // App moving to background; trigger PiP at inactive for earlier handoff
-        useSipStore.getState().handleAppBackground();
-      } else if ((prevState === "inactive" || prevState === "background") && nextAppState === "active") {
-        // App returning to foreground
-        useSipStore.getState().handleAppForeground();
-      }
-    });
+        if (
+          prevState === 'active' &&
+          (nextAppState === 'inactive' || nextAppState === 'background')
+        ) {
+          // App moving to background; PiP is handled by RTCView iosPIP settings
+        } else if (
+          (prevState === 'inactive' || prevState === 'background') &&
+          nextAppState === 'active'
+        ) {
+          // App returning to foreground
+          void useSipStore
+            .getState()
+            .handleAppForegroundRecovery()
+            .catch((error) => {
+              console.error('[RootLayout] Foreground recovery failed:', error);
+            });
+        }
+      },
+    );
 
     return () => {
       subscription.remove();
@@ -72,14 +98,14 @@ export default function RootLayout() {
   useEffect(() => {
     const initializeApp = async () => {
       try {
-        console.log("🚀 App started - requesting permissions...");
+        console.log('🚀 App started - requesting permissions...');
 
         // Request camera and microphone permissions first
         const permissions = await requestMediaPermissions();
-        console.log("📋 Permission results:", permissions);
+        console.log('📋 Permission results:', permissions);
 
         // Initialize CallKeep for native call integration
-        console.log("📞 Initializing CallKeep...");
+        console.log('📞 Initializing CallKeep...');
         await setupCallKeep();
         registerCallKeepListeners({
           answer: () => useSipStore.getState().answer(),
@@ -92,13 +118,21 @@ export default function RootLayout() {
           },
           sendDtmf: (digits: string) => useSipStore.getState().sendDtmf(digits),
           onAudioSessionActivated: () => {
-            useSipStore.getState().refreshRemoteVideo("callkeep_audio_session");
-            useSipStore.getState().handleAppForeground();
+            useSipStore.getState().refreshRemoteVideo('callkeep_audio_session');
+            void useSipStore
+              .getState()
+              .handleAppForegroundRecovery()
+              .catch((error) => {
+                console.error(
+                  '[RootLayout] Audio session foreground recovery failed:',
+                  error,
+                );
+              });
           },
         });
 
         // Initialize network monitor for auto-reconnect on network change
-        console.log("📶 Initializing network monitor...");
+        console.log('📶 Initializing network monitor...');
         const networkMonitor = getNetworkMonitor();
         await networkMonitor.initialize({
           debounceMs: 500,
@@ -109,10 +143,10 @@ export default function RootLayout() {
         setupNetworkMonitor();
 
         // Then initialize auto-connect
-        console.log("🔌 Initializing auto-connect...");
+        console.log('🔌 Initializing auto-connect...');
         initializeAutoConnect();
       } catch (error) {
-        console.error("[RootLayout] initializeApp failed:", error);
+        console.error('[RootLayout] initializeApp failed:', error);
       }
     };
 
@@ -126,12 +160,26 @@ export default function RootLayout() {
   }, [setupNetworkMonitor]);
 
   return (
-    <ThemeProvider value={colorScheme === "dark" ? AppDarkTheme : AppLightTheme}>
-      <Stack screenOptions={{ contentStyle: { backgroundColor: colorScheme === "dark" ? Colors.dark.background : Colors.light.background } }}>
+    <ThemeProvider
+      value={colorScheme === 'dark' ? AppDarkTheme : AppLightTheme}
+    >
+      <Stack
+        screenOptions={{
+          contentStyle: {
+            backgroundColor:
+              colorScheme === 'dark'
+                ? Colors.dark.background
+                : Colors.light.background,
+          },
+        }}
+      >
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        <Stack.Screen name="modal" options={{ presentation: "modal", title: "Modal" }} />
+        <Stack.Screen
+          name="modal"
+          options={{ presentation: 'modal', title: 'Modal' }}
+        />
       </Stack>
-      <StatusBar style={colorScheme === "dark" ? "light" : "dark"} />
+      <StatusBar style={colorScheme === 'dark' ? 'light' : 'dark'} />
       <CallOverlays />
     </ThemeProvider>
   );
