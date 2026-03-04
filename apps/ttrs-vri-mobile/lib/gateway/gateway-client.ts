@@ -2425,27 +2425,10 @@ export class GatewayClient {
       };
     }
 
-    // Fast-exit: if track flags are healthy and ICE is already connected/completed,
-    // skip the expensive 2-sample RTP stats poll (saves ~300ms on every healthy foreground return).
-    if (hasHealthyTrackFlags && this.pc) {
-      const iceState = this.pc.iceConnectionState;
-      const isIceEstablished =
-        iceState === 'connected' || iceState === 'completed';
-      if (isIceEstablished) {
-        console.log(
-          '[Gateway] ✅ Local video track healthy on iOS (fast exit - ICE connected):',
-          reason,
-          'iceState:',
-          iceState,
-        );
-        return {
-          status: 'healthy',
-          reason,
-          senderSummary: 'fast_exit_ice_connected',
-        };
-      }
-    }
-
+    // NOTE: Do NOT fast-exit based on track flags + ICE state alone.
+    // On iOS, the H264 encoder is suspended when the app goes to background,
+    // but track.readyState stays 'live' and ICE stays 'connected'.
+    // The RTP stats delta check is the ONLY reliable way to detect frozen encoders.
     const senderHealth = await this.sampleLocalVideoSenderHealth();
     const isHealthy = hasHealthyTrackFlags && senderHealth.isHealthy;
 
