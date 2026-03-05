@@ -98,7 +98,7 @@ export function attachPersist<TState, TPersistedData>(
   let timer: ReturnType<typeof setTimeout> | null = null
   let lastJson = ''
 
-  const unsubscribe = store.subscribe(() => {
+  const subscription = store.subscribe(() => {
     if (timer) clearTimeout(timer)
 
     timer = setTimeout(() => {
@@ -116,6 +116,16 @@ export function attachPersist<TState, TPersistedData>(
 
   return () => {
     if (timer) clearTimeout(timer)
-    unsubscribe()
+
+    const unsubscribeTarget = subscription as
+      | { unsubscribe?: () => void }
+      | (() => void)
+
+    if (typeof unsubscribeTarget === 'function') {
+      unsubscribeTarget()
+      return
+    }
+
+    unsubscribeTarget.unsubscribe?.()
   }
 }

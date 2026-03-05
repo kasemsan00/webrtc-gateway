@@ -145,7 +145,7 @@ function useAutoScroll(dep: unknown) {
 /* ------------------------------------------------------------------ */
 
 export function GatewayConsolePage() {
-  const state = useStore(gatewayStore)
+  const state = useStore(gatewayStore, (storeState) => storeState)
   const { theme, toggleTheme } = useTheme()
   const [messageBody, setMessageBody] = useState('')
 
@@ -167,14 +167,21 @@ export function GatewayConsolePage() {
   // Init store
   useEffect(() => {
     gatewayActions.initialize()
-    if (
-      gatewayStore.state.connection.status !== 'connected' &&
-      gatewayStore.state.connection.status !== 'connecting' &&
-      gatewayStore.state.connection.status !== 'reconnecting'
-    ) {
-      gatewayActions.connect()
+
+    const connectTimer = setTimeout(() => {
+      if (
+        gatewayStore.state.connection.status !== 'connected' &&
+        gatewayStore.state.connection.status !== 'connecting' &&
+        gatewayStore.state.connection.status !== 'reconnecting'
+      ) {
+        gatewayActions.connect()
+      }
+    }, 0)
+
+    return () => {
+      clearTimeout(connectTimer)
+      gatewayActions.cleanup()
     }
-    return () => gatewayActions.cleanup()
   }, [])
 
   // Bind streams

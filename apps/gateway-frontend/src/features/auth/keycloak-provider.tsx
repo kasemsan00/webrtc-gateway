@@ -12,11 +12,13 @@ import { clearAccessToken, setAccessToken } from './token-store'
 import { getKeycloakRuntimeConfig } from './runtime-env'
 import { initializeKeycloakRuntime } from './keycloak-runtime'
 import type {
+  AuthUser,
   KeycloakClientLike,
   KeycloakRuntimeState,
 } from './keycloak-runtime'
 
 interface AuthContextValue extends KeycloakRuntimeState {
+  user: AuthUser | null
   login: () => Promise<void>
   logout: () => Promise<void>
 }
@@ -29,6 +31,7 @@ const initialState: KeycloakRuntimeState = {
   ready: false,
   authenticated: false,
   token: null,
+  user: null,
 }
 
 async function createKeycloakClient(): Promise<KeycloakClientLike> {
@@ -124,7 +127,7 @@ export function KeycloakAuthProvider({
   )
 
   if (!mounted) {
-    return <>{children}</>
+    return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
   }
 
   if (error) {

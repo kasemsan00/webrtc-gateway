@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { initializeKeycloakRuntime } from './keycloak-runtime'
+import { extractAuthUser, initializeKeycloakRuntime } from './keycloak-runtime'
 import type { KeycloakClientLike } from './keycloak-runtime'
 
 function makeClient(overrides?: Partial<KeycloakClientLike>): KeycloakClientLike {
@@ -36,6 +36,7 @@ describe('initializeKeycloakRuntime', () => {
       ready: true,
       authenticated: true,
       token: 'token-1',
+      user: null,
     })
 
     stop()
@@ -76,5 +77,36 @@ describe('initializeKeycloakRuntime', () => {
     expect(onStateChange).toHaveBeenCalledTimes(2)
 
     stop()
+  })
+})
+
+describe('extractAuthUser', () => {
+  it('uses name and preferred_username when available', () => {
+    expect(
+      extractAuthUser({
+        name: 'Alice Doe',
+        preferred_username: 'alice',
+        email: 'alice@example.com',
+      }),
+    ).toEqual({
+      displayName: 'Alice Doe',
+      username: 'alice',
+      email: 'alice@example.com',
+    })
+  })
+
+  it('falls back to unknown user and sub', () => {
+    expect(
+      extractAuthUser({
+        sub: 'user-123',
+      }),
+    ).toEqual({
+      displayName: 'Unknown user',
+      username: 'user-123',
+    })
+  })
+
+  it('returns null when token claims are missing', () => {
+    expect(extractAuthUser(undefined)).toBeNull()
   })
 })

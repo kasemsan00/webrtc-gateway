@@ -1,6 +1,7 @@
 export interface KeycloakClientLike {
   authenticated?: boolean
   token?: string
+  tokenParsed?: Record<string, unknown>
   onTokenExpired?: () => void
   init: (options: {
     onLoad: 'login-required'
@@ -16,6 +17,43 @@ export interface KeycloakRuntimeState {
   ready: boolean
   authenticated: boolean
   token: string | null
+  user: AuthUser | null
+}
+
+export interface AuthUser {
+  displayName: string
+  username: string
+  email?: string
+}
+
+function asNonEmptyString(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim()
+  return trimmed.length > 0 ? trimmed : undefined
+}
+
+export function extractAuthUser(
+  tokenParsed?: Record<string, unknown>,
+): AuthUser | null {
+  if (!tokenParsed) return null
+
+  const username =
+    asNonEmptyString(tokenParsed.preferred_username) ??
+    asNonEmptyString(tokenParsed.sub) ??
+    '-'
+
+  const displayName =
+    asNonEmptyString(tokenParsed.name) ??
+    asNonEmptyString(tokenParsed.preferred_username) ??
+    'Unknown user'
+
+  const email = asNonEmptyString(tokenParsed.email)
+
+  return {
+    displayName,
+    username,
+    email,
+  }
 }
 
 interface InitializeKeycloakRuntimeOptions {
@@ -38,6 +76,7 @@ export async function initializeKeycloakRuntime({
       ready: true,
       authenticated: Boolean(client.authenticated),
       token: client.token ?? null,
+      user: extractAuthUser(client.tokenParsed),
     })
   }
 
