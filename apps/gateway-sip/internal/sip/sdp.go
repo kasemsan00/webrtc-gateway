@@ -12,10 +12,29 @@ import (
 	"k2-gateway/internal/session"
 )
 
+type sdpNegotiationConstraints struct {
+	audioProfile          string
+	videoProfile          string
+	audioRtcpMux          bool
+	videoRtcpMux          bool
+	videoPacketizationOne bool
+}
+
 // createSDPOffer creates an SDP offer for outbound calls
 // Plain RTP version (no SRTP/crypto) since Asterisk doesn't use encryption
 // WebRTC side will still use SRTP (handled by pion/webrtc automatically)
 func (s *Server) createSDPOffer(rtpPort int, sess *session.Session) []byte {
+	return s.createSIPSDP(rtpPort, sess, nil)
+}
+
+// createSDPAnswerForInvite creates an SDP answer for inbound INVITE while mirroring
+// the offered media transport profile/mux capabilities to avoid strict SIP peer rejections.
+func (s *Server) createSDPAnswerForInvite(rtpPort int, sess *session.Session, inviteSDP []byte) []byte {
+	constraints := parseInviteSDPNegotiation(inviteSDP)
+	return s.createSIPSDP(rtpPort, sess, &constraints)
+}
+
+func (s *Server) createSIPSDP(rtpPort int, sess *session.Session, constraints *sdpNegotiationConstraints) []byte {
 	sessionID := time.Now().UnixNano() / 1000000 // Use milliseconds like Linphone
 	videoPort := rtpPort + 2                     // Video on next even port
 
@@ -59,6 +78,20 @@ func (s *Server) createSDPOffer(rtpPort int, sess *session.Session) []byte {
 		fmt.Printf("[%s] ⚠️ Forcing RTP/AVP to SIP side (SIP_FORCE_AVP=%s)\n", sess.ID, forceAVP)
 	}
 
+	audioRtcpMux := true
+	videoRtcpMux := true
+	videoPacketizationOne := true
+	if constraints != nil {
+		audioProfile = constraints.audioProfile
+		videoProfile = constraints.videoProfile
+		audioRtcpMux = constraints.audioRtcpMux
+		videoRtcpMux = constraints.videoRtcpMux
+		videoPacketizationOne = constraints.videoPacketizationOne
+		if videoProfile != "RTP/AVPF" {
+			rtcpFbLines = ""
+		}
+	}
+
 	// Build H.264 fmtp line.
 	//
 	// IMPORTANT (Android/WebRTC):
@@ -74,7 +107,10 @@ func (s *Server) createSDPOffer(rtpPort int, sess *session.Session) []byte {
 	//   than our previous hardcoded profile-level-id. Mismatch can lead to black screen.
 	defaultProfileLevelID := "42801F"
 	videoProfileLevelID := defaultProfileLevelID
-	videoFmtp := fmt.Sprintf("a=fmtp:96 profile-level-id=%s;packetization-mode=1", videoProfileLevelID)
+	videoFmtp := fmt.Sprintf("a=fmtp:96 profile-level-id=%s", videoProfileLevelID)
+	if videoPacketizationOne {
+		videoFmtp = fmt.Sprintf("%s;packetization-mode=1", videoFmtp)
+	}
 	if sps, pps, ok := sess.GetCachedSPSPPS(); ok {
 		// Derive profile-level-id from SPS if possible.
 		// SPS layout: [NAL header][profile_idc][constraints][level_idc]...
@@ -89,8 +125,22 @@ func (s *Server) createSDPOffer(rtpPort int, sess *session.Session) []byte {
 		// Base64 encode SPS and PPS for SDP
 		b64sps := base64.StdEncoding.EncodeToString(sps)
 		b64pps := base64.StdEncoding.EncodeToString(pps)
-		videoFmtp = fmt.Sprintf("a=fmtp:96 profile-level-id=%s;packetization-mode=1;sprop-parameter-sets=%s,%s", videoProfileLevelID, b64sps, b64pps)
+		videoFmtp = fmt.Sprintf("a=fmtp:96 profile-level-id=%s", videoProfileLevelID)
+		if videoPacketizationOne {
+			videoFmtp = fmt.Sprintf("%s;packetization-mode=1", videoFmtp)
+		}
+		videoFmtp = fmt.Sprintf("%s;sprop-parameter-sets=%s,%s", videoFmtp, b64sps, b64pps)
 		fmt.Printf("[%s] 🎬 Including sprop-parameter-sets in SDP (SPS: %d bytes, PPS: %d bytes)\n", sess.ID, len(sps), len(pps))
+	}
+
+	audioRtcpMuxLine := ""
+	if audioRtcpMux {
+		audioRtcpMuxLine = "a=rtcp-mux\n"
+	}
+
+	videoRtcpMuxLine := ""
+	if videoRtcpMux {
+		videoRtcpMuxLine = "a=rtcp-mux\n"
 	}
 
 	// Get username for SDP origin field (o=) from session auth context
@@ -115,18 +165,21 @@ a=fmtp:%d minptime=10;useinbandfec=1
 a=rtpmap:101 telephone-event/8000
 a=fmtp:101 0-16
 a=ptime:20
-a=rtcp-mux
+%s
 a=sendrecv
 m=video %d %s 96
 a=rtpmap:96 H264/90000
 %s
-a=rtcp-mux
+%s
 %sa=sendrecv
 `, sdpUsername, sessionID, sessionID, s.publicAddress,
 		s.publicAddress,
 		rtpPort, audioProfile,
 		opusPT, opusPT, opusPT,
-		videoPort, videoProfile, videoFmtp, rtcpFbLines)
+		audioRtcpMuxLine,
+		videoPort, videoProfile, videoFmtp,
+		videoRtcpMuxLine,
+		rtcpFbLines)
 
 	profileNote := "AVP"
 	if s.config.AudioUseAVPF || s.config.VideoUseAVPF {
@@ -144,6 +197,63 @@ a=rtcp-mux
 		fmt.Printf("📋 AVPF SDP Details: Profile=%s, RTCP Feedback: rtcp-fb:* ccm fir (matching Linphone Mobile)\n", videoProfile)
 	}
 	return []byte(sdp)
+}
+
+func parseInviteSDPNegotiation(inviteSDP []byte) sdpNegotiationConstraints {
+	constraints := sdpNegotiationConstraints{
+		audioProfile:          "RTP/AVP",
+		videoProfile:          "RTP/AVP",
+		audioRtcpMux:          false,
+		videoRtcpMux:          false,
+		videoPacketizationOne: false,
+	}
+
+	if len(inviteSDP) == 0 {
+		return constraints
+	}
+
+	media := ""
+	lines := strings.Split(string(inviteSDP), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		if strings.HasPrefix(line, "m=audio ") {
+			media = "audio"
+			parts := strings.Fields(line)
+			if len(parts) >= 3 {
+				constraints.audioProfile = parts[2]
+			}
+			continue
+		}
+		if strings.HasPrefix(line, "m=video ") {
+			media = "video"
+			parts := strings.Fields(line)
+			if len(parts) >= 3 {
+				constraints.videoProfile = parts[2]
+			}
+			continue
+		}
+
+		if line == "a=rtcp-mux" {
+			if media == "audio" {
+				constraints.audioRtcpMux = true
+			} else if media == "video" {
+				constraints.videoRtcpMux = true
+			}
+			continue
+		}
+
+		if media == "video" && strings.HasPrefix(line, "a=fmtp:96 ") {
+			if strings.Contains(line, "packetization-mode=1") {
+				constraints.videoPacketizationOne = true
+			}
+		}
+	}
+
+	return constraints
 }
 
 // parseAsteriskSDPAndSetEndpoints parses Asterisk's SDP answer to extract RTP ports
