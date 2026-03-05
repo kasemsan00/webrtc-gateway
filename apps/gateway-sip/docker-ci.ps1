@@ -1,2 +1,6 @@
-$branch = "1.0.1"
-docker build --push -t registry.kasemsan.com/k2-gateway:$branch .
+param(
+	[string]$Tag = "1.0.2"
+)
+
+Write-Host "Building and pushing registry.kasemsan.com/k2-gateway:$Tag"
+docker build --push -t registry.kasemsan.com/k2-gateway:$Tag .

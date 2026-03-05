@@ -16,7 +16,9 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: registry.kasemsan.com/gateway-sip
+          images: |
+            registry.kasemsan.com/k2-gateway
+            registry.kasemsan.com/gateway-sip
           tags: |
             type=ref,event=branch
             type=ref,event=tag
