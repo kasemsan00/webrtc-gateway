@@ -767,8 +767,12 @@ func (s *Session) SetSIPDialogState(fromTag, toTag, remoteContact, domain string
 	s.SIPFromTag = fromTag
 	s.SIPToTag = toTag
 	s.SIPRemoteContact = remoteContact
-	s.SIPDomain = domain
-	s.SIPPort = port
+	if domain != "" {
+		s.SIPDomain = domain
+	}
+	if port > 0 {
+		s.SIPPort = port
+	}
 	s.SIPCSeq = cseq
 	// Only update RouteSet if provided (don't overwrite with empty list from ACK)
 	if len(routeSet) > 0 {

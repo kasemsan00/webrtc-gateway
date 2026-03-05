@@ -101,11 +101,13 @@ func (s *Server) handleINVITE(req *sip.Request, tx sip.ServerTransaction) {
 	// NEW: Check if this incoming call is for a trunk we own
 	var isTrunkCall bool
 	var trunkOwned bool
+	var matchedTrunk *Trunk
 	if s.trunkManager != nil {
 		trunk, owned := s.trunkManager.MatchTrunkFromInvite(req)
 		if trunk != nil {
 			isTrunkCall = true
 			trunkOwned = owned
+			matchedTrunk = trunk
 			fmt.Printf("📞 INVITE matched trunk ID %d (name: %s, owned: %v)\n", trunk.ID, trunk.Name, owned)
 
 			if !owned {
@@ -208,6 +210,17 @@ func (s *Server) handleINVITE(req *sip.Request, tx sip.ServerTransaction) {
 
 		// Store incoming call info in session
 		sess.SetCallInfo("inbound", fromURI, toURI, callIDValue)
+		if matchedTrunk != nil {
+			sess.SetSIPAuthContext(
+				"trunk",
+				"",
+				matchedTrunk.ID,
+				matchedTrunk.Domain,
+				matchedTrunk.Username,
+				matchedTrunk.Password,
+				matchedTrunk.Port,
+			)
+		}
 		sess.UpdateState(session.StateIncoming)
 		s.logEvent(&logstore.Event{
 			Timestamp: time.Now(),
@@ -462,7 +475,8 @@ func (s *Server) handleACK(req *sip.Request, tx sip.ServerTransaction) {
 				}
 
 				// For incoming calls: we are callee, so swap tags
-				sess.SetSIPDialogState(toTag, fromTag, remoteContact, s.getActiveDomain(), s.getActivePort(), 1, routeSet)
+				dialogDomain, dialogPort := s.resolveDialogDomainPort(sess)
+				sess.SetSIPDialogState(toTag, fromTag, remoteContact, dialogDomain, dialogPort, 1, routeSet)
 				sess.UpdateState(session.StateActive)
 				s.notifySessionStateChange(sess, session.StateActive)
 				s.logDialogSnapshot(ctx, sess)

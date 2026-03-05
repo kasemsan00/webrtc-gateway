@@ -11,15 +11,31 @@ type incomingTestSIPCallMaker struct {
 	acceptCount int
 	rejectCount int
 	lastReject  string
+	hangupCount int
+	lastHangup  *session.Session
 }
 
 func (s *incomingTestSIPCallMaker) MakeCall(destination, from string, sess *session.Session) error {
 	return nil
 }
-func (s *incomingTestSIPCallMaker) Hangup(sess *session.Session) error                  { return nil }
+func (s *incomingTestSIPCallMaker) Hangup(sess *session.Session) error {
+	s.hangupCount++
+	s.lastHangup = sess
+	return nil
+}
 func (s *incomingTestSIPCallMaker) SendDTMF(sess *session.Session, digits string) error { return nil }
 func (s *incomingTestSIPCallMaker) AcceptCall(sess *session.Session) error {
 	s.acceptCount++
+	sess.SetSIPDialogState(
+		"local-tag",
+		"remote-tag",
+		"<sip:00025@203.150.245.42:5060>",
+		"203.151.21.121",
+		5060,
+		1,
+		nil,
+	)
+	sess.UpdateState(session.StateActive)
 	return nil
 }
 func (s *incomingTestSIPCallMaker) RejectCall(sess *session.Session, reason string) error {
@@ -149,5 +165,42 @@ func TestNotifyIncomingCall_SendsOnlyResolvedClients(t *testing.T) {
 	}
 	if msg.From != "sip:alice@example.com" || msg.To != "sip:bob@example.com" {
 		t.Fatalf("resolved client unexpected from/to: from=%s to=%s", msg.From, msg.To)
+	}
+}
+
+func TestIncomingAcceptThenHangup_UsesSessionWithDialogState(t *testing.T) {
+	mgr := newTestSessionManager()
+	incomingSess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create incoming session: %v", err)
+	}
+	incomingSess.SetState(session.StateIncoming)
+	incomingSess.SetCallInfo("inbound", "sip:00025@203.150.245.42:5060", "sip:1100@203.151.21.121:5060", "sip-call-3")
+
+	sipMaker := &incomingTestSIPCallMaker{}
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, mgr, sipMaker, nil, nil, nil)
+	client := &WSClient{send: make(chan []byte, 16)}
+
+	srv.handleWSAccept(client, WSMessage{
+		Type:      "accept",
+		SessionID: incomingSess.ID,
+	})
+	srv.handleWSHangup(client, WSMessage{
+		Type:      "hangup",
+		SessionID: incomingSess.ID,
+	})
+
+	if sipMaker.hangupCount != 1 {
+		t.Fatalf("expected Hangup once, got %d", sipMaker.hangupCount)
+	}
+	if sipMaker.lastHangup == nil {
+		t.Fatalf("expected hangup session to be captured")
+	}
+	fromTag, toTag, _, _, _, domain, port := sipMaker.lastHangup.GetSIPDialogState()
+	if fromTag == "" || toTag == "" {
+		t.Fatalf("expected dialog tags to be present on hangup session")
+	}
+	if domain == "" || port == 0 {
+		t.Fatalf("expected dialog domain/port to be present on hangup session, got domain=%q port=%d", domain, port)
 	}
 }

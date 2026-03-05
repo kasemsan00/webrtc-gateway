@@ -840,7 +840,8 @@ func (s *Server) AcceptCall(sess *session.Session) error {
 	}
 
 	// For incoming calls: swap fromTag/toTag because we are the callee
-	sess.SetSIPDialogState(toTag, fromTag, remoteContact, s.getActiveDomain(), s.getActivePort(), 1, routeSet)
+	dialogDomain, dialogPort := s.resolveDialogDomainPort(sess)
+	sess.SetSIPDialogState(toTag, fromTag, remoteContact, dialogDomain, dialogPort, 1, routeSet)
 	fmt.Printf("✅ [%s] Dialog state stored - FromTag: %s, ToTag: %s, Contact: %s\n",
 		sess.ID, toTag, fromTag, remoteContact)
 	s.logDialogSnapshot(ctx, sess)
@@ -1096,39 +1097,59 @@ func normalizeSIPUser(user string) string {
 	return u
 }
 
+// resolveDialogDomainPort determines the best SIP domain/port source for dialog requests.
+// Priority: dialog state -> session auth context -> active static config.
+func (s *Server) resolveDialogDomainPort(sess *session.Session) (string, int) {
+	_, _, _, _, _, dialogDomain, dialogPort := sess.GetSIPDialogState()
+	if dialogDomain != "" {
+		if dialogPort == 0 {
+			dialogPort = s.getActivePort()
+		}
+		if dialogPort == 0 {
+			dialogPort = 5060
+		}
+		return dialogDomain, dialogPort
+	}
+
+	_, _, _, authDomain, _, _, authPort := sess.GetSIPAuthContext()
+	if authDomain != "" {
+		if authPort == 0 {
+			authPort = s.getActivePort()
+		}
+		if authPort == 0 {
+			authPort = 5060
+		}
+		return authDomain, authPort
+	}
+
+	fallbackDomain := s.getActiveDomain()
+	fallbackPort := s.getActivePort()
+	if fallbackPort == 0 {
+		fallbackPort = 5060
+	}
+	return fallbackDomain, fallbackPort
+}
+
 // createBYERequest creates a SIP BYE request for terminating a call
 func (s *Server) createBYERequest(sess *session.Session) (*sip.Request, error) {
-	// Get the correct domain
-	_, _, _, _, _, sipDomain, sipPort := sess.GetSIPDialogState()
-	domain := sipDomain
-	if domain == "" {
-		domain = s.getActiveDomain()
-	}
-	if domain == "" {
-		return nil, fmt.Errorf("no SIP domain available for BYE request")
-	}
-
-	// Get the correct port
-	port := sipPort
-	if port == 0 {
-		port = s.getActivePort()
-	}
-
-	fmt.Printf("[%s] BYE using domain: %s, port: %d\n", sess.ID, domain, port)
-
-	// Resolve destination domain
-	ips, err := net.LookupIP(domain)
-	if err != nil {
-		return nil, fmt.Errorf("failed to resolve SIP domain %s: %w", domain, err)
-	}
-	if len(ips) == 0 {
-		return nil, fmt.Errorf("no IP addresses found for domain %s", domain)
-	}
-	resolvedIP := ips[0].String()
-
 	// Get dialog state (contact, route set, tags)
 	direction, from, to, sipCallID := sess.GetCallInfo()
-	fromTag, toTag, remoteContact, routeSet, dialogCSeq, _, _ := sess.GetSIPDialogState()
+	fromTag, toTag, remoteContact, routeSet, dialogCSeq, dialogDomain, dialogPort := sess.GetSIPDialogState()
+	_, _, _, authDomain, _, _, authPort := sess.GetSIPAuthContext()
+
+	domain := ""
+	port := 0
+	source := ""
+	if dialogDomain != "" {
+		domain = dialogDomain
+		port = dialogPort
+		source = "dialog"
+	} else if authDomain != "" {
+		domain = authDomain
+		port = authPort
+		source = "auth"
+	}
+
 	var recipient sip.Uri
 	if remoteContact != "" {
 		// Parse Contact header for Request-URI
@@ -1145,6 +1166,11 @@ func (s *Server) createBYERequest(sess *session.Session) (*sip.Request, error) {
 			}
 		} else {
 			recipient = parsedURI
+			if domain == "" && parsedURI.Host != "" {
+				domain = parsedURI.Host
+				port = parsedURI.Port
+				source = "contact"
+			}
 		}
 	} else {
 		recipient = sip.Uri{
@@ -1152,6 +1178,36 @@ func (s *Server) createBYERequest(sess *session.Session) (*sip.Request, error) {
 			Host: domain,
 		}
 	}
+
+	if domain == "" {
+		domain = s.getActiveDomain()
+		source = "fallback"
+	}
+	if domain == "" {
+		return nil, fmt.Errorf("no SIP domain available for BYE request")
+	}
+	if port == 0 {
+		port = s.getActivePort()
+	}
+	if port == 0 {
+		port = 5060
+	}
+
+	if recipient.Host == "" {
+		recipient.Host = domain
+	}
+
+	fmt.Printf("[%s] BYE target source=%s domain=%s port=%d\n", sess.ID, source, domain, port)
+
+	// Resolve destination domain
+	ips, err := net.LookupIP(domain)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve SIP domain %s: %w", domain, err)
+	}
+	if len(ips) == 0 {
+		return nil, fmt.Errorf("no IP addresses found for domain %s", domain)
+	}
+	resolvedIP := ips[0].String()
 
 	fmt.Printf("[%s] BYE Request-URI: %s\n", sess.ID, recipient.String())
 
@@ -1221,10 +1277,6 @@ func (s *Server) createBYERequest(sess *session.Session) (*sip.Request, error) {
 		if err := sip.ParseUri(remoteURI, &toUri); err != nil {
 			fmt.Printf("[%s] Failed to parse To URI '%s': %v\n", sess.ID, remoteURI, err)
 			toUri = sip.Uri{User: remoteURI, Host: domain}
-		} else if direction == "inbound" {
-			toUri.Host = domain
-			toUri.Port = 0
-			fmt.Printf("[%s] Replaced To URI host with domain: %s\n", sess.ID, domain)
 		}
 	} else {
 		toUri = sip.Uri{User: remoteURI, Host: domain}
