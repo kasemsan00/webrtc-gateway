@@ -257,7 +257,11 @@ func (s *Server) handleINVITE(req *sip.Request, tx sip.ServerTransaction) {
 		if callerID == "" {
 			callerID = fromURI
 		}
-		s.incomingNotifier.NotifyIncomingCall(sess.ID, callerID, toURI)
+		incomingTrunkID := int64(0)
+		if matchedTrunk != nil {
+			incomingTrunkID = matchedTrunk.ID
+		}
+		s.incomingNotifier.NotifyIncomingCall(sess.ID, callerID, toURI, incomingTrunkID)
 		fmt.Printf("📲 Notified browser about incoming call from: %s\n", callerID)
 
 		return

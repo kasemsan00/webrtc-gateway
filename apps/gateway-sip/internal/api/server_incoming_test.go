@@ -138,22 +138,28 @@ func TestHandleWSReject_DefaultReasonAndDeletesSession(t *testing.T) {
 	}
 }
 
-func TestNotifyIncomingCall_SendsOnlyResolvedClients(t *testing.T) {
+func TestNotifyIncomingCall_SendsOnlyClientsResolvedOnSameTrunk(t *testing.T) {
 	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, nil, nil, nil, nil, nil)
-	clientA := &WSClient{sessionID: "a", trunkResolved: true, send: make(chan []byte, 8)}
-	clientB := &WSClient{sessionID: "b", trunkResolved: false, send: make(chan []byte, 8)}
+	clientA := &WSClient{sessionID: "a", trunkResolved: true, resolvedTrunkID: 1, send: make(chan []byte, 8)}
+	clientB := &WSClient{sessionID: "b", trunkResolved: true, resolvedTrunkID: 1, send: make(chan []byte, 8)}
+	clientC := &WSClient{sessionID: "c", trunkResolved: true, resolvedTrunkID: 2, send: make(chan []byte, 8)}
+	clientD := &WSClient{sessionID: "d", trunkResolved: false, resolvedTrunkID: 1, send: make(chan []byte, 8)}
 
 	srv.mu.Lock()
 	srv.wsConnections[clientA] = struct{}{}
 	srv.wsConnections[clientB] = struct{}{}
+	srv.wsConnections[clientC] = struct{}{}
+	srv.wsConnections[clientD] = struct{}{}
 	srv.mu.Unlock()
 
-	srv.NotifyIncomingCall("incoming-123", "sip:alice@example.com", "sip:bob@example.com")
+	srv.NotifyIncomingCall("incoming-123", "sip:alice@example.com", "sip:bob@example.com", 1)
 
 	msgsA := readWSMessages(t, clientA.send)
 	msgsB := readWSMessages(t, clientB.send)
-	if len(msgsA) != 1 || len(msgsB) != 0 {
-		t.Fatalf("expected one incoming message only for resolved client, got A=%d B=%d", len(msgsA), len(msgsB))
+	msgsC := readWSMessages(t, clientC.send)
+	msgsD := readWSMessages(t, clientD.send)
+	if len(msgsA) != 1 || len(msgsB) != 1 || len(msgsC) != 0 || len(msgsD) != 0 {
+		t.Fatalf("expected incoming only for same-trunk resolved clients, got A=%d B=%d C=%d D=%d", len(msgsA), len(msgsB), len(msgsC), len(msgsD))
 	}
 
 	msg := msgsA[0]

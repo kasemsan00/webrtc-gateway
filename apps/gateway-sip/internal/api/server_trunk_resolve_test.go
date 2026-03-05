@@ -147,6 +147,9 @@ func TestHandleWSTrunkResolve_NotFoundSendsTrunkNotFoundAndError(t *testing.T) {
 	if client.trunkResolved {
 		t.Fatalf("expected client.trunkResolved=false for trunk_not_found")
 	}
+	if client.resolvedTrunkID != 0 {
+		t.Fatalf("expected client.resolvedTrunkID=0 for trunk_not_found, got %d", client.resolvedTrunkID)
+	}
 }
 
 func TestHandleWSTrunkResolve_LeaseNotActive(t *testing.T) {
@@ -180,6 +183,9 @@ func TestHandleWSTrunkResolve_LeaseNotActive(t *testing.T) {
 	}
 	if client.trunkResolved {
 		t.Fatalf("expected client.trunkResolved=false for trunk_not_ready")
+	}
+	if client.resolvedTrunkID != 0 {
+		t.Fatalf("expected client.resolvedTrunkID=0 for trunk_not_ready, got %d", client.resolvedTrunkID)
 	}
 }
 
@@ -218,6 +224,9 @@ func TestHandleWSTrunkResolve_ResolvedWhenOwnedByInstance(t *testing.T) {
 	if !client.trunkResolved {
 		t.Fatalf("expected client.trunkResolved=true for trunk_resolved")
 	}
+	if client.resolvedTrunkID != 42 {
+		t.Fatalf("expected client.resolvedTrunkID=42 for trunk_resolved, got %d", client.resolvedTrunkID)
+	}
 }
 
 func TestHandleWSTrunkResolve_ResolvedReplaysPendingIncoming(t *testing.T) {
@@ -237,6 +246,15 @@ func TestHandleWSTrunkResolve_ResolvedReplaysPendingIncoming(t *testing.T) {
 	}
 	incomingSess.SetState(session.StateIncoming)
 	incomingSess.SetCallInfo("inbound", "sip:linphone@example.com", "sip:agent@example.com", "sip-call-99")
+	incomingSess.SetSIPAuthContext("trunk", "", 42, "sip.example.com", "1001", "secret", 5060)
+
+	otherIncoming, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create other incoming session: %v", err)
+	}
+	otherIncoming.SetState(session.StateIncoming)
+	otherIncoming.SetCallInfo("inbound", "sip:other@example.com", "sip:agent@example.com", "sip-call-100")
+	otherIncoming.SetSIPAuthContext("trunk", "", 99, "sip.example.com", "1002", "secret", 5060)
 
 	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{InstanceID: "gw-1"}, mgr, nil, nil, nil, store)
 	client := &WSClient{send: make(chan []byte, 8)}
@@ -252,7 +270,7 @@ func TestHandleWSTrunkResolve_ResolvedReplaysPendingIncoming(t *testing.T) {
 
 	msgs := readWSMessages(t, client.send)
 	if len(msgs) != 2 {
-		t.Fatalf("expected 2 messages (trunk_resolved + incoming), got %d", len(msgs))
+		t.Fatalf("expected 2 messages (trunk_resolved + matching incoming), got %d", len(msgs))
 	}
 	if msgs[0].Type != "trunk_resolved" {
 		t.Fatalf("expected first message trunk_resolved, got %s", msgs[0].Type)
@@ -268,6 +286,9 @@ func TestHandleWSTrunkResolve_ResolvedReplaysPendingIncoming(t *testing.T) {
 	}
 	if !client.trunkResolved {
 		t.Fatalf("expected client.trunkResolved=true after successful trunk_resolve")
+	}
+	if client.resolvedTrunkID != 42 {
+		t.Fatalf("expected client.resolvedTrunkID=42 after successful trunk_resolve, got %d", client.resolvedTrunkID)
 	}
 }
 
@@ -305,6 +326,9 @@ func TestHandleWSTrunkResolve_RedirectWhenOwnedByOtherInstance(t *testing.T) {
 	if client.trunkResolved {
 		t.Fatalf("expected client.trunkResolved=false for trunk_redirect")
 	}
+	if client.resolvedTrunkID != 0 {
+		t.Fatalf("expected client.resolvedTrunkID=0 for trunk_redirect, got %d", client.resolvedTrunkID)
+	}
 }
 
 func TestHandleWSTrunkResolve_ResolveFailure(t *testing.T) {
@@ -330,6 +354,9 @@ func TestHandleWSTrunkResolve_ResolveFailure(t *testing.T) {
 	}
 	if client.trunkResolved {
 		t.Fatalf("expected client.trunkResolved=false for resolve error")
+	}
+	if client.resolvedTrunkID != 0 {
+		t.Fatalf("expected client.resolvedTrunkID=0 for resolve error, got %d", client.resolvedTrunkID)
 	}
 }
 
@@ -366,6 +393,9 @@ func TestHandleWSTrunkResolve_ByTrunkID_ResolvedWhenOwnedByInstance(t *testing.T
 	if !client.trunkResolved {
 		t.Fatalf("expected client.trunkResolved=true for trunk_resolved by trunkId")
 	}
+	if client.resolvedTrunkID != 42 {
+		t.Fatalf("expected client.resolvedTrunkID=42 for trunk_resolved by trunkId, got %d", client.resolvedTrunkID)
+	}
 }
 
 func TestHandleWSTrunkResolve_ByTrunkPublicID_ResolvedWhenOwnedByInstance(t *testing.T) {
@@ -401,6 +431,9 @@ func TestHandleWSTrunkResolve_ByTrunkPublicID_ResolvedWhenOwnedByInstance(t *tes
 	if !client.trunkResolved {
 		t.Fatalf("expected client.trunkResolved=true for trunk_resolved by trunkPublicId")
 	}
+	if client.resolvedTrunkID != 42 {
+		t.Fatalf("expected client.resolvedTrunkID=42 for trunk_resolved by trunkPublicId, got %d", client.resolvedTrunkID)
+	}
 }
 
 func TestHandleWSTrunkResolve_ByTrunkID_NotReadyWhenLeaseExpired(t *testing.T) {
@@ -432,6 +465,9 @@ func TestHandleWSTrunkResolve_ByTrunkID_NotReadyWhenLeaseExpired(t *testing.T) {
 	}
 	if client.trunkResolved {
 		t.Fatalf("expected client.trunkResolved=false for trunk_not_ready by trunkId")
+	}
+	if client.resolvedTrunkID != 0 {
+		t.Fatalf("expected client.resolvedTrunkID=0 for trunk_not_ready by trunkId, got %d", client.resolvedTrunkID)
 	}
 }
 
@@ -468,5 +504,8 @@ func TestHandleWSTrunkResolve_ByTrunkID_RedirectWhenOwnedByOtherInstance(t *test
 	}
 	if client.trunkResolved {
 		t.Fatalf("expected client.trunkResolved=false for trunk_redirect by trunkId")
+	}
+	if client.resolvedTrunkID != 0 {
+		t.Fatalf("expected client.resolvedTrunkID=0 for trunk_redirect by trunkId, got %d", client.resolvedTrunkID)
 	}
 }

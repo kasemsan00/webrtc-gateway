@@ -21,7 +21,7 @@ type StateNotifier interface {
 
 // IncomingCallNotifier interface for notifying about incoming calls
 type IncomingCallNotifier interface {
-	NotifyIncomingCall(sessionID, from, to string)
+	NotifyIncomingCall(sessionID, from, to string, trunkID int64)
 }
 
 // MessageNotifier interface for notifying about incoming SIP messages

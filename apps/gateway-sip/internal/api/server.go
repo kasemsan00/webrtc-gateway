@@ -98,11 +98,12 @@ type SIPCallMaker interface {
 
 // WSClient represents a WebSocket client connection
 type WSClient struct {
-	conn          *websocket.Conn
-	sessionID     string
-	trunkResolved bool
-	send          chan []byte
-	ConnectedAt   time.Time
+	conn            *websocket.Conn
+	sessionID       string
+	trunkResolved   bool
+	resolvedTrunkID int64
+	send            chan []byte
+	ConnectedAt     time.Time
 }
 
 // WSMessage represents a WebSocket message
@@ -993,28 +994,39 @@ func (s *Server) NotifySessionState(sessionID string, state session.SessionState
 	}
 }
 
-// NotifyIncomingCall notifies all connected WebSocket clients about an incoming call
-func (s *Server) NotifyIncomingCall(sessionID, from, to string) {
+// NotifyIncomingCall notifies connected WebSocket clients about an incoming call for a specific trunk.
+func (s *Server) NotifyIncomingCall(sessionID, from, to string, trunkID int64) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	// Broadcast only to clients that have resolved trunk credentials.
+	if trunkID <= 0 {
+		log.Printf("📲 Skipping incoming call notification for session %s: missing trunkID", sessionID)
+		return
+	}
+
+	totalConnections := len(s.wsConnections)
+	recipients := 0
+
+	// Broadcast only to clients resolved on the same trunk.
 	for client := range s.wsConnections {
-		if client == nil || !client.trunkResolved {
+		if client == nil || !client.trunkResolved || client.resolvedTrunkID != trunkID {
 			continue
 		}
+		recipients++
 		s.sendWSMessage(client, WSMessage{
 			Type:      "incoming",
 			SessionID: sessionID,
 			From:      from,
 			To:        to,
 		})
-		log.Printf("📲 Sent incoming call notification to resolved client (sessionID=%s)", sessionID)
+		log.Printf("📲 Sent incoming call notification to resolved client (sessionID=%s trunkID=%d)", sessionID, trunkID)
 	}
 
-	if len(s.wsClients) == 0 {
+	if totalConnections == 0 {
 		log.Printf("⚠️ No WebSocket clients connected for incoming call notification")
+		return
 	}
+	log.Printf("📲 Incoming fanout summary: sessionID=%s trunkID=%d recipients=%d filtered=%d total=%d", sessionID, trunkID, recipients, totalConnections-recipients, totalConnections)
 }
 
 // handleWSAccept handles WebSocket accept messages for incoming calls
@@ -1556,12 +1568,13 @@ func (s *Server) handleWSTrunkResolve(client *WSClient, msg WSMessage) {
 
 	if *leaseOwner == s.gatewayConfig.InstanceID {
 		client.trunkResolved = true
+		client.resolvedTrunkID = trunkID
 		s.sendWSMessage(client, WSMessage{
 			Type:          "trunk_resolved",
 			TrunkID:       trunkID,
 			TrunkPublicID: trunkPublicID,
 		})
-		s.notifyPendingIncomingForClient(client)
+		s.notifyPendingIncomingForClient(client, trunkID)
 		return
 	}
 
@@ -1586,13 +1599,17 @@ func (s *Server) handleWSTrunkResolve(client *WSClient, msg WSMessage) {
 
 // notifyPendingIncomingForClient replays queued incoming calls to a specific client.
 // This is used after trunk_resolve so UI can pick up incoming calls that arrived before resolve.
-func (s *Server) notifyPendingIncomingForClient(client *WSClient) {
+func (s *Server) notifyPendingIncomingForClient(client *WSClient, trunkID int64) {
 	if s.sessionMgr == nil || client == nil {
 		return
 	}
 
 	for _, sess := range s.sessionMgr.ListSessions() {
 		if sess == nil || sess.GetState() != session.StateIncoming {
+			continue
+		}
+		authMode, _, sessTrunkID, _, _, _, _ := sess.GetSIPAuthContext()
+		if authMode != "trunk" || sessTrunkID != trunkID {
 			continue
 		}
 		_, from, to, _ := sess.GetCallInfo()
