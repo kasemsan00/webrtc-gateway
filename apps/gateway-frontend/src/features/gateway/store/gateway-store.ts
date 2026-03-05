@@ -6,7 +6,6 @@ import {
   normalizeGatewayWssUrl,
 } from '../config'
 import { fetchVrsCredentials } from '../services/vrs-api'
-import { fetchTrunks } from '../../trunk/services/trunk-api'
 import {
   applyIncomingRtt,
   buildOutgoingRttXml,
@@ -153,10 +152,12 @@ const initialState: GatewayState = {
 export const gatewayStore = new Store<GatewayState>(initialState)
 
 type TrunkResolvePayload = {
-  sipDomain: string
-  sipUsername: string
-  sipPassword: string
-  sipPort: number
+  trunkId?: number
+  trunkPublicId?: string
+  sipDomain?: string
+  sipUsername?: string
+  sipPassword?: string
+  sipPort?: number
 }
 
 const runtime = {
@@ -1427,13 +1428,27 @@ export function connect(urlOverride?: string) {
         return
       }
 
+      if (
+        !runtime.trunkResolvePending &&
+        gatewayStore.state.mode === 'siptrunk' &&
+        gatewayStore.state.trunk.status === 'resolved'
+      ) {
+        const parsed = parseTrunkIdentifier(
+          gatewayStore.state.trunk.credentials.trunkId,
+        )
+        if (parsed) {
+          runtime.trunkResolvePayload =
+            parsed.kind === 'numeric'
+              ? { trunkId: parsed.trunkId }
+              : { trunkPublicId: parsed.trunkPublicId }
+          runtime.trunkResolvePending = true
+        }
+      }
+
       if (runtime.trunkResolvePending && runtime.trunkResolvePayload) {
         sendJson(runtime.ws, {
           type: 'trunk_resolve',
-          sipDomain: runtime.trunkResolvePayload.sipDomain,
-          sipUsername: runtime.trunkResolvePayload.sipUsername,
-          sipPassword: runtime.trunkResolvePayload.sipPassword,
-          sipPort: runtime.trunkResolvePayload.sipPort,
+          ...runtime.trunkResolvePayload,
         })
       }
     }
@@ -1883,55 +1898,20 @@ export async function resolveTrunk() {
   const creds = gatewayStore.state.trunk.credentials
   const parsedTrunk = parseTrunkIdentifier(creds.trunkId)
   if (parsedTrunk) {
-    runtime.trunkResolvePending = false
-    runtime.trunkResolvePayload = null
+    runtime.trunkResolvePayload =
+      parsedTrunk.kind === 'numeric'
+        ? { trunkId: parsedTrunk.trunkId }
+        : { trunkPublicId: parsedTrunk.trunkPublicId }
+    runtime.trunkResolvePending = true
     setTrunkStatus(
       'resolving',
       `Resolving trunk by ${parsedTrunk.kind === 'numeric' ? `ID ${parsedTrunk.trunkId}` : `UUID ${parsedTrunk.trunkPublicId}`}...`,
     )
-
-    try {
-      const result = await fetchTrunks(
-        parsedTrunk.kind === 'numeric'
-          ? { page: 1, pageSize: 1, trunkId: parsedTrunk.trunkId }
-          : { page: 1, pageSize: 1, trunkPublicId: parsedTrunk.trunkPublicId },
-      )
-      const matched = result.items.at(0)
-      if (!matched) {
-        runtime.lastTrunkNotFoundAt = Date.now()
-        setTrunkStatus(
-          'not-found',
-          `Trunk not found: ${
-            parsedTrunk.kind === 'numeric'
-              ? `ID ${parsedTrunk.trunkId}`
-              : `UUID ${parsedTrunk.trunkPublicId}`
-          }`,
-          'error',
-        )
-        return
-      }
-
-      gatewayStore.setState((state) => ({
-        ...state,
-        trunk: {
-          ...state.trunk,
-          status: 'resolved',
-          credentials: {
-            ...state.trunk.credentials,
-            trunkId: String(matched.id),
-          },
-        },
-      }))
-      appendLog(`Trunk resolved: ID ${matched.id}`, 'success')
-      return
-    } catch (error) {
-      setTrunkStatus(
-        'not-resolved',
-        `Failed to resolve trunk by ID/UUID: ${(error as Error).message}`,
-        'error',
-      )
-      return
-    }
+    sendJson(runtime.ws, {
+      type: 'trunk_resolve',
+      ...runtime.trunkResolvePayload,
+    })
+    return
   }
 
   if (

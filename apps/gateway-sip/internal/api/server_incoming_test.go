@@ -122,34 +122,32 @@ func TestHandleWSReject_DefaultReasonAndDeletesSession(t *testing.T) {
 	}
 }
 
-func TestNotifyIncomingCall_BroadcastPayload(t *testing.T) {
+func TestNotifyIncomingCall_SendsOnlyResolvedClients(t *testing.T) {
 	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, nil, nil, nil, nil, nil)
-	clientA := &WSClient{sessionID: "a", send: make(chan []byte, 8)}
-	clientB := &WSClient{sessionID: "b", send: make(chan []byte, 8)}
+	clientA := &WSClient{sessionID: "a", trunkResolved: true, send: make(chan []byte, 8)}
+	clientB := &WSClient{sessionID: "b", trunkResolved: false, send: make(chan []byte, 8)}
 
 	srv.mu.Lock()
-	srv.wsClients["a"] = clientA
-	srv.wsClients["b"] = clientB
+	srv.wsConnections[clientA] = struct{}{}
+	srv.wsConnections[clientB] = struct{}{}
 	srv.mu.Unlock()
 
 	srv.NotifyIncomingCall("incoming-123", "sip:alice@example.com", "sip:bob@example.com")
 
 	msgsA := readWSMessages(t, clientA.send)
 	msgsB := readWSMessages(t, clientB.send)
-	if len(msgsA) != 1 || len(msgsB) != 1 {
-		t.Fatalf("expected one incoming message per client, got A=%d B=%d", len(msgsA), len(msgsB))
+	if len(msgsA) != 1 || len(msgsB) != 0 {
+		t.Fatalf("expected one incoming message only for resolved client, got A=%d B=%d", len(msgsA), len(msgsB))
 	}
 
-	for i, msg := range []WSMessage{msgsA[0], msgsB[0]} {
-		if msg.Type != "incoming" {
-			t.Fatalf("client msg %d expected incoming, got %s", i, msg.Type)
-		}
-		if msg.SessionID != "incoming-123" {
-			t.Fatalf("client msg %d expected session incoming-123, got %s", i, msg.SessionID)
-		}
-		if msg.From != "sip:alice@example.com" || msg.To != "sip:bob@example.com" {
-			t.Fatalf("client msg %d unexpected from/to: from=%s to=%s", i, msg.From, msg.To)
-		}
+	msg := msgsA[0]
+	if msg.Type != "incoming" {
+		t.Fatalf("resolved client expected incoming, got %s", msg.Type)
+	}
+	if msg.SessionID != "incoming-123" {
+		t.Fatalf("resolved client expected session incoming-123, got %s", msg.SessionID)
+	}
+	if msg.From != "sip:alice@example.com" || msg.To != "sip:bob@example.com" {
+		t.Fatalf("resolved client unexpected from/to: from=%s to=%s", msg.From, msg.To)
 	}
 }
-

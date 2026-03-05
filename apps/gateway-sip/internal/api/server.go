@@ -50,6 +50,7 @@ type Server struct {
 	gatewayConfig    config.GatewayConfig
 	upgrader         websocket.Upgrader
 	wsClients        map[string]*WSClient
+	wsConnections    map[*WSClient]struct{}
 	trunkStreams     map[int]chan []byte
 	trunkStreamSeq   int
 	sessionStreams   map[int]chan []byte
@@ -97,10 +98,11 @@ type SIPCallMaker interface {
 
 // WSClient represents a WebSocket client connection
 type WSClient struct {
-	conn        *websocket.Conn
-	sessionID   string
-	send        chan []byte
-	ConnectedAt time.Time
+	conn          *websocket.Conn
+	sessionID     string
+	trunkResolved bool
+	send          chan []byte
+	ConnectedAt   time.Time
 }
 
 // WSMessage represents a WebSocket message
@@ -210,6 +212,7 @@ func NewServer(cfg config.APIConfig, turnCfg config.TURNConfig, gatewayCfg confi
 			},
 		},
 		wsClients:      make(map[string]*WSClient),
+		wsConnections:  make(map[*WSClient]struct{}),
 		trunkStreams:   make(map[int]chan []byte),
 		sessionStreams: make(map[int]chan []byte),
 		startTime:      time.Now(),
@@ -326,6 +329,9 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		send:        make(chan []byte, 256),
 		ConnectedAt: time.Now(),
 	}
+	s.mu.Lock()
+	s.wsConnections[client] = struct{}{}
+	s.mu.Unlock()
 
 	// Start write pump
 	go s.wsWritePump(client)
@@ -354,13 +360,14 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Cleanup - only delete if this client is still the registered one
+	s.mu.Lock()
+	delete(s.wsConnections, client)
 	if client.sessionID != "" {
-		s.mu.Lock()
 		if s.wsClients[client.sessionID] == client {
 			delete(s.wsClients, client.sessionID)
 		}
-		s.mu.Unlock()
 	}
+	s.mu.Unlock()
 }
 
 // wsWritePump pumps messages from the send channel to the WebSocket connection
@@ -991,31 +998,20 @@ func (s *Server) NotifyIncomingCall(sessionID, from, to string) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	// Broadcast to all connected clients (or first one if single-user mode)
-	msg := WSMessage{
-		Type:      "incoming",
-		SessionID: sessionID,
-		From:      from,
-		To:        to,
-	}
-
-	data, err := json.Marshal(msg)
-	if err != nil {
-		log.Printf("Failed to marshal incoming call notification: %v", err)
-		return
-	}
-
-	// Send to all connected clients
-	for _, client := range s.wsClients {
-		select {
-		case client.send <- data:
-			log.Printf("📲 Sent incoming call notification to client (sessionID=%s)", sessionID)
-		default:
-			log.Printf("Failed to send incoming call notification - client channel full")
+	// Broadcast only to clients that have resolved trunk credentials.
+	for client := range s.wsConnections {
+		if client == nil || !client.trunkResolved {
+			continue
 		}
+		s.sendWSMessage(client, WSMessage{
+			Type:      "incoming",
+			SessionID: sessionID,
+			From:      from,
+			To:        to,
+		})
+		log.Printf("📲 Sent incoming call notification to resolved client (sessionID=%s)", sessionID)
 	}
 
-	// If no clients connected yet, store as pending
 	if len(s.wsClients) == 0 {
 		log.Printf("⚠️ No WebSocket clients connected for incoming call notification")
 	}
@@ -1465,30 +1461,89 @@ func (s *Server) handleWSResume(client *WSClient, msg WSMessage) {
 	s.sendWSMessage(client, response)
 }
 
-// handleWSTrunkResolve resolves an existing trunkId from credentials and redirects if needed.
+// handleWSTrunkResolve resolves trunk ownership/route from either credentials or trunk ID/public ID.
 func (s *Server) handleWSTrunkResolve(client *WSClient, msg WSMessage) {
-	if msg.SIPDomain == "" || msg.SIPUsername == "" || msg.SIPPassword == "" {
-		s.sendWSError(client, msg.SessionID, "sipDomain, sipUsername, and sipPassword are required")
-		return
-	}
-
-	// Use port as-is from client (0 means "not specified" for hostname domains)
-	// This allows DNS SRV resolution for hostnames without explicit port
-	port := msg.SIPPort
-
-	if s.logStore == nil {
-		s.sendWSError(client, msg.SessionID, "LogStore not available")
-		return
-	}
-
 	ctx := context.Background()
-	trunkID, leaseOwner, leaseUntil, found, err := s.logStore.ResolveTrunkByCredentials(ctx, msg.SIPDomain, port, msg.SIPUsername, msg.SIPPassword)
-	if err != nil {
-		s.sendWSError(client, msg.SessionID, fmt.Sprintf("Failed to resolve trunk: %v", err))
-		return
+	trunkID := int64(0)
+	trunkPublicID := ""
+	var leaseOwner *string
+	var leaseUntil *time.Time
+	found := false
+
+	if msg.TrunkID > 0 || strings.TrimSpace(msg.TrunkPublicID) != "" {
+		if s.trunkManager == nil {
+			s.sendWSError(client, msg.SessionID, "Trunk manager not available")
+			return
+		}
+
+		if msg.TrunkID > 0 {
+			trunkID = msg.TrunkID
+		} else {
+			publicID, ok := sip.NormalizeTrunkPublicID(msg.TrunkPublicID)
+			if !ok {
+				reason := "Invalid trunkPublicId"
+				s.sendWSMessage(client, WSMessage{Type: "trunk_not_found", Reason: reason})
+				s.sendWSError(client, msg.SessionID, fmt.Sprintf("Trunk not found: %s", reason))
+				return
+			}
+			resolvedID, ok := s.trunkManager.GetTrunkIDByPublicID(publicID)
+			if !ok {
+				reason := "No matching trunk ID/public ID"
+				s.sendWSMessage(client, WSMessage{Type: "trunk_not_found", Reason: reason})
+				s.sendWSError(client, msg.SessionID, fmt.Sprintf("Trunk not found: %s", reason))
+				return
+			}
+			trunkID = resolvedID
+		}
+
+		trunk, err := s.trunkManager.GetTrunkByIDFromDB(ctx, trunkID)
+		if err != nil || trunk == nil {
+			reason := "No matching trunk ID/public ID"
+			s.sendWSMessage(client, WSMessage{Type: "trunk_not_found", Reason: reason})
+			s.sendWSError(client, msg.SessionID, fmt.Sprintf("Trunk not found: %s", reason))
+			return
+		}
+
+		found = true
+		leaseOwner = trunk.LeaseOwner
+		leaseUntil = trunk.LeaseUntil
+		trunkPublicID = trunk.PublicID
+	} else {
+		if msg.SIPDomain == "" || msg.SIPUsername == "" || msg.SIPPassword == "" {
+			s.sendWSError(client, msg.SessionID, "sipDomain, sipUsername, and sipPassword are required")
+			return
+		}
+		// Use port as-is from client (0 means "not specified" for hostname domains)
+		// This allows DNS SRV resolution for hostnames without explicit port
+		port := msg.SIPPort
+
+		if s.logStore == nil {
+			s.sendWSError(client, msg.SessionID, "LogStore not available")
+			return
+		}
+
+		var err error
+		trunkID, leaseOwner, leaseUntil, found, err = s.logStore.ResolveTrunkByCredentials(ctx, msg.SIPDomain, port, msg.SIPUsername, msg.SIPPassword)
+		if err != nil {
+			s.sendWSError(client, msg.SessionID, fmt.Sprintf("Failed to resolve trunk: %v", err))
+			return
+		}
+		if !found {
+			reason := "No matching trunk credentials"
+			s.sendWSMessage(client, WSMessage{Type: "trunk_not_found", Reason: reason})
+			s.sendWSError(client, msg.SessionID, fmt.Sprintf("Trunk not found: %s", reason))
+			return
+		}
+
+		if s.trunkManager != nil {
+			if trunk, getErr := s.trunkManager.GetTrunkByIDFromDB(ctx, trunkID); getErr == nil && trunk != nil {
+				trunkPublicID = trunk.PublicID
+			}
+		}
 	}
+
 	if !found {
-		reason := "No matching trunk credentials"
+		reason := "No matching trunk"
 		s.sendWSMessage(client, WSMessage{Type: "trunk_not_found", Reason: reason})
 		s.sendWSError(client, msg.SessionID, fmt.Sprintf("Trunk not found: %s", reason))
 		return
@@ -1500,18 +1555,18 @@ func (s *Server) handleWSTrunkResolve(client *WSClient, msg WSMessage) {
 	}
 
 	if *leaseOwner == s.gatewayConfig.InstanceID {
-		trunkPublicID := ""
-		if s.trunkManager != nil {
-			trunk, getErr := s.trunkManager.GetTrunkByIDFromDB(ctx, trunkID)
-			if getErr == nil {
-				trunkPublicID = trunk.PublicID
-			}
-		}
+		client.trunkResolved = true
 		s.sendWSMessage(client, WSMessage{
 			Type:          "trunk_resolved",
 			TrunkID:       trunkID,
 			TrunkPublicID: trunkPublicID,
 		})
+		s.notifyPendingIncomingForClient(client)
+		return
+	}
+
+	if s.logStore == nil {
+		s.sendWSError(client, msg.SessionID, "LogStore not available")
 		return
 	}
 
@@ -1527,6 +1582,27 @@ func (s *Server) handleWSTrunkResolve(client *WSClient, msg WSMessage) {
 	}
 
 	s.sendWSMessage(client, WSMessage{Type: "trunk_redirect", RedirectURL: wsURL})
+}
+
+// notifyPendingIncomingForClient replays queued incoming calls to a specific client.
+// This is used after trunk_resolve so UI can pick up incoming calls that arrived before resolve.
+func (s *Server) notifyPendingIncomingForClient(client *WSClient) {
+	if s.sessionMgr == nil || client == nil {
+		return
+	}
+
+	for _, sess := range s.sessionMgr.ListSessions() {
+		if sess == nil || sess.GetState() != session.StateIncoming {
+			continue
+		}
+		_, from, to, _ := sess.GetCallInfo()
+		s.sendWSMessage(client, WSMessage{
+			Type:      "incoming",
+			SessionID: sess.ID,
+			From:      from,
+			To:        to,
+		})
+	}
 }
 
 // NotifySIPMessage notifies all WebSocket clients about an incoming SIP message

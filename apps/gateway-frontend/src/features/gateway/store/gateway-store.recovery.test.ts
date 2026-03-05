@@ -197,4 +197,64 @@ describe('gateway recovery signaling', () => {
       TEST_TRUNK_PUBLIC_ID,
     )
   })
+
+  it('sends websocket trunk_resolve when resolving by trunkId', async () => {
+    gatewayActions.connect('ws://node-a:8080/ws')
+    const ws = MockWebSocket.instances[0]
+    ws.open()
+
+    gatewayStore.setState((state) => ({
+      ...state,
+      mode: 'siptrunk',
+      trunk: {
+        ...state.trunk,
+        credentials: {
+          ...state.trunk.credentials,
+          trunkId: '88',
+        },
+      },
+    }))
+
+    await gatewayActions.resolveTrunk()
+
+    expect(
+      ws.sent.some(
+        (raw) =>
+          raw.includes('"type":"trunk_resolve"') && raw.includes('"trunkId":88'),
+      ),
+    ).toBe(true)
+  })
+
+  it('re-resolves trunk on reconnect when trunk is already resolved', () => {
+    gatewayActions.connect('ws://node-a:8080/ws')
+    const ws1 = MockWebSocket.instances[0]
+    ws1.open()
+
+    gatewayStore.setState((state) => ({
+      ...state,
+      mode: 'siptrunk',
+      trunk: {
+        ...state.trunk,
+        status: 'resolved',
+        credentials: {
+          ...state.trunk.credentials,
+          trunkId: '88',
+        },
+      },
+    }))
+
+    ws1.close()
+    vi.advanceTimersByTime(20000)
+
+    expect(MockWebSocket.instances.length).toBeGreaterThanOrEqual(2)
+    const ws2 = MockWebSocket.instances[1]
+    ws2.open()
+
+    expect(
+      ws2.sent.some(
+        (raw) =>
+          raw.includes('"type":"trunk_resolve"') && raw.includes('"trunkId":88'),
+      ),
+    ).toBe(true)
+  })
 })
