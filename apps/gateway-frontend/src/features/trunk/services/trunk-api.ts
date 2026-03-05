@@ -5,7 +5,11 @@ import type {
   TrunkListResponse,
   UpdateTrunkPayload,
 } from '../types'
-import { fetchJson, resolveGatewayApiBaseUrl } from '@/lib/http-client'
+import {
+  buildAuthHeaders,
+  fetchJson,
+  resolveGatewayApiBaseUrl,
+} from '@/lib/http-client'
 import { appendQuery } from '@/lib/http-query'
 
 export interface TrunkStreamEvent {
@@ -99,28 +103,78 @@ export function subscribeTrunkEvents(
   onEvent: (event: TrunkStreamEvent) => void,
   onError?: (event: Event) => void,
 ) {
-  const stream = new EventSource(`${API_BASE}/trunks/stream`)
+  const controller = new AbortController()
+  const decoder = new TextDecoder()
+  let buffer = ''
 
-  const handleTrunkEvent = (message: MessageEvent<string>) => {
+  const handleChunk = (chunk: string) => {
+    buffer += chunk.replace(/\r\n/g, '\n')
+
+    for (;;) {
+      const eventBoundary = buffer.indexOf('\n\n')
+      if (eventBoundary === -1) break
+
+      const rawEvent = buffer.slice(0, eventBoundary)
+      buffer = buffer.slice(eventBoundary + 2)
+
+      const lines = rawEvent.split(/\r?\n/)
+      let eventName = 'message'
+      const dataLines: Array<string> = []
+
+      for (const line of lines) {
+        if (line.startsWith('event:')) {
+          eventName = line.slice('event:'.length).trim()
+          continue
+        }
+
+        if (line.startsWith('data:')) {
+          dataLines.push(line.slice('data:'.length).trim())
+        }
+      }
+
+      if (eventName !== 'trunk' || dataLines.length === 0) continue
+
+      try {
+        const parsed = JSON.parse(dataLines.join('\n')) as TrunkStreamEvent
+        onEvent(parsed)
+      } catch {
+        // Ignore malformed event payloads.
+      }
+    }
+  }
+
+  const start = async () => {
     try {
-      const parsed = JSON.parse(message.data) as TrunkStreamEvent
-      onEvent(parsed)
+      const response = await fetch(`${API_BASE}/trunks/stream`, {
+        method: 'GET',
+        headers: buildAuthHeaders({
+          Accept: 'text/event-stream',
+          'Cache-Control': 'no-cache',
+        }),
+        signal: controller.signal,
+      })
+
+      if (!response.ok || !response.body) {
+        throw new Error(`Failed to subscribe trunk events: HTTP ${response.status}`)
+      }
+
+      const reader = response.body.getReader()
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        handleChunk(decoder.decode(value, { stream: true }))
+      }
     } catch {
-      // Ignore malformed event payloads.
+      if (!controller.signal.aborted && onError) {
+        onError(new Event('error'))
+      }
     }
   }
 
-  stream.addEventListener('trunk', (event) => {
-    handleTrunkEvent(event as MessageEvent<string>)
-  })
-
-  stream.onerror = (event) => {
-    if (onError) {
-      onError(event)
-    }
-  }
+  void start()
 
   return () => {
-    stream.close()
+    controller.abort()
   }
 }

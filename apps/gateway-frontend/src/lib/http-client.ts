@@ -1,3 +1,5 @@
+import { getAccessToken } from '@/features/auth/token-store'
+
 const DEFAULT_TIMEOUT_MS = 15_000
 
 export function resolveGatewayApiBaseUrl(): string {
@@ -17,6 +19,16 @@ type FetchJsonOptions = {
   body?: BodyInit | null
   timeoutMs?: number
   signal?: AbortSignal
+}
+
+export function buildAuthHeaders(headers?: HeadersInit): Headers {
+  const mergedHeaders = new Headers(headers)
+  const token = getAccessToken()
+  if (token && !mergedHeaders.has('Authorization')) {
+    mergedHeaders.set('Authorization', `Bearer ${token}`)
+  }
+
+  return mergedHeaders
 }
 
 function mergeSignals(signal?: AbortSignal, timeoutSignal?: AbortSignal) {
@@ -51,7 +63,7 @@ export async function fetchJson<T>(
   try {
     const res = await fetch(url, {
       method: options.method,
-      headers: options.headers,
+      headers: buildAuthHeaders(options.headers),
       body: options.body,
       signal,
     })

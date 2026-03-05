@@ -5,6 +5,7 @@ import {
   createRootRoute,
 } from '@tanstack/react-router'
 import { Toaster } from '@/components/ui/sonner'
+import { KeycloakAuthProvider } from '@/features/auth/keycloak-provider'
 
 import '../styles.css'
 
@@ -54,9 +55,9 @@ function RootDocument({ children }: { children: React.ReactNode }) {
 
 function RootLayout() {
   return (
-    <>
+    <KeycloakAuthProvider>
       <Outlet />
       <Toaster />
-    </>
+    </KeycloakAuthProvider>
   )
 }

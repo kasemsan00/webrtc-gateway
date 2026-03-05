@@ -25,6 +25,19 @@ This project uses [Vitest](https://vitest.dev/) for testing. You can run the tes
 npm run test
 ```
 
+## Environment
+
+Use Vite client env keys in `.env` (or copy from `.env.example`):
+
+- `VITE_GATEWAY_URL`
+- `VITE_TURN_URL`
+- `VITE_TURN_USERNAME`
+- `VITE_TURN_CREDENTIAL`
+- `VITE_KEYCLOAK_URL`
+- `VITE_KEYCLOAK_REALM`
+- `VITE_KEYCLOAK_CLIENT`
+- `VITE_CONFIG_AUTORECORD`
+
 ## Styling
 
 This project uses [Tailwind CSS](https://tailwindcss.com/) for styling.
