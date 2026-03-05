@@ -1,5 +1,6 @@
 import {
   HeadContent,
+  Link,
   Outlet,
   Scripts,
   createRootRoute,
@@ -32,6 +33,7 @@ export const Route = createRootRoute({
 
   shellComponent: RootDocument,
   component: RootLayout,
+  notFoundComponent: RootNotFound,
 })
 
 function RootDocument({ children }: { children: React.ReactNode }) {
@@ -59,5 +61,22 @@ function RootLayout() {
       <Outlet />
       <Toaster />
     </KeycloakAuthProvider>
+  )
+}
+
+function RootNotFound() {
+  return (
+    <div className="flex h-screen flex-col items-center justify-center gap-3 bg-background px-6 text-foreground">
+      <h1 className="text-xl font-semibold">Page not found</h1>
+      <p className="text-sm text-muted-foreground">
+        The requested route does not exist.
+      </p>
+      <Link
+        to="/"
+        className="rounded-md border border-border px-3 py-1.5 text-sm hover:bg-muted"
+      >
+        Back to home
+      </Link>
+    </div>
   )
 }

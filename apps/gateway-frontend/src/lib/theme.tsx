@@ -9,7 +9,7 @@ import {
 } from './theme-store'
 
 export function useTheme() {
-  const { theme } = useStore(themeStore)
+  const { theme } = useStore(themeStore, (state) => state)
 
   useEffect(() => {
     initializeThemeStore()

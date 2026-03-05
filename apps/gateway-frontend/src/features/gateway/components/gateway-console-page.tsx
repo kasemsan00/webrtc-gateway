@@ -145,7 +145,7 @@ function useAutoScroll(dep: unknown) {
 /* ------------------------------------------------------------------ */
 
 export function GatewayConsolePage() {
-  const state = useStore(gatewayStore)
+  const state = useStore(gatewayStore, (storeState) => storeState)
   const { theme, toggleTheme } = useTheme()
   const [messageBody, setMessageBody] = useState('')
 

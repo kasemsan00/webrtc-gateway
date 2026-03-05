@@ -155,7 +155,7 @@ export function TrunkListPage() {
   const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const [sortMode, setSortMode] = useState<TrunkSortMode>('activeCallsDesc')
-  const { viewMode } = useStore(trunkPrefsStore)
+  const { viewMode } = useStore(trunkPrefsStore, (state) => state)
 
   useEffect(() => {
     initializeTrunkPrefsStore()
