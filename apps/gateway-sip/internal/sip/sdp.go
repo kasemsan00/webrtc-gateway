@@ -146,6 +146,96 @@ a=rtcp-mux
 	return []byte(sdp)
 }
 
+// createSDPAnswerForInvite creates SDP answer for inbound INVITE by mirroring offer constraints.
+// This prevents strict SIP peers from hanging up when 200 OK advertises unsupported profile/mux settings.
+func (s *Server) createSDPAnswerForInvite(rtpPort int, sess *session.Session, inviteSDP []byte) []byte {
+	audioProfile := "RTP/AVP"
+	videoProfile := "RTP/AVP"
+	audioRtcpMux := false
+	videoRtcpMux := false
+	videoPacketizationMode := false
+
+	if len(inviteSDP) > 0 {
+		currentMedia := ""
+		lines := strings.Split(string(inviteSDP), "\n")
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+
+			if strings.HasPrefix(line, "m=audio ") {
+				currentMedia = "audio"
+				parts := strings.Fields(line)
+				if len(parts) >= 3 {
+					audioProfile = parts[2]
+				}
+				continue
+			}
+
+			if strings.HasPrefix(line, "m=video ") {
+				currentMedia = "video"
+				parts := strings.Fields(line)
+				if len(parts) >= 3 {
+					videoProfile = parts[2]
+				}
+				continue
+			}
+
+			if line == "a=rtcp-mux" {
+				if currentMedia == "audio" {
+					audioRtcpMux = true
+				}
+				if currentMedia == "video" {
+					videoRtcpMux = true
+				}
+				continue
+			}
+
+			if currentMedia == "video" && strings.HasPrefix(line, "a=fmtp:96 ") && strings.Contains(line, "packetization-mode=1") {
+				videoPacketizationMode = true
+			}
+		}
+	}
+
+	base := s.createSDPOffer(rtpPort, sess)
+	sdp := string(base)
+
+	// Apply profile constraints.
+	sdp = strings.ReplaceAll(sdp, "m=audio "+strconv.Itoa(rtpPort)+" RTP/AVPF", "m=audio "+strconv.Itoa(rtpPort)+" "+audioProfile)
+	sdp = strings.ReplaceAll(sdp, "m=audio "+strconv.Itoa(rtpPort)+" RTP/AVP", "m=audio "+strconv.Itoa(rtpPort)+" "+audioProfile)
+	videoPort := rtpPort + 2
+	sdp = strings.ReplaceAll(sdp, "m=video "+strconv.Itoa(videoPort)+" RTP/AVPF", "m=video "+strconv.Itoa(videoPort)+" "+videoProfile)
+	sdp = strings.ReplaceAll(sdp, "m=video "+strconv.Itoa(videoPort)+" RTP/AVP", "m=video "+strconv.Itoa(videoPort)+" "+videoProfile)
+
+	if !audioRtcpMux {
+		sdp = strings.Replace(sdp, "a=rtcp-mux\na=sendrecv", "a=sendrecv", 1)
+	}
+	if !videoRtcpMux {
+		sdp = strings.Replace(sdp, "a=rtcp-mux\na=rtcp-fb:* ccm fir\na=sendrecv", "a=rtcp-fb:* ccm fir\na=sendrecv", 1)
+		sdp = strings.Replace(sdp, "a=rtcp-mux\na=sendrecv", "a=sendrecv", 1)
+	}
+
+	if !videoPacketizationMode {
+		sdp = strings.ReplaceAll(sdp, ";packetization-mode=1", "")
+	}
+
+	if videoProfile != "RTP/AVPF" {
+		sdp = strings.ReplaceAll(sdp, "a=rtcp-fb:* ccm fir\n", "")
+	}
+
+	fmt.Printf("[%s] 📋 Inbound SDP answer constrained to offer (audio=%s video=%s audio_mux=%v video_mux=%v pmode1=%v)\n",
+		sess.ID,
+		audioProfile,
+		videoProfile,
+		audioRtcpMux,
+		videoRtcpMux,
+		videoPacketizationMode,
+	)
+
+	return []byte(sdp)
+}
+
 // parseAsteriskSDPAndSetEndpoints parses Asterisk's SDP answer to extract RTP ports
 // and configures the session for forwarding WebRTC → Asterisk
 func (s *Server) parseAsteriskSDPAndSetEndpoints(sdpBody []byte, sess *session.Session) {
