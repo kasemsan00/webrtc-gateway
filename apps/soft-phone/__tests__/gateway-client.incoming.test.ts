@@ -54,6 +54,46 @@ describe('GatewayClient incoming flow', () => {
     vi.clearAllMocks();
   });
 
+  it('maps incoming from field to caller when caller is absent', async () => {
+    const { GatewayClient } = await import('@/lib/gateway/gateway-client');
+    const onIncomingCall = vi.fn();
+    const client = new GatewayClient();
+    const anyClient = client as any;
+
+    client.setCallbacks({ onIncomingCall });
+    anyClient.handleMessage(
+      JSON.stringify({
+        type: 'incoming',
+        from: '2001',
+        to: '3001',
+        sessionId: 'incoming-from-only',
+      }),
+    );
+
+    expect(onIncomingCall).toHaveBeenCalledWith(
+      {
+        caller: '2001',
+        sessionId: 'incoming-from-only',
+        to: '3001',
+      },
+      undefined,
+    );
+  });
+
+  it('maps server active state to incall', async () => {
+    const { GatewayClient } = await import('@/lib/gateway/gateway-client');
+    const { CallState } = await import('@/lib/gateway/types');
+    const onAnswered = vi.fn();
+    const client = new GatewayClient();
+    const anyClient = client as any;
+
+    client.setCallbacks({ onAnswered });
+    anyClient.handleMessage(JSON.stringify({ type: 'state', state: 'active' }));
+
+    expect(client.callState).toBe(CallState.INCALL);
+    expect(onAnswered).toHaveBeenCalledTimes(1);
+  });
+
   it('sends accept only (no unsupported incoming answer) when active session already exists', async () => {
     const { GatewayClient } = await import('@/lib/gateway/gateway-client');
     const client = new GatewayClient();
@@ -68,9 +108,13 @@ describe('GatewayClient incoming flow', () => {
 
     await client.answer();
 
-    const sent = anyClient.send.mock.calls.map((call: [Record<string, unknown>]) => call[0]);
+    const sent = anyClient.send.mock.calls.map(
+      (call: [Record<string, unknown>]) => call[0],
+    );
     expect(sent).toEqual([{ type: 'accept', sessionId: 'incoming-1' }]);
-    expect(sent.some((msg: Record<string, unknown>) => msg.type === 'answer')).toBe(false);
+    expect(
+      sent.some((msg: Record<string, unknown>) => msg.type === 'answer'),
+    ).toBe(false);
   });
 
   it('creates offer then accepts incoming call when no active session exists', async () => {
@@ -89,14 +133,21 @@ describe('GatewayClient incoming flow', () => {
     });
     anyClient.send = vi.fn();
     anyClient.pc = {
-      localDescription: { sdp: 'v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\n' },
-      createOffer: vi.fn(async () => ({ type: 'offer', sdp: 'v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\n' })),
+      localDescription: {
+        sdp: 'v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\n',
+      },
+      createOffer: vi.fn(async () => ({
+        type: 'offer',
+        sdp: 'v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\n',
+      })),
       setLocalDescription: vi.fn(async () => {}),
     };
 
     await client.answer();
 
-    const sent = anyClient.send.mock.calls.map((call: [Record<string, unknown>]) => call[0]);
+    const sent = anyClient.send.mock.calls.map(
+      (call: [Record<string, unknown>]) => call[0],
+    );
     expect(sent[0].type).toBe('offer');
     expect(sent[1]).toEqual({ type: 'accept', sessionId: 'incoming-2' });
   });
@@ -119,4 +170,3 @@ describe('GatewayClient incoming flow', () => {
     expect(anyClient.incomingSessionId).toBeNull();
   });
 });
-

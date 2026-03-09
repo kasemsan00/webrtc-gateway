@@ -70,6 +70,7 @@ interface SettingsState {
   // Call mode (Public or SIP Trunk)
   callMode: CallMode;
   trunkId: number | null; // Last resolved SIP Trunk ID (valid after successful resolve in current session)
+  trunkPublicId: string | null;
   trunkIdManualOverride: boolean;
 
   // Theme Preference
@@ -101,6 +102,7 @@ interface SettingsActions {
   // Call mode setters
   setCallMode: (value: CallMode) => void;
   setTrunkId: (value: number | null) => void;
+  setTrunkPublicId: (value: string | null) => void;
   setResolvedTrunkId: (value: number | null) => void;
 
   setThemePreference: (value: ThemePreference) => void;
@@ -159,6 +161,7 @@ const DEFAULT_SETTINGS: SettingsState = {
   // Call mode - SIP trunk by default
   callMode: "siptrunk",
   trunkId: null,
+  trunkPublicId: null,
   trunkIdManualOverride: false,
 
   themePreference: "system",
@@ -198,6 +201,11 @@ export const useSettingsStore = create<SettingsStore>()(
           trunkIdManualOverride: value !== null,
         });
         console.log("[SettingsStore] 🏢 Trunk ID set:", value);
+      },
+      setTrunkPublicId: (value) => {
+        const normalized = value?.trim() || null;
+        set({ trunkPublicId: normalized });
+        console.log("[SettingsStore] 🆔 Trunk Public ID set:", normalized);
       },
       setResolvedTrunkId: (value) => {
         const { trunkIdManualOverride } = get();
@@ -322,6 +330,10 @@ export const useSettingsStore = create<SettingsStore>()(
 
           // Gateway server always from env (read-only)
           state.gatewayServer = ENV_GATEWAY_SERVER ?? "";
+
+          if (typeof state.trunkPublicId === "string" && !state.trunkPublicId.trim()) {
+            state.trunkPublicId = null;
+          }
         }
       },
     },

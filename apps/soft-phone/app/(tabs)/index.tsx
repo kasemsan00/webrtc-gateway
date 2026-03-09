@@ -36,6 +36,7 @@ export default function DialerScreen() {
   // Settings store values
   const callMode = useSettingsStore((s) => s.callMode);
   const trunkId = useSettingsStore((s) => s.trunkId);
+  const trunkPublicId = useSettingsStore((s) => s.trunkPublicId);
 
   // SIP store values
   const isConnected = useSipStore((s) => s.isConnected);
@@ -194,7 +195,10 @@ export default function DialerScreen() {
   const isCallModeReady = (() => {
     if (callMode === 'public') return true; // Always ready - fetches credentials per call
     if (callMode === 'siptrunk')
-      return trunkResolveStatus === 'resolved' && (trunkId || 0) > 0; // Needs trunk resolve + trunk ID
+      return (
+        trunkResolveStatus === 'resolved' &&
+        ((trunkId || 0) > 0 || Boolean(trunkPublicId))
+      );
     return false;
   })();
 

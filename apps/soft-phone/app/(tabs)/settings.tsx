@@ -106,6 +106,9 @@ export default function SettingsScreen() {
   const [trunkIdInput, setTrunkIdInput] = useState(
     settingsStore.trunkId ? String(settingsStore.trunkId) : '',
   );
+  const [trunkPublicIdInput, setTrunkPublicIdInput] = useState(
+    settingsStore.trunkPublicId || '',
+  );
 
   // SIP store values
   const isConnected = useSipStore((s) => s.isConnected);
@@ -134,6 +137,10 @@ export default function SettingsScreen() {
   useEffect(() => {
     setTrunkIdInput(settingsStore.trunkId ? String(settingsStore.trunkId) : '');
   }, [settingsStore.trunkId]);
+
+  useEffect(() => {
+    setTrunkPublicIdInput(settingsStore.trunkPublicId || '');
+  }, [settingsStore.trunkPublicId]);
 
   useEffect(() => {
     if (
@@ -187,6 +194,12 @@ export default function SettingsScreen() {
     settingsStore.setTrunkId(
       Number.isFinite(parsed) && parsed > 0 ? parsed : null,
     );
+  };
+
+  const handleTrunkPublicIdChange = (text: string) => {
+    const normalized = text.trim();
+    setTrunkPublicIdInput(text);
+    settingsStore.setTrunkPublicId(normalized || null);
   };
 
   const copyToClipboard = async (text: string) => {
@@ -459,7 +472,7 @@ export default function SettingsScreen() {
                     <Text style={styles.modeDescription}>
                       {callMode === 'public'
                         ? 'Credentials fetched automatically from VRS API for each call'
-                        : 'Trunk ID is resolved from SIP credentials before each trunk call'}
+                        : 'Resolve by Trunk Public ID (preferred), Trunk ID, or SIP credentials'}
                     </Text>
                   </View>
 
@@ -481,8 +494,18 @@ export default function SettingsScreen() {
 
                       <TextInput
                         style={styles.input}
+                        value={trunkPublicIdInput}
+                        placeholder="Enter trunk public ID (UUID)"
+                        placeholderTextColor={colors.placeholder}
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                        onChangeText={handleTrunkPublicIdChange}
+                      />
+
+                      <TextInput
+                        style={styles.input}
                         value={trunkIdInput}
-                        placeholder="Enter or resolve trunk ID"
+                        placeholder="Enter fallback numeric trunk ID"
                         placeholderTextColor={colors.placeholder}
                         keyboardType="number-pad"
                         onChangeText={handleTrunkIdChange}

@@ -819,13 +819,18 @@ export const useSipStore = create<SipStore>((set, get) => ({
         },
 
         // Trunk resolve callbacks (soft-phone specific)
-        onTrunkResolved: (trunkId: number) => {
-          console.log('[SipStore] Trunk resolved:', trunkId);
-          useSettingsStore.getState().setResolvedTrunkId(trunkId);
+        onTrunkResolved: ({ trunkId, trunkPublicId }) => {
+          console.log(
+            '[SipStore] Trunk resolved:',
+            trunkPublicId ?? trunkId ?? 'unknown',
+          );
+          if (trunkId) {
+            useSettingsStore.getState().setResolvedTrunkId(trunkId);
+          }
           set({
             trunkResolveStatus: 'resolved',
             trunkResolveError: null,
-            resolvedTrunkId: trunkId,
+            resolvedTrunkId: trunkId ?? null,
           });
         },
         onTrunkRedirect: (redirectUrl: string) => {
@@ -962,12 +967,21 @@ export const useSipStore = create<SipStore>((set, get) => ({
       const effectiveAuth =
         auth ??
         (settings.callMode === 'siptrunk'
-          ? settings.trunkId && settings.trunkId > 0
+          ? settings.trunkPublicId
             ? {
                 mode: 'siptrunk' as const,
-                trunkId: settings.trunkId,
+                trunkPublicId: settings.trunkPublicId,
+                trunkId:
+                  settings.trunkId && settings.trunkId > 0
+                    ? settings.trunkId
+                    : undefined,
               }
-            : null
+            : settings.trunkId && settings.trunkId > 0
+              ? {
+                  mode: 'siptrunk' as const,
+                  trunkId: settings.trunkId,
+                }
+              : null
           : {
               mode: 'public' as const,
               sipDomain: settings.sipDomain,
@@ -2124,7 +2138,7 @@ export const useSipStore = create<SipStore>((set, get) => ({
 
   // ===== SOFT-PHONE SPECIFIC ACTIONS =====
 
-  // Resolve SIP trunk from configured trunkId (preferred) or SIP credentials
+  // Resolve SIP trunk from configured trunkPublicId/trunkId (preferred) or SIP credentials
   resolveTrunk: () => {
     const { gatewayClient } = get();
     if (!gatewayClient) {
@@ -2133,22 +2147,14 @@ export const useSipStore = create<SipStore>((set, get) => ({
     }
 
     const settings = getSettingsSync();
+    const configuredTrunkPublicId = settings.trunkPublicId?.trim() || null;
     const configuredTrunkId = settings.trunkId;
 
-    if (configuredTrunkId && configuredTrunkId > 0) {
-      console.log(
-        '[SipStore] Trunk resolved from configured trunkId:',
-        configuredTrunkId,
-      );
-      set({
-        trunkResolveStatus: 'resolved',
-        trunkResolveError: null,
-        resolvedTrunkId: configuredTrunkId,
-      });
-      return;
-    }
-
-    if (!settings.sipDomain || !settings.sipUsername || !settings.sipPassword) {
+    if (
+      !configuredTrunkPublicId &&
+      !(configuredTrunkId && configuredTrunkId > 0) &&
+      (!settings.sipDomain || !settings.sipUsername || !settings.sipPassword)
+    ) {
       console.warn(
         '[SipStore] Cannot resolve trunk: missing SIP credentials in settings',
       );
@@ -2162,6 +2168,16 @@ export const useSipStore = create<SipStore>((set, get) => ({
     set({ trunkResolveStatus: 'resolving', trunkResolveError: null });
 
     try {
+      if (configuredTrunkPublicId) {
+        gatewayClient.resolveTrunk({ trunkPublicId: configuredTrunkPublicId });
+        return;
+      }
+
+      if (configuredTrunkId && configuredTrunkId > 0) {
+        gatewayClient.resolveTrunk({ trunkId: configuredTrunkId });
+        return;
+      }
+
       gatewayClient.resolveTrunk({
         sipDomain: settings.sipDomain,
         sipUsername: settings.sipUsername,

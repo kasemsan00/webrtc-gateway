@@ -22,6 +22,7 @@ import {
 } from '@/store/settings-store';
 
 import {
+  CallMessage,
   CallState,
   ConnectionState,
   DEFAULT_RECONNECT_CONFIG,
@@ -90,7 +91,8 @@ export interface PublicCallAuth {
 
 export interface TrunkCallAuth {
   mode: 'siptrunk';
-  trunkId: number;
+  trunkId?: number;
+  trunkPublicId?: string;
   from?: string;
 }
 
@@ -897,15 +899,46 @@ export class GatewayClient {
     this.callbacks.onUnregistered?.();
   }
 
-  // Resolve SIP trunk ID from credentials
+  // Resolve SIP trunk by public ID / numeric ID / SIP credentials.
   resolveTrunk(credentials: {
-    sipDomain: string;
-    sipUsername: string;
-    sipPassword: string;
+    trunkId?: number;
+    trunkPublicId?: string;
+    sipDomain?: string;
+    sipUsername?: string;
+    sipPassword?: string;
     sipPort?: number;
   }): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       throw new Error('Not connected to Gateway');
+    }
+
+    if (credentials.trunkPublicId) {
+      this.pendingTrunkResolvePayload = {
+        type: 'trunk_resolve',
+        trunkPublicId: credentials.trunkPublicId.trim(),
+      };
+      this.isTrunkResolving = true;
+      this.trunkResolveAttempt = 0;
+
+      console.log(
+        '[Gateway] 🏢 Resolving trunk by public ID:',
+        credentials.trunkPublicId,
+      );
+      this.send(this.pendingTrunkResolvePayload);
+      return;
+    }
+
+    if (credentials.trunkId && credentials.trunkId > 0) {
+      this.pendingTrunkResolvePayload = {
+        type: 'trunk_resolve',
+        trunkId: credentials.trunkId,
+      };
+      this.isTrunkResolving = true;
+      this.trunkResolveAttempt = 0;
+
+      console.log('[Gateway] 🏢 Resolving trunk by ID:', credentials.trunkId);
+      this.send(this.pendingTrunkResolvePayload);
+      return;
     }
 
     if (
@@ -913,7 +946,9 @@ export class GatewayClient {
       !credentials.sipUsername ||
       !credentials.sipPassword
     ) {
-      throw new Error('SIP credentials are required for trunk resolve');
+      throw new Error(
+        'Trunk resolve requires trunkPublicId, trunkId, or SIP credentials',
+      );
     }
 
     const sipPort = credentials.sipPort || 5060;
@@ -1754,9 +1789,15 @@ export class GatewayClient {
 
         case 'trunk_resolved': {
           const trunkMsg = message as import('./types').TrunkResolvedResponse;
-          console.log('[Gateway] 🏢 Trunk resolved:', trunkMsg.trunkId);
+          console.log(
+            '[Gateway] 🏢 Trunk resolved:',
+            trunkMsg.trunkPublicId ?? trunkMsg.trunkId,
+          );
           this.isTrunkResolving = false;
-          this.callbacks.onTrunkResolved?.(trunkMsg.trunkId);
+          this.callbacks.onTrunkResolved?.({
+            trunkId: trunkMsg.trunkId,
+            trunkPublicId: trunkMsg.trunkPublicId,
+          });
           break;
         }
 
@@ -2013,7 +2054,7 @@ export class GatewayClient {
             `[Gateway] ➡️ Sending call with sessionId: ${this.activeSessionId} (mode: ${this.pendingCallAuth.mode})`,
           );
 
-          const callMessage: any = {
+          const callMessage: CallMessage = {
             type: 'call',
             sessionId: this.activeSessionId,
             destination: this.pendingDestination,
@@ -2029,7 +2070,12 @@ export class GatewayClient {
               callMessage.from = this.pendingCallAuth.from;
             }
           } else if (this.pendingCallAuth.mode === 'siptrunk') {
-            callMessage.trunkId = this.pendingCallAuth.trunkId;
+            // Keep payload precedence aligned with web client behavior.
+            if (this.pendingCallAuth.trunkPublicId) {
+              callMessage.trunkPublicId = this.pendingCallAuth.trunkPublicId;
+            } else if (this.pendingCallAuth.trunkId) {
+              callMessage.trunkId = this.pendingCallAuth.trunkId;
+            }
             if (this.pendingCallAuth.from) {
               callMessage.from = this.pendingCallAuth.from;
             }

@@ -24,13 +24,16 @@ export interface CallMessage {
   sipPort?: number;
   // Trunk mode field
   trunkId?: number;
+  trunkPublicId?: string;
 }
 
 export interface TrunkResolveMessage {
   type: 'trunk_resolve';
-  sipDomain: string;
-  sipUsername: string;
-  sipPassword: string;
+  trunkId?: number;
+  trunkPublicId?: string;
+  sipDomain?: string;
+  sipUsername?: string;
+  sipPassword?: string;
   sipPort?: number;
 }
 
@@ -184,7 +187,8 @@ export interface RegisterStatusResponse {
 
 export interface TrunkResolvedResponse {
   type: 'trunk_resolved';
-  trunkId: number;
+  trunkId?: number;
+  trunkPublicId?: string;
 }
 
 export interface TrunkRedirectResponse {
@@ -324,7 +328,10 @@ export interface GatewayCallbacks {
   onDisconnected?: (reason?: string) => void;
   onRegistered?: (username: string) => void;
   onRegisterStatus?: (status: RegisterStatusResponse) => void;
-  onTrunkResolved?: (trunkId: number) => void;
+  onTrunkResolved?: (payload: {
+    trunkId?: number;
+    trunkPublicId?: string;
+  }) => void;
   onTrunkRedirect?: (redirectUrl: string) => void;
   onTrunkResolveFailed?: (
     reason: string,

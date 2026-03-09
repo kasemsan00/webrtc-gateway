@@ -19,6 +19,13 @@
         "command": "pnpm run android"
       }
     },
+    "android:apk": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "apps/ttrs-vri-mobile/android",
+        "command": "cmd /c \"set EXPO_NO_METRO_WORKSPACE_ROOT=true&& set NODE_ENV=production&& gradlew.bat assembleRelease\""
+      }
+    },
     "ios": {
       "executor": "nx:run-commands",
       "options": {
