@@ -51,6 +51,25 @@ func TestHandleWSResume_SessionNotFound(t *testing.T) {
 	}
 }
 
+func TestHandleWSResume_EmptySessionID(t *testing.T) {
+	mgr := newTestSessionManager()
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, mgr, nil, nil, nil, nil)
+	client := &WSClient{send: make(chan []byte, 8)}
+
+	srv.handleWSResume(client, WSMessage{
+		Type:      "resume",
+		SessionID: "",
+	})
+
+	msgs := readWSMessages(t, client.send)
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+	if msgs[0].Type != "error" {
+		t.Fatalf("expected error, got %s", msgs[0].Type)
+	}
+}
+
 func TestHandleWSResume_StateNotResumable(t *testing.T) {
 	mgr := newTestSessionManager()
 	sess := createActiveSession(t, mgr)

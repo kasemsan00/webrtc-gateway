@@ -113,3 +113,31 @@ func TestHandleWSCallAllowsSamePublicIdentity(t *testing.T) {
 		t.Fatalf("expected state message, got %s", msgs[0].Type)
 	}
 }
+
+func TestHandleWSCall_AllowsIdentityChangeForNonPublicMode(t *testing.T) {
+	mgr := newTestSessionManager()
+	sess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+	sess.SetSIPAuthContext("trunk", "", 1, "example.com", "userA", "old-secret", 5060)
+
+	sipMaker := &stubSIPCallMaker{}
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, mgr, sipMaker, nil, nil, nil)
+	client := &WSClient{send: make(chan []byte, 8)}
+
+	srv.handleWSCall(client, WSMessage{
+		Type:        "call",
+		SessionID:   sess.ID,
+		Destination: "1003",
+		From:        "callerA",
+		SIPDomain:   "example.com",
+		SIPUsername: "userB",
+		SIPPassword: "new-secret",
+		SIPPort:     5060,
+	})
+
+	if sipMaker.makeCallCount != 1 {
+		t.Fatalf("expected MakeCall to be called once, got %d", sipMaker.makeCallCount)
+	}
+}

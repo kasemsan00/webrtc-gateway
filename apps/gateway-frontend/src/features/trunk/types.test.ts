@@ -19,4 +19,13 @@ describe('normalizeTrunkUid', () => {
       }),
     ).toBe('camel-id')
   })
+
+  it('returns empty string when no uid fields are provided', () => {
+    expect(
+      normalizeTrunkUid({
+        public_id: undefined,
+        publicId: undefined,
+      }),
+    ).toBe('')
+  })
 })

@@ -4,9 +4,68 @@ on:
   push:
     branches: ["main"]
     tags: ["*"]
+  pull_request:
+    branches: ["main"]
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: apps/gateway-sip/go.mod
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Frontend unit tests
+        run: npm exec nx run gateway-frontend:test
+
+      - name: SIP unit tests
+        run: npm exec nx run gateway-sip:test
+
+      - name: Frontend coverage
+        run: npm exec nx run gateway-frontend:test:coverage
+
+      - name: SIP coverage report
+        run: npm exec nx run gateway-sip:test:coverage
+
+      - name: Frontend smoke e2e
+        run: npm exec nx run gateway-frontend:e2e-smoke
+
+      - name: SIP package coverage thresholds
+        run: |
+          cd apps/gateway-sip
+          packages=(internal/api internal/sip internal/session)
+          minimums=(30 5 8)
+          for idx in "${!packages[@]}"; do
+            pkg="${packages[$idx]}"
+            min="${minimums[$idx]}"
+            profile="coverage-${pkg//\//-}.out"
+            go test -covermode=atomic -coverprofile="${profile}" "./${pkg}"
+            pct="$(go tool cover -func="${profile}" | awk '/^total:/{gsub("%","",$3); print $3}')"
+            echo "${pkg}: ${pct}% (minimum ${min}%)"
+            awk -v pct="${pct}" -v min="${min}" 'BEGIN { exit((pct + 0) < (min + 0)) }'
+          done
+
   build:
+    if: github.event_name == 'push'
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

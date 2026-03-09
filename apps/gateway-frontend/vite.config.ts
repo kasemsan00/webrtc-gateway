@@ -9,6 +9,7 @@ import tailwindcss from '@tailwindcss/vite'
 import netlify from '@netlify/vite-plugin-tanstack-start'
 
 const isNetlifyBuild = process.env.NETLIFY === 'true'
+const isVitest = process.env.VITEST === 'true'
 
 const config = defineConfig({
   resolve: {
@@ -17,16 +18,44 @@ const config = defineConfig({
     },
   },
   plugins: [
-    devtools(),
-    ...(isNetlifyBuild ? [netlify()] : []),
+    ...(isVitest ? [] : [devtools()]),
+    ...(isVitest || !isNetlifyBuild ? [] : [netlify()]),
     // this is the plugin that enables path aliases
     viteTsConfigPaths({
       projects: ['./tsconfig.json'],
     }),
     tailwindcss(),
-    tanstackStart(),
+    ...(isVitest ? [] : [tanstackStart()]),
     viteReact(),
   ],
+  test: {
+    environment: 'jsdom',
+    include: [
+      'src/**/*.test.ts',
+      'src/**/*.test.tsx',
+      'src/**/*.smoke.test.ts',
+      'src/**/*.smoke.test.tsx',
+    ],
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'json-summary', 'html'],
+      reportsDirectory: './coverage',
+      include: ['src/**/*.ts', 'src/**/*.tsx'],
+      exclude: [
+        'src/**/*.test.ts',
+        'src/**/*.test.tsx',
+        'src/**/*.smoke.test.ts',
+        'src/**/*.smoke.test.tsx',
+        'src/routeTree.gen.ts',
+      ],
+      thresholds: {
+        lines: 10,
+        functions: 10,
+        statements: 10,
+        branches: 5,
+      },
+    },
+  },
 })
 
 export default config

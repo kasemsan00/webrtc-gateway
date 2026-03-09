@@ -25,6 +25,9 @@
     "serve:sip": "nx serve gateway-sip",
     "build:sip": "nx build gateway-sip",
     "test:sip": "nx test gateway-sip",
+    "test:sip:coverage": "nx run gateway-sip:test:coverage",
+    "test:frontend:coverage": "nx run gateway-frontend:test:coverage",
+    "test:frontend:smoke": "nx run gateway-frontend:e2e-smoke",
     "test": "nx run-many -t test --projects gateway-frontend,gateway-sip --parallel=2"
   },
   "private": true,

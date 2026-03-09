@@ -185,6 +185,27 @@ describe('call state normalization', () => {
 })
 
 describe('canResolveTrunk', () => {
+  it('returns false when websocket is not connected', () => {
+    expect(
+      canResolveTrunk(
+        createState({
+          connection: { status: 'disconnected', wsStateText: 'Disconnected' },
+          mode: 'siptrunk',
+          trunk: {
+            status: 'not-resolved',
+            credentials: {
+              trunkId: '88',
+              sipDomain: '',
+              sipUsername: '',
+              sipPassword: '',
+              sipPort: 5060,
+            },
+          },
+        }),
+      ),
+    ).toBe(false)
+  })
+
   it('requires websocket and trunk credentials', () => {
     expect(
       canResolveTrunk(

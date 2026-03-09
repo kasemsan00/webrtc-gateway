@@ -32,6 +32,18 @@
       "options": {
         "cwd": "apps/gateway-frontend",
         "command": "npm run test"
+      },
+      "configurations": {
+        "coverage": {
+          "command": "npm run test:coverage"
+        }
+      }
+    },
+    "e2e-smoke": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "apps/gateway-frontend",
+        "command": "npm run test:smoke"
       }
     },
     "lint": {

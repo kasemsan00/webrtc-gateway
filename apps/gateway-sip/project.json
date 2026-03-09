@@ -25,6 +25,11 @@
       "options": {
         "cwd": "apps/gateway-sip",
         "command": "go test ./..."
+      },
+      "configurations": {
+        "coverage": {
+          "command": "go test -covermode=atomic -coverprofile=coverage.out ./... && go tool cover -func=coverage.out"
+        }
       }
     },
     "tidy": {

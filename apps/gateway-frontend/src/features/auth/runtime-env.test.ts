@@ -35,6 +35,9 @@ describe('runtime-env', () => {
 
     vi.stubEnv('VITE_CONFIG_AUTORECORD', 'true')
     expect(isAutoRecordEnabled()).toBe(true)
+
+    vi.stubEnv('VITE_CONFIG_AUTORECORD', ' YES ')
+    expect(isAutoRecordEnabled()).toBe(true)
   })
 
   it('returns false when VITE_CONFIG_AUTORECORD is not set', () => {

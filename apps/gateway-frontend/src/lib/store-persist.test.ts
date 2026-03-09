@@ -5,12 +5,45 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { attachPersist, clearPersisted, loadPersisted } from './store-persist'
 
 // ---------- helpers ----------
+type StorageMock = {
+  clear: () => void
+  getItem: (key: string) => string | null
+  key: (index: number) => string | null
+  removeItem: (key: string) => void
+  setItem: (key: string, value: string) => void
+  readonly length: number
+}
+
+function createStorageMock(): StorageMock {
+  const values = new Map<string, string>()
+  return {
+    clear: () => values.clear(),
+    getItem: (key) => values.get(String(key)) ?? null,
+    key: (index) => Array.from(values.keys())[index] ?? null,
+    removeItem: (key) => {
+      values.delete(String(key))
+    },
+    setItem: (key, value) => {
+      values.set(String(key), String(value))
+    },
+    get length() {
+      return values.size
+    },
+  }
+}
+
 beforeEach(() => {
-  localStorage.clear()
+  const storage = createStorageMock()
+  vi.stubGlobal('localStorage', storage)
+  Object.defineProperty(window, 'localStorage', {
+    value: storage,
+    configurable: true,
+  })
 })
 
 afterEach(() => {
   vi.restoreAllMocks()
+  vi.unstubAllGlobals()
 })
 
 // ---------- loadPersisted ----------
