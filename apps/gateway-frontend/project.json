@@ -1,0 +1,57 @@
+{
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "name": "gateway-frontend",
+  "projectType": "application",
+  "sourceRoot": "apps/gateway-frontend/src",
+  "tags": ["scope:gateway", "type:frontend"],
+  "targets": {
+    "dev": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "pnpm --filter webrtc-gateway-react run dev"
+      }
+    },
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "pnpm --filter webrtc-gateway-react run build"
+      },
+      "outputs": ["{projectRoot}/.output", "{projectRoot}/dist", "{projectRoot}/build"]
+    },
+    "preview": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "pnpm --filter webrtc-gateway-react run preview"
+      }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "pnpm --filter webrtc-gateway-react run test"
+      },
+      "configurations": {
+        "coverage": {
+          "command": "pnpm --filter webrtc-gateway-react run test:coverage"
+        }
+      }
+    },
+    "e2e-smoke": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "pnpm --filter webrtc-gateway-react run test:smoke"
+      }
+    },
+    "lint": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "pnpm --filter webrtc-gateway-react run lint"
+      }
+    },
+    "check": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "pnpm --filter webrtc-gateway-react run check"
+      }
+    }
+  }
+}

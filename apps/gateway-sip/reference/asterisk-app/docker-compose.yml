@@ -1,0 +1,24 @@
+version: '3.2'
+services:
+  asterisk-app:
+    container_name: asterisk-app
+    restart: always
+    network_mode: host
+    build:
+      context: .
+    env_file:
+      - .env
+    volumes:
+      - ./mount/etc/asterisk/:/etc/asterisk/
+      - ./mount/lib/agi-bin/vrs_agi/:/var/lib/asterisk/agi-bin/vrs_agi/
+      - ./mount/lib/moh/:/var/lib/asterisk/moh
+      - ./mount/lib/sounds/:/var/lib/asterisk/sounds/
+      - ./mount/lib/astdb.sqlite3:/var/lib/asterisk/astdb.sqlite3
+      - ./mount/spool/monitor/:/var/spool/asterisk/monitor/
+      - ./mount/spool/outgoing/:/var/spool/asterisk/outgoing/
+      - ./conf/nginx.conf:/etc/nginx/nginx.conf
+      - /var/log/asterisk/:/var/log/asterisk/
+      - /var/log/nginx/:/var/log/nginx/
+      - /var/log/php5.6-fpm.log:/var/log/php5.6-fpm.log
+    #image: registry.gitlab.spinsoft.co.th/voip/docker_asterisk_15:4.0.1
+    image: thspinsoft/ttrs-ippbx-asterisk-15:4.0.3

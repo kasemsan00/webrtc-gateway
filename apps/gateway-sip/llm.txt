@@ -1,0 +1,151 @@
+# K2 Gateway (webrtc-gateway-sip) - LLM Context
+
+## 1) Project Identity
+- ประเภทระบบ: Real-time **WebRTC <-> SIP Gateway API** (media + signaling bridge)
+- เป้าหมายหลัก: ให้ browser/mobile (WebRTC) โทรออก/รับสายผ่าน SIP endpoints (เช่น Asterisk/Kamailio) โดยคง media compatibility และความเสถียรระดับ production
+- Data plane: SRTP (WebRTC side) <-> RTP/RTCP (SIP side)
+- Control plane: WebSocket JSON + REST API <-> SIP signaling
+- Non-goals ที่สำคัญ: ไม่ทำ audio transcoding; จำกัด video ที่ H.264
+
+## 2) Technical Stack
+- Go: **1.25.5** (`go.mod`)
+- HTTP/Web API: **net/http + gorilla/mux**
+- WebSocket: **gorilla/websocket**
+- ORM: **ไม่มี ORM** (ใช้ SQL ตรงผ่าน `pgx/v5` + `pgxpool`)
+- Core libraries:
+  - `github.com/pion/webrtc/v4` (PeerConnection, tracks, ICE)
+  - `github.com/pion/rtp`, `github.com/pion/rtcp`, `github.com/pion/sdp/v3`
+  - `github.com/emiago/sipgo` (SIP server/client/transactions)
+  - `github.com/jackc/pgx/v5` (Postgres)
+  - `github.com/joho/godotenv` (env loading)
+
+## 3) Project Structure
+- `main.go`: bootstrap config/logger/logstore, initialize SIP server + API server, graceful shutdown
+- `internal/api/`
+  - `server.go`: route setup (`/ws`, `/api/*`), WebSocket lifecycle, WS message dispatcher
+  - `handlers.go`: REST/SSE handlers, request validation, response formatting
+- `internal/session/`
+  - `manager.go`: in-memory session registry (`map[string]*Session`)
+  - `session.go`: core `Session` model, PeerConnection lifecycle, OnTrack/RTCP hooks
+  - `rtp_forward.go`, `keyframe.go`, `h264_paramsets.go`, `reorder_buffer.go`: media forwarding + recovery logic
+  - `renegotiate.go`: call resume / PeerConnection recreate
+  - `media_endpoints.go`: RTP/RTCP endpoint learning (symmetric RTP), status snapshots
+- `internal/sip/`
+  - `server.go`, `handlers.go`: SIP listener and INVITE/ACK/BYE/MESSAGE flows
+  - `call.go`: outbound INVITE, auth challenge handling, accept/reject incoming call, DTMF send
+  - `sdp.go`: SIP SDP offer/answer generation + parsing
+  - `rtp.go`: RTP/RTCP listeners, SIP->WebRTC forwarding, keyframe watchdog
+  - `public_registry.go`: SIP public account register/refresh/cleanup
+  - `trunk_manager.go`: DB-backed trunk lease ownership + register/unregister workers
+- `internal/logstore/`
+  - `logstore.go`, `queue.go`, `partition.go`, `models.go`
+  - async event/stats queue, payload storage, session/dialog snapshots, directory/instance registry
+- `internal/config/config.go`: strongly-typed env config
+- `init.sql` + `migrations/`: DB schema and updates
+
+## 4) Coding Standards (Observed + Required)
+- Concurrency:
+  - ใช้ `sync.RWMutex` ป้องกัน shared state (`Session`, `Manager`, API wsClients, trunk/public registries)
+  - หลีกเลี่ยงถือ lock ขณะ network I/O หรือ DB I/O
+- Error handling:
+  - business/internal layer ใช้ `fmt.Errorf("...: %w", err)`
+  - handler layer คืน HTTP/WS error ที่อ่านง่ายสำหรับ client
+- Context discipline:
+  - ใช้ `context.WithTimeout` กับ SIP transaction/DB operations
+  - workers ต้องหยุดได้ด้วย `ctx.Done()` หรือ stop channel
+- API compatibility:
+  - โครงสร้าง WS message (`type` + fields) ถือเป็น contract
+  - เปลี่ยน payload/field ต้องอัปเดตทั้ง backend + client
+- Stability rules:
+  - หลีกเลี่ยง panic ใน hot path (RTP/RTCP/SIP loops)
+  - media invariants ห้าม regress: **Audio Opus passthrough**, **Video H.264 only**, **SPS/PPS caching/injection ต้องคงอยู่**
+- Naming/style:
+  - exported: PascalCase, internal: camelCase
+  - state transitions ผ่าน method (`SetState`/`UpdateState`) ไม่เขียน field ตรงใน cross-goroutine path
+
+## 5) Core Data Models
+- Runtime models:
+  - `session.Session`: ศูนย์กลางของ call state (PeerConnection, RTP/RTCP conns, SIP dialog/auth context, media caches, counters)
+  - `api.WSMessage`: envelope สำหรับ WS contract (`type`, `sessionId`, `sdp`, `destination`, `dtmf`, `trunkId`, `trunkPublicId`, ...)
+  - `sip.Trunk`: trunk config + lease/status (`lease_owner`, `lease_until`, `public_id`)
+  - `sip.PublicAccount`: temporary SIP public registration + ref count + expiry
+- Persistence models (`internal/logstore/models.go`):
+  - `SessionRecord`, `Event`, `PayloadRecord`, `StatsRecord`, `DialogRecord`
+  - `GatewayInstanceRecord`, `SessionDirectoryRecord`
+- DB tables (`init.sql`):
+  - `call_sessions`, `call_events` (partitioned), `call_payloads` (partitioned), `call_stats`, `sip_dialogs`
+  - `sip_trunks`, `session_directory`, `gateway_instances`
+- Logical relationships:
+  - ส่วนใหญ่เชื่อมด้วย `session_id` และ `sip_call_id` (ไม่พึ่ง FK หนักใน hot path)
+  - trunk ownership ใช้ lease fields (`lease_owner`, `lease_until`) เพื่อ single-active per trunk
+
+## 6) API Patterns
+- REST:
+  - Prefix: `/api`
+  - Success: JSON object/array ตรงๆ
+  - Error format: `{"error":"<message>"}`
+  - Common status: `200`, `201`, `400`, `404`, `409`, `500`, `503`
+- WebSocket (`/ws`):
+  - request/response ใช้ `WSMessage` (`type` เป็น dispatcher key)
+  - ตัวอย่าง type จาก client: `offer`, `call`, `hangup`, `accept`, `reject`, `dtmf`, `send_message`, `resume`, `trunk_resolve`, `ping`
+  - ตัวอย่าง type จาก server: `answer`, `state`, `incoming`, `message`, `messageSent`, `dtmf`, `resumed`, `resume_failed`, `resume_redirect`, `trunk_resolved`, `trunk_redirect`, `trunk_not_found`, `trunk_not_ready`, `pong`, `error`
+- SSE:
+  - `/api/trunks/stream`, `/api/sessions/stream` สำหรับ event feed + heartbeat
+
+## 7) Critical Logic (High Regression Risk)
+- WebRTC/SIP call flows:
+  - Outbound: WS/REST offer -> create answer -> SIP INVITE -> parse 200 OK SDP -> ACK -> active
+  - Inbound: SIP INVITE -> create incoming session -> notify WS `incoming` -> first-accept-wins -> 200 OK
+  - Public identity rule: if a session already has public identity and next WS `call` changes `sipUsername` or `sipDomain`, reject and require a new `offer` (new session)
+- Session resume / multi-instance redirect:
+  - WS `resume` ตรวจ `session_directory`; ถ้า owner อยู่คนละ instance จะตอบ `resume_redirect`
+  - ใช้ `gateway_instances` + `session_directory` ใน DB สำหรับ cross-instance routing
+- Trunk/public registration control:
+  - `PublicAccountRegistry`: acquire/register/refcount/idle cleanup
+  - `TrunkManager`: lease heartbeat + refresh workers + register/unregister + force operations
+- Media invariants:
+  - Audio: Opus passthrough, PT rewrite SIP<->WebRTC ตาม negotiated payload type
+  - Video: H.264 only, `profile-level-id` + `sprop-parameter-sets` handling
+  - SPS/PPS strategy:
+    - cache จาก SDP และ RTP
+    - inject ก่อน keyframe/IDR เพื่อ decoder recovery
+    - STAP-A de-aggregation รองรับ endpoint compatibility
+- RTCP recovery and resilience:
+  - PLI/FIR/NACK forwarding ทั้งสองทิศทาง
+  - keyframe watchdog ส่ง PLI/FIR เมื่อ video stale
+  - symmetric RTP/RTCP learning + fallback window (RTP+1 และ mux fallback)
+  - SIP->WebRTC video reorder buffer ลดผลกระทบ packet reordering
+- Logging/persistence hot-path safety:
+  - event/stats ลง async queue + batch worker
+  - payload บางชนิด sync insert (ต้องระวัง latency path)
+  - no-op store เมื่อ `DB_ENABLE=false`
+
+## 8) Quick Guidance For AI Editors
+- ห้ามแก้ media behavior โดยไม่อ่านไฟล์เหล่านี้ก่อน:
+  - `internal/session/rtp_forward.go`
+  - `internal/session/keyframe.go`
+  - `internal/sip/sdp.go`
+  - `internal/sip/rtp.go`
+- ก่อนแก้ WebSocket contract ให้ sync กับ client ที่ใช้งานจริง
+- ถ้าแตะส่วน trunk/session directory ให้ทดสอบกรณี multi-instance redirect
+- หลังแก้โค้ดสำคัญให้รันอย่างน้อย:
+  - `go test ./...`
+  - `go test -v ./internal/sip -run "TestBuildPublicAccountKey|TestResolveSIPDestination"`
+
+## 9) Recent Changes (2026-02)
+- Resume latency hardening:
+  - เพิ่ม timeout สำหรับ ICE gathering ในการ renegotiate ตอน resume
+  - ค่าคงที่ใหม่: `RENEGOTIATE_ICE_GATHER_TIMEOUT = 5s`
+  - ไฟล์: `internal/session/renegotiate.go`
+  - พฤติกรรม: ถ้า ICE gathering ช้ากว่า timeout จะ log warning และเดินหน้าต่อด้วย candidates ที่มีอยู่ (ไม่ block จนค้าง)
+- Resume observability:
+  - เพิ่ม slow-resume warning log เมื่อ `handleWSResume` ใช้เวลามากกว่า `3s`
+  - ค่าคงที่ใหม่: `resumeSlowLogThreshold = 3s`
+  - ไฟล์: `internal/api/server.go`
+- New tests:
+  - `internal/session/renegotiate_test.go`:
+    - ทดสอบ helper wait-for-gathering (complete vs timeout)
+  - `internal/api/server_resume_test.go`:
+    - ครอบคลุม `session not found`, `state not resumable`, `success without SDP`, `invalid SDP -> resume_failed`
+- Operational note:
+  - โฟกัสของการเปลี่ยนชุดนี้คือหลีกเลี่ยง resume timeout ฝั่ง client จากการรอ ICE gathering นานเกินไป และเพิ่ม trace เพื่อตรวจ bottleneck เครือข่าย/renegotiation ได้ง่ายขึ้น
