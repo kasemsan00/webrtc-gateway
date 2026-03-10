@@ -309,6 +309,9 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 	const (
 		burstGapTrigger        = 8
 		gapRecoveryMinInterval = 1200 * time.Millisecond
+		startupPLIAttempts     = 3
+		startupPLIInterval     = 250 * time.Millisecond
+		startupKeyframeFresh   = 1200 * time.Millisecond
 	)
 
 	fmt.Printf("[%s] Video RTP handler started, VideoTrack is nil: %v\n", sess.ID, sess.VideoTrack == nil)
@@ -410,19 +413,25 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 				fmt.Printf("[%s] Learned Remote Video SSRC: %d (previous: %d)\n", sess.ID, ssrc, previousSSRC)
 				sess.StartVideoRTCPFallbackWindow(4*time.Second, "ssrc-learn")
 
-				// Send FIR first (to request SPS/PPS + IDR), then PLI burst for fast video start
+				// Send FIR first, then a short guarded PLI burst.
+				// Keep startup recovery conservative to avoid RTCP storms during @switch answer.
 				go func() {
-					fmt.Printf("[%s] 🚀 Sending FIR + PLI requests for fast video start (with SPS/PPS)\n", sess.ID)
-					// Send FIR first to request full keyframe with parameter sets
+					fmt.Printf("[%s] 🚀 Sending startup FIR + guarded PLI burst\n", sess.ID)
 					sess.SendFIRToAsterisk()
-					time.Sleep(100 * time.Millisecond)
-					// Then send PLI burst for redundancy
-					for i := 0; i < 10; i++ {
+					time.Sleep(startupPLIInterval)
+					for i := 0; i < startupPLIAttempts; i++ {
 						if sess.GetState() == session.StateEnded {
 							return
 						}
+
+						lastKeyframe, _ := sess.GetKeyframeTimes()
+						if !lastKeyframe.IsZero() && time.Since(lastKeyframe) <= startupKeyframeFresh {
+							fmt.Printf("[%s] ✅ Startup recovery settled after keyframe; stopping PLI burst\n", sess.ID)
+							return
+						}
+
 						sess.SendPLIToAsteriskForced("ssrc-learn")
-						time.Sleep(100 * time.Millisecond)
+						time.Sleep(startupPLIInterval)
 					}
 				}()
 			}

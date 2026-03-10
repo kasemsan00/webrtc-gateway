@@ -8,7 +8,7 @@ import (
 
 const (
 	reorderWindowSize = 64
-	reorderTimeoutMS  = 25
+	reorderTimeoutMS  = 40
 )
 
 // reorderEntry holds a buffered RTP packet with metadata.

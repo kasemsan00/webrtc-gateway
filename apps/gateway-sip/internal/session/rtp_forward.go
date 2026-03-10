@@ -253,19 +253,16 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 					fmt.Printf("[%s] 🔑 KEYFRAME (STAP-A IDR) detected in video packet #%d → Asterisk\n", s.ID, packetCount)
 				}
 
-				// Inject SPS/PPS before STAP-A IDR.
-				// This fixes cases where the first keyframe arrives aggregated and Linphone stays black until a later IDR.
-				shouldInjectBeforeSTAPA := containsIDR && len(s.CachedSPS) > 0 && len(s.CachedPPS) > 0
+				// Inject SPS/PPS before STAP-A IDR only when STAP-A does not already carry both.
+				// This avoids duplicate SPS/PPS bursts at call startup that can destabilize decoders.
+				shouldInjectBeforeSTAPA := containsIDR && len(s.CachedSPS) > 0 && len(s.CachedPPS) > 0 && !(containsSPS && containsPPS)
 				if shouldInjectBeforeSTAPA {
 					injectReason := "keyframe"
-					// Always inject 3x for STAP-A+IDR. Even when STAP-A already carries SPS/PPS,
-					// a single pre-injection is fragile under UDP reordering/loss and may keep Linphone black.
 					redundancyCount := 1
-					// if s.SwitchSPSPPSInjectRemaining > 0 {
-					// 	injectReason = "@switch"
-					// 	redundancyCount = 3
-					// }
-					// Optimization: Reducing redundancy to 1 to match Linphone Mobile and prevent burst congestion.
+					if s.SwitchSPSPPSInjectRemaining > 0 {
+						injectReason = "@switch"
+						redundancyCount = 2
+					}
 
 					s.LastSPSPPSInjectionTime = time.Now()
 					fmt.Printf("[%s] 💉 STAP-A contains IDR - injecting Separate SPS/PPS (NRI=3) (%s, %dx) before de-aggregation (stapaHasSPS=%v, stapaHasPPS=%v)\n",
@@ -392,15 +389,12 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 			if shouldInjectSPSPPS {
 				s.LastSPSPPSInjectionTime = time.Now()
 
-				// Send Separate SPS/PPS packets with forced NRI=3 (mimicking Linphone Mobile)
-				// This ensures Asterisk/chan_sip doesn't drop them
+				// Send Separate SPS/PPS packets with forced NRI=3.
+				// Use a small warmup redundancy window at call startup for decoder reliability.
 				redundancyCount := 1
-				// if isKeyframe {
-				// 	redundancyCount = 3 // Send 3 copies before keyframes for reliability
-				// }
-				// Optimization: Linphone Mobile sends only 1 copy.
-				// Sending 3 copies back-to-back (burst 6 packets + IDR) might be causing congestion/reordering
-				// leading to "pixelated" video on subsequent calls. Reducing to 1.
+				if isKeyframe && packetCount <= 120 {
+					redundancyCount = 2
+				}
 
 				for i := 0; i < redundancyCount; i++ {
 					// 1. Send SPS (with forced NRI=3)
