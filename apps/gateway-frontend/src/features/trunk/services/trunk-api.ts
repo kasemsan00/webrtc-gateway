@@ -149,13 +149,14 @@ export function subscribeTrunkEvents(
         method: 'GET',
         headers: buildAuthHeaders({
           Accept: 'text/event-stream',
-          'Cache-Control': 'no-cache',
         }),
         signal: controller.signal,
       })
 
       if (!response.ok || !response.body) {
-        throw new Error(`Failed to subscribe trunk events: HTTP ${response.status}`)
+        throw new Error(
+          `Failed to subscribe trunk events: HTTP ${response.status}`,
+        )
       }
 
       const reader = response.body.getReader()
