@@ -126,7 +126,7 @@ GET /api/trunks?search=agent&page=1&pageSize=5&createdAfter=2025-06-01T00:00:00Z
 | `leaseOwner`       | string | Gateway instance ID that owns the registration lease |
 | `leaseUntil`       | string | Lease expiry time (RFC 3339), empty if no lease      |
 | `lastRegisteredAt` | string | Last successful SIP REGISTER time (RFC 3339)         |
-| `isRegistered`     | bool   | Whether trunk is currently considered registered      |
+| `isRegistered`     | bool   | Whether trunk is currently considered registered     |
 | `lastError`        | string | Last registration error message, empty if none       |
 | `createdAt`        | string | Trunk creation time (RFC 3339)                       |
 | `updatedAt`        | string | Last update time (RFC 3339)                          |
@@ -298,42 +298,39 @@ POST /api/trunk/5/unregister
 
 ---
 
-## 6. Delete Trunk
+## 6. Soft Delete (Disable) and Restore
 
-Hard-deletes a trunk from the database. Also sends SIP unregister (best-effort).
-
-```
-DELETE /api/trunk/{id}
-```
-
-### Path Parameters
-
-| Parameter | Type  | Description |
-| --------- | ----- | ----------- |
-| `id`      | int64 | Trunk ID    |
-
-### Example
+Trunks are not hard-deleted from `sip_trunks`.
+Use trunk update to soft delete (`enabled=false`) and restore (`enabled=true`).
 
 ```
-DELETE /api/trunk/5
+PUT /api/trunk/{id}
 ```
 
-### Response (success)
+### Soft delete (disable)
+
+Request body:
 
 ```json
 {
-  "trunkId": 5,
-  "status": "deleted"
+  "enabled": false
 }
 ```
 
-### Response (error)
+### Restore
+
+Request body:
 
 ```json
 {
-  "error": "Failed to delete trunk: trunk 5 not found"
+  "enabled": true
 }
 ```
+
+### Notes
+
+- When active calls exist on the trunk, disabling is rejected with `409`.
+- On successful disable, gateway performs best-effort unregister and lease release.
 
 ---
 

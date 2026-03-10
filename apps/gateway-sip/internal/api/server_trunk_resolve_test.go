@@ -59,9 +59,6 @@ func (s *stubResolveTrunkManager) RegisterTrunk(trunkID int64, force bool) error
 func (s *stubResolveTrunkManager) UnregisterTrunk(trunkID int64, force bool) error {
 	return errors.New("not implemented")
 }
-func (s *stubResolveTrunkManager) DeleteTrunk(trunkID int64, force bool) error {
-	return errors.New("not implemented")
-}
 func (s *stubResolveTrunkManager) ListTrunks(ctx context.Context, params sip.TrunkListParams) (*sip.TrunkListResult, error) {
 	return nil, errors.New("not implemented")
 }

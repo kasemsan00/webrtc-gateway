@@ -78,7 +78,6 @@ type TrunkManager interface {
 	UpdateTrunk(ctx context.Context, trunkID int64, patch sip.TrunkUpdatePatch) (*sip.Trunk, error)
 	RegisterTrunk(trunkID int64, force bool) error
 	UnregisterTrunk(trunkID int64, force bool) error
-	DeleteTrunk(trunkID int64, force bool) error
 	ListTrunks(ctx context.Context, params sip.TrunkListParams) (*sip.TrunkListResult, error)
 	GetTrunkByIDFromDB(ctx context.Context, trunkID int64) (*sip.Trunk, error)
 	ListOwnedTrunks() []*sip.Trunk
@@ -267,7 +266,6 @@ func (s *Server) Start(ctx context.Context) error {
 		api.HandleFunc("/trunk/{id}", s.handleUpdateTrunk).Methods("PUT", "OPTIONS")
 		api.HandleFunc("/trunk/{id}/register", s.handleTrunkRegister).Methods("POST", "OPTIONS")
 		api.HandleFunc("/trunk/{id}/unregister", s.handleTrunkUnregister).Methods("POST", "OPTIONS")
-		api.HandleFunc("/trunk/{id}", s.handleDeleteTrunk).Methods("DELETE", "OPTIONS")
 		fmt.Printf("REST API endpoints enabled: /api/*\n")
 	}
 

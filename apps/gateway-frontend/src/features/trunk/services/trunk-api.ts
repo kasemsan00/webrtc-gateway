@@ -43,15 +43,12 @@ export async function refreshTrunks(): Promise<{ status: string }> {
   })
 }
 
-export async function deleteTrunk(
-  id: number,
-): Promise<{ trunkId: number; status: string }> {
-  return fetchJson<{ trunkId: number; status: string }>(
-    `${API_BASE}/trunk/${id}`,
-    {
-      method: 'DELETE',
-    },
-  )
+export async function softDeleteTrunk(id: number): Promise<Trunk> {
+  return updateTrunk(id, { enabled: false })
+}
+
+export async function restoreTrunk(id: number): Promise<Trunk> {
+  return updateTrunk(id, { enabled: true })
 }
 
 export async function unregisterTrunk(

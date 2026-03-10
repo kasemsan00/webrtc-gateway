@@ -1432,53 +1432,6 @@ func (tm *TrunkManager) UnregisterTrunk(trunkID int64, force bool) error {
 	return nil
 }
 
-// DeleteTrunk removes a trunk from the database (hard delete)
-func (tm *TrunkManager) DeleteTrunk(trunkID int64, force bool) error {
-	if tm.db == nil {
-		return fmt.Errorf("database not available for trunk manager")
-	}
-	if !force && !tm.IsOwnedTrunk(trunkID) {
-		return fmt.Errorf("trunk %d lease not owned by this instance", trunkID)
-	}
-
-	ctx, cancel := tm.dbContext()
-	defer cancel()
-
-	trunk, err := tm.getTrunkByIDFromDB(ctx, trunkID)
-	if err != nil {
-		return err
-	}
-
-	// Stop refresh worker and clear caches
-	tm.mu.Lock()
-	if stopCh, exists := tm.refreshWorkers[trunkID]; exists {
-		close(stopCh)
-		delete(tm.refreshWorkers, trunkID)
-	}
-	delete(tm.registrations, trunkID)
-	delete(tm.ownedLeases, trunkID)
-	if trunk.PublicID != "" {
-		delete(tm.trunkByPublic, trunk.PublicID)
-	}
-	delete(tm.trunks, trunkID)
-	tm.mu.Unlock()
-
-	unregisterErr := tm.sendUnregister(trunk)
-
-	result, err := tm.db.Exec(ctx, `DELETE FROM sip_trunks WHERE id = $1`, trunkID)
-	if err != nil {
-		return fmt.Errorf("delete failed: %w", err)
-	}
-	if result.RowsAffected() == 0 {
-		return fmt.Errorf("trunk %d not found", trunkID)
-	}
-
-	if unregisterErr != nil {
-		return fmt.Errorf("trunk deleted but unregister failed: %w", unregisterErr)
-	}
-	return nil
-}
-
 func (tm *TrunkManager) releaseLeaseForce(trunkID int64) {
 	ctx, cancel := tm.dbContext()
 	defer cancel()

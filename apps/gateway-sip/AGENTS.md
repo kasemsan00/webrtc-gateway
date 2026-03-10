@@ -250,7 +250,8 @@ If you add/change a message type, update all of:
 ### Trunk manager
 
 - Uses DB lease ownership (`lease_owner`, `lease_until`) to enforce single-active registration per trunk.
-- Supports force unregister/delete APIs via REST endpoints.
+- Supports force unregister API via REST endpoints.
+- Trunks are soft-deleted by update flow (`enabled=false`); rows are not hard-deleted from `sip_trunks`.
 - Provides dual ID support:
   - internal numeric `trunkId` (DB primary key),
   - `trunkPublicId` from DB column `sip_trunks.public_id` (`UUID UNIQUE`) for external/API use.

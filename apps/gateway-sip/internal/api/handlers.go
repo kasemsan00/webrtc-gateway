@@ -1097,37 +1097,6 @@ func (s *Server) handleTrunkUnregister(w http.ResponseWriter, r *http.Request) {
 	s.respondJSON(w, http.StatusOK, map[string]interface{}{"trunkId": trunkID, "status": "unregistered"})
 }
 
-// handleDeleteTrunk deletes a trunk (force)
-func (s *Server) handleDeleteTrunk(w http.ResponseWriter, r *http.Request) {
-	if s.trunkManager == nil {
-		s.respondError(w, http.StatusServiceUnavailable, "Trunk manager not available")
-		return
-	}
-
-	vars := mux.Vars(r)
-	idStr := vars["id"]
-	trunkID, err := strconv.ParseInt(idStr, 10, 64)
-	if err != nil || trunkID <= 0 {
-		s.respondError(w, http.StatusBadRequest, "Invalid trunk ID")
-		return
-	}
-
-	if err := s.trunkManager.DeleteTrunk(trunkID, true); err != nil {
-		s.respondError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to delete trunk: %v", err))
-		return
-	}
-
-	s.logEvent(&logstore.Event{
-		Timestamp: time.Now(),
-		Category:  "rest",
-		Name:      "rest_trunk_deleted",
-		Data:      map[string]interface{}{"trunkId": trunkID, "force": true},
-	})
-	s.notifyTrunkListChanged("deleted", &trunkID)
-
-	s.respondJSON(w, http.StatusOK, map[string]interface{}{"trunkId": trunkID, "status": "deleted"})
-}
-
 func trunkResponseFrom(trunk *sip.Trunk, activeCallCount int, activeDestinations []string) TrunkResponse {
 	isRegistered := trunk.LastRegisteredAt != nil
 	if trunk.LastError != nil && *trunk.LastError != "" {

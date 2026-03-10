@@ -51,10 +51,11 @@ import { useTheme } from '@/lib/theme'
 import { useVisibilityRealtimeReload } from '@/lib/use-visibility-realtime-reload'
 import {
   createTrunk,
-  deleteTrunk,
   fetchTrunks,
   refreshTrunks,
   registerTrunk,
+  restoreTrunk,
+  softDeleteTrunk,
   subscribeTrunkEvents,
   unregisterTrunk,
   updateTrunk,
@@ -107,6 +108,14 @@ function formatRegisterErrorMessage(error: unknown) {
 
 export function isRegisterActionDisabled(trunk: Trunk) {
   return trunk.isRegistered || !trunk.enabled
+}
+
+export function getTrunkStatusLabel(enabled: boolean) {
+  return enabled ? 'Enabled' : 'Deleted'
+}
+
+export function getTrunkLifecycleActionLabel(enabled: boolean) {
+  return enabled ? 'Disable' : 'Restore'
 }
 
 type TrunkEditForm = {
@@ -177,8 +186,10 @@ export function TrunkListPage() {
   const [registering, setRegistering] = useState(false)
   const [unregisterTarget, setUnregisterTarget] = useState<Trunk | null>(null)
   const [unregistering, setUnregistering] = useState(false)
-  const [deleteTarget, setDeleteTarget] = useState<Trunk | null>(null)
-  const [deleting, setDeleting] = useState(false)
+  const [softDeleteTarget, setSoftDeleteTarget] = useState<Trunk | null>(null)
+  const [softDeleting, setSoftDeleting] = useState(false)
+  const [restoreTarget, setRestoreTarget] = useState<Trunk | null>(null)
+  const [restoring, setRestoring] = useState(false)
   const [editTarget, setEditTarget] = useState<Trunk | null>(null)
   const [editForm, setEditForm] = useState<TrunkEditForm | null>(null)
   const [savingEdit, setSavingEdit] = useState(false)
@@ -347,8 +358,12 @@ export function TrunkListPage() {
     }
   }, [unregisterTarget, load])
 
-  const openDeleteModal = useCallback((trunk: Trunk) => {
-    setDeleteTarget(trunk)
+  const openSoftDeleteModal = useCallback((trunk: Trunk) => {
+    setSoftDeleteTarget(trunk)
+  }, [])
+
+  const openRestoreModal = useCallback((trunk: Trunk) => {
+    setRestoreTarget(trunk)
   }, [])
 
   const openEditModal = useCallback((trunk: Trunk) => {
@@ -416,25 +431,45 @@ export function TrunkListPage() {
     }
   }, [closeEditModal, editForm, editTarget, load])
 
-  const confirmDelete = useCallback(async () => {
-    if (!deleteTarget) return
-    setDeleting(true)
+  const confirmSoftDelete = useCallback(async () => {
+    if (!softDeleteTarget) return
+    setSoftDeleting(true)
     try {
-      await deleteTrunk(deleteTarget.id)
-      setDeleteTarget(null)
+      await softDeleteTrunk(softDeleteTarget.id)
+      setSoftDeleteTarget(null)
       await load()
-      toast.success('Delete success', {
-        description: trunkIdentityText(deleteTarget),
+      toast.success('Disable success', {
+        description: trunkIdentityText(softDeleteTarget),
       })
     } catch (err) {
-      toast.error('Delete failed', {
+      toast.error('Disable failed', {
         description:
-          err instanceof Error ? err.message : 'Failed to delete trunk',
+          err instanceof Error ? err.message : 'Failed to disable trunk',
       })
     } finally {
-      setDeleting(false)
+      setSoftDeleting(false)
     }
-  }, [deleteTarget, load])
+  }, [softDeleteTarget, load])
+
+  const confirmRestore = useCallback(async () => {
+    if (!restoreTarget) return
+    setRestoring(true)
+    try {
+      await restoreTrunk(restoreTarget.id)
+      setRestoreTarget(null)
+      await load()
+      toast.success('Restore success', {
+        description: trunkIdentityText(restoreTarget),
+      })
+    } catch (err) {
+      toast.error('Restore failed', {
+        description:
+          err instanceof Error ? err.message : 'Failed to restore trunk',
+      })
+    } finally {
+      setRestoring(false)
+    }
+  }, [restoreTarget, load])
 
   const confirmCreate = useCallback(async () => {
     const trimmedName = createForm.name.trim()
@@ -627,7 +662,8 @@ export function TrunkListPage() {
                 onEdit={openEditModal}
                 onRegister={openRegisterModal}
                 onUnregister={openUnregisterModal}
-                onDelete={openDeleteModal}
+                onSoftDelete={openSoftDeleteModal}
+                onRestore={openRestoreModal}
               />
             ))}
           </div>
@@ -637,7 +673,8 @@ export function TrunkListPage() {
             onEdit={openEditModal}
             onRegister={openRegisterModal}
             onUnregister={openUnregisterModal}
-            onDelete={openDeleteModal}
+            onSoftDelete={openSoftDeleteModal}
+            onRestore={openRestoreModal}
           />
         )}
 
@@ -858,39 +895,72 @@ export function TrunkListPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Delete confirmation modal */}
+      {/* Soft delete confirmation modal */}
       <Dialog
-        open={!!deleteTarget}
+        open={!!softDeleteTarget}
         onOpenChange={(open) => {
-          if (!open) setDeleteTarget(null)
+          if (!open) setSoftDeleteTarget(null)
         }}
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Delete Trunk</DialogTitle>
+            <DialogTitle>Disable Trunk</DialogTitle>
             <DialogDescription>
-              Are you sure you want to delete trunk{' '}
-              <strong>{trunkIdentityText(deleteTarget)}</strong>? This cannot be
-              undone.
+              Are you sure you want to disable trunk{' '}
+              <strong>{trunkIdentityText(softDeleteTarget)}</strong>? You can
+              restore it later.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button
               variant="outline"
-              onClick={() => setDeleteTarget(null)}
-              disabled={deleting}
+              onClick={() => setSoftDeleteTarget(null)}
+              disabled={softDeleting}
             >
               Cancel
             </Button>
             <Button
               variant="destructive"
-              onClick={confirmDelete}
-              disabled={deleting}
+              onClick={confirmSoftDelete}
+              disabled={softDeleting}
             >
-              {deleting ? (
+              {softDeleting ? (
                 <RiLoader4Line className="mr-1 size-3.5 animate-spin" />
               ) : null}
-              Delete
+              Disable
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Restore confirmation modal */}
+      <Dialog
+        open={!!restoreTarget}
+        onOpenChange={(open) => {
+          if (!open) setRestoreTarget(null)
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Restore Trunk</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to restore trunk{' '}
+              <strong>{trunkIdentityText(restoreTarget)}</strong>?
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setRestoreTarget(null)}
+              disabled={restoring}
+            >
+              Cancel
+            </Button>
+            <Button onClick={confirmRestore} disabled={restoring}>
+              {restoring ? (
+                <RiLoader4Line className="mr-1 size-3.5 animate-spin" />
+              ) : null}
+              Restore
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1036,13 +1106,15 @@ function TrunkTable({
   onEdit,
   onRegister,
   onUnregister,
-  onDelete,
+  onSoftDelete,
+  onRestore,
 }: {
   trunks: Array<Trunk>
   onEdit: (trunk: Trunk) => void
   onRegister: (trunk: Trunk) => void
   onUnregister: (trunk: Trunk) => void
-  onDelete: (trunk: Trunk) => void
+  onSoftDelete: (trunk: Trunk) => void
+  onRestore: (trunk: Trunk) => void
 }) {
   const columns = useMemo<Array<ColumnDef<Trunk>>>(
     () => [
@@ -1127,7 +1199,7 @@ function TrunkTable({
               variant={row.original.enabled ? 'success' : 'destructive'}
               className="text-[10px]"
             >
-              {row.original.enabled ? 'Enabled' : 'Disabled'}
+              {getTrunkStatusLabel(row.original.enabled)}
             </Badge>
           </div>
         ),
@@ -1172,19 +1244,30 @@ function TrunkTable({
             >
               Unregister
             </Button>
-            <Button
-              size="sm"
-              variant="destructive"
-              className="h-6 px-2 text-[10px]"
-              onClick={() => onDelete(row.original)}
-            >
-              Delete
-            </Button>
+            {row.original.enabled ? (
+              <Button
+                size="sm"
+                variant="destructive"
+                className="h-6 px-2 text-[10px]"
+                onClick={() => onSoftDelete(row.original)}
+              >
+                {getTrunkLifecycleActionLabel(row.original.enabled)}
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                variant="default"
+                className="h-6 px-2 text-[10px]"
+                onClick={() => onRestore(row.original)}
+              >
+                {getTrunkLifecycleActionLabel(row.original.enabled)}
+              </Button>
+            )}
           </div>
         ),
       },
     ],
-    [onDelete, onEdit, onRegister, onUnregister],
+    [onEdit, onRegister, onRestore, onSoftDelete, onUnregister],
   )
 
   return <DataTable columns={columns} data={trunks} />
@@ -1195,13 +1278,15 @@ function TrunkCard({
   onEdit,
   onRegister,
   onUnregister,
-  onDelete,
+  onSoftDelete,
+  onRestore,
 }: {
   trunk: Trunk
   onEdit: (trunk: Trunk) => void
   onRegister: (trunk: Trunk) => void
   onUnregister: (trunk: Trunk) => void
-  onDelete: (trunk: Trunk) => void
+  onSoftDelete: (trunk: Trunk) => void
+  onRestore: (trunk: Trunk) => void
 }) {
   return (
     <Card className="border-border/60">
@@ -1224,7 +1309,7 @@ function TrunkCard({
               variant={trunk.enabled ? 'success' : 'destructive'}
               className="text-[10px]"
             >
-              {trunk.enabled ? 'Enabled' : 'Disabled'}
+              {getTrunkStatusLabel(trunk.enabled)}
             </Badge>
           </div>
         </div>
@@ -1312,14 +1397,25 @@ function TrunkCard({
             >
               Unregister
             </Button>
-            <Button
-              size="sm"
-              variant="destructive"
-              className="h-6 px-2 text-[10px]"
-              onClick={() => onDelete(trunk)}
-            >
-              Delete
-            </Button>
+            {trunk.enabled ? (
+              <Button
+                size="sm"
+                variant="destructive"
+                className="h-6 px-2 text-[10px]"
+                onClick={() => onSoftDelete(trunk)}
+              >
+                {getTrunkLifecycleActionLabel(trunk.enabled)}
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                variant="default"
+                className="h-6 px-2 text-[10px]"
+                onClick={() => onRestore(trunk)}
+              >
+                {getTrunkLifecycleActionLabel(trunk.enabled)}
+              </Button>
+            )}
           </div>
         </div>
       </CardContent>

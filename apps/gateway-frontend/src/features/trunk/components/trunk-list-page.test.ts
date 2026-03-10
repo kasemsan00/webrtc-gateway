@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
-import { isRegisterActionDisabled } from './trunk-list-page'
+import {
+  getTrunkLifecycleActionLabel,
+  getTrunkStatusLabel,
+  isRegisterActionDisabled,
+} from './trunk-list-page'
 import type { Trunk } from '@/features/trunk/types'
 
 function makeTrunk(overrides?: Partial<Trunk>): Trunk {
@@ -43,5 +47,23 @@ describe('isRegisterActionDisabled', () => {
         makeTrunk({ enabled: true, isRegistered: false }),
       ),
     ).toBe(false)
+  })
+})
+
+describe('trunk soft-delete labels', () => {
+  it('returns Enabled status when trunk is enabled', () => {
+    expect(getTrunkStatusLabel(true)).toBe('Enabled')
+  })
+
+  it('returns Deleted status when trunk is disabled', () => {
+    expect(getTrunkStatusLabel(false)).toBe('Deleted')
+  })
+
+  it('returns Disable action when trunk is enabled', () => {
+    expect(getTrunkLifecycleActionLabel(true)).toBe('Disable')
+  })
+
+  it('returns Restore action when trunk is disabled', () => {
+    expect(getTrunkLifecycleActionLabel(false)).toBe('Restore')
   })
 })

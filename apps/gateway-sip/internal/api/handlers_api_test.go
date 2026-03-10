@@ -35,9 +35,6 @@ type apiHandlerTrunkManagerStub struct {
 	updateErr     error
 	updatePatch   sip.TrunkUpdatePatch
 	updateTrunkID int64
-	deleteErr     error
-	deleteTrunkID int64
-	deleteForce   bool
 	registerErr   error
 	registerID    int64
 	registerForce bool
@@ -104,12 +101,6 @@ func (s *apiHandlerTrunkManagerStub) UnregisterTrunk(trunkID int64, force bool) 
 	s.unregisterID = trunkID
 	s.unregisterFor = force
 	return s.unregisterErr
-}
-
-func (s *apiHandlerTrunkManagerStub) DeleteTrunk(trunkID int64, force bool) error {
-	s.deleteTrunkID = trunkID
-	s.deleteForce = force
-	return s.deleteErr
 }
 
 func (s *apiHandlerTrunkManagerStub) ListTrunks(_ context.Context, params sip.TrunkListParams) (*sip.TrunkListResult, error) {
@@ -410,7 +401,7 @@ func TestHandleListTrunks_NegativePaths(t *testing.T) {
 	assertJSONError(t, rr, http.StatusInternalServerError, "Failed to list trunks")
 }
 
-func TestHandleUpdateAndDeleteTrunk(t *testing.T) {
+func TestHandleUpdateTrunk(t *testing.T) {
 	trunk := makeTestTrunk(7, "33333333-3333-4333-8333-333333333333")
 	tm := &apiHandlerTrunkManagerStub{
 		byID:         map[int64]*sip.Trunk{7: trunk},
@@ -431,15 +422,6 @@ func TestHandleUpdateAndDeleteTrunk(t *testing.T) {
 	}
 	if tm.updatePatch.Password != nil {
 		t.Fatalf("expected empty password to be treated as nil patch")
-	}
-
-	rr = doRequest(t, srv.handleDeleteTrunk, http.MethodDelete, "/trunks/7", "", map[string]string{"id": "7"})
-	out := assertJSONDecode[map[string]interface{}](t, rr, http.StatusOK)
-	if out["status"] != "deleted" {
-		t.Fatalf("unexpected delete response: %+v", out)
-	}
-	if tm.deleteTrunkID != 7 || !tm.deleteForce {
-		t.Fatalf("delete call mismatch id=%d force=%v", tm.deleteTrunkID, tm.deleteForce)
 	}
 }
 
@@ -464,17 +446,6 @@ func TestHandleUpdateTrunk_NegativePaths(t *testing.T) {
 	tm.updateErr = fmt.Errorf("%w: missing", sip.ErrTrunkNotFound)
 	rr = doRequest(t, srv.handleUpdateTrunk, http.MethodPatch, "/trunks/9", `{"name":"x"}`, map[string]string{"id": "9"})
 	assertJSONError(t, rr, http.StatusNotFound, "trunk not found")
-}
-
-func TestHandleDeleteTrunk_NegativePaths(t *testing.T) {
-	tm := &apiHandlerTrunkManagerStub{}
-	srv, _ := newAPIHandlerTestServer(t, tm, nil, nil)
-	rr := doRequest(t, srv.handleDeleteTrunk, http.MethodDelete, "/trunks/x", "", map[string]string{"id": "x"})
-	assertJSONError(t, rr, http.StatusBadRequest, "Invalid trunk ID")
-
-	tm.deleteErr = errors.New("failed")
-	rr = doRequest(t, srv.handleDeleteTrunk, http.MethodDelete, "/trunks/99", "", map[string]string{"id": "99"})
-	assertJSONError(t, rr, http.StatusInternalServerError, "Failed to delete trunk")
 }
 
 func TestHandleSessionHandlers(t *testing.T) {
