@@ -389,7 +389,9 @@ function mapDeviceOptions(
   kind: 'audioinput' | 'videoinput',
   fallbackLabelPrefix: string,
 ): Array<MediaInputDeviceOption> {
-  const filtered = devices.filter((device) => device.kind === kind)
+  const filtered = devices.filter(
+    (device) => device.kind === kind && device.deviceId.trim().length > 0,
+  )
   return filtered.map((device, index) => ({
     deviceId: device.deviceId,
     label: device.label.trim() || `${fallbackLabelPrefix} ${index + 1}`,
