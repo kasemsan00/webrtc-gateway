@@ -58,33 +58,57 @@ func (s *Session) SendPLIToAsteriskForced(trigger string) {
 
 // SendBrowserRecoveryToAsterisk handles browser-originated video recovery feedback.
 // It escalates to FIR quickly when keyframes are stale, otherwise sends forced PLI.
-func (s *Session) SendBrowserRecoveryToAsterisk(trigger string) {
+// Returns action: "none" | "pli" | "fir" | "both".
+func (s *Session) SendBrowserRecoveryToAsterisk(trigger string) string {
 	now := time.Now()
 
-	s.mu.RLock()
+	s.mu.Lock()
 	lastKeyframe := s.LastKeyframe
 	lastFIRReq := s.LastSipFIRSent
-	s.mu.RUnlock()
+	_, pliStale, firStale, burstActive := s.getVideoRecoveryPolicy(now, browserFIRInterval, browserPLIStale, browserFIRStale)
+	s.mu.Unlock()
+
+	keyframeAge := time.Duration(-1)
+	if !lastKeyframe.IsZero() {
+		keyframeAge = now.Sub(lastKeyframe)
+	}
+
+	shouldSendFIR := false
+	if !lastKeyframe.IsZero() {
+		age := now.Sub(lastKeyframe)
+		if age >= firStale {
+			shouldSendFIR = true
+		}
+	} else if burstActive {
+		shouldSendFIR = true
+	}
+
+	if shouldSendFIR && (lastFIRReq.IsZero() || now.Sub(lastFIRReq) >= browserFIRInterval) {
+		if trigger == "ws-request_keyframe" {
+			s.SendFIRToAsterisk()
+			s.SendPLIToAsteriskForced(trigger)
+			fmt.Printf("[%s] 📈 request_keyframe_handled action=both burst=%v keyframeAge=%s\n", s.ID, burstActive, keyframeAge)
+			return "both"
+		}
+		s.SendFIRToAsterisk()
+		return "fir"
+	}
 
 	if !lastKeyframe.IsZero() {
 		age := now.Sub(lastKeyframe)
-		if age < browserPLIStale {
-			return
-		}
-		if age >= browserFIRStale {
-			if lastFIRReq.IsZero() || now.Sub(lastFIRReq) >= browserFIRInterval {
-				s.SendFIRToAsterisk()
-				return
+		if age < pliStale {
+			if trigger == "ws-request_keyframe" {
+				fmt.Printf("[%s] 📈 request_keyframe_handled action=none burst=%v keyframeAge=%s\n", s.ID, burstActive, age)
 			}
-		}
-	} else {
-		if lastFIRReq.IsZero() || now.Sub(lastFIRReq) >= browserFIRInterval {
-			s.SendFIRToAsterisk()
-			return
+			return "none"
 		}
 	}
 
 	s.SendPLIToAsteriskForced(trigger)
+	if trigger == "ws-request_keyframe" {
+		fmt.Printf("[%s] 📈 request_keyframe_handled action=pli burst=%v keyframeAge=%s\n", s.ID, burstActive, keyframeAge)
+	}
+	return "pli"
 }
 
 func (s *Session) sendPLIToAsterisk(force bool, trigger string) {

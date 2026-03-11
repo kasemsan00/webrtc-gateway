@@ -354,6 +354,7 @@ func (s *Session) RenegotiatePeerConnection(newOfferSDP string, turnConfig confi
 
 			fmt.Printf("[%s] ✅ Renegotiated connection established\n", id)
 			s.SetState(StateActive)
+			s.StartVideoRecoveryBurst("renegotiated-ice-connected")
 			// Send FIR first (to request SPS/PPS + IDR), then PLI burst for fast video start
 			go func() {
 				fmt.Printf("[%s] 🚀 Renegotiated - Sending FIR + PLI requests for fast video start (with SPS/PPS)\n", id)

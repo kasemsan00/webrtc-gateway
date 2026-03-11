@@ -414,17 +414,30 @@ func (s *Session) GetAudioTimestamp() uint32 {
 
 // RecordKeyframe records a keyframe reception and returns (isPLIResponse, responseTime, pliSent, pliResponse)
 func (s *Session) RecordKeyframe() (bool, time.Duration, int, int) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	now := time.Now()
+	var shouldStopRecoveryBurst bool
+	var responseTime time.Duration
+	var pliSent int
+	var pliResponse int
 
-	s.LastKeyframe = time.Now()
-	isPLIResponse := time.Since(s.LastPLISent) < 2*time.Second && s.PLISent > 0
+	s.mu.Lock()
+	s.LastKeyframe = now
+	isPLIResponse := now.Sub(s.LastPLISent) < 2*time.Second && s.PLISent > 0
 
 	if isPLIResponse {
 		s.PLIResponse++
 	}
+	responseTime = now.Sub(s.LastPLISent)
+	pliSent = s.PLISent
+	pliResponse = s.PLIResponse
+	shouldStopRecoveryBurst = !s.VideoRecoveryBurstUntil.IsZero() && now.Before(s.VideoRecoveryBurstUntil)
+	s.mu.Unlock()
 
-	return isPLIResponse, time.Since(s.LastPLISent), s.PLISent, s.PLIResponse
+	if shouldStopRecoveryBurst {
+		s.StopVideoRecoveryBurstIfActive("keyframe_recovered")
+	}
+
+	return isPLIResponse, responseTime, pliSent, pliResponse
 }
 
 // GetKeyframeTimes returns last keyframe and last PLI/FIR send time (thread-safe)

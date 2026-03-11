@@ -70,6 +70,12 @@ type SIPConfig struct {
 	VideoKeyframeWatchdogIntervalMS int  // Check interval in ms (default: 1000)
 	VideoKeyframeStaleMS            int  // Stale threshold for PLI (default: 1500)
 	VideoKeyframeFIRStaleMS         int  // Stale threshold for FIR (default: 3000)
+	// Dynamic post-reconnect recovery burst policy (temporary aggressive window)
+	VideoRecoveryBurstEnabled    bool // Enable dynamic burst recovery policy (default: true)
+	VideoRecoveryBurstWindowMS   int  // Burst window duration in ms (default: 12000)
+	VideoRecoveryBurstIntervalMS int  // Burst watchdog interval in ms (default: 800)
+	VideoRecoveryBurstStaleMS    int  // Burst stale threshold for PLI in ms (default: 1200)
+	VideoRecoveryBurstFIRStaleMS int  // Burst stale threshold for FIR in ms (default: 2500)
 }
 
 // DBConfig holds PostgreSQL database configuration
@@ -153,6 +159,11 @@ func Load() (*Config, error) {
 			VideoKeyframeWatchdogIntervalMS: getEnvAsInt("SIP_VIDEO_KEYFRAME_WATCHDOG_INTERVAL_MS", 3000),
 			VideoKeyframeStaleMS:            getEnvAsInt("SIP_VIDEO_KEYFRAME_STALE_MS", 5000),
 			VideoKeyframeFIRStaleMS:         getEnvAsInt("SIP_VIDEO_KEYFRAME_FIR_STALE_MS", 10000),
+			VideoRecoveryBurstEnabled:       getEnvAsBool("SIP_VIDEO_RECOVERY_BURST_ENABLED", true),
+			VideoRecoveryBurstWindowMS:      getEnvAsInt("SIP_VIDEO_RECOVERY_BURST_WINDOW_MS", 12000),
+			VideoRecoveryBurstIntervalMS:    getEnvAsInt("SIP_VIDEO_RECOVERY_BURST_INTERVAL_MS", 800),
+			VideoRecoveryBurstStaleMS:       getEnvAsInt("SIP_VIDEO_RECOVERY_BURST_STALE_MS", 1200),
+			VideoRecoveryBurstFIRStaleMS:    getEnvAsInt("SIP_VIDEO_RECOVERY_BURST_FIR_STALE_MS", 2500),
 		},
 		API: APIConfig{
 			Port:           apiPort,
@@ -248,6 +259,13 @@ func (c *Config) Display() {
 		c.SIP.VideoKeyframeWatchdogIntervalMS,
 		c.SIP.VideoKeyframeStaleMS,
 		c.SIP.VideoKeyframeFIRStaleMS,
+	)
+	fmt.Printf("  Video Recovery Burst: %v (window=%dms, interval=%dms, stale=%dms, firStale=%dms)\n",
+		c.SIP.VideoRecoveryBurstEnabled,
+		c.SIP.VideoRecoveryBurstWindowMS,
+		c.SIP.VideoRecoveryBurstIntervalMS,
+		c.SIP.VideoRecoveryBurstStaleMS,
+		c.SIP.VideoRecoveryBurstFIRStaleMS,
 	)
 
 	// Display API Configuration

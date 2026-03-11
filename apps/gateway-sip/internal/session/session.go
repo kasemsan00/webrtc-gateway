@@ -72,16 +72,24 @@ type Session struct {
 	ICEUfrag string `json:"-"`
 	ICEPwd   string `json:"-"`
 	// Asterisk RTP endpoints for forwarding WebRTC → Asterisk
-	AsteriskAudioAddr      *net.UDPAddr `json:"-"`
-	AsteriskVideoAddr      *net.UDPAddr `json:"-"`
-	AsteriskVideoRTCPAddr  *net.UDPAddr `json:"-"`
-	VideoRTCPLearnedAt     time.Time    `json:"-"`
-	VideoRTCPSource        string       `json:"-"`
-	VideoRTCPFallbackUntil time.Time    `json:"-"`
-	SymmetricRTPTrustUntil time.Time    `json:"-"`
-	PLIBurstUntil          time.Time    `json:"-"`
-	LastSipPLISent         time.Time    `json:"-"`
-	LastSipFIRSent         time.Time    `json:"-"`
+	AsteriskAudioAddr            *net.UDPAddr  `json:"-"`
+	AsteriskVideoAddr            *net.UDPAddr  `json:"-"`
+	AsteriskVideoRTCPAddr        *net.UDPAddr  `json:"-"`
+	VideoRTCPLearnedAt           time.Time     `json:"-"`
+	VideoRTCPSource              string        `json:"-"`
+	VideoRTCPFallbackUntil       time.Time     `json:"-"`
+	SymmetricRTPTrustUntil       time.Time     `json:"-"`
+	PLIBurstUntil                time.Time     `json:"-"`
+	LastSipPLISent               time.Time     `json:"-"`
+	LastSipFIRSent               time.Time     `json:"-"`
+	VideoRecoveryBurstEnabled    bool          `json:"-"`
+	VideoRecoveryBurstWindow     time.Duration `json:"-"`
+	VideoRecoveryBurstInterval   time.Duration `json:"-"`
+	VideoRecoveryBurstStale      time.Duration `json:"-"`
+	VideoRecoveryBurstFIRStale   time.Duration `json:"-"`
+	VideoRecoveryBurstUntil      time.Time     `json:"-"`
+	VideoRecoveryBurstStartedAt  time.Time     `json:"-"`
+	VideoRecoveryBurstLastReason string        `json:"-"`
 	// RTP State for re-packetization
 	AudioSeq        uint16 `json:"-"`
 	AudioSSRC       uint32 `json:"-"`
@@ -248,6 +256,23 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 	}
 
 	// Create session with both audio and video tracks
+	burstWindow := time.Duration(cfg.SIP.VideoRecoveryBurstWindowMS) * time.Millisecond
+	if burstWindow <= 0 {
+		burstWindow = 12 * time.Second
+	}
+	burstInterval := time.Duration(cfg.SIP.VideoRecoveryBurstIntervalMS) * time.Millisecond
+	if burstInterval <= 0 {
+		burstInterval = 800 * time.Millisecond
+	}
+	burstStale := time.Duration(cfg.SIP.VideoRecoveryBurstStaleMS) * time.Millisecond
+	if burstStale <= 0 {
+		burstStale = 1200 * time.Millisecond
+	}
+	burstFIRStale := time.Duration(cfg.SIP.VideoRecoveryBurstFIRStaleMS) * time.Millisecond
+	if burstFIRStale <= 0 {
+		burstFIRStale = 2500 * time.Millisecond
+	}
+
 	session := &Session{
 		ID:                          id,
 		PeerConnection:              peerConnection,
@@ -261,6 +286,11 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 		VideoRTCPSource:             "unknown",
 		SymmetricRTPTrustUntil:      time.Now().Add(symmetricRTPTrustWindow),
 		PreserveSTAPA:               cfg.SIP.VideoPreserveSTAPA, // Phase 2: preserve STAP-A if enabled
+		VideoRecoveryBurstEnabled:   cfg.SIP.VideoRecoveryBurstEnabled,
+		VideoRecoveryBurstWindow:    burstWindow,
+		VideoRecoveryBurstInterval:  burstInterval,
+		VideoRecoveryBurstStale:     burstStale,
+		VideoRecoveryBurstFIRStale:  burstFIRStale,
 	}
 	session.initVideoRTPHistory()
 
@@ -356,6 +386,7 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 
 		session.mu.Lock()
 		session.UpdatedAt = time.Now()
+		startRecoveryBurstReason := ""
 
 		switch connectionState {
 		case webrtc.ICEConnectionStateConnected:
@@ -414,6 +445,7 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 				session.State = StateActive
 				if wasReconnecting {
 					fmt.Printf("[%s] ✅ ICE reconnected - resuming call\n", id)
+					startRecoveryBurstReason = "ice-reconnected"
 				}
 			}
 			// Send FIR first (to request SPS/PPS + IDR), then PLI burst for fast video start
@@ -440,6 +472,7 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 			if session.State != StateReconnecting {
 				session.State = StateReconnecting
 				fmt.Printf("[%s] 📡 ICE %s - entering reconnection grace period (%s)\n", id, connectionState.String(), reconnectGracePeriod)
+				startRecoveryBurstReason = "ice-reconnecting"
 
 				go func() {
 					time.Sleep(reconnectGracePeriod)
@@ -491,6 +524,9 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 			}
 		}
 		session.mu.Unlock()
+		if startRecoveryBurstReason != "" {
+			session.StartVideoRecoveryBurst(startRecoveryBurstReason)
+		}
 	})
 
 	// Set OnTrack handler to forward WebRTC RTP → Asterisk

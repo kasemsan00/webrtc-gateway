@@ -704,25 +704,24 @@ func (s *Server) startKeyframeWatchdogForSession(sess *session.Session) {
 		return
 	}
 
-	interval := time.Duration(s.config.VideoKeyframeWatchdogIntervalMS) * time.Millisecond
-	if interval < 200*time.Millisecond {
-		interval = 200 * time.Millisecond
+	baseInterval := time.Duration(s.config.VideoKeyframeWatchdogIntervalMS) * time.Millisecond
+	if baseInterval < 200*time.Millisecond {
+		baseInterval = 200 * time.Millisecond
 	}
 
-	stale := time.Duration(s.config.VideoKeyframeStaleMS) * time.Millisecond
-	if stale < 1000*time.Millisecond {
-		stale = 1000 * time.Millisecond
+	baseStale := time.Duration(s.config.VideoKeyframeStaleMS) * time.Millisecond
+	if baseStale < 1000*time.Millisecond {
+		baseStale = 1000 * time.Millisecond
 	}
 
-	firStale := time.Duration(s.config.VideoKeyframeFIRStaleMS) * time.Millisecond
-	if firStale < stale {
-		firStale = stale
+	baseFirStale := time.Duration(s.config.VideoKeyframeFIRStaleMS) * time.Millisecond
+	if baseFirStale < baseStale {
+		baseFirStale = baseStale
 	}
 
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	for range ticker.C {
+	for {
+		interval, stale, firStale, burstActive := sess.GetVideoRecoveryPolicy(baseInterval, baseStale, baseFirStale)
+		time.Sleep(interval)
 		if sess.GetState() == session.StateEnded {
 			return
 		}
@@ -761,8 +760,13 @@ func (s *Server) startKeyframeWatchdogForSession(sess *session.Session) {
 			continue
 		}
 
-		fmt.Printf("[%s] ⚠️ Keyframe stale for %v (>= %v) - sending PLI to SIP\n",
-			sess.ID, keyframeAge, stale)
+		if burstActive {
+			fmt.Printf("[%s] ⚠️ (burst) Keyframe stale for %v (>= %v) - sending PLI to SIP\n",
+				sess.ID, keyframeAge, stale)
+		} else {
+			fmt.Printf("[%s] ⚠️ Keyframe stale for %v (>= %v) - sending PLI to SIP\n",
+				sess.ID, keyframeAge, stale)
+		}
 		sess.SendPLIToAsterisk()
 	}
 }

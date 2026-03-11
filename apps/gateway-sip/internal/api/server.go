@@ -1239,7 +1239,8 @@ func (s *Server) handleWSRequestKeyframe(client *WSClient, msg WSMessage) {
 		log.Printf("📸 Keyframe request received: session=%s", sessionID)
 	}
 
-	sess.SendBrowserRecoveryToAsterisk("ws-request_keyframe")
+	action := sess.SendBrowserRecoveryToAsterisk("ws-request_keyframe")
+	log.Printf("📈 request_keyframe_handled session=%s action=%s", sessionID, action)
 }
 
 // handleWSSendMessage handles WebSocket send_message requests
@@ -1482,6 +1483,7 @@ func (s *Server) handleWSResume(client *WSClient, msg WSMessage) {
 		finalState = session.StateActive
 		log.Printf("✅ Session %s transitioned from reconnecting to active", msg.SessionID)
 	}
+	sess.StartVideoRecoveryBurst("ws-resume-success")
 	direction, _, _, _ := sess.GetCallInfo()
 	log.Printf("📊 Resume total elapsed: session=%s elapsed=%s", msg.SessionID, time.Since(resumeStartedAt).Round(10*time.Millisecond))
 	log.Printf("✅ Session %s resumed successfully (state: %s, direction: %s, wasReconnecting: %v, hasSDP: %v)", msg.SessionID, finalState, direction, wasReconnecting, answerSDP != "")
