@@ -3,7 +3,9 @@ import { describe, expect, it, vi } from 'vitest'
 import { extractAuthUser, initializeKeycloakRuntime } from './keycloak-runtime'
 import type { KeycloakClientLike } from './keycloak-runtime'
 
-function makeClient(overrides?: Partial<KeycloakClientLike>): KeycloakClientLike {
+function makeClient(
+  overrides?: Partial<KeycloakClientLike>,
+): KeycloakClientLike {
   return {
     authenticated: true,
     token: 'token-1',

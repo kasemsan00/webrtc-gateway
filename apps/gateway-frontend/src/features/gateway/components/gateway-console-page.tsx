@@ -2,6 +2,8 @@ import { useStore } from '@tanstack/react-store'
 import {
   RiArrowDownSLine,
   RiArrowRightSLine,
+  RiFullscreenExitLine,
+  RiFullscreenLine,
   RiMicLine,
   RiMicOffLine,
   RiMoonLine,
@@ -21,6 +23,13 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import Header from '@/components/Header'
 import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { useTheme } from '@/lib/theme'
 import {
@@ -153,16 +162,22 @@ export function GatewayConsolePage() {
   const remoteVideoRef = useRef<HTMLVideoElement>(null)
   const remoteAudioRef = useRef<HTMLAudioElement>(null)
   const acceptBtnRef = useRef<HTMLButtonElement>(null)
+  const remotePanelRef = useRef<HTMLElement>(null)
 
   const callEnabled = useMemo(() => canPlaceCall(state), [state])
   const trunkResolveEnabled = useMemo(() => canResolveTrunk(state), [state])
   const inCall = useMemo(() => isCallInProgress(state), [state])
+  const [isRemoteFullscreen, setIsRemoteFullscreen] = useState(false)
 
   const logsRef = useAutoScroll(state.logs)
   const msgsRef = useAutoScroll(state.messages)
 
   const hasRemoteVideo = Boolean(state.media.remoteVideoStream)
   const hasLocalVideo = Boolean(state.media.localStream)
+
+  const selectedCameraValue =
+    state.controls.selectedVideoInputId || '__default__'
+  const selectedMicValue = state.controls.selectedAudioInputId || '__default__'
 
   // Init store
   useEffect(() => {
@@ -211,6 +226,35 @@ export function GatewayConsolePage() {
     document.addEventListener('keydown', h)
     return () => document.removeEventListener('keydown', h)
   }, [state.incomingCall])
+
+  useEffect(() => {
+    const onFullscreenChange = () => {
+      const panel = remotePanelRef.current
+      setIsRemoteFullscreen(
+        Boolean(panel && document.fullscreenElement === panel),
+      )
+    }
+
+    document.addEventListener('fullscreenchange', onFullscreenChange)
+    return () => {
+      document.removeEventListener('fullscreenchange', onFullscreenChange)
+    }
+  }, [])
+
+  const handleToggleRemoteFullscreen = useCallback(async () => {
+    const panel = remotePanelRef.current
+    if (!panel || !document.fullscreenEnabled) return
+
+    try {
+      if (document.fullscreenElement === panel) {
+        await document.exitFullscreen()
+      } else {
+        await panel.requestFullscreen()
+      }
+    } catch {
+      // Ignore fullscreen failures caused by browser restrictions.
+    }
+  }, [])
 
   const handleSendMessage = useCallback(() => {
     if (gatewayActions.sendSIPMessage(messageBody)) setMessageBody('')
@@ -350,6 +394,74 @@ export function GatewayConsolePage() {
                 >
                   {state.media.status === 'active' ? 'End' : 'Start'}
                 </Button>
+              </div>
+              <div className="grid grid-cols-1 gap-1.5">
+                <Field label="Camera" id="camera-input-select">
+                  <Select
+                    value={selectedCameraValue}
+                    onValueChange={(value) => {
+                      void gatewayActions.setSelectedVideoInput(value)
+                    }}
+                    disabled={
+                      state.controls.mediaInputsLoading ||
+                      state.controls.switchingVideoInput
+                    }
+                  >
+                    <SelectTrigger
+                      id="camera-input-select"
+                      className="h-7 w-full px-2 text-xs"
+                      size="sm"
+                    >
+                      <SelectValue placeholder="Default camera" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__default__">
+                        Default camera
+                      </SelectItem>
+                      {state.controls.availableVideoInputs.map((device) => (
+                        <SelectItem
+                          key={device.deviceId}
+                          value={device.deviceId}
+                        >
+                          {device.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Field label="Microphone" id="microphone-input-select">
+                  <Select
+                    value={selectedMicValue}
+                    onValueChange={(value) => {
+                      void gatewayActions.setSelectedAudioInput(value)
+                    }}
+                    disabled={
+                      state.controls.mediaInputsLoading ||
+                      state.controls.switchingAudioInput
+                    }
+                  >
+                    <SelectTrigger
+                      id="microphone-input-select"
+                      className="h-7 w-full px-2 text-xs"
+                      size="sm"
+                    >
+                      <SelectValue placeholder="Default microphone" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__default__">
+                        Default microphone
+                      </SelectItem>
+                      {state.controls.availableAudioInputs.map((device) => (
+                        <SelectItem
+                          key={device.deviceId}
+                          value={device.deviceId}
+                        >
+                          {device.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </Field>
               </div>
             </CardContent>
           </Card>
@@ -721,7 +833,10 @@ export function GatewayConsolePage() {
         </aside>
 
         {/* ---- CENTER: Video ---- */}
-        <main className="relative flex min-h-0 min-w-0 flex-col overflow-hidden bg-black">
+        <main
+          ref={remotePanelRef}
+          className="relative flex min-h-0 min-w-0 flex-col overflow-hidden bg-black"
+        >
           <video
             ref={remoteVideoRef}
             autoPlay
@@ -774,64 +889,140 @@ export function GatewayConsolePage() {
           )}
 
           {/* Floating controls */}
-          <div className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full px-3 py-1.5 backdrop-blur">
-            <Button
-              size="icon"
-              className="size-12"
-              variant={state.controls.isMutedAudio ? 'destructive' : 'outline'}
-              onClick={gatewayActions.toggleMuteAudio}
-              aria-label={
-                state.controls.isMutedAudio ? 'Unmute mic' : 'Mute mic'
-              }
-              aria-pressed={state.controls.isMutedAudio}
-            >
-              {state.controls.isMutedAudio ? (
-                <RiMicOffLine className="size-5" />
-              ) : (
-                <RiMicLine className="size-5" />
-              )}
-            </Button>
-            <Button
-              size="icon"
-              className="size-12"
-              variant={state.controls.isMutedVideo ? 'destructive' : 'outline'}
-              onClick={gatewayActions.toggleMuteVideo}
-              aria-label={
-                state.controls.isMutedVideo
-                  ? 'Turn on camera'
-                  : 'Turn off camera'
-              }
-              aria-pressed={state.controls.isMutedVideo}
-            >
-              {state.controls.isMutedVideo ? (
-                <RiVideoOffLine className="size-5" />
-              ) : (
-                <RiVideoOnLine className="size-5" />
-              )}
-            </Button>
-            <Button
-              size="icon"
-              className="size-12"
-              variant="destructive"
-              onClick={gatewayActions.hangup}
-              disabled={!inCall}
-              aria-label="Hang up"
-            >
-              <RiShutDownLine className="size-5" />
-            </Button>
-            <Button
-              size="icon"
-              className="size-12"
-              variant={state.controls.statsOpen ? 'default' : 'outline'}
-              onClick={gatewayActions.toggleStats}
-              aria-label={
-                state.controls.statsOpen ? 'Hide stats' : 'Show stats'
-              }
-              aria-pressed={state.controls.statsOpen}
-            >
-              <RiSignalWifiLine className="size-5" />
-            </Button>
+          <div className="absolute bottom-3 left-1/2 flex -translate-x-1/2 flex-col items-center gap-1.5">
+            <div className="flex items-center gap-1.5 rounded-full px-3 py-1.5 backdrop-blur">
+              <Button
+                size="icon"
+                className="size-12"
+                variant={
+                  state.controls.isMutedAudio ? 'destructive' : 'outline'
+                }
+                onClick={gatewayActions.toggleMuteAudio}
+                aria-label={
+                  state.controls.isMutedAudio ? 'Unmute mic' : 'Mute mic'
+                }
+                aria-pressed={state.controls.isMutedAudio}
+              >
+                {state.controls.isMutedAudio ? (
+                  <RiMicOffLine className="size-5" />
+                ) : (
+                  <RiMicLine className="size-5" />
+                )}
+              </Button>
+              <Button
+                size="icon"
+                className="size-12"
+                variant={
+                  state.controls.isMutedVideo ? 'destructive' : 'outline'
+                }
+                onClick={gatewayActions.toggleMuteVideo}
+                aria-label={
+                  state.controls.isMutedVideo
+                    ? 'Turn on camera'
+                    : 'Turn off camera'
+                }
+                aria-pressed={state.controls.isMutedVideo}
+              >
+                {state.controls.isMutedVideo ? (
+                  <RiVideoOffLine className="size-5" />
+                ) : (
+                  <RiVideoOnLine className="size-5" />
+                )}
+              </Button>
+              <Button
+                size="icon"
+                className="size-12"
+                variant="destructive"
+                onClick={gatewayActions.hangup}
+                disabled={!inCall}
+                aria-label="Hang up"
+              >
+                <RiShutDownLine className="size-5" />
+              </Button>
+              <Button
+                size="icon"
+                className="size-12"
+                variant={state.controls.statsOpen ? 'default' : 'outline'}
+                onClick={gatewayActions.toggleStats}
+                aria-label={
+                  state.controls.statsOpen ? 'Hide stats' : 'Show stats'
+                }
+                aria-pressed={state.controls.statsOpen}
+              >
+                <RiSignalWifiLine className="size-5" />
+              </Button>
+            </div>
+            {state.media.status === 'active' ? (
+              <div className="flex items-center gap-1.5 rounded-full bg-black/50 px-2 py-1 backdrop-blur">
+                <Select
+                  value={selectedCameraValue}
+                  onValueChange={(value) => {
+                    void gatewayActions.setSelectedVideoInput(value)
+                  }}
+                  disabled={state.controls.switchingVideoInput}
+                >
+                  <SelectTrigger
+                    className="h-8 w-44 bg-black/30 px-2 text-xs"
+                    size="sm"
+                  >
+                    <SelectValue placeholder="Camera" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__default__">Default camera</SelectItem>
+                    {state.controls.availableVideoInputs.map((device) => (
+                      <SelectItem key={device.deviceId} value={device.deviceId}>
+                        {device.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Select
+                  value={selectedMicValue}
+                  onValueChange={(value) => {
+                    void gatewayActions.setSelectedAudioInput(value)
+                  }}
+                  disabled={state.controls.switchingAudioInput}
+                >
+                  <SelectTrigger
+                    className="h-8 w-44 bg-black/30 px-2 text-xs"
+                    size="sm"
+                  >
+                    <SelectValue placeholder="Microphone" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__default__">
+                      Default microphone
+                    </SelectItem>
+                    {state.controls.availableAudioInputs.map((device) => (
+                      <SelectItem key={device.deviceId} value={device.deviceId}>
+                        {device.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            ) : null}
           </div>
+
+          <Button
+            size="icon"
+            className="absolute right-3 top-3 z-20 size-9 rounded-full border-white/20 bg-black/50 text-white hover:bg-black/70"
+            variant="outline"
+            onClick={() => {
+              void handleToggleRemoteFullscreen()
+            }}
+            disabled={!document.fullscreenEnabled}
+            aria-label={
+              isRemoteFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'
+            }
+            aria-pressed={isRemoteFullscreen}
+          >
+            {isRemoteFullscreen ? (
+              <RiFullscreenExitLine className="size-4" />
+            ) : (
+              <RiFullscreenLine className="size-4" />
+            )}
+          </Button>
 
           {state.controls.statsOpen ? (
             <div className="absolute left-3 top-3 rounded-md border border-white/10 bg-black/70 p-2 font-mono text-[11px] text-gray-300 backdrop-blur">

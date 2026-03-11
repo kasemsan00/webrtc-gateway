@@ -111,6 +111,11 @@ export interface StatsState {
   resolution: string
 }
 
+export interface MediaInputDeviceOption {
+  deviceId: string
+  label: string
+}
+
 export interface PendingCallRequest {
   destination: string
   sipDomain?: string
@@ -162,6 +167,13 @@ export interface GatewayState {
     isMutedAudio: boolean
     isMutedVideo: boolean
     autoStartingSession: boolean
+    selectedVideoInputId: string
+    selectedAudioInputId: string
+    availableVideoInputs: Array<MediaInputDeviceOption>
+    availableAudioInputs: Array<MediaInputDeviceOption>
+    mediaInputsLoading: boolean
+    switchingVideoInput: boolean
+    switchingAudioInput: boolean
   }
   stats: StatsState
   rtt: {

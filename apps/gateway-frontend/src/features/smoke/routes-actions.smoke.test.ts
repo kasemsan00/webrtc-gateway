@@ -21,12 +21,10 @@ describe('gateway smoke route and action contracts', () => {
   })
 
   it('keeps trunks and sessions API action wiring', async () => {
-    const { fetchTrunks, refreshTrunks } = await import(
-      '@/features/trunk/services/trunk-api'
-    )
-    const { fetchSessionHistory } = await import(
-      '@/features/session-history/services/session-history-api'
-    )
+    const { fetchTrunks, refreshTrunks } =
+      await import('@/features/trunk/services/trunk-api')
+    const { fetchSessionHistory } =
+      await import('@/features/session-history/services/session-history-api')
 
     fetchJsonMock.mockResolvedValueOnce({
       items: [],

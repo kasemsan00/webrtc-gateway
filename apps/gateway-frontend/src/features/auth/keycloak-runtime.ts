@@ -86,7 +86,9 @@ export async function initializeKeycloakRuntime({
       emitState()
     } catch (error) {
       if (stopped) return
-      onError(error instanceof Error ? error : new Error('Token refresh failed'))
+      onError(
+        error instanceof Error ? error : new Error('Token refresh failed'),
+      )
       await client.login()
     }
   }

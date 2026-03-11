@@ -29,6 +29,7 @@ import type {
   GatewayState,
   LogEntry,
   LogType,
+  MediaInputDeviceOption,
   MessageEntry,
   PendingCallRequest,
   PublicCredentials,
@@ -130,6 +131,13 @@ const initialState: GatewayState = {
     isMutedAudio: false,
     isMutedVideo: false,
     autoStartingSession: false,
+    selectedVideoInputId: '',
+    selectedAudioInputId: '',
+    availableVideoInputs: [],
+    availableAudioInputs: [],
+    mediaInputsLoading: false,
+    switchingVideoInput: false,
+    switchingAudioInput: false,
   },
   stats: {
     rttMs: '-',
@@ -193,6 +201,7 @@ const runtime = {
   outgoingRttLastSentText: '',
   outgoingRttTimer: null as ReturnType<typeof setTimeout> | null,
   outgoingRttPendingText: '',
+  mediaDeviceChangeHandler: null as (() => void) | null,
 }
 
 function randomId() {
@@ -315,6 +324,8 @@ interface PersistedGatewayPrefs {
   publicCredentials: PublicCredentials
   trunkCredentials: TrunkCredentials
   vrsConfig?: VrsConfig
+  selectedVideoInputId?: string
+  selectedAudioInputId?: string
 }
 
 const PERSIST_KEY = 'k2_gateway_prefs'
@@ -344,6 +355,74 @@ function parseTrunkIdentifier(
   return null
 }
 
+function selectedDeviceConstraint(deviceId: string) {
+  const trimmed = deviceId.trim()
+  if (!trimmed) return undefined
+  return { exact: trimmed }
+}
+
+function buildVideoConstraint(deviceId: string): MediaTrackConstraints {
+  const constraint: MediaTrackConstraints = {
+    width: { ideal: runtime.videoConfig.width },
+    height: { ideal: runtime.videoConfig.height },
+    frameRate: { max: runtime.videoConfig.maxFramerate },
+  }
+  const selected = selectedDeviceConstraint(deviceId)
+  if (selected) {
+    constraint.deviceId = selected
+  }
+  return constraint
+}
+
+function buildPreferredGetUserMediaConstraints() {
+  const controls = gatewayStore.state.controls
+  const selectedAudio = selectedDeviceConstraint(controls.selectedAudioInputId)
+
+  return {
+    audio: selectedAudio ? { deviceId: selectedAudio } : true,
+    video: buildVideoConstraint(controls.selectedVideoInputId),
+  }
+}
+
+function mapDeviceOptions(
+  devices: Array<MediaDeviceInfo>,
+  kind: 'audioinput' | 'videoinput',
+  fallbackLabelPrefix: string,
+): Array<MediaInputDeviceOption> {
+  const filtered = devices.filter((device) => device.kind === kind)
+  return filtered.map((device, index) => ({
+    deviceId: device.deviceId,
+    label: device.label.trim() || `${fallbackLabelPrefix} ${index + 1}`,
+  }))
+}
+
+function fallbackToAvailableInput(
+  options: Array<MediaInputDeviceOption>,
+  selectedId: string,
+) {
+  if (!selectedId) return selectedId
+  const exists = options.some((option) => option.deviceId === selectedId)
+  return exists ? selectedId : ''
+}
+
+function updateLocalStreamTrack(
+  kind: 'audio' | 'video',
+  newTrack: MediaStreamTrack,
+) {
+  const current = runtime.localStream
+  if (!current) {
+    runtime.localStream = new MediaStream([newTrack])
+    return
+  }
+
+  const keep = current.getTracks().filter((track) => track.kind !== kind)
+  const previous = current.getTracks().filter((track) => track.kind === kind)
+  const next = new MediaStream([...keep, newTrack])
+
+  previous.forEach((track) => track.stop())
+  runtime.localStream = next
+}
+
 export function hasCredentialReady(state: GatewayState) {
   if (state.mode === 'siptrunk') {
     return parseTrunkIdentifier(state.trunk.credentials.trunkId) !== null
@@ -357,8 +436,8 @@ export function hasCredentialReady(state: GatewayState) {
 
   return Boolean(
     state.publicCredentials.sipDomain.trim() &&
-      state.publicCredentials.sipUsername.trim() &&
-      state.publicCredentials.sipPassword,
+    state.publicCredentials.sipUsername.trim() &&
+    state.publicCredentials.sipPassword,
   )
 }
 
@@ -385,8 +464,8 @@ export function canResolveTrunk(state: GatewayState) {
     parseTrunkIdentifier(state.trunk.credentials.trunkId) !== null
   const hasResolvableCredentials = Boolean(
     state.trunk.credentials.sipDomain.trim() &&
-      state.trunk.credentials.sipUsername.trim() &&
-      state.trunk.credentials.sipPassword,
+    state.trunk.credentials.sipUsername.trim() &&
+    state.trunk.credentials.sipPassword,
   )
 
   return (
@@ -649,6 +728,8 @@ function teardownFullSession({ preserveCallState = false } = {}) {
       isMutedVideo: false,
       autoStartingSession: false,
       statsOpen: false,
+      switchingVideoInput: false,
+      switchingAudioInput: false,
     },
     rtt: {
       ...state.rtt,
@@ -688,6 +769,8 @@ function teardownSessionForRecovery() {
       ...state.controls,
       autoStartingSession: false,
       statsOpen: false,
+      switchingVideoInput: false,
+      switchingAudioInput: false,
     },
     incomingCall: null,
   }))
@@ -940,14 +1023,9 @@ async function requestLocalMediaForResume() {
     'Local media unavailable during resume, requesting access...',
     'warning',
   )
-  runtime.localStream = await navigator.mediaDevices.getUserMedia({
-    audio: true,
-    video: {
-      width: { ideal: runtime.videoConfig.width },
-      height: { ideal: runtime.videoConfig.height },
-      frameRate: { max: runtime.videoConfig.maxFramerate },
-    },
-  })
+  runtime.localStream = await navigator.mediaDevices.getUserMedia(
+    buildPreferredGetUserMediaConstraints(),
+  )
 
   gatewayStore.setState((state) => ({
     ...state,
@@ -956,6 +1034,7 @@ async function requestLocalMediaForResume() {
       localStream: runtime.localStream,
     },
   }))
+  void refreshMediaInputDevices()
 }
 
 async function sendResumeOffer(sessionId: string) {
@@ -1581,14 +1660,9 @@ export async function startSession() {
     }))
     appendLog('Requesting Media Access...', 'info')
 
-    runtime.localStream = await navigator.mediaDevices.getUserMedia({
-      audio: true,
-      video: {
-        width: { ideal: runtime.videoConfig.width },
-        height: { ideal: runtime.videoConfig.height },
-        frameRate: { max: runtime.videoConfig.maxFramerate },
-      },
-    })
+    runtime.localStream = await navigator.mediaDevices.getUserMedia(
+      buildPreferredGetUserMediaConstraints(),
+    )
 
     gatewayStore.setState((state) => ({
       ...state,
@@ -1597,6 +1671,7 @@ export async function startSession() {
         localStream: runtime.localStream,
       },
     }))
+    void refreshMediaInputDevices()
     appendLog('Media Access Granted', 'success')
 
     buildPeerConnectionFromCurrentLocalStream()
@@ -2056,6 +2131,209 @@ export function toggleDialpad() {
   }))
 }
 
+export async function refreshMediaInputDevices() {
+  if (!isBrowser()) return
+
+  gatewayStore.setState((state) => ({
+    ...state,
+    controls: {
+      ...state.controls,
+      mediaInputsLoading: true,
+    },
+  }))
+
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices()
+    const availableVideoInputs = mapDeviceOptions(
+      devices,
+      'videoinput',
+      'Camera',
+    )
+    const availableAudioInputs = mapDeviceOptions(
+      devices,
+      'audioinput',
+      'Microphone',
+    )
+
+    const current = gatewayStore.state.controls
+    const selectedVideoInputId = fallbackToAvailableInput(
+      availableVideoInputs,
+      current.selectedVideoInputId,
+    )
+    const selectedAudioInputId = fallbackToAvailableInput(
+      availableAudioInputs,
+      current.selectedAudioInputId,
+    )
+
+    if (current.selectedVideoInputId && !selectedVideoInputId) {
+      appendLog(
+        'Selected camera is unavailable, falling back to default',
+        'warning',
+      )
+    }
+    if (current.selectedAudioInputId && !selectedAudioInputId) {
+      appendLog(
+        'Selected microphone is unavailable, falling back to default',
+        'warning',
+      )
+    }
+
+    gatewayStore.setState((state) => ({
+      ...state,
+      controls: {
+        ...state.controls,
+        availableVideoInputs,
+        availableAudioInputs,
+        selectedVideoInputId,
+        selectedAudioInputId,
+        mediaInputsLoading: false,
+      },
+    }))
+  } catch (error) {
+    gatewayStore.setState((state) => ({
+      ...state,
+      controls: {
+        ...state.controls,
+        mediaInputsLoading: false,
+      },
+    }))
+    appendLog(
+      `Unable to load media devices: ${(error as Error).message}`,
+      'warning',
+    )
+  }
+}
+
+async function switchLocalInput(
+  kind: 'audio' | 'video',
+  selectedDeviceId: string,
+) {
+  if (!isBrowser()) return
+
+  const switchingKey =
+    kind === 'video' ? 'switchingVideoInput' : 'switchingAudioInput'
+  gatewayStore.setState((state) => ({
+    ...state,
+    controls: {
+      ...state.controls,
+      [switchingKey]: true,
+    },
+  }))
+
+  try {
+    const audioDeviceConstraint = selectedDeviceConstraint(selectedDeviceId)
+    const stream = await navigator.mediaDevices.getUserMedia(
+      kind === 'video'
+        ? {
+            audio: false,
+            video: buildVideoConstraint(selectedDeviceId),
+          }
+        : {
+            audio: audioDeviceConstraint
+              ? { deviceId: audioDeviceConstraint }
+              : true,
+            video: false,
+          },
+    )
+
+    const newTrack =
+      kind === 'video'
+        ? stream.getVideoTracks().at(0)
+        : stream.getAudioTracks().at(0)
+
+    if (!newTrack) {
+      throw new Error(`No ${kind} track available from selected input`)
+    }
+
+    const muted =
+      kind === 'video'
+        ? gatewayStore.state.controls.isMutedVideo
+        : gatewayStore.state.controls.isMutedAudio
+    newTrack.enabled = !muted
+
+    const pc = runtime.pc
+    if (pc) {
+      const sender = pc.getSenders().find((s) => s.track?.kind === kind)
+      if (sender) {
+        await sender.replaceTrack(newTrack)
+      } else {
+        pc.addTrack(newTrack, new MediaStream([newTrack]))
+      }
+    }
+
+    updateLocalStreamTrack(kind, newTrack)
+
+    gatewayStore.setState((state) => ({
+      ...state,
+      media: {
+        ...state.media,
+        localStream: runtime.localStream,
+      },
+    }))
+
+    if (runtime.pc && kind === 'video' && runtime.localStream) {
+      await applyVideoConstraints(
+        runtime.pc,
+        runtime.localStream,
+        runtime.videoConfig,
+      )
+    }
+
+    void refreshMediaInputDevices()
+    appendLog(
+      `Switched ${kind === 'video' ? 'camera' : 'microphone'} input`,
+      'success',
+    )
+  } catch (error) {
+    appendLog(
+      `Unable to switch ${kind === 'video' ? 'camera' : 'microphone'}: ${(error as Error).message}`,
+      'error',
+    )
+  } finally {
+    gatewayStore.setState((state) => ({
+      ...state,
+      controls: {
+        ...state.controls,
+        [switchingKey]: false,
+      },
+    }))
+  }
+}
+
+export async function setSelectedVideoInput(deviceId: string) {
+  const next = deviceId === '__default__' ? '' : deviceId
+  if (next === gatewayStore.state.controls.selectedVideoInputId) return
+
+  gatewayStore.setState((state) => ({
+    ...state,
+    controls: {
+      ...state.controls,
+      selectedVideoInputId: next,
+    },
+  }))
+
+  if (runtime.pc && runtime.localStream) {
+    await switchLocalInput('video', next)
+  }
+}
+
+export async function setSelectedAudioInput(deviceId: string) {
+  const next = deviceId === '__default__' ? '' : deviceId
+  if (next === gatewayStore.state.controls.selectedAudioInputId) return
+
+  gatewayStore.setState((state) => ({
+    ...state,
+    controls: {
+      ...state.controls,
+      selectedAudioInputId: next,
+    },
+  }))
+
+  if (runtime.pc && runtime.localStream) {
+    await switchLocalInput('audio', next)
+  }
+}
+
 export function toggleMuteAudio() {
   const next = !gatewayStore.state.controls.isMutedAudio
   runtime.localStream?.getAudioTracks().forEach((track) => {
@@ -2192,6 +2470,8 @@ export function initializeGatewayStore() {
       publicCredentials: state.publicCredentials,
       trunkCredentials: state.trunk.credentials,
       vrsConfig: state.vrs.config,
+      selectedVideoInputId: state.controls.selectedVideoInputId,
+      selectedAudioInputId: state.controls.selectedAudioInputId,
     }),
     merge: (persisted, current) => ({
       ...current,
@@ -2199,6 +2479,12 @@ export function initializeGatewayStore() {
       controls: {
         ...current.controls,
         destination: persisted.destination || current.controls.destination,
+        selectedVideoInputId:
+          persisted.selectedVideoInputId ??
+          current.controls.selectedVideoInputId,
+        selectedAudioInputId:
+          persisted.selectedAudioInputId ??
+          current.controls.selectedAudioInputId,
       },
       publicCredentials: {
         ...current.publicCredentials,
@@ -2221,6 +2507,15 @@ export function initializeGatewayStore() {
     }),
   })
 
+  void refreshMediaInputDevices()
+  runtime.mediaDeviceChangeHandler = () => {
+    void refreshMediaInputDevices()
+  }
+  navigator.mediaDevices.addEventListener(
+    'devicechange',
+    runtime.mediaDeviceChangeHandler,
+  )
+
   appendLog('Ready to connect.', 'info')
 }
 
@@ -2238,6 +2533,13 @@ export function cleanupGatewayStore() {
   if (runtime.unsubscribePersist) {
     runtime.unsubscribePersist()
     runtime.unsubscribePersist = null
+  }
+  if (runtime.mediaDeviceChangeHandler) {
+    navigator.mediaDevices.removeEventListener(
+      'devicechange',
+      runtime.mediaDeviceChangeHandler,
+    )
+    runtime.mediaDeviceChangeHandler = null
   }
   if (runtime.ws) {
     runtime.ws.onopen = null
@@ -2276,6 +2578,9 @@ export const gatewayActions = {
   clearLogs,
   clearMessages,
   toggleDialpad,
+  refreshMediaInputDevices,
+  setSelectedVideoInput,
+  setSelectedAudioInput,
   toggleMuteAudio,
   toggleMuteVideo,
   toggleStats,

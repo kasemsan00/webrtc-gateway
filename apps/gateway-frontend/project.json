@@ -16,7 +16,11 @@
       "options": {
         "command": "pnpm --filter webrtc-gateway-react run build"
       },
-      "outputs": ["{projectRoot}/.output", "{projectRoot}/dist", "{projectRoot}/build"]
+      "outputs": [
+        "{projectRoot}/.output",
+        "{projectRoot}/dist",
+        "{projectRoot}/build"
+      ]
     },
     "preview": {
       "executor": "nx:run-commands",

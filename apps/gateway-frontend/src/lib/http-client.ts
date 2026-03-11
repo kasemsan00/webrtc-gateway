@@ -3,7 +3,9 @@ import { getAccessToken } from '@/features/auth/token-store'
 const DEFAULT_TIMEOUT_MS = 15_000
 
 export function resolveGatewayApiBaseUrl(): string {
-  const envUrl = (import.meta.env.VITE_GATEWAY_URL as string | undefined)?.trim()
+  const envUrl = (
+    import.meta.env.VITE_GATEWAY_URL as string | undefined
+  )?.trim()
   if (!envUrl) {
     throw new Error('VITE_GATEWAY_URL is not configured')
   }
@@ -70,7 +72,9 @@ export async function fetchJson<T>(
 
     if (!res.ok) {
       const body = await res.json().catch(() => ({}))
-      throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`)
+      throw new Error(
+        (body as { error?: string }).error ?? `HTTP ${res.status}`,
+      )
     }
 
     return res.json() as Promise<T>

@@ -5,7 +5,10 @@ interface UseVisibilityRealtimeReloadOptions {
    * Called to subscribe to a realtime event source.
    * Must return an unsubscribe function.
    */
-  subscribe: (onEvent: () => void, onError?: (event: Event) => void) => () => void
+  subscribe: (
+    onEvent: () => void,
+    onError?: (event: Event) => void,
+  ) => () => void
   /**
    * Called to reload data. Should be stable (e.g. wrapped in useCallback / ref).
    */

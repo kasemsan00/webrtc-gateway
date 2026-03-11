@@ -220,7 +220,8 @@ describe('gateway recovery signaling', () => {
     expect(
       ws.sent.some(
         (raw) =>
-          raw.includes('"type":"trunk_resolve"') && raw.includes('"trunkId":88'),
+          raw.includes('"type":"trunk_resolve"') &&
+          raw.includes('"trunkId":88'),
       ),
     ).toBe(true)
   })
@@ -253,7 +254,8 @@ describe('gateway recovery signaling', () => {
     expect(
       ws2.sent.some(
         (raw) =>
-          raw.includes('"type":"trunk_resolve"') && raw.includes('"trunkId":88'),
+          raw.includes('"type":"trunk_resolve"') &&
+          raw.includes('"trunkId":88'),
       ),
     ).toBe(true)
   })

@@ -7,7 +7,7 @@ import {
   isRttXmlPayload,
 } from './rtt-xep0301'
 
-function applySeq(xmlPackets: string[]) {
+function applySeq(xmlPackets: Array<string>) {
   let text = ''
   for (const packet of xmlPackets) {
     const next = applyIncomingRtt(text, packet)
@@ -58,7 +58,10 @@ describe('applyIncomingRtt', () => {
   })
 
   it('handles reset by replacing current buffer', () => {
-    const first = applyIncomingRtt('', "<rtt event='new' seq='1'><t>abc</t></rtt>")
+    const first = applyIncomingRtt(
+      '',
+      "<rtt event='new' seq='1'><t>abc</t></rtt>",
+    )
     const second = applyIncomingRtt(
       first.nextText,
       "<rtt event='reset' seq='2'><t>xy</t></rtt>",
@@ -86,9 +89,7 @@ describe('applyIncomingRtt', () => {
 
 describe('xml escaping and outgoing xml builder', () => {
   it('escapes xml entities', () => {
-    expect(escapeXmlText(`a&b<c>d"e'f`)).toBe(
-      'a&amp;b&lt;c&gt;d&quot;e&apos;f',
-    )
+    expect(escapeXmlText(`a&b<c>d"e'f`)).toBe('a&amp;b&lt;c&gt;d&quot;e&apos;f')
   })
 
   it('builds outgoing xml payload', () => {
