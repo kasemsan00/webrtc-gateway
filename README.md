@@ -1,159 +1,98 @@
-# Turborepo starter
+https://webrtc-gateway-ui.app.kasemsan.com/
 
-This Turborepo starter is maintained by the Turborepo core team.
+# WebRTC Gateway Monorepo
 
-## Using this example
+Monorepo สำหรับระบบ WebRTC <-> SIP Gateway โดยแยกเป็น frontend สำหรับ operations UI และ backend gateway service สำหรับ signaling/media.
 
-Run the following command:
+## Project Structure
 
-```sh
-npx create-turbo@latest
+- `apps/gateway-frontend` : React + TypeScript + Vite UI
+- `apps/gateway-sip` : Go service สำหรับ WebRTC <-> SIP bridge
+- `packages/ui` : shared UI components
+- `packages/eslint-config` : shared ESLint config
+- `packages/typescript-config` : shared TypeScript config
+
+## Tech Stack
+
+- Monorepo: `pnpm` workspaces + `turborepo`
+- Frontend: React, TypeScript, Vite, TanStack Router
+- Backend: Go (`k2-gateway`), Pion WebRTC, SIP stack
+
+## Prerequisites
+
+- Node.js `>= 18`
+- `pnpm@9`
+- Go `1.25.5` (สำหรับ `apps/gateway-sip`)
+
+## Install Dependencies
+
+รันที่ root ของ repo:
+
+```bash
+pnpm install
 ```
 
-## What's inside?
+## Root Commands
 
-This Turborepo includes the following packages/apps:
-
-### Apps and Packages
-
-- `docs`: a [Next.js](https://nextjs.org/) app
-- `web`: another [Next.js](https://nextjs.org/) app
-- `@repo/ui`: a stub React component library shared by both `web` and `docs` applications
-- `@repo/eslint-config`: `eslint` configurations (includes `eslint-config-next` and `eslint-config-prettier`)
-- `@repo/typescript-config`: `tsconfig.json`s used throughout the monorepo
-
-Each package/app is 100% [TypeScript](https://www.typescriptlang.org/).
-
-### Utilities
-
-This Turborepo has some additional tools already setup for you:
-
-- [TypeScript](https://www.typescriptlang.org/) for static type checking
-- [ESLint](https://eslint.org/) for code linting
-- [Prettier](https://prettier.io) for code formatting
-
-### Build
-
-To build all apps and packages, run the following command:
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended):
-
-```sh
-cd my-turborepo
-turbo build
+```bash
+pnpm build
+pnpm lint
+pnpm check-types
+pnpm dev
 ```
 
-Without global `turbo`, use your package manager:
+## Run Each App
 
-```sh
-cd my-turborepo
-npx turbo build
-yarn dlx turbo build
-pnpm exec turbo build
+Frontend (จาก root):
+
+```bash
+pnpm dev:frontend
 ```
 
-You can build a specific package by using a [filter](https://turborepo.dev/docs/crafting-your-repository/running-tasks#using-filters):
+Backend (จาก root):
 
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed:
-
-```sh
-turbo build --filter=docs
+```bash
+pnpm exec turbo dev --filter=gateway-sip
 ```
 
-Without global `turbo`:
+หมายเหตุ: สคริปต์ `pnpm run dev:backend` ใน root ยังชี้ไปที่ `gateway-backend` (ชื่อเก่า) จึงควรใช้คำสั่ง `turbo` ด้านบนแทน.
 
-```sh
-npx turbo build --filter=docs
-yarn exec turbo build --filter=docs
-pnpm exec turbo build --filter=docs
+## App-Level Commands
+
+Frontend scripts: ดูที่ `apps/gateway-frontend/package.json`
+
+Backend targets: ดูที่ `apps/gateway-sip/project.json`
+
+ตัวอย่าง backend แบบตรงโฟลเดอร์:
+
+```bash
+cd apps/gateway-sip
+go run .
+go test ./...
 ```
 
-### Develop
+## Environment Setup
 
-To develop all apps and packages, run the following command:
+ตั้งค่า environment แยกตามแอปก่อนรัน:
 
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended):
+- Frontend: `apps/gateway-frontend/.env.example`
+- Backend: `apps/gateway-sip/.env.example`
 
-```sh
-cd my-turborepo
-turbo dev
-```
+ไฟล์อ้างอิงเพิ่มเติม:
 
-Without global `turbo`, use your package manager:
+- `apps/gateway-frontend/README.md`
+- `apps/gateway-sip/AGENTS.md`
 
-```sh
-cd my-turborepo
-npx turbo dev
-yarn exec turbo dev
-pnpm exec turbo dev
-```
+## Development Notes
 
-You can develop a specific package by using a [filter](https://turborepo.dev/docs/crafting-your-repository/running-tasks#using-filters):
+- แก้โค้ดให้ scope อยู่ในแอป/แพ็กเกจที่เกี่ยวข้องเท่านั้น
+- หลีกเลี่ยงแก้ไฟล์ generated เช่น `apps/gateway-frontend/src/routeTree.gen.ts`
+- การเปลี่ยน media path ใน `apps/gateway-sip` มีความเสี่ยงสูง ควรเลี่ยงหากไม่ได้ตั้งใจแก้พฤติกรรมโปรโตคอล
 
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed:
+## Key References
 
-```sh
-turbo dev --filter=web
-```
-
-Without global `turbo`:
-
-```sh
-npx turbo dev --filter=web
-yarn exec turbo dev --filter=web
-pnpm exec turbo dev --filter=web
-```
-
-### Remote Caching
-
-> [!TIP]
-> Vercel Remote Cache is free for all plans. Get started today at [vercel.com](https://vercel.com/signup?utm_source=remote-cache-sdk&utm_campaign=free_remote_cache).
-
-Turborepo can use a technique known as [Remote Caching](https://turborepo.dev/docs/core-concepts/remote-caching) to share cache artifacts across machines, enabling you to share build caches with your team and CI/CD pipelines.
-
-By default, Turborepo will cache locally. To enable Remote Caching you will need an account with Vercel. If you don't have an account you can [create one](https://vercel.com/signup?utm_source=turborepo-examples), then enter the following commands:
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended):
-
-```sh
-cd my-turborepo
-turbo login
-```
-
-Without global `turbo`, use your package manager:
-
-```sh
-cd my-turborepo
-npx turbo login
-yarn exec turbo login
-pnpm exec turbo login
-```
-
-This will authenticate the Turborepo CLI with your [Vercel account](https://vercel.com/docs/concepts/personal-accounts/overview).
-
-Next, you can link your Turborepo to your Remote Cache by running the following command from the root of your Turborepo:
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed:
-
-```sh
-turbo link
-```
-
-Without global `turbo`:
-
-```sh
-npx turbo link
-yarn exec turbo link
-pnpm exec turbo link
-```
-
-## Useful Links
-
-Learn more about the power of Turborepo:
-
-- [Tasks](https://turborepo.dev/docs/crafting-your-repository/running-tasks)
-- [Caching](https://turborepo.dev/docs/crafting-your-repository/caching)
-- [Remote Caching](https://turborepo.dev/docs/core-concepts/remote-caching)
-- [Filtering](https://turborepo.dev/docs/crafting-your-repository/running-tasks#using-filters)
-- [Configuration Options](https://turborepo.dev/docs/reference/configuration)
-- [CLI Usage](https://turborepo.dev/docs/reference/command-line-reference)
+- Monorepo tasks: `turbo.json`
+- Workspace config: `pnpm-workspace.yaml`
+- Root scripts: `package.json`
+- Frontend guide: `apps/gateway-frontend/AGENTS.md`
+- Backend guide: `apps/gateway-sip/AGENTS.md`
