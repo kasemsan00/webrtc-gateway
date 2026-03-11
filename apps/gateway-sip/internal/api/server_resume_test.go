@@ -1,12 +1,24 @@
 package api
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	"k2-gateway/internal/config"
+	"k2-gateway/internal/logstore"
 	"k2-gateway/internal/session"
 )
+
+type countingLookupLogStore struct {
+	logstore.LogStore
+	lookupCalls int
+}
+
+func (c *countingLookupLogStore) LookupSessionDirectory(ctx context.Context, sessionID string) (string, string, bool, error) {
+	c.lookupCalls++
+	return "", "", false, nil
+}
 
 func newTestSessionManager() *session.Manager {
 	cfg := &config.Config{
@@ -119,6 +131,74 @@ func TestHandleWSResume_SuccessWithoutSDP(t *testing.T) {
 	}
 	if client.sessionID != sess.ID {
 		t.Fatalf("expected client sessionID to be updated to %s, got %s", sess.ID, client.sessionID)
+	}
+}
+
+func TestHandleWSResume_ReconnectingSessionReturnsActiveState(t *testing.T) {
+	mgr := newTestSessionManager()
+	sess := createActiveSession(t, mgr)
+	sess.SetState(session.StateReconnecting)
+
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, mgr, nil, nil, nil, nil)
+	client := &WSClient{send: make(chan []byte, 8)}
+
+	srv.handleWSResume(client, WSMessage{
+		Type:      "resume",
+		SessionID: sess.ID,
+	})
+
+	msgs := readWSMessages(t, client.send)
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+	if msgs[0].Type != "resumed" {
+		t.Fatalf("expected resumed, got %s", msgs[0].Type)
+	}
+	if msgs[0].State != string(session.StateActive) {
+		t.Fatalf("expected resumed state active, got %s", msgs[0].State)
+	}
+	if got := sess.GetState(); got != session.StateActive {
+		t.Fatalf("expected session state active after resume, got %s", got)
+	}
+}
+
+func TestHandleWSResume_LocalSessionHitSkipsDirectoryLookup(t *testing.T) {
+	mgr := newTestSessionManager()
+	sess := createActiveSession(t, mgr)
+
+	baseStore, err := logstore.New(config.DBConfig{Enable: false})
+	if err != nil {
+		t.Fatalf("failed to create noop logstore: %v", err)
+	}
+	countingStore := &countingLookupLogStore{LogStore: baseStore}
+
+	srv := NewServer(
+		config.APIConfig{},
+		config.TURNConfig{},
+		config.GatewayConfig{InstanceID: "gw-a"},
+		mgr,
+		nil,
+		nil,
+		nil,
+		countingStore,
+	)
+	client := &WSClient{send: make(chan []byte, 8)}
+
+	srv.handleWSResume(client, WSMessage{
+		Type:      "resume",
+		SessionID: sess.ID,
+	})
+
+	if countingStore.lookupCalls != 0 {
+		t.Fatalf("expected directory lookup to be skipped on local session hit, got %d calls", countingStore.lookupCalls)
+	}
+
+	msgs := readWSMessages(t, client.send)
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+	if msgs[0].Type != "resumed" {
+		t.Fatalf("expected resumed, got %s", msgs[0].Type)
 	}
 }
 

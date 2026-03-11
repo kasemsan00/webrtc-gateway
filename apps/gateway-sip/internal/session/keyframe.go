@@ -342,7 +342,8 @@ func (s *Session) SendPLItoWebRTC() {
 			if err := s.PeerConnection.WriteRTCP([]rtcp.Packet{pli}); err != nil {
 				// Common during early call setup: RTCP is attempted before DTLS transport starts.
 				// This is expected and extremely noisy, so suppress this specific case.
-				if strings.Contains(err.Error(), "DTLS transport has not started yet") {
+				if strings.Contains(err.Error(), "DTLS transport has not started yet") ||
+					strings.Contains(err.Error(), "read/write on closed pipe") {
 					return
 				}
 				fmt.Printf("[%s] Error sending PLI to browser: %v\n", s.ID, err)
@@ -390,6 +391,9 @@ func (s *Session) SendFIRToWebRTC() {
 			}
 
 			if err := s.PeerConnection.WriteRTCP([]rtcp.Packet{fir}); err != nil {
+				if strings.Contains(err.Error(), "read/write on closed pipe") {
+					return
+				}
 				fmt.Printf("[%s] ❌ Error sending FIR to browser: %v\n", s.ID, err)
 			} else {
 				fmt.Printf("[%s] 📸 Sent FIR #%d to WebRTC browser (SSRC=%d, Seq=%d)\n",
@@ -418,6 +422,9 @@ func (s *Session) SendNACKToWebRTC(mediaSSRC uint32, nacks []rtcp.NackPair) {
 
 	// Write RTCP NACK to the WebRTC peer connection
 	if err := s.PeerConnection.WriteRTCP([]rtcp.Packet{nack}); err != nil {
+		if strings.Contains(err.Error(), "read/write on closed pipe") {
+			return
+		}
 		fmt.Printf("[%s] Error sending NACK to browser: %v\n", s.ID, err)
 	} else {
 		fmt.Printf("[%s] 🔄 Forwarded NACK to WebRTC browser (MediaSSRC=%d, Nacks=%v)\n", s.ID, mediaSSRC, nacks)

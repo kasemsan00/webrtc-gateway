@@ -1317,15 +1317,23 @@ func (s *Server) handleWSResume(client *WSClient, msg WSMessage) {
 	log.Printf("🔄 Resume request for session: %s (has SDP: %v)", msg.SessionID, msg.SDP != "")
 	log.Printf("📊 Resume timing start: session=%s", msg.SessionID)
 
-	// Check session directory to see if this session is owned by another instance
-	ctx := context.Background()
-	if s.logStore != nil && s.gatewayConfig.InstanceID != "" {
-		ownerInstanceID, wsURL, found, err := s.logStore.LookupSessionDirectory(ctx, msg.SessionID)
+	localLookupStartedAt := time.Now()
+	sess, ok := s.sessionMgr.GetSession(msg.SessionID)
+	localLookupElapsed := time.Since(localLookupStartedAt).Round(10 * time.Millisecond)
+	log.Printf("📊 Resume local session lookup: session=%s found=%v elapsed=%s", msg.SessionID, ok, localLookupElapsed)
+
+	// Local-first: only hit directory when local session is missing.
+	if !ok && s.logStore != nil && s.gatewayConfig.InstanceID != "" {
+		dirLookupStartedAt := time.Now()
+		lookupCtx, cancelLookup := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancelLookup()
+
+		ownerInstanceID, wsURL, found, err := s.logStore.LookupSessionDirectory(lookupCtx, msg.SessionID)
+		dirLookupElapsed := time.Since(dirLookupStartedAt).Round(10 * time.Millisecond)
 		if err != nil {
-			log.Printf("⚠️ Session directory lookup failed for %s: %v", msg.SessionID, err)
+			log.Printf("⚠️ Resume directory lookup failed for %s: %v (elapsed=%s)", msg.SessionID, err, dirLookupElapsed)
 		} else if found && ownerInstanceID != s.gatewayConfig.InstanceID {
-			// Session is owned by another instance - send redirect
-			log.Printf("🔀 Session %s is owned by instance %s, redirecting to %s", msg.SessionID, ownerInstanceID, wsURL)
+			log.Printf("🔀 Session %s is owned by instance %s, redirecting to %s (lookup_elapsed=%s)", msg.SessionID, ownerInstanceID, wsURL, dirLookupElapsed)
 			response := WSMessage{
 				Type:        "resume_redirect",
 				SessionID:   msg.SessionID,
@@ -1333,11 +1341,15 @@ func (s *Server) handleWSResume(client *WSClient, msg WSMessage) {
 			}
 			s.sendWSMessage(client, response)
 			return
+		} else {
+			log.Printf("📊 Resume directory lookup: session=%s found=%v owner=%s elapsed=%s", msg.SessionID, found, ownerInstanceID, dirLookupElapsed)
 		}
+
+		// Re-check local session once after directory lookup in case of race with in-memory restore.
+		sess, ok = s.sessionMgr.GetSession(msg.SessionID)
+		log.Printf("📊 Resume local session recheck: session=%s found=%v", msg.SessionID, ok)
 	}
 
-	// Try to find the existing session
-	sess, ok := s.sessionMgr.GetSession(msg.SessionID)
 	if !ok {
 		log.Printf("❌ Resume failed: session %s not found", msg.SessionID)
 		response := WSMessage{
@@ -1367,7 +1379,21 @@ func (s *Server) handleWSResume(client *WSClient, msg WSMessage) {
 	if (mediaStatus.HasAsteriskAudio && !mediaStatus.AudioRTPReady) ||
 		(mediaStatus.HasAsteriskVideo && !mediaStatus.VideoRTPReady) {
 		reason := "Session media endpoints expired - cannot resume"
-		log.Printf("❌ Resume failed: session %s media endpoints unavailable", msg.SessionID)
+		log.Printf(
+			"❌ Resume failed: session %s media endpoints unavailable (reason=%s audioRTP=%v:%d videoRTP=%v:%d audioRTCP=%v:%d videoRTCP=%v:%d hasAsteriskAudio=%v hasAsteriskVideo=%v)",
+			msg.SessionID,
+			reason,
+			mediaStatus.AudioRTPReady,
+			mediaStatus.AudioRTPPort,
+			mediaStatus.VideoRTPReady,
+			mediaStatus.VideoRTPPort,
+			mediaStatus.AudioRTCPReady,
+			mediaStatus.AudioRTCPPort,
+			mediaStatus.VideoRTCPReady,
+			mediaStatus.VideoRTCPPort,
+			mediaStatus.HasAsteriskAudio,
+			mediaStatus.HasAsteriskVideo,
+		)
 		response := WSMessage{
 			Type:      "resume_failed",
 			SessionID: msg.SessionID,
@@ -1393,12 +1419,8 @@ func (s *Server) handleWSResume(client *WSClient, msg WSMessage) {
 		return
 	}
 
-	// If session was in reconnecting state, transition back to active
+	// If session was in reconnecting state, transition back to active only after resume succeeds.
 	wasReconnecting := state == session.StateReconnecting
-	if wasReconnecting {
-		sess.SetState(session.StateActive)
-		log.Printf("✅ Session %s transitioned from reconnecting to active", msg.SessionID)
-	}
 
 	// Remove old client mapping if exists (from previous WebSocket connection)
 	s.mu.Lock()
@@ -1454,21 +1476,29 @@ func (s *Server) handleWSResume(client *WSClient, msg WSMessage) {
 		log.Printf("✅ Session %s PeerConnection renegotiated successfully", msg.SessionID)
 	}
 
+	finalState := sess.GetState()
+	if wasReconnecting {
+		sess.SetState(session.StateActive)
+		finalState = session.StateActive
+		log.Printf("✅ Session %s transitioned from reconnecting to active", msg.SessionID)
+	}
 	direction, _, _, _ := sess.GetCallInfo()
 	log.Printf("📊 Resume total elapsed: session=%s elapsed=%s", msg.SessionID, time.Since(resumeStartedAt).Round(10*time.Millisecond))
-	log.Printf("✅ Session %s resumed successfully (state: %s, direction: %s, wasReconnecting: %v, hasSDP: %v)", msg.SessionID, state, direction, wasReconnecting, answerSDP != "")
+	log.Printf("✅ Session %s resumed successfully (state: %s, direction: %s, wasReconnecting: %v, hasSDP: %v)", msg.SessionID, finalState, direction, wasReconnecting, answerSDP != "")
 
 	// Send success response with session details (and answer SDP if renegotiated)
 	_, from, to, _ := sess.GetCallInfo()
 	response := WSMessage{
 		Type:      "resumed",
 		SessionID: msg.SessionID,
-		State:     string(state),
+		State:     string(finalState),
 		From:      from,
 		To:        to,
 		SDP:       answerSDP,
 	}
+	resumeSendStartedAt := time.Now()
 	s.sendWSMessage(client, response)
+	log.Printf("📊 Resume send elapsed: session=%s elapsed=%s", msg.SessionID, time.Since(resumeSendStartedAt).Round(10*time.Millisecond))
 }
 
 // handleWSTrunkResolve resolves trunk ownership/route from either credentials or trunk ID/public ID.

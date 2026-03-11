@@ -71,3 +71,38 @@ func TestAnalyzeRenegotiateVideoOffer(t *testing.T) {
 		}
 	})
 }
+
+func TestRenegotiateIceGatherTimeoutIsHandoverSafe(t *testing.T) {
+	if RENEGOTIATE_ICE_GATHER_TIMEOUT < 3*time.Second {
+		t.Fatalf("expected renegotiate ICE gather timeout >= 3s, got %s", RENEGOTIATE_ICE_GATHER_TIMEOUT)
+	}
+}
+
+func TestHasUsableResumeCandidatesInSDP(t *testing.T) {
+	t.Run("rejects empty SDP", func(t *testing.T) {
+		if hasUsableResumeCandidatesInSDP("") {
+			t.Fatalf("expected empty SDP to be unusable")
+		}
+	})
+
+	t.Run("rejects single host candidate", func(t *testing.T) {
+		sdp := "v=0\r\na=candidate:1 1 udp 2122260223 10.0.0.2 59784 typ host\r\n"
+		if hasUsableResumeCandidatesInSDP(sdp) {
+			t.Fatalf("expected single host candidate to be unusable for resume early-exit")
+		}
+	})
+
+	t.Run("accepts relay candidate", func(t *testing.T) {
+		sdp := "v=0\r\na=candidate:1 1 udp 1686052607 1.2.3.4 50000 typ relay raddr 0.0.0.0 rport 0\r\n"
+		if !hasUsableResumeCandidatesInSDP(sdp) {
+			t.Fatalf("expected relay candidate to be usable")
+		}
+	})
+
+	t.Run("accepts multiple candidates", func(t *testing.T) {
+		sdp := "v=0\r\na=candidate:1 1 udp 2122260223 10.0.0.2 59784 typ host\r\na=candidate:2 1 udp 2122194687 10.0.0.2 59785 typ host\r\n"
+		if !hasUsableResumeCandidatesInSDP(sdp) {
+			t.Fatalf("expected multiple candidates to be usable")
+		}
+	})
+}

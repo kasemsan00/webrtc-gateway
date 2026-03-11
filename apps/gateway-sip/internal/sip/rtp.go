@@ -665,7 +665,8 @@ func (s *Server) startPeriodicPLIForSession(sess *session.Session) {
 
 	// Small initial burst to kickstart keyframe delivery.
 	for i := 0; i < 5; i++ {
-		if sess.GetState() == session.StateEnded {
+		state := sess.GetState()
+		if state == session.StateEnded || state == session.StateReconnecting {
 			return
 		}
 		sess.SendPLItoWebRTC()
@@ -674,8 +675,13 @@ func (s *Server) startPeriodicPLIForSession(sess *session.Session) {
 	}
 
 	for range ticker.C {
-		if sess.GetState() == session.StateEnded {
+		state := sess.GetState()
+		if state == session.StateEnded {
 			fmt.Printf("[%s] Stopping periodic PLI sender - session ended\n", sess.ID)
+			return
+		}
+		if state == session.StateReconnecting {
+			fmt.Printf("[%s] Stopping periodic PLI sender - session reconnecting\n", sess.ID)
 			return
 		}
 

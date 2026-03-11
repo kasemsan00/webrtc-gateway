@@ -14,7 +14,7 @@ import (
 	pkg_webrtc "k2-gateway/internal/pkg/webrtc"
 )
 
-const RENEGOTIATE_ICE_GATHER_TIMEOUT = 1 * time.Second
+const RENEGOTIATE_ICE_GATHER_TIMEOUT = 3 * time.Second
 const renegotiateVideoOnTrackWatchdog = 3 * time.Second
 
 type renegotiateVideoOfferDiagnostics struct {
@@ -92,7 +92,40 @@ func waitForRenegotiateIceGatheringComplete(pc *webrtc.PeerConnection, timeout t
 	if pc == nil {
 		return false
 	}
-	return waitForGatheringComplete(webrtc.GatheringCompletePromise(pc), timeout)
+	gatherDone := webrtc.GatheringCompletePromise(pc)
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-gatherDone:
+			return true
+		case <-ticker.C:
+			// Early-exit only when candidate set is reasonably usable for cross-network handover.
+			// A single host candidate can be a false-ready signal on Wi-Fi -> Cellular transitions.
+			if ld := pc.LocalDescription(); ld != nil && hasUsableResumeCandidatesInSDP(ld.SDP) {
+				return true
+			}
+		case <-timer.C:
+			return false
+		}
+	}
+}
+
+func hasUsableResumeCandidatesInSDP(sdp string) bool {
+	if sdp == "" {
+		return false
+	}
+	candidateCount := strings.Count(sdp, "\na=candidate:")
+	if strings.HasPrefix(sdp, "a=candidate:") {
+		candidateCount++
+	}
+	if candidateCount >= 2 {
+		return true
+	}
+	return strings.Contains(sdp, " typ srflx ") || strings.Contains(sdp, " typ relay ")
 }
 
 // RenegotiatePeerConnection recreates the PeerConnection with a new SDP offer
