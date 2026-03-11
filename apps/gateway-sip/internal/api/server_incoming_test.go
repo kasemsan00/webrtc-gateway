@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"testing"
 
 	"k2-gateway/internal/config"
@@ -11,6 +12,7 @@ type incomingTestSIPCallMaker struct {
 	acceptCount int
 	rejectCount int
 	lastReject  string
+	rejectErr   error
 	hangupCount int
 	lastHangup  *session.Session
 }
@@ -41,7 +43,7 @@ func (s *incomingTestSIPCallMaker) AcceptCall(sess *session.Session) error {
 func (s *incomingTestSIPCallMaker) RejectCall(sess *session.Session, reason string) error {
 	s.rejectCount++
 	s.lastReject = reason
-	return nil
+	return s.rejectErr
 }
 func (s *incomingTestSIPCallMaker) SendMessage(destination, from, body, contentType string) error {
 	return nil
@@ -138,6 +140,72 @@ func TestHandleWSReject_DefaultReasonAndDeletesSession(t *testing.T) {
 	}
 }
 
+func TestHandleWSReject_BenignTransactionTerminatedIsTreatedAsEnded(t *testing.T) {
+	mgr := newTestSessionManager()
+	incomingSess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create incoming session: %v", err)
+	}
+	incomingSess.SetState(session.StateIncoming)
+	incomingSess.SetCallInfo("inbound", "1001", "1002", "sip-call-terminated")
+
+	sipMaker := &incomingTestSIPCallMaker{
+		rejectErr: errors.New("failed to send reject response: transaction terminated"),
+	}
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, mgr, sipMaker, nil, nil, nil)
+	client := &WSClient{send: make(chan []byte, 8)}
+
+	srv.handleWSReject(client, WSMessage{
+		Type:      "reject",
+		SessionID: incomingSess.ID,
+		Reason:    "decline",
+	})
+
+	msgs := readWSMessages(t, client.send)
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message for reject benign path, got %d", len(msgs))
+	}
+	if msgs[0].Type != "state" || msgs[0].State != string(session.StateEnded) {
+		t.Fatalf("expected ended state for benign reject path, got type=%s state=%s", msgs[0].Type, msgs[0].State)
+	}
+	if _, ok := mgr.GetSession(incomingSess.ID); ok {
+		t.Fatalf("expected session %s to be deleted after benign reject path", incomingSess.ID)
+	}
+}
+
+func TestHandleWSReject_NonBenignErrorReturnsWSError(t *testing.T) {
+	mgr := newTestSessionManager()
+	incomingSess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create incoming session: %v", err)
+	}
+	incomingSess.SetState(session.StateIncoming)
+	incomingSess.SetCallInfo("inbound", "1001", "1002", "sip-call-fail")
+
+	sipMaker := &incomingTestSIPCallMaker{
+		rejectErr: errors.New("network timeout"),
+	}
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, mgr, sipMaker, nil, nil, nil)
+	client := &WSClient{send: make(chan []byte, 8)}
+
+	srv.handleWSReject(client, WSMessage{
+		Type:      "reject",
+		SessionID: incomingSess.ID,
+		Reason:    "decline",
+	})
+
+	msgs := readWSMessages(t, client.send)
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message for reject non-benign path, got %d", len(msgs))
+	}
+	if msgs[0].Type != "error" {
+		t.Fatalf("expected error response for non-benign reject path, got %s", msgs[0].Type)
+	}
+	if _, ok := mgr.GetSession(incomingSess.ID); !ok {
+		t.Fatalf("expected session %s to remain when reject fails with non-benign error", incomingSess.ID)
+	}
+}
+
 func TestNotifyIncomingCall_SendsOnlyClientsResolvedOnSameTrunk(t *testing.T) {
 	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, nil, nil, nil, nil, nil)
 	clientA := &WSClient{sessionID: "a", trunkResolved: true, resolvedTrunkID: 1, send: make(chan []byte, 8)}
@@ -171,6 +239,31 @@ func TestNotifyIncomingCall_SendsOnlyClientsResolvedOnSameTrunk(t *testing.T) {
 	}
 	if msg.From != "sip:alice@example.com" || msg.To != "sip:bob@example.com" {
 		t.Fatalf("resolved client unexpected from/to: from=%s to=%s", msg.From, msg.To)
+	}
+}
+
+func TestNotifyIncomingCall_TargetsResolvedTrunkID(t *testing.T) {
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, nil, nil, nil, nil, nil)
+	clientTrunk1 := &WSClient{sessionID: "trunk-1-client", trunkResolved: true, resolvedTrunkID: 1, send: make(chan []byte, 8)}
+	clientTrunk2 := &WSClient{sessionID: "trunk-2-client", trunkResolved: true, resolvedTrunkID: 2, send: make(chan []byte, 8)}
+
+	srv.mu.Lock()
+	srv.wsConnections[clientTrunk1] = struct{}{}
+	srv.wsConnections[clientTrunk2] = struct{}{}
+	srv.mu.Unlock()
+
+	srv.NotifyIncomingCall("incoming-trunk-2", "sip:alice@example.com", "sip:00025@203.151.21.121:5090", 2)
+
+	msgs1 := readWSMessages(t, clientTrunk1.send)
+	msgs2 := readWSMessages(t, clientTrunk2.send)
+	if len(msgs1) != 0 {
+		t.Fatalf("expected trunk-1 client to receive no incoming, got %d", len(msgs1))
+	}
+	if len(msgs2) != 1 {
+		t.Fatalf("expected trunk-2 client to receive one incoming, got %d", len(msgs2))
+	}
+	if msgs2[0].Type != "incoming" || msgs2[0].SessionID != "incoming-trunk-2" {
+		t.Fatalf("unexpected message for trunk-2 client: %+v", msgs2[0])
 	}
 }
 

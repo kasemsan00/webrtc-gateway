@@ -1004,6 +1004,7 @@ func (s *Server) NotifyIncomingCall(sessionID, from, to string, trunkID int64) {
 
 	totalConnections := len(s.wsConnections)
 	recipients := 0
+	recipientSessionIDs := make([]string, 0)
 
 	// Broadcast only to clients resolved on the same trunk.
 	for client := range s.wsConnections {
@@ -1011,6 +1012,7 @@ func (s *Server) NotifyIncomingCall(sessionID, from, to string, trunkID int64) {
 			continue
 		}
 		recipients++
+		recipientSessionIDs = append(recipientSessionIDs, client.sessionID)
 		s.sendWSMessage(client, WSMessage{
 			Type:      "incoming",
 			SessionID: sessionID,
@@ -1024,7 +1026,7 @@ func (s *Server) NotifyIncomingCall(sessionID, from, to string, trunkID int64) {
 		log.Printf("⚠️ No WebSocket clients connected for incoming call notification")
 		return
 	}
-	log.Printf("📲 Incoming fanout summary: sessionID=%s trunkID=%d recipients=%d filtered=%d total=%d", sessionID, trunkID, recipients, totalConnections-recipients, totalConnections)
+	log.Printf("📲 Incoming fanout summary: sessionID=%s trunkID=%d recipients=%d recipientSessionIDs=%v filtered=%d total=%d", sessionID, trunkID, recipients, recipientSessionIDs, totalConnections-recipients, totalConnections)
 }
 
 // handleWSAccept handles WebSocket accept messages for incoming calls
@@ -1048,6 +1050,17 @@ func (s *Server) handleWSAccept(client *WSClient, msg WSMessage) {
 	if !incomingSess.TryClaimIncoming(clientID) {
 		// Already claimed by another client
 		log.Printf("⚠️ [Accept] Session %s already claimed by another client", msg.SessionID)
+		s.logEvent(&logstore.Event{
+			Timestamp: time.Now(),
+			SessionID: incomingSess.ID,
+			Category:  "ws",
+			Name:      "ws_incoming_action_result",
+			Data: map[string]interface{}{
+				"incomingAction": "sending_accept",
+				"result":         "already_claimed",
+				"sessionId":      msg.SessionID,
+			},
+		})
 		s.sendWSError(client, msg.SessionID, "Call already accepted by another client")
 		return
 	}
@@ -1149,9 +1162,39 @@ func (s *Server) handleWSAccept(client *WSClient, msg WSMessage) {
 
 	if acceptError {
 		log.Printf("⚠️ Call accepted with warning, using session: %s (dialog state will be set from ACK)", callSession.ID)
+		s.logEvent(&logstore.Event{
+			Timestamp: time.Now(),
+			SessionID: callSession.ID,
+			Category:  "ws",
+			Name:      "ws_incoming_action_result",
+			Data: map[string]interface{}{
+				"incomingAction": "sending_accept",
+				"result":         "accepted_with_warning",
+				"sessionId":      callSession.ID,
+			},
+		})
 	} else {
 		log.Printf("✅ Call accepted, using session: %s", callSession.ID)
+		s.logEvent(&logstore.Event{
+			Timestamp: time.Now(),
+			SessionID: callSession.ID,
+			Category:  "ws",
+			Name:      "ws_incoming_action_result",
+			Data: map[string]interface{}{
+				"incomingAction": "sending_accept",
+				"result":         "accepted",
+				"sessionId":      callSession.ID,
+			},
+		})
 	}
+}
+
+func isBenignIncomingRejectError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errMsg := strings.ToLower(err.Error())
+	return strings.Contains(errMsg, "transaction terminated")
 }
 
 // handleWSReject handles WebSocket reject messages for incoming calls
@@ -1173,7 +1216,10 @@ func (s *Server) handleWSReject(client *WSClient, msg WSMessage) {
 		SessionID: sess.ID,
 		Category:  "ws",
 		Name:      "ws_reject_request",
-		Data:      map[string]interface{}{"reason": msg.Reason},
+		Data: map[string]interface{}{
+			"incomingAction": "sending_reject",
+			"reason":         msg.Reason,
+		},
 	})
 
 	reason := msg.Reason
@@ -1190,10 +1236,55 @@ func (s *Server) handleWSReject(client *WSClient, msg WSMessage) {
 	// Reject the incoming call
 	if s.sipMaker != nil {
 		if err := s.sipMaker.RejectCall(sess, reason); err != nil {
-			s.sendWSError(client, msg.SessionID, fmt.Sprintf("Failed to reject call: %v", err))
-			return
+			if isBenignIncomingRejectError(err) {
+				log.Printf("⚠️ [Reject] Incoming reject reached terminated transaction, treating as ended (session=%s): %v", msg.SessionID, err)
+				s.logEvent(&logstore.Event{
+					Timestamp: time.Now(),
+					SessionID: sess.ID,
+					Category:  "ws",
+					Name:      "ws_incoming_action_result",
+					Data: map[string]interface{}{
+						"incomingAction": "sending_reject",
+						"reason":         reason,
+						"result":         "already_terminated",
+						"sessionId":      msg.SessionID,
+					},
+				})
+			} else {
+				s.logEvent(&logstore.Event{
+					Timestamp: time.Now(),
+					SessionID: sess.ID,
+					Category:  "ws",
+					Name:      "ws_incoming_action_result",
+					Data: map[string]interface{}{
+						"incomingAction": "sending_reject",
+						"reason":         reason,
+						"result":         "failed",
+						"sessionId":      msg.SessionID,
+						"error":          err.Error(),
+					},
+				})
+				s.sendWSError(client, msg.SessionID, fmt.Sprintf("Failed to reject call: %v", err))
+				return
+			}
+		} else {
+			s.logEvent(&logstore.Event{
+				Timestamp: time.Now(),
+				SessionID: sess.ID,
+				Category:  "ws",
+				Name:      "ws_incoming_action_result",
+				Data: map[string]interface{}{
+					"incomingAction": "sending_reject",
+					"reason":         reason,
+					"result":         "rejected",
+					"sessionId":      msg.SessionID,
+				},
+			})
 		}
 	}
+
+	// Ensure terminal state is reflected for clients even if SIP transaction already ended.
+	sess.UpdateState(session.StateEnded)
 
 	// Delete session
 	s.sessionMgr.DeleteSession(msg.SessionID)

@@ -25,6 +25,11 @@ export type TrunkStatus =
   | 'redirecting'
   | 'not-found'
   | 'not-ready'
+export type IncomingActionStatus =
+  | 'idle'
+  | 'preparing_accept'
+  | 'sending_accept'
+  | 'sending_reject'
 
 export interface LogEntry {
   id: string
@@ -182,6 +187,7 @@ export interface GatewayState {
     lastRemoteSeq: number | null
   }
   incomingCall: IncomingCallState | null
+  incomingAction: IncomingActionStatus
   logs: Array<LogEntry>
   messages: Array<MessageEntry>
   pendingCallRequest: PendingCallRequest | null

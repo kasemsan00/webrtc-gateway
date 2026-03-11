@@ -85,6 +85,7 @@ function createState(overrides?: Partial<GatewayState>): GatewayState {
       lastRemoteSeq: null,
     },
     incomingCall: null,
+    incomingAction: 'idle',
     logs: [],
     messages: [],
     pendingCallRequest: null,

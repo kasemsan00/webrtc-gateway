@@ -7,6 +7,7 @@ const originalWindow = (globalThis as { window?: unknown }).window
 const originalWebSocket = globalThis.WebSocket
 const originalLocalStorage = (globalThis as { localStorage?: unknown })
   .localStorage
+const originalMediaDevices = globalThis.navigator?.mediaDevices
 
 class MockWebSocket {
   static readonly CONNECTING = 0
@@ -70,6 +71,16 @@ describe('gateway recovery signaling', () => {
       configurable: true,
       writable: true,
     })
+    Object.defineProperty(globalThis.navigator, 'mediaDevices', {
+      value: {
+        enumerateDevices: vi.fn(async () => []),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        getUserMedia: vi.fn(() => new Promise(() => {})),
+      },
+      configurable: true,
+      writable: true,
+    })
 
     gatewayActions.cleanup()
   })
@@ -93,6 +104,15 @@ describe('gateway recovery signaling', () => {
       configurable: true,
       writable: true,
     })
+    if (originalMediaDevices === undefined) {
+      Reflect.deleteProperty(globalThis.navigator, 'mediaDevices')
+    } else {
+      Object.defineProperty(globalThis.navigator, 'mediaDevices', {
+        value: originalMediaDevices,
+        configurable: true,
+        writable: true,
+      })
+    }
 
     if (originalLocalStorage === undefined) {
       Reflect.deleteProperty(globalThis, 'localStorage')
@@ -256,6 +276,79 @@ describe('gateway recovery signaling', () => {
         (raw) =>
           raw.includes('"type":"trunk_resolve"') &&
           raw.includes('"trunkId":88'),
+      ),
+    ).toBe(true)
+  })
+
+  it('guards duplicate accept clicks while preparing incoming media session', () => {
+    gatewayActions.connect('ws://node-a:8080/ws')
+    const ws = MockWebSocket.instances[0]
+    ws.open()
+
+    gatewayStore.setState((state) => ({
+      ...state,
+      incomingCall: {
+        from: 'sip:1100200363490@203.150.245.42',
+        to: 'sip:00025@203.151.21.121:5090',
+        mode: 'siptrunk',
+        sessionId: 'incoming-1',
+      },
+    }))
+
+    gatewayActions.acceptCall()
+    gatewayActions.acceptCall()
+
+    expect(gatewayStore.state.incomingAction).toBe('preparing_accept')
+    expect(
+      gatewayStore.state.logs.filter((entry) =>
+        entry.message.includes(
+          'Incoming call requires local media session. Preparing automatically before accept...',
+        ),
+      ).length,
+    ).toBe(1)
+    expect(
+      gatewayStore.state.logs.some((entry) =>
+        entry.message.includes('Incoming call action already in progress'),
+      ),
+    ).toBe(true)
+    expect(
+      ws.sent.filter(
+        (raw) =>
+          raw.includes('"type":"accept"') && raw.includes('"sessionId":"incoming-1"'),
+      ).length,
+    ).toBe(0)
+  })
+
+  it('blocks reject while incoming action is in progress', () => {
+    gatewayActions.connect('ws://node-a:8080/ws')
+    const ws = MockWebSocket.instances[0]
+    ws.open()
+
+    gatewayStore.setState((state) => ({
+      ...state,
+      incomingCall: {
+        from: 'sip:1100200363490@203.150.245.42',
+        to: 'sip:00025@203.151.21.121:5090',
+        mode: 'siptrunk',
+        sessionId: 'incoming-2',
+      },
+      incomingAction: 'preparing_accept',
+    }))
+
+    gatewayActions.rejectCall()
+
+    expect(
+      ws.sent.some(
+        (raw) =>
+          raw.includes('"type":"reject"') && raw.includes('"sessionId":"incoming-2"'),
+      ),
+    ).toBe(false)
+    expect(gatewayStore.state.incomingCall?.sessionId).toBe('incoming-2')
+    expect(
+      gatewayStore.state.logs.some((entry) =>
+        entry.message.includes(
+          'Incoming call is being processed. Reject is temporarily disabled.',
+        ),
       ),
     ).toBe(true)
   })

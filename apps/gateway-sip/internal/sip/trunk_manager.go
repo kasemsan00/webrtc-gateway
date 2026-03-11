@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -113,6 +114,17 @@ type TrunkManager struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
+}
+
+// TrunkInviteMatchResult contains detailed invite matching outcome for observability.
+type TrunkInviteMatchResult struct {
+	Trunk           *Trunk
+	Owned           bool
+	Rule            string
+	CandidateIDs    []int64
+	SIPUser         string
+	OwnedCandidates []int64
+	Ambiguous       bool
 }
 
 const trunkManagerDBTimeout = 5 * time.Second
@@ -825,65 +837,201 @@ func (tm *TrunkManager) GetDefaultTrunk() (interface{}, bool) {
 	return nil, false
 }
 
-// MatchTrunkFromInvite matches an incoming INVITE to a trunk.
+func collectCandidateIDs(trunks []*Trunk) []int64 {
+	ids := make([]int64, 0, len(trunks))
+	for _, t := range trunks {
+		ids = append(ids, t.ID)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	return ids
+}
+
+func filterTrunks(trunks []*Trunk, predicate func(*Trunk) bool) []*Trunk {
+	matches := make([]*Trunk, 0)
+	for _, t := range trunks {
+		if predicate(t) {
+			matches = append(matches, t)
+		}
+	}
+	return matches
+}
+
+func normalizeInviteURI(uri sip.Uri) (host, user string, port int) {
+	host = strings.ToLower(strings.TrimSpace(uri.Host))
+	user = strings.TrimSpace(uri.User)
+	port = uri.Port
+	if port == 0 {
+		port = 5060
+	}
+	return host, user, port
+}
+
+func selectSingleMatch(matches []*Trunk, rule string) TrunkInviteMatchResult {
+	result := TrunkInviteMatchResult{
+		Rule:         rule,
+		CandidateIDs: collectCandidateIDs(matches),
+	}
+	if len(matches) == 1 {
+		result.Trunk = matches[0]
+		return result
+	}
+	if len(matches) > 1 {
+		result.Ambiguous = true
+	}
+	return result
+}
+
+// MatchTrunkFromInviteDetailed matches an incoming INVITE to a trunk with deterministic priority.
 // Priority:
-// 1) Strict Request-URI domain+port match
-// 2) Strict To header domain+port match
-// 3) Request-URI username+domain match (port-agnostic)
-// 4) To header username+domain match (port-agnostic)
-// Returns (trunk, owned) where owned indicates if this instance owns the trunk's lease.
-func (tm *TrunkManager) MatchTrunkFromInvite(req *sip.Request) (*Trunk, bool) {
+// 1) Request-URI username+domain+port
+// 2) To header username+domain+port
+// 3) Request-URI username+domain
+// 4) To header username+domain
+// 5) fallback domain+port only when exactly one candidate exists
+// 6) fallback username-only on owned/online trunks only
+func (tm *TrunkManager) MatchTrunkFromInviteDetailed(req *sip.Request) TrunkInviteMatchResult {
 	tm.mu.RLock()
 	defer tm.mu.RUnlock()
 
-	ruri := req.Recipient
-	to := req.To()
-
-	ruriHost := strings.ToLower(strings.TrimSpace(ruri.Host))
-	ruriUser := strings.TrimSpace(ruri.User)
-	ruriPort := ruri.Port
-	if ruriPort == 0 {
-		ruriPort = 5060
+	all := make([]*Trunk, 0, len(tm.trunks))
+	for _, trunk := range tm.trunks {
+		all = append(all, trunk)
 	}
+	sort.Slice(all, func(i, j int) bool { return all[i].ID < all[j].ID })
+
+	ruriHost, ruriUser, ruriPort := normalizeInviteURI(req.Recipient)
 
 	toHost := ""
 	toUser := ""
 	toPort := 5060
+	to := req.To()
 	if to != nil {
-		toHost = strings.ToLower(strings.TrimSpace(to.Address.Host))
-		toUser = strings.TrimSpace(to.Address.User)
-		if to.Address.Port != 0 {
-			toPort = to.Address.Port
+		toHost, toUser, toPort = normalizeInviteURI(to.Address)
+	}
+	sipUser := strings.TrimSpace(ruriUser)
+	if sipUser == "" {
+		sipUser = strings.TrimSpace(toUser)
+	}
+
+	matchesBy := func(predicate func(trunk *Trunk) bool) []*Trunk {
+		return filterTrunks(all, predicate)
+	}
+
+	byUserDomainPort := func(host, user string, port int) []*Trunk {
+		if host == "" || user == "" {
+			return nil
+		}
+		return matchesBy(func(trunk *Trunk) bool {
+			trunkDomain := strings.ToLower(strings.TrimSpace(trunk.Domain))
+			return trunkDomain == host && trunk.Port == port && strings.TrimSpace(trunk.Username) == user
+		})
+	}
+
+	byUserDomain := func(host, user string) []*Trunk {
+		if host == "" || user == "" {
+			return nil
+		}
+		return matchesBy(func(trunk *Trunk) bool {
+			trunkDomain := strings.ToLower(strings.TrimSpace(trunk.Domain))
+			return trunkDomain == host && strings.TrimSpace(trunk.Username) == user
+		})
+	}
+
+	byDomainPort := func(host string, port int) []*Trunk {
+		if host == "" {
+			return nil
+		}
+		return matchesBy(func(trunk *Trunk) bool {
+			trunkDomain := strings.ToLower(strings.TrimSpace(trunk.Domain))
+			return trunkDomain == host && trunk.Port == port
+		})
+	}
+	byUsernameOwnedOnline := func(user string) []*Trunk {
+		user = strings.TrimSpace(user)
+		if user == "" {
+			return nil
+		}
+		return matchesBy(func(trunk *Trunk) bool {
+			return tm.ownedLeases[trunk.ID] && strings.TrimSpace(trunk.Username) == user
+		})
+	}
+	ownedCandidatesByUser := func(user string) []int64 {
+		return collectCandidateIDs(byUsernameOwnedOnline(user))
+	}
+
+	orderedRules := []struct {
+		rule    string
+		matches []*Trunk
+	}{
+		{rule: "ruri_user_domain_port", matches: byUserDomainPort(ruriHost, ruriUser, ruriPort)},
+		{rule: "to_user_domain_port", matches: byUserDomainPort(toHost, toUser, toPort)},
+		{rule: "ruri_user_domain", matches: byUserDomain(ruriHost, ruriUser)},
+		{rule: "to_user_domain", matches: byUserDomain(toHost, toUser)},
+	}
+
+	for _, entry := range orderedRules {
+		result := selectSingleMatch(entry.matches, entry.rule)
+		if result.Trunk != nil || result.Ambiguous {
+			if result.Trunk != nil {
+				result.Owned = tm.ownedLeases[result.Trunk.ID]
+			}
+			result.SIPUser = sipUser
+			result.OwnedCandidates = ownedCandidatesByUser(sipUser)
+			return result
 		}
 	}
 
-	trunkMatch := func(trunk *Trunk) bool {
-		trunkDomain := strings.ToLower(strings.TrimSpace(trunk.Domain))
-
-		if ruriHost != "" && trunkDomain == ruriHost && trunk.Port == ruriPort {
-			return true
-		}
-		if toHost != "" && trunkDomain == toHost && trunk.Port == toPort {
-			return true
-		}
-		if ruriHost != "" && ruriUser != "" && trunkDomain == ruriHost && trunk.Username == ruriUser {
-			return true
-		}
-		if toHost != "" && toUser != "" && trunkDomain == toHost && trunk.Username == toUser {
-			return true
-		}
-
-		return false
+	fallbackRules := []struct {
+		rule    string
+		matches []*Trunk
+	}{
+		{rule: "ruri_domain_port_fallback", matches: byDomainPort(ruriHost, ruriPort)},
+		{rule: "to_domain_port_fallback", matches: byDomainPort(toHost, toPort)},
 	}
 
-	for _, trunk := range tm.trunks {
-		if trunkMatch(trunk) {
-			owned := tm.ownedLeases[trunk.ID]
-			return trunk, owned
+	for _, entry := range fallbackRules {
+		result := selectSingleMatch(entry.matches, entry.rule)
+		if result.Trunk != nil || result.Ambiguous {
+			if result.Trunk != nil {
+				result.Owned = tm.ownedLeases[result.Trunk.ID]
+			}
+			result.SIPUser = sipUser
+			result.OwnedCandidates = ownedCandidatesByUser(sipUser)
+			return result
 		}
 	}
 
-	return nil, false
+	usernameFallbackUsers := []string{strings.TrimSpace(ruriUser)}
+	if toUserTrimmed := strings.TrimSpace(toUser); toUserTrimmed != "" && toUserTrimmed != usernameFallbackUsers[0] {
+		usernameFallbackUsers = append(usernameFallbackUsers, toUserTrimmed)
+	}
+	for _, user := range usernameFallbackUsers {
+		result := selectSingleMatch(byUsernameOwnedOnline(user), "username_only_online")
+		if result.Trunk != nil || result.Ambiguous {
+			if result.Trunk != nil {
+				result.Owned = true
+			}
+			result.SIPUser = user
+			result.OwnedCandidates = result.CandidateIDs
+			return result
+		}
+	}
+
+	return TrunkInviteMatchResult{
+		Rule:            "no_match",
+		SIPUser:         sipUser,
+		OwnedCandidates: ownedCandidatesByUser(sipUser),
+	}
+}
+
+// MatchTrunkFromInvite matches an incoming INVITE to a trunk.
+// Returns (trunk, owned) where owned indicates if this instance owns the trunk's lease.
+func (tm *TrunkManager) MatchTrunkFromInvite(req *sip.Request) (*Trunk, bool) {
+	result := tm.MatchTrunkFromInviteDetailed(req)
+	if result.Trunk == nil {
+		return nil, false
+	}
+	return result.Trunk, result.Owned
 }
 
 // IsOwnedTrunk checks if this instance owns the lease for a trunk

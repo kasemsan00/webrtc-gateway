@@ -152,6 +152,7 @@ const initialState: GatewayState = {
     lastRemoteSeq: null,
   },
   incomingCall: null,
+  incomingAction: 'idle',
   logs: [],
   messages: [],
   pendingCallRequest: null,
@@ -766,6 +767,7 @@ function teardownFullSession({ preserveCallState = false } = {}) {
       lastRemoteSeq: null,
     },
     incomingCall: null,
+    incomingAction: 'idle',
     pendingCallRequest: null,
   }))
 }
@@ -801,6 +803,7 @@ function teardownSessionForRecovery() {
       switchingAudioInput: false,
     },
     incomingCall: null,
+    incomingAction: 'idle',
   }))
 }
 
@@ -812,6 +815,10 @@ function handleCallState(callState: string) {
       ...state.call,
       state: normalized,
     },
+    incomingAction:
+      normalized === 'active' || normalized === 'ended'
+        ? 'idle'
+        : state.incomingAction,
   }))
   appendLog(`Call State: ${normalized}`, 'info')
 
@@ -856,11 +863,23 @@ function flushPendingIncomingAcceptQueue() {
   if (!incomingSessionId) return
   if (!isWebSocketOpen(runtime.ws)) return
 
-  sendJson(runtime.ws, { type: 'accept', sessionId: incomingSessionId })
+  const sent = sendJson(runtime.ws, {
+    type: 'accept',
+    sessionId: incomingSessionId,
+  })
+  if (!sent) {
+    gatewayStore.setState((state) => ({
+      ...state,
+      incomingAction: 'idle',
+    }))
+    appendLog('Unable to send accept: WebSocket not connected', 'warning')
+    return
+  }
   runtime.pendingIncomingAcceptSessionId = null
   gatewayStore.setState((state) => ({
     ...state,
     incomingCall: null,
+    incomingAction: 'sending_accept',
   }))
   appendLog('Incoming call accepted after media session became ready', 'success')
 }
@@ -912,6 +931,7 @@ function handleIncomingCall(payload: {
       mode: state.mode,
       sessionId,
     },
+    incomingAction: 'idle',
   }))
 
   appendLog(
@@ -1480,6 +1500,10 @@ function handleMessage(event: MessageEvent<string>) {
         break
       }
       appendLog(`Server Error: ${error}`, 'error')
+      gatewayStore.setState((state) => ({
+        ...state,
+        incomingAction: 'idle',
+      }))
       if (error.includes('Public SIP identity changed')) {
         handlePublicIdentityChangedError()
         break
@@ -2064,12 +2088,20 @@ export function acceptCall() {
     appendLog('Cannot accept call: no active session', 'error')
     return
   }
+  if (gatewayStore.state.incomingAction !== 'idle') {
+    appendLog('Incoming call action already in progress', 'warning')
+    return
+  }
 
   const localSessionId = gatewayStore.state.call.sessionId
   const needMediaPrepare =
     !runtime.pc || !localSessionId || localSessionId === incoming.sessionId
 
   if (needMediaPrepare) {
+    gatewayStore.setState((state) => ({
+      ...state,
+      incomingAction: 'preparing_accept',
+    }))
     runtime.pendingIncomingAcceptSessionId = incoming.sessionId
     appendLog(
       'Incoming call requires local media session. Preparing automatically before accept...',
@@ -2079,16 +2111,29 @@ export function acceptCall() {
     return
   }
 
-  sendJson(runtime.ws, { type: 'accept', sessionId: incoming.sessionId })
+  const sent = sendJson(runtime.ws, { type: 'accept', sessionId: incoming.sessionId })
+  if (!sent) {
+    gatewayStore.setState((state) => ({
+      ...state,
+      incomingAction: 'idle',
+    }))
+    appendLog('WebSocket not connected', 'error')
+    return
+  }
   runtime.pendingIncomingAcceptSessionId = null
   gatewayStore.setState((state) => ({
     ...state,
     incomingCall: null,
+    incomingAction: 'sending_accept',
   }))
   appendLog('Call accepted', 'success')
 }
 
 export function rejectCall() {
+  if (gatewayStore.state.incomingAction !== 'idle') {
+    appendLog('Incoming call is being processed. Reject is temporarily disabled.', 'warning')
+    return
+  }
   const incoming = gatewayStore.state.incomingCall
   const sessionId = incoming?.sessionId || gatewayStore.state.call.sessionId
   if (!sessionId) {
@@ -2097,14 +2142,19 @@ export function rejectCall() {
   }
 
   runtime.pendingIncomingAcceptSessionId = null
-  sendJson(runtime.ws, {
+  const sent = sendJson(runtime.ws, {
     type: 'reject',
     sessionId,
     reason: 'decline',
   })
+  if (!sent) {
+    appendLog('WebSocket not connected', 'error')
+    return
+  }
   gatewayStore.setState((state) => ({
     ...state,
     incomingCall: null,
+    incomingAction: 'sending_reject',
   }))
   appendLog('Call rejected', 'info')
 }

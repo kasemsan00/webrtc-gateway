@@ -178,6 +178,15 @@ export function GatewayConsolePage() {
   const selectedCameraValue =
     state.controls.selectedVideoInputId || '__default__'
   const selectedMicValue = state.controls.selectedAudioInputId || '__default__'
+  const incomingBusy = state.incomingAction !== 'idle'
+  const incomingBusyLabel =
+    state.incomingAction === 'preparing_accept'
+      ? 'Preparing local media session...'
+      : state.incomingAction === 'sending_accept'
+        ? 'Sending accept...'
+        : state.incomingAction === 'sending_reject'
+          ? 'Sending reject...'
+          : ''
 
   // Init store
   useEffect(() => {
@@ -1204,11 +1213,17 @@ export function GatewayConsolePage() {
               <p className="text-xs uppercase tracking-wide text-muted-foreground">
                 Mode: {state.incomingCall.mode}
               </p>
+              {incomingBusy ? (
+                <p className="text-xs text-amber-600 dark:text-amber-300">
+                  {incomingBusyLabel}
+                </p>
+              ) : null}
               <div className="grid grid-cols-2 gap-2 pt-1">
                 <Button
                   variant="destructive"
                   className="h-8"
                   onClick={gatewayActions.rejectCall}
+                  disabled={incomingBusy}
                 >
                   Reject
                 </Button>
@@ -1216,6 +1231,7 @@ export function GatewayConsolePage() {
                   ref={acceptBtnRef}
                   className="h-8"
                   onClick={gatewayActions.acceptCall}
+                  disabled={incomingBusy}
                 >
                   Accept
                 </Button>

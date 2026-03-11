@@ -874,6 +874,14 @@ func isBenignIncomingAcceptRespondError(err error) bool {
 	return strings.Contains(errMsg, "transaction terminated")
 }
 
+func isBenignIncomingRejectRespondError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errMsg := strings.ToLower(err.Error())
+	return strings.Contains(errMsg, "transaction terminated")
+}
+
 // RejectCall rejects an incoming SIP call by sending 486 Busy Here
 func (s *Server) RejectCall(sess *session.Session, reason string) error {
 	fmt.Printf("\n=== [%s] Reject Incoming Call ===\n", sess.ID)
@@ -904,7 +912,22 @@ func (s *Server) RejectCall(sess *session.Session, reason string) error {
 
 	rejectRes := sip.NewResponse(code, reasonPhrase)
 	if err := tx.Respond(rejectRes); err != nil {
-		return fmt.Errorf("failed to send reject response: %w", err)
+		if isBenignIncomingRejectRespondError(err) {
+			fmt.Printf("⚠️ [%s] Reject response warning: %v\n", sess.ID, err)
+			s.logEvent(&logstore.Event{
+				Timestamp: time.Now(),
+				SessionID: sess.ID,
+				Category:  "sip",
+				Name:      "sip_reject_send_warning",
+				Data: map[string]interface{}{
+					"reason": reason,
+					"status": code,
+					"error":  err.Error(),
+				},
+			})
+		} else {
+			return fmt.Errorf("failed to send reject response: %w", err)
+		}
 	}
 
 	// Update session state

@@ -48,6 +48,7 @@ K2 Gateway ทำหน้าที่เป็น bridge ระหว่าง 
 ```
 
 สำหรับระบบหลาย user ที่ต้องรับสายเข้าแบบ route ตาม account ให้ใช้ trunk model ใน DB (`sip_trunks`) และ `trunk_resolve` บน frontend เป็นหลัก
+และควรกำหนด trunk identity ให้ไม่ ambiguous ใน inbound target (แนะนำให้ mapping ต่อ user ชัดเจนด้วย username+domain+port)
 
 ### ขั้นตอนการทำงาน
 

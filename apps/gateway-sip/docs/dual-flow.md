@@ -80,6 +80,6 @@ flowchart LR
 1. Frontend must trigger `trunk_resolve` after every WebSocket connect/reconnect.
 2. Incoming accept must have an established local WebRTC session.
 3. Incoming notifications are fanout-filtered by resolved trunk.
-4. Codec policy stays fixed: Opus audio passthrough + H.264 video.
-5. Watch logs for `trunk_resolve`, incoming fanout, accept path, and resume results.
-
+4. Trunk routing identity must be unambiguous for inbound INVITE matching (prefer per-user unique target such as username+domain+port).
+5. Codec policy stays fixed: Opus audio passthrough + H.264 video.
+6. Watch logs for trunk match rule/candidates, `trunk_resolve`, incoming fanout, accept path, and resume results.
