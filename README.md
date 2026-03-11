@@ -4,6 +4,17 @@ https://webrtc-gateway-ui.app.kasemsan.com/
 
 Monorepo สำหรับระบบ WebRTC <-> SIP Gateway โดยแยกเป็น frontend สำหรับ operations UI และ backend gateway service สำหรับ signaling/media.
 
+## Supported Call Flows
+
+ระบบรองรับการใช้งานพร้อมกัน 2 flow:
+
+1. `browser -> gateway -> kamailio/asterisk -> linphone desktop`
+2. `browser frontend -> gateway -> kamailio/asterisk -> gateway -> browser frontend`
+
+สถาปัตยกรรมหลักคือให้ `gateway` เป็น media/signaling bridge เสมอ และใช้ trunk mapping เป็นฐาน route สำหรับสายเข้า/สายออก
+
+รายละเอียด flow แบบเต็ม: `apps/gateway-sip/docs/dual-flow.md`
+
 ## Project Structure
 
 - `apps/gateway-frontend` : React + TypeScript + Vite UI
@@ -78,10 +89,18 @@ go test ./...
 - Frontend: `apps/gateway-frontend/.env.example`
 - Backend: `apps/gateway-sip/.env.example`
 
+สำหรับ flow browser-to-browser ผ่าน SIP core ต้องใช้ trunk/DB:
+
+- `DB_ENABLE=true`
+- `SIP_TRUNK_ENABLE=true`
+- ตั้ง `GATEWAY_INSTANCE_ID` ให้คงที่
+- ตั้ง `GATEWAY_PUBLIC_WS_URL` ใน environment จริงเพื่อรองรับ redirect/recovery ข้าม instance
+
 ไฟล์อ้างอิงเพิ่มเติม:
 
 - `apps/gateway-frontend/README.md`
 - `apps/gateway-sip/AGENTS.md`
+- `apps/gateway-sip/docs/dual-flow.md`
 
 ## Development Notes
 

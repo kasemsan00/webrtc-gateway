@@ -94,7 +94,7 @@ const initialState: GatewayState = {
     elapsedSeconds: 0,
     callCount: 0,
   },
-  mode: 'public',
+  mode: 'siptrunk',
   publicCredentials: {
     sipDomain: '',
     sipUsername: '',
@@ -194,6 +194,7 @@ const runtime = {
   trunkResolvePayload: null as TrunkResolvePayload | null,
   trunkResolvePending: false,
   lastTrunkNotFoundAt: 0,
+  pendingIncomingAcceptSessionId: null as string | null,
   videoConfig: { ...defaultVideoConfig },
   unsubscribePersist: null as (() => void) | null,
   outgoingRttSeq: 1,
@@ -353,6 +354,30 @@ function parseTrunkIdentifier(
   }
 
   return null
+}
+
+function buildTrunkResolvePayloadFromState(): TrunkResolvePayload | null {
+  const state = gatewayStore.state
+  if (state.mode !== 'siptrunk') return null
+
+  const creds = state.trunk.credentials
+  const parsedTrunk = parseTrunkIdentifier(creds.trunkId)
+  if (parsedTrunk) {
+    return parsedTrunk.kind === 'numeric'
+      ? { trunkId: parsedTrunk.trunkId }
+      : { trunkPublicId: parsedTrunk.trunkPublicId }
+  }
+
+  if (!creds.sipDomain.trim() || !creds.sipUsername.trim() || !creds.sipPassword) {
+    return null
+  }
+
+  return {
+    sipDomain: creds.sipDomain.trim(),
+    sipUsername: creds.sipUsername.trim(),
+    sipPassword: creds.sipPassword,
+    sipPort: creds.sipPort,
+  }
 }
 
 function selectedDeviceConstraint(deviceId: string) {
@@ -694,6 +719,7 @@ function teardownFullSession({ preserveCallState = false } = {}) {
   stopTimer()
   stopStats()
   resetOutgoingRttRuntime()
+  runtime.pendingIncomingAcceptSessionId = null
 
   if (runtime.localStream) {
     runtime.localStream.getTracks().forEach((track) => track.stop())
@@ -825,6 +851,20 @@ function flushPendingCallQueue() {
   sendCallPayload(pending)
 }
 
+function flushPendingIncomingAcceptQueue() {
+  const incomingSessionId = runtime.pendingIncomingAcceptSessionId
+  if (!incomingSessionId) return
+  if (!isWebSocketOpen(runtime.ws)) return
+
+  sendJson(runtime.ws, { type: 'accept', sessionId: incomingSessionId })
+  runtime.pendingIncomingAcceptSessionId = null
+  gatewayStore.setState((state) => ({
+    ...state,
+    incomingCall: null,
+  }))
+  appendLog('Incoming call accepted after media session became ready', 'success')
+}
+
 function handlePublicIdentityChangedError() {
   const pending = buildCallParams()
   if (!pending) {
@@ -915,6 +955,7 @@ async function handleAnswer(payload: { sdp: string; sessionId: string }) {
     }
     appendLog('Session Established', 'success')
     flushPendingCallQueue()
+    flushPendingIncomingAcceptQueue()
   } catch (error) {
     appendLog(
       `Error setting remote description: ${(error as Error).message}`,
@@ -1511,17 +1552,11 @@ export function connect(urlOverride?: string) {
 
       if (
         !runtime.trunkResolvePending &&
-        gatewayStore.state.mode === 'siptrunk' &&
-        gatewayStore.state.trunk.status === 'resolved'
+        gatewayStore.state.mode === 'siptrunk'
       ) {
-        const parsed = parseTrunkIdentifier(
-          gatewayStore.state.trunk.credentials.trunkId,
-        )
-        if (parsed) {
-          runtime.trunkResolvePayload =
-            parsed.kind === 'numeric'
-              ? { trunkId: parsed.trunkId }
-              : { trunkPublicId: parsed.trunkPublicId }
+        const payload = buildTrunkResolvePayloadFromState()
+        if (payload) {
+          runtime.trunkResolvePayload = payload
           runtime.trunkResolvePending = true
         }
       }
@@ -1972,45 +2007,27 @@ export async function resolveTrunk() {
     return
   }
 
-  const creds = gatewayStore.state.trunk.credentials
-  const parsedTrunk = parseTrunkIdentifier(creds.trunkId)
-  if (parsedTrunk) {
-    runtime.trunkResolvePayload =
-      parsedTrunk.kind === 'numeric'
-        ? { trunkId: parsedTrunk.trunkId }
-        : { trunkPublicId: parsedTrunk.trunkPublicId }
-    runtime.trunkResolvePending = true
-    setTrunkStatus(
-      'resolving',
-      `Resolving trunk by ${parsedTrunk.kind === 'numeric' ? `ID ${parsedTrunk.trunkId}` : `UUID ${parsedTrunk.trunkPublicId}`}...`,
-    )
-    sendJson(runtime.ws, {
-      type: 'trunk_resolve',
-      ...runtime.trunkResolvePayload,
-    })
-    return
-  }
-
-  if (
-    !creds.sipDomain.trim() ||
-    !creds.sipUsername.trim() ||
-    !creds.sipPassword
-  ) {
+  const payload = buildTrunkResolvePayloadFromState()
+  if (!payload) {
     appendLog('Please fill in all trunk credentials', 'error')
     return
   }
 
-  runtime.trunkResolvePayload = {
-    sipDomain: creds.sipDomain.trim(),
-    sipUsername: creds.sipUsername.trim(),
-    sipPassword: creds.sipPassword,
-    sipPort: creds.sipPort,
-  }
+  runtime.trunkResolvePayload = payload
   runtime.trunkResolvePending = true
-  setTrunkStatus(
-    'resolving',
-    `Resolving trunk: ${creds.sipUsername}@${creds.sipDomain}:${creds.sipPort}...`,
-  )
+  if (payload.trunkId) {
+    setTrunkStatus('resolving', `Resolving trunk by ID ${payload.trunkId}...`)
+  } else if (payload.trunkPublicId) {
+    setTrunkStatus(
+      'resolving',
+      `Resolving trunk by UUID ${payload.trunkPublicId}...`,
+    )
+  } else {
+    setTrunkStatus(
+      'resolving',
+      `Resolving trunk: ${payload.sipUsername}@${payload.sipDomain}:${payload.sipPort}...`,
+    )
+  }
 
   sendJson(runtime.ws, {
     type: 'trunk_resolve',
@@ -2043,13 +2060,27 @@ export function sendDTMF(digits: string) {
 
 export function acceptCall() {
   const incoming = gatewayStore.state.incomingCall
-  const sessionId = incoming?.sessionId || gatewayStore.state.call.sessionId
-  if (!sessionId) {
+  if (!incoming?.sessionId) {
     appendLog('Cannot accept call: no active session', 'error')
     return
   }
 
-  sendJson(runtime.ws, { type: 'accept', sessionId })
+  const localSessionId = gatewayStore.state.call.sessionId
+  const needMediaPrepare =
+    !runtime.pc || !localSessionId || localSessionId === incoming.sessionId
+
+  if (needMediaPrepare) {
+    runtime.pendingIncomingAcceptSessionId = incoming.sessionId
+    appendLog(
+      'Incoming call requires local media session. Preparing automatically before accept...',
+      'info',
+    )
+    ensureMediaSessionForCall()
+    return
+  }
+
+  sendJson(runtime.ws, { type: 'accept', sessionId: incoming.sessionId })
+  runtime.pendingIncomingAcceptSessionId = null
   gatewayStore.setState((state) => ({
     ...state,
     incomingCall: null,
@@ -2065,6 +2096,7 @@ export function rejectCall() {
     return
   }
 
+  runtime.pendingIncomingAcceptSessionId = null
   sendJson(runtime.ws, {
     type: 'reject',
     sessionId,
@@ -2557,6 +2589,7 @@ export function cleanupGatewayStore() {
   runtime.resumeRedirectUrl = null
   runtime.trunkResolvePending = false
   runtime.trunkResolvePayload = null
+  runtime.pendingIncomingAcceptSessionId = null
   runtime.initialized = false
 }
 

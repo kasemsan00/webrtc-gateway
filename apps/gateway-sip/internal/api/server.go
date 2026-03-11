@@ -1089,6 +1089,18 @@ func (s *Server) handleWSAccept(client *WSClient, msg WSMessage) {
 		webrtcSess.SetCallInfo("inbound", from, to, sipCallID)
 
 		// DON'T delete yet - only delete after AcceptCall succeeds
+	} else {
+		log.Printf("⚠️ [Accept] No dedicated WebRTC session ready for incoming session %s (client.sessionID=%s). Proceeding with incoming session may result in one-way media until browser offer/answer completes.", msg.SessionID, client.sessionID)
+		s.logEvent(&logstore.Event{
+			Timestamp: time.Now(),
+			SessionID: incomingSess.ID,
+			Category:  "ws",
+			Name:      "ws_accept_without_webrtc_session",
+			Data: map[string]interface{}{
+				"incomingSessionId": msg.SessionID,
+				"clientSessionId":   client.sessionID,
+			},
+		})
 	}
 
 	// Determine which session to use for the call

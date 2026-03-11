@@ -2,6 +2,8 @@
 
 คู่มือการใช้งาน WebRTC กับ K2 Gateway สำหรับการเชื่อมต่อและโทรผ่าน SIP
 
+> อัปเดต: สำหรับ production flow ล่าสุด (รองรับ Linphone + Browser-to-Browser พร้อมกัน) ให้ใช้อ้างอิงหลักที่ `docs/dual-flow.md` ร่วมกับเอกสารนี้
+
 ## ✅ Features ที่รองรับ
 
 **Core Features:**
@@ -15,6 +17,9 @@
 - ✅ NAT traversal ผ่าน TURN server
 - ✅ DTMF support
 - ✅ **SIP MESSAGE (Text Messaging)** - ส่ง/รับข้อความระหว่างโทร
+- ✅ รองรับ dual-flow พร้อมกัน:
+  - `browser -> gateway -> kamailio/asterisk -> linphone`
+  - `browser -> gateway -> kamailio/asterisk -> gateway -> browser`
 
 **โหมดการใช้งาน:**
 
@@ -41,6 +46,8 @@ K2 Gateway ทำหน้าที่เป็น bridge ระหว่าง 
 ```
 [Browser/WebRTC] <---> [K2 Gateway] <---> [SIP Server (Asterisk)]
 ```
+
+สำหรับระบบหลาย user ที่ต้องรับสายเข้าแบบ route ตาม account ให้ใช้ trunk model ใน DB (`sip_trunks`) และ `trunk_resolve` บน frontend เป็นหลัก
 
 ### ขั้นตอนการทำงาน
 
