@@ -10,14 +10,14 @@ RUN apk add --no-cache git
 # Set working directory
 WORKDIR /build
 
-# Copy go mod files
-COPY go.mod go.sum ./
+# Copy go mod files from root context
+COPY apps/gateway/go.mod apps/gateway/go.sum ./
 
 # Download dependencies
 RUN go mod download
 
 # Copy source code
-COPY . .
+COPY apps/gateway/ .
 
 # Build the application
 # CGO_ENABLED=0 for static binary
