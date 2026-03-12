@@ -1,6 +1,6 @@
 # Gateway Frontend
 
-React + TypeScript + Vite frontend สำหรับควบคุม WebRTC call ผ่าน `gateway-sip`.
+React + TypeScript + Vite frontend สำหรับควบคุม WebRTC call ผ่าน `gateway`.
 
 ## Run
 
@@ -70,5 +70,5 @@ Server -> Client:
 
 ## References
 
-- Dual-flow architecture: `../gateway-sip/docs/dual-flow.md`
-- Backend WS contract: `../gateway-sip/AGENTS.md`
+- Dual-flow architecture: `../gateway/docs/dual-flow.md`
+- Backend WS contract: `../gateway/AGENTS.md`

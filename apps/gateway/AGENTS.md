@@ -133,7 +133,7 @@ Payload format: JSON
 If you add/change a message type, update all of:
 
 1. `internal/api/server.go` switch + payload struct
-2. Frontend client handlers/senders in `webrtc-gateway-react` (`src/features/gateway/store/gateway-store.ts`)
+2. Frontend client handlers/senders in `frontend` (`src/features/gateway/store/gateway-store.ts`)
 3. this document
 
 ---

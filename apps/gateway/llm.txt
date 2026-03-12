@@ -1,4 +1,4 @@
-# K2 Gateway (webrtc-gateway-sip) - LLM Context
+# K2 Gateway (gateway) - LLM Context
 
 ## 1) Project Identity
 - ประเภทระบบ: Real-time **WebRTC <-> SIP Gateway API** (media + signaling bridge)

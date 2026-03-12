@@ -1,21 +1,21 @@
 {
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
-  "name": "gateway-sip",
+  "name": "gateway",
   "projectType": "application",
-  "sourceRoot": "apps/gateway-sip",
+  "sourceRoot": "apps/gateway",
   "tags": ["scope:gateway", "type:backend", "lang:go"],
   "targets": {
     "serve": {
       "executor": "nx:run-commands",
       "options": {
-        "cwd": "apps/gateway-sip",
+        "cwd": "apps/gateway",
         "command": "go run ."
       }
     },
     "build": {
       "executor": "nx:run-commands",
       "options": {
-        "cwd": "apps/gateway-sip",
+        "cwd": "apps/gateway",
         "command": "go build -o k2-gateway ."
       },
       "outputs": ["{projectRoot}/k2-gateway"]
@@ -23,7 +23,7 @@
     "test": {
       "executor": "nx:run-commands",
       "options": {
-        "cwd": "apps/gateway-sip",
+        "cwd": "apps/gateway",
         "command": "go test ./..."
       },
       "configurations": {
@@ -35,15 +35,15 @@
     "tidy": {
       "executor": "nx:run-commands",
       "options": {
-        "cwd": "apps/gateway-sip",
+        "cwd": "apps/gateway",
         "command": "go mod tidy"
       }
     },
     "docker-build": {
       "executor": "nx:run-commands",
       "options": {
-        "cwd": "apps/gateway-sip",
-        "command": "docker build -t gateway-sip:local ."
+        "cwd": "apps/gateway",
+        "command": "docker build -t gateway:local ."
       }
     }
   }
