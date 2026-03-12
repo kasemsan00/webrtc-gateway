@@ -221,7 +221,7 @@ describe('canResolveTrunk', () => {
     ).toBe(false)
   })
 
-  it('requires websocket and trunk credentials', () => {
+  it('returns false when no trunk identifier is selected', () => {
     expect(
       canResolveTrunk(
         createState({
@@ -230,15 +230,15 @@ describe('canResolveTrunk', () => {
             status: 'not-resolved',
             credentials: {
               trunkId: '',
-              sipDomain: 'example.com',
-              sipUsername: '1001',
-              sipPassword: 'secret',
+              sipDomain: '',
+              sipUsername: '',
+              sipPassword: '',
               sipPort: 5060,
             },
           },
         }),
       ),
-    ).toBe(true)
+    ).toBe(false)
   })
 
   it('supports resolve when trunk id is provided', () => {

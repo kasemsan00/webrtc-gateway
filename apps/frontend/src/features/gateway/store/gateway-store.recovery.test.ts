@@ -218,6 +218,23 @@ describe('gateway recovery signaling', () => {
     )
   })
 
+  it('prefers trunkPublicId over trunkId when both are provided', () => {
+    gatewayActions.connect('ws://node-a:8080/ws')
+    const ws = MockWebSocket.instances[0]
+    ws.open()
+
+    ws.emitMessage({
+      type: 'trunk_resolved',
+      trunkId: 88,
+      trunkPublicId: TEST_TRUNK_PUBLIC_ID,
+    })
+
+    expect(gatewayStore.state.trunk.status).toBe('resolved')
+    expect(gatewayStore.state.trunk.credentials.trunkId).toBe(
+      TEST_TRUNK_PUBLIC_ID,
+    )
+  })
+
   it('sends websocket trunk_resolve when resolving by trunkId', async () => {
     gatewayActions.connect('ws://node-a:8080/ws')
     const ws = MockWebSocket.instances[0]

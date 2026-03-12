@@ -32,6 +32,8 @@ import {
 } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { useTheme } from '@/lib/theme'
+import { fetchTrunks } from '@/features/trunk/services/trunk-api'
+import { normalizeTrunkUid, type Trunk } from '@/features/trunk/types'
 import {
   canPlaceCall,
   canResolveTrunk,
@@ -157,6 +159,15 @@ export function GatewayConsolePage() {
   const state = useStore(gatewayStore, (storeState) => storeState)
   const { theme, toggleTheme } = useTheme()
   const [messageBody, setMessageBody] = useState('')
+  const [switchQueueNumber, setSwitchQueueNumber] = useState('')
+  const [switchAgentUsername, setSwitchAgentUsername] = useState('')
+  const [isSendingSwitch, setIsSendingSwitch] = useState(false)
+  const [trunkOptions, setTrunkOptions] = useState<Array<{
+    value: string
+    label: string
+  }>>([])
+  const [trunkOptionsLoading, setTrunkOptionsLoading] = useState(false)
+  const [trunkOptionsError, setTrunkOptionsError] = useState('')
 
   const localVideoRef = useRef<HTMLVideoElement>(null)
   const remoteVideoRef = useRef<HTMLVideoElement>(null)
@@ -269,6 +280,16 @@ export function GatewayConsolePage() {
     if (gatewayActions.sendSIPMessage(messageBody)) setMessageBody('')
   }, [messageBody])
 
+  const handleSendSwitch = useCallback(async () => {
+    if (isSendingSwitch) return
+    setIsSendingSwitch(true)
+    try {
+      await gatewayActions.sendSwitch(switchQueueNumber, switchAgentUsername)
+    } finally {
+      setIsSendingSwitch(false)
+    }
+  }, [isSendingSwitch, switchAgentUsername, switchQueueNumber])
+
   const onExtKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (e.key === 'Enter' && callEnabled) {
@@ -289,9 +310,58 @@ export function GatewayConsolePage() {
     [handleSendMessage],
   )
 
+  const loadTrunkOptions = useCallback(async () => {
+    setTrunkOptionsLoading(true)
+    setTrunkOptionsError('')
+    try {
+      const res = await fetchTrunks({
+        page: 1,
+        pageSize: 200,
+        sortBy: 'id',
+        sortDir: 'asc',
+      })
+      const items = res.items.filter((trunk) => trunk.enabled)
+      const options = items.map((trunk: Trunk) => {
+        const publicId = normalizeTrunkUid(trunk)
+        return {
+          value: publicId || String(trunk.id),
+          label: `${trunk.name} (#${trunk.id}${publicId ? ` · uid: ${publicId}` : ''})`,
+        }
+      })
+      setTrunkOptions(options)
+    } catch (error) {
+      setTrunkOptions([])
+      setTrunkOptionsError(
+        error instanceof Error ? error.message : 'Failed to fetch trunks',
+      )
+    } finally {
+      setTrunkOptionsLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (state.mode !== 'siptrunk') return
+    void loadTrunkOptions()
+  }, [loadTrunkOptions, state.mode])
+
   /* ---------------------------------------------------------------- */
   /*  Render                                                           */
   /* ---------------------------------------------------------------- */
+
+  const selectedTrunkIdentifier = state.trunk.credentials.trunkId.trim()
+  const selectedTrunkValue = useMemo(() => {
+    if (!selectedTrunkIdentifier) return '__none__'
+    if (trunkOptionsLoading) return selectedTrunkIdentifier
+    return trunkOptions.some((option) => option.value === selectedTrunkIdentifier)
+      ? selectedTrunkIdentifier
+      : '__none__'
+  }, [selectedTrunkIdentifier, trunkOptions, trunkOptionsLoading])
+  const resolveTrunkDisabled =
+    !trunkResolveEnabled ||
+    !selectedTrunkIdentifier ||
+    trunkOptionsLoading ||
+    state.trunk.status === 'resolving' ||
+    state.trunk.status === 'redirecting'
 
   return (
     <div className="flex h-screen flex-col bg-background text-foreground">
@@ -656,92 +726,52 @@ export function GatewayConsolePage() {
               </CardHeader>
               <CardContent className="space-y-1.5 p-3 pt-1.5">
                 <Field label="Trunk ID / UUID" id="t-id">
-                  <Input
-                    id="t-id"
-                    className="h-7 text-xs"
-                    placeholder="88 or 8f6f6d70-2b5a-4fe7-a0d5-9d0af0e90d3a"
-                    value={state.trunk.credentials.trunkId}
-                    onChange={(e) =>
+                  <Select
+                    value={selectedTrunkValue}
+                    onValueChange={(value) =>
                       gatewayActions.setTrunkCredential(
                         'trunkId',
-                        e.target.value,
+                        value === '__none__' ? '' : value,
                       )
                     }
-                  />
+                    disabled={trunkOptionsLoading}
+                  >
+                    <SelectTrigger id="t-id" className="h-7 w-full px-2 text-xs" size="sm">
+                      <SelectValue
+                        placeholder={
+                          trunkOptionsLoading ? 'Loading trunks...' : 'Select trunk'
+                        }
+                      />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">Select trunk</SelectItem>
+                      {trunkOptions.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </Field>
-                <Separator />
-                <p className="text-[10px] text-muted-foreground">Or resolve:</p>
-                <Field label="Domain" id="t-d">
-                  <Input
-                    id="t-d"
-                    className="h-7 text-xs"
-                    placeholder="sip.example.com"
-                    value={state.trunk.credentials.sipDomain}
-                    onChange={(e) =>
-                      gatewayActions.setTrunkCredential(
-                        'sipDomain',
-                        e.target.value,
-                      )
-                    }
-                  />
-                </Field>
-                <Field label="Username" id="t-u">
-                  <Input
-                    id="t-u"
-                    className="h-7 text-xs"
-                    placeholder="1001"
-                    value={state.trunk.credentials.sipUsername}
-                    onChange={(e) =>
-                      gatewayActions.setTrunkCredential(
-                        'sipUsername',
-                        e.target.value,
-                      )
-                    }
-                  />
-                </Field>
-                <Field label="Password" id="t-p">
-                  <Input
-                    id="t-p"
-                    className="h-7 text-xs"
-                    type="password"
-                    placeholder="********"
-                    value={state.trunk.credentials.sipPassword}
-                    onChange={(e) =>
-                      gatewayActions.setTrunkCredential(
-                        'sipPassword',
-                        e.target.value,
-                      )
-                    }
-                  />
-                </Field>
-                <Field label="Port" id="t-port">
-                  <Input
-                    id="t-port"
-                    className="h-7 text-xs"
-                    type="number"
-                    min={0}
-                    max={65535}
-                    placeholder="5060 (0 = SRV)"
-                    value={state.trunk.credentials.sipPort}
-                    onChange={(e) =>
-                      gatewayActions.setTrunkCredential(
-                        'sipPort',
-                        parsePortInput(e.target.value, 5060),
-                      )
-                    }
-                  />
-                </Field>
+                {trunkOptionsError ? (
+                  <p className="text-[10px] text-red-600 dark:text-red-300">
+                    Failed to load trunks: {trunkOptionsError}
+                  </p>
+                ) : null}
+                {!trunkOptionsLoading && !trunkOptionsError && trunkOptions.length === 0 ? (
+                  <p className="text-[10px] text-muted-foreground">
+                    No enabled trunks available
+                  </p>
+                ) : null}
                 <Button
                   variant="outline"
                   className="h-7 w-full text-[11px]"
                   onClick={gatewayActions.resolveTrunk}
-                  disabled={
-                    !trunkResolveEnabled ||
-                    state.trunk.status === 'resolving' ||
-                    state.trunk.status === 'redirecting'
-                  }
+                  disabled={resolveTrunkDisabled}
                 >
-                  {state.trunk.status === 'resolving'
+                  {trunkOptionsLoading
+                    ? 'Loading trunks...'
+                    : state.trunk.status === 'resolving'
                     ? 'Resolving...'
                     : 'Resolve'}
                 </Button>
@@ -837,6 +867,41 @@ export function GatewayConsolePage() {
                   ))}
                 </div>
               ) : null}
+
+              <Separator />
+              <div className="space-y-1.5">
+                <p className="text-[11px] font-medium text-muted-foreground">
+                  Switch Trigger
+                </p>
+                <Field label="Queue Number" id="switch-queue">
+                  <Input
+                    id="switch-queue"
+                    className="h-7 text-xs"
+                    placeholder="14131"
+                    value={switchQueueNumber}
+                    onChange={(e) => setSwitchQueueNumber(e.target.value)}
+                  />
+                </Field>
+                <Field label="Agent Username" id="switch-agent">
+                  <Input
+                    id="switch-agent"
+                    className="h-7 text-xs"
+                    placeholder="00025"
+                    value={switchAgentUsername}
+                    onChange={(e) => setSwitchAgentUsername(e.target.value)}
+                  />
+                </Field>
+                <Button
+                  variant="outline"
+                  className="h-7 w-full text-[11px]"
+                  onClick={() => {
+                    void handleSendSwitch()
+                  }}
+                  disabled={!state.call.sessionId || isSendingSwitch}
+                >
+                  {isSendingSwitch ? 'Sending...' : 'Send Switch'}
+                </Button>
+              </div>
             </CardContent>
           </Card>
         </aside>

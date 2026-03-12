@@ -23,6 +23,7 @@ import {
   isWebSocketOpen,
   sendJson,
 } from '../services/ws-client'
+import { sendSwitchRequest } from '../services/switch-api'
 import type {
   CallMode,
   CallStatus,
@@ -363,22 +364,11 @@ function buildTrunkResolvePayloadFromState(): TrunkResolvePayload | null {
 
   const creds = state.trunk.credentials
   const parsedTrunk = parseTrunkIdentifier(creds.trunkId)
-  if (parsedTrunk) {
-    return parsedTrunk.kind === 'numeric'
-      ? { trunkId: parsedTrunk.trunkId }
-      : { trunkPublicId: parsedTrunk.trunkPublicId }
-  }
+  if (!parsedTrunk) return null
 
-  if (!creds.sipDomain.trim() || !creds.sipUsername.trim() || !creds.sipPassword) {
-    return null
-  }
-
-  return {
-    sipDomain: creds.sipDomain.trim(),
-    sipUsername: creds.sipUsername.trim(),
-    sipPassword: creds.sipPassword,
-    sipPort: creds.sipPort,
-  }
+  return parsedTrunk.kind === 'numeric'
+    ? { trunkId: parsedTrunk.trunkId }
+    : { trunkPublicId: parsedTrunk.trunkPublicId }
 }
 
 function selectedDeviceConstraint(deviceId: string) {
@@ -488,18 +478,8 @@ export function canPlaceCall(state: GatewayState) {
 }
 
 export function canResolveTrunk(state: GatewayState) {
-  const hasTrunkId =
-    parseTrunkIdentifier(state.trunk.credentials.trunkId) !== null
-  const hasResolvableCredentials = Boolean(
-    state.trunk.credentials.sipDomain.trim() &&
-    state.trunk.credentials.sipUsername.trim() &&
-    state.trunk.credentials.sipPassword,
-  )
-
-  return (
-    state.connection.status === 'connected' &&
-    (hasTrunkId || hasResolvableCredentials)
-  )
+  const hasTrunkId = parseTrunkIdentifier(state.trunk.credentials.trunkId) !== null
+  return state.connection.status === 'connected' && hasTrunkId
 }
 
 export function normalizeCallStatus(value: string): CallStatus {
@@ -1282,9 +1262,11 @@ function handleTrunkResolved(payload: {
       credentials: {
         ...state.trunk.credentials,
         trunkId:
-          Number.isInteger(trunkId) && trunkId > 0
-            ? String(trunkId)
-            : trunkPublicId,
+          hasPublicId
+            ? trunkPublicId
+            : Number.isInteger(trunkId) && trunkId > 0
+              ? String(trunkId)
+              : '',
       },
     },
   }))
@@ -2082,6 +2064,39 @@ export function sendDTMF(digits: string) {
   appendLog(`DTMF sent: ${digits}`, 'info')
 }
 
+export async function sendSwitch(queueNumber: string, agentUsername: string) {
+  const sessionId = gatewayStore.state.call.sessionId
+  if (!sessionId) {
+    appendLog('No active session for switch request', 'warning')
+    return
+  }
+
+  const trimmedQueueNumber = queueNumber.trim()
+  const trimmedAgentUsername = agentUsername.trim()
+  if (!trimmedQueueNumber) {
+    appendLog('Queue number is required', 'error')
+    return
+  }
+  if (!trimmedAgentUsername) {
+    appendLog('Agent username is required', 'error')
+    return
+  }
+
+  try {
+    const response = await sendSwitchRequest({
+      sessionId,
+      queueNumber: trimmedQueueNumber,
+      agentUsername: trimmedAgentUsername,
+    })
+    appendLog(
+      `Switch request accepted: queue=${response.queueNumber}, agent=${response.agentUsername}, session=${response.sessionId}`,
+      'success',
+    )
+  } catch (error) {
+    appendLog(`Switch request failed: ${(error as Error).message}`, 'error')
+  }
+}
+
 export function acceptCall() {
   const incoming = gatewayStore.state.incomingCall
   if (!incoming?.sessionId) {
@@ -2656,6 +2671,7 @@ export const gatewayActions = {
   resolveTrunk,
   sendPing,
   sendDTMF,
+  sendSwitch,
   acceptCall,
   rejectCall,
   sendSIPMessage,
