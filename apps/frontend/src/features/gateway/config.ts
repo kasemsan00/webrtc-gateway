@@ -1,4 +1,5 @@
 import type { VideoConfig } from './types'
+import { readAppEnvValue } from '@/lib/runtime-env'
 
 const isBrowser = () => typeof window !== 'undefined'
 
@@ -21,7 +22,7 @@ export function normalizeGatewayWssUrl(rawUrl: string) {
 }
 
 function resolveDefaultWssUrl() {
-  const envUrl = import.meta.env.VITE_GATEWAY_URL as string | undefined
+  const envUrl = readAppEnvValue('VITE_GATEWAY_URL')
   if (envUrl) return normalizeGatewayWssUrl(`wss://${envUrl}`)
 
   if (!isBrowser()) {
@@ -39,10 +40,9 @@ function resolveDefaultWssUrl() {
 export const gatewayRuntimeConfig = {
   wssUrl: resolveDefaultWssUrl(),
   turn: {
-    url: (import.meta.env.VITE_TURN_URL as string | undefined) ?? '',
-    username: (import.meta.env.VITE_TURN_USERNAME as string | undefined) ?? '',
-    credential:
-      (import.meta.env.VITE_TURN_CREDENTIAL as string | undefined) ?? '',
+    url: readAppEnvValue('VITE_TURN_URL') ?? '',
+    username: readAppEnvValue('VITE_TURN_USERNAME') ?? '',
+    credential: readAppEnvValue('VITE_TURN_CREDENTIAL') ?? '',
   },
 }
 

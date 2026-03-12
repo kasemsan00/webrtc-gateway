@@ -9,6 +9,16 @@ import app from './dist/server/server.js'
 const host = process.env.HOST ?? '0.0.0.0'
 const port = Number(process.env.PORT ?? 4173)
 const staticRoot = resolve(process.cwd(), 'dist/client')
+const runtimeEnvKeys = [
+  'VITE_GATEWAY_URL',
+  'VITE_TURN_URL',
+  'VITE_TURN_USERNAME',
+  'VITE_TURN_CREDENTIAL',
+  'VITE_KEYCLOAK_URL',
+  'VITE_KEYCLOAK_REALM',
+  'VITE_KEYCLOAK_CLIENT',
+  'VITE_CONFIG_AUTORECORD',
+]
 
 const mimeTypes = {
   '.css': 'text/css; charset=utf-8',
@@ -28,6 +38,36 @@ const toStaticPath = (pathname) => {
   const absolutePath = resolve(staticRoot, relativePath)
   if (!absolutePath.startsWith(staticRoot)) return null
   return absolutePath
+}
+
+const escapeInlineScriptJson = (value) =>
+  value
+    .replace(/</g, '\\u003c')
+    .replace(/>/g, '\\u003e')
+    .replace(/&/g, '\\u0026')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029')
+
+const buildRuntimeEnvScript = () => {
+  const runtimeEnv = {}
+
+  for (const key of runtimeEnvKeys) {
+    const value = process.env[key]
+    if (value !== undefined && value !== '') {
+      runtimeEnv[key] = value
+    }
+  }
+
+  const serialized = escapeInlineScriptJson(JSON.stringify(runtimeEnv))
+  return `<script>window.__APP_RUNTIME_ENV__=${serialized};</script>`
+}
+
+const injectRuntimeEnvIntoHtml = (html) => {
+  const script = buildRuntimeEnvScript()
+  if (html.includes('</head>')) {
+    return html.replace('</head>', `${script}</head>`)
+  }
+  return `${script}${html}`
 }
 
 const serveStaticFile = async (req, res, url) => {
@@ -76,8 +116,23 @@ createServer(async (req, res) => {
     })
 
     const response = await app.fetch(request)
-    res.statusCode = response.status
+    const contentType = response.headers.get('content-type') ?? ''
+    const isHtmlResponse = contentType.includes('text/html')
 
+    if (isHtmlResponse) {
+      const html = await response.text()
+      const injectedHtml = injectRuntimeEnvIntoHtml(html)
+
+      res.statusCode = response.status
+      response.headers.forEach((value, key) => {
+        if (key.toLowerCase() === 'content-length') return
+        res.setHeader(key, value)
+      })
+      res.end(injectedHtml)
+      return
+    }
+
+    res.statusCode = response.status
     response.headers.forEach((value, key) => {
       res.setHeader(key, value)
     })

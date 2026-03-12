@@ -197,6 +197,7 @@ const runtime = {
   trunkResolvePending: false,
   lastTrunkNotFoundAt: 0,
   pendingIncomingAcceptSessionId: null as string | null,
+  pendingAutoSwitchSessionId: null as string | null,
   videoConfig: { ...defaultVideoConfig },
   unsubscribePersist: null as (() => void) | null,
   outgoingRttSeq: 1,
@@ -701,6 +702,7 @@ function teardownFullSession({ preserveCallState = false } = {}) {
   stopStats()
   resetOutgoingRttRuntime()
   runtime.pendingIncomingAcceptSessionId = null
+  runtime.pendingAutoSwitchSessionId = null
 
   if (runtime.localStream) {
     runtime.localStream.getTracks().forEach((track) => track.stop())
@@ -756,6 +758,7 @@ function teardownSessionForRecovery() {
   stopStats()
   resetOutgoingRttRuntime()
   stopTimer({ resetElapsed: false })
+  runtime.pendingAutoSwitchSessionId = null
 
   if (runtime.pc) {
     runtime.pc.close()
@@ -803,7 +806,15 @@ function handleCallState(callState: string) {
   appendLog(`Call State: ${normalized}`, 'info')
 
   if (normalized === 'active') {
-    runtime.activeCallSessionId = gatewayStore.state.call.sessionId
+    const activeSessionId = gatewayStore.state.call.sessionId
+    runtime.activeCallSessionId = activeSessionId
+    if (
+      activeSessionId &&
+      runtime.pendingAutoSwitchSessionId === activeSessionId
+    ) {
+      runtime.pendingAutoSwitchSessionId = null
+      void sendSwitch()
+    }
     startTimer()
     return
   }
@@ -820,6 +831,7 @@ function handleCallState(callState: string) {
 
   if (normalized === 'ended') {
     runtime.activeCallSessionId = null
+    runtime.pendingAutoSwitchSessionId = null
     clearResumeRecovery()
     teardownFullSession()
   }
@@ -856,6 +868,7 @@ function flushPendingIncomingAcceptQueue() {
     return
   }
   runtime.pendingIncomingAcceptSessionId = null
+  runtime.pendingAutoSwitchSessionId = incomingSessionId
   gatewayStore.setState((state) => ({
     ...state,
     incomingCall: null,
@@ -2118,6 +2131,7 @@ export function acceptCall() {
     return
   }
   runtime.pendingIncomingAcceptSessionId = null
+  runtime.pendingAutoSwitchSessionId = incoming.sessionId
   gatewayStore.setState((state) => ({
     ...state,
     incomingCall: null,
@@ -2139,6 +2153,7 @@ export function rejectCall() {
   }
 
   runtime.pendingIncomingAcceptSessionId = null
+  runtime.pendingAutoSwitchSessionId = null
   const sent = sendJson(runtime.ws, {
     type: 'reject',
     sessionId,
@@ -2637,6 +2652,7 @@ export function cleanupGatewayStore() {
   runtime.trunkResolvePending = false
   runtime.trunkResolvePayload = null
   runtime.pendingIncomingAcceptSessionId = null
+  runtime.pendingAutoSwitchSessionId = null
   runtime.initialized = false
 }
 

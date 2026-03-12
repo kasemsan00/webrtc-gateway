@@ -1,3 +1,5 @@
+import { readAppEnvValue } from '@/lib/runtime-env'
+
 export interface KeycloakRuntimeConfig {
   url: string
   realm: string
@@ -5,9 +7,7 @@ export interface KeycloakRuntimeConfig {
 }
 
 function readEnvValue(name: keyof ImportMetaEnv): string | undefined {
-  const raw = import.meta.env[name] as string | undefined
-  const value = raw?.trim()
-  return value || undefined
+  return readAppEnvValue(name)
 }
 
 function requireEnvValue(name: keyof ImportMetaEnv): string {

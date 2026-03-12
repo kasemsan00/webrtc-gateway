@@ -31,6 +31,13 @@ pnpm test
 - `VITE_TURN_URL`
 - `VITE_TURN_USERNAME`
 - `VITE_TURN_CREDENTIAL`
+- `VITE_KEYCLOAK_URL`
+- `VITE_KEYCLOAK_REALM`
+- `VITE_KEYCLOAK_CLIENT`
+- `VITE_CONFIG_AUTORECORD`
+
+> สำหรับ deployment ด้วย Docker/Coolify: ค่ากลุ่ม `VITE_*` รองรับทั้งตอน build และตอน runtime ของ container
+> (ตั้งใน Coolify Environment Variables ได้โดยไม่ต้อง rebuild image)
 
 ## Supported Operation Flows
 

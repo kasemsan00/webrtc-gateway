@@ -1,10 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+const { sendSwitchRequestMock } = vi.hoisted(() => ({
+  sendSwitchRequestMock: vi.fn(),
+}))
+
+vi.mock('../services/switch-api', () => ({
+  sendSwitchRequest: sendSwitchRequestMock,
+}))
+
 import { gatewayActions, gatewayStore } from './gateway-store'
 
 const TEST_TRUNK_PUBLIC_ID = '8f6f6d70-2b5a-4fe7-a0d5-9d0af0e90d3a'
 const originalWindow = (globalThis as { window?: unknown }).window
 const originalWebSocket = globalThis.WebSocket
+const originalRTCPeerConnection = globalThis.RTCPeerConnection
+const originalRTCRtpSender = globalThis.RTCRtpSender
+const originalMediaStream = globalThis.MediaStream
 const originalLocalStorage = (globalThis as { localStorage?: unknown })
   .localStorage
 const originalMediaDevices = globalThis.navigator?.mediaDevices
@@ -50,10 +61,118 @@ class MockWebSocket {
   }
 }
 
+class MockMediaStreamTrack {
+  readonly kind: 'audio' | 'video'
+  readonly id: string
+  readyState: MediaStreamTrackState = 'live'
+
+  constructor(kind: 'audio' | 'video') {
+    this.kind = kind
+    this.id = `${kind}-track-1`
+  }
+
+  stop() {
+    this.readyState = 'ended'
+  }
+
+  async applyConstraints() {}
+}
+
+class MockMediaStream {
+  private readonly tracks: MockMediaStreamTrack[]
+
+  constructor(tracks: MockMediaStreamTrack[] = []) {
+    this.tracks = [...tracks]
+  }
+
+  getTracks() {
+    return [...this.tracks]
+  }
+
+  getAudioTracks() {
+    return this.tracks.filter((track) => track.kind === 'audio')
+  }
+
+  getVideoTracks() {
+    return this.tracks.filter((track) => track.kind === 'video')
+  }
+
+  addTrack(track: MockMediaStreamTrack) {
+    this.tracks.push(track)
+  }
+}
+
+class MockRTCPeerConnection {
+  localDescription: { type: 'offer'; sdp: string } | null = null
+  iceGatheringState: RTCIceGatheringState = 'complete'
+  iceConnectionState: RTCIceConnectionState = 'new'
+  signalingState: RTCSignalingState = 'stable'
+  oniceconnectionstatechange: (() => void) | null = null
+  onsignalingstatechange: (() => void) | null = null
+  ontrack: ((event: RTCTrackEvent) => void) | null = null
+  private readonly listeners = new Map<string, Set<() => void>>()
+
+  addTrack() {}
+
+  getTransceivers() {
+    return []
+  }
+
+  getSenders() {
+    return []
+  }
+
+  async createOffer() {
+    return { type: 'offer', sdp: 'v=0' } as RTCSessionDescriptionInit
+  }
+
+  async setLocalDescription(description: RTCSessionDescriptionInit) {
+    this.localDescription = {
+      type: 'offer',
+      sdp: description.sdp ?? 'v=0',
+    }
+  }
+
+  async setRemoteDescription() {}
+
+  async getStats() {
+    return new Map()
+  }
+
+  close() {}
+
+  addEventListener(event: string, cb: () => void) {
+    if (!this.listeners.has(event)) {
+      this.listeners.set(event, new Set())
+    }
+    this.listeners.get(event)?.add(cb)
+  }
+
+  removeEventListener(event: string, cb: () => void) {
+    this.listeners.get(event)?.delete(cb)
+  }
+}
+
+async function flushAsync() {
+  await Promise.resolve()
+  await Promise.resolve()
+}
+
+async function waitForOffer(ws: MockWebSocket) {
+  for (let idx = 0; idx < 20; idx += 1) {
+    if (ws.sent.some((raw) => raw.includes('"type":"offer"'))) {
+      return
+    }
+    await flushAsync()
+  }
+  throw new Error('offer was not sent in time')
+}
+
 describe('gateway recovery signaling', () => {
   beforeEach(() => {
     vi.useFakeTimers()
     MockWebSocket.instances = []
+    sendSwitchRequestMock.mockReset()
 
     Object.defineProperty(globalThis, 'window', {
       value: {
@@ -71,12 +190,34 @@ describe('gateway recovery signaling', () => {
       configurable: true,
       writable: true,
     })
+    Object.defineProperty(globalThis, 'MediaStream', {
+      value: MockMediaStream,
+      configurable: true,
+      writable: true,
+    })
+    Object.defineProperty(globalThis, 'RTCPeerConnection', {
+      value: MockRTCPeerConnection,
+      configurable: true,
+      writable: true,
+    })
+    Object.defineProperty(globalThis, 'RTCRtpSender', {
+      value: {
+        getCapabilities: vi.fn(() => ({ codecs: [] })),
+      },
+      configurable: true,
+      writable: true,
+    })
     Object.defineProperty(globalThis.navigator, 'mediaDevices', {
       value: {
         enumerateDevices: vi.fn(async () => []),
         addEventListener: vi.fn(),
         removeEventListener: vi.fn(),
-        getUserMedia: vi.fn(() => new Promise(() => {})),
+        getUserMedia: vi.fn(async () =>
+          new MockMediaStream([
+            new MockMediaStreamTrack('audio'),
+            new MockMediaStreamTrack('video'),
+          ]),
+        ),
       },
       configurable: true,
       writable: true,
@@ -101,6 +242,21 @@ describe('gateway recovery signaling', () => {
 
     Object.defineProperty(globalThis, 'WebSocket', {
       value: originalWebSocket,
+      configurable: true,
+      writable: true,
+    })
+    Object.defineProperty(globalThis, 'MediaStream', {
+      value: originalMediaStream,
+      configurable: true,
+      writable: true,
+    })
+    Object.defineProperty(globalThis, 'RTCPeerConnection', {
+      value: originalRTCPeerConnection,
+      configurable: true,
+      writable: true,
+    })
+    Object.defineProperty(globalThis, 'RTCRtpSender', {
+      value: originalRTCRtpSender,
       configurable: true,
       writable: true,
     })
@@ -334,6 +490,139 @@ describe('gateway recovery signaling', () => {
           raw.includes('"type":"accept"') && raw.includes('"sessionId":"incoming-1"'),
       ).length,
     ).toBe(0)
+  })
+
+  it('auto-sends switch once after incoming accept reaches active state', async () => {
+    sendSwitchRequestMock.mockResolvedValueOnce({
+      status: 'accepted',
+      sessionId: 'incoming-auto-1',
+      autoMode: true,
+    })
+
+    gatewayActions.connect('ws://node-a:8080/ws')
+    const ws = MockWebSocket.instances[0]
+    ws.open()
+    await gatewayActions.startSession()
+    await waitForOffer(ws)
+
+    ws.emitMessage({
+      type: 'incoming',
+      from: 'sip:caller@test',
+      to: 'sip:receiver@test',
+      sessionId: 'incoming-auto-1',
+    })
+    gatewayStore.setState((state) => ({
+      ...state,
+      call: {
+        ...state.call,
+        sessionId: 'local-session-1',
+      },
+    }))
+
+    gatewayActions.acceptCall()
+    await flushAsync()
+
+    ws.emitMessage({
+      type: 'state',
+      state: 'active',
+      sessionId: 'incoming-auto-1',
+    })
+    ws.emitMessage({
+      type: 'state',
+      state: 'active',
+      sessionId: 'incoming-auto-1',
+    })
+    await flushAsync()
+
+    expect(sendSwitchRequestMock).toHaveBeenCalledTimes(1)
+    expect(sendSwitchRequestMock).toHaveBeenCalledWith({
+      sessionId: 'incoming-auto-1',
+    })
+  })
+
+  it('does not auto-send switch if call ends before first active state', async () => {
+    gatewayActions.connect('ws://node-a:8080/ws')
+    const ws = MockWebSocket.instances[0]
+    ws.open()
+    await gatewayActions.startSession()
+    await waitForOffer(ws)
+
+    ws.emitMessage({
+      type: 'incoming',
+      from: 'sip:caller@test',
+      to: 'sip:receiver@test',
+      sessionId: 'incoming-auto-2',
+    })
+    gatewayStore.setState((state) => ({
+      ...state,
+      call: {
+        ...state.call,
+        sessionId: 'local-session-2',
+      },
+    }))
+
+    gatewayActions.acceptCall()
+    await flushAsync()
+
+    ws.emitMessage({
+      type: 'state',
+      state: 'ended',
+      sessionId: 'incoming-auto-2',
+    })
+    ws.emitMessage({
+      type: 'state',
+      state: 'active',
+      sessionId: 'incoming-auto-2',
+    })
+    await flushAsync()
+
+    expect(sendSwitchRequestMock).not.toHaveBeenCalled()
+  })
+
+  it('logs auto-switch error once when background send fails', async () => {
+    sendSwitchRequestMock.mockRejectedValueOnce(new Error('switch failed'))
+
+    gatewayActions.connect('ws://node-a:8080/ws')
+    const ws = MockWebSocket.instances[0]
+    ws.open()
+    await gatewayActions.startSession()
+    await waitForOffer(ws)
+
+    ws.emitMessage({
+      type: 'incoming',
+      from: 'sip:caller@test',
+      to: 'sip:receiver@test',
+      sessionId: 'incoming-auto-3',
+    })
+    gatewayStore.setState((state) => ({
+      ...state,
+      call: {
+        ...state.call,
+        sessionId: 'local-session-3',
+      },
+    }))
+
+    gatewayActions.acceptCall()
+    await flushAsync()
+
+    ws.emitMessage({
+      type: 'state',
+      state: 'active',
+      sessionId: 'incoming-auto-3',
+    })
+    ws.emitMessage({
+      type: 'state',
+      state: 'active',
+      sessionId: 'incoming-auto-3',
+    })
+    await flushAsync()
+
+    expect(sendSwitchRequestMock).toHaveBeenCalledTimes(1)
+    expect(
+      gatewayStore.state.logs.some((entry) =>
+        entry.message.includes('Switch request failed: switch failed'),
+      ),
+    ).toBe(true)
   })
 
   it('blocks reject while incoming action is in progress', () => {

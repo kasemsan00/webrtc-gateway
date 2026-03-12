@@ -4,6 +4,11 @@ import { getKeycloakRuntimeConfig, isAutoRecordEnabled } from './runtime-env'
 
 describe('runtime-env', () => {
   afterEach(() => {
+    delete (
+      window as Window & {
+        __APP_RUNTIME_ENV__?: Record<string, string>
+      }
+    ).__APP_RUNTIME_ENV__
     vi.unstubAllEnvs()
   })
 
@@ -27,6 +32,27 @@ describe('runtime-env', () => {
     expect(() => getKeycloakRuntimeConfig()).toThrow(
       'VITE_KEYCLOAK_URL is not configured',
     )
+  })
+
+  it('prefers runtime env injected on window over build-time env', () => {
+    vi.stubEnv('VITE_KEYCLOAK_URL', 'https://build.example.com/auth')
+    vi.stubEnv('VITE_KEYCLOAK_REALM', 'build-realm')
+    vi.stubEnv('VITE_KEYCLOAK_CLIENT', 'build-client')
+    ;(
+      window as Window & {
+        __APP_RUNTIME_ENV__?: Record<string, string>
+      }
+    ).__APP_RUNTIME_ENV__ = {
+      VITE_KEYCLOAK_URL: 'https://runtime.example.com/auth',
+      VITE_KEYCLOAK_REALM: 'runtime-realm',
+      VITE_KEYCLOAK_CLIENT: 'runtime-client',
+    }
+
+    expect(getKeycloakRuntimeConfig()).toEqual({
+      url: 'https://runtime.example.com/auth',
+      realm: 'runtime-realm',
+      clientId: 'runtime-client',
+    })
   })
 
   it('parses VITE_CONFIG_AUTORECORD as true for truthy values', () => {
