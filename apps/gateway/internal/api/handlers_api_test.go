@@ -128,13 +128,17 @@ type apiHandlerSIPMakerStub struct {
 	makeCallErr error
 	hangupErr   error
 	dtmfErr     error
+	switchErr   error
 
 	makeCallCount int
 	hangupCount   int
 	dtmfCount     int
+	switchCount   int
 
 	lastMakeCallSessionID string
 	lastDigits            string
+	lastSwitchBody        string
+	lastSwitchCallerURI   string
 }
 
 func (s *apiHandlerSIPMakerStub) MakeCall(_ string, _ string, sess *session.Session) error {
@@ -161,6 +165,12 @@ func (s *apiHandlerSIPMakerStub) RejectCall(_ *session.Session, _ string) error 
 func (s *apiHandlerSIPMakerStub) SendMessage(_, _, _, _ string) error           { return nil }
 func (s *apiHandlerSIPMakerStub) SendMessageToSession(_ *session.Session, _, _ string) error {
 	return nil
+}
+func (s *apiHandlerSIPMakerStub) TriggerSwitchMessage(body, callerURI string) error {
+	s.switchCount++
+	s.lastSwitchBody = body
+	s.lastSwitchCallerURI = callerURI
+	return s.switchErr
 }
 
 type apiHandlerLogStoreStub struct {
@@ -577,6 +587,60 @@ func TestHandleOfferCallHangupDTMF_ValidationAndFailures(t *testing.T) {
 	okResp := assertJSONDecode[map[string]string](t, rr, http.StatusOK)
 	if okResp["status"] != "ok" || sipMaker.lastDigits != "123" {
 		t.Fatalf("unexpected dtmf response=%+v digits=%q", okResp, sipMaker.lastDigits)
+	}
+}
+
+func TestHandleSwitch_ValidationAndSuccess(t *testing.T) {
+	srv, mgr := newAPIHandlerTestServer(t, nil, nil, nil)
+	rr := doRequest(t, srv.handleSwitch, http.MethodPost, "/switch", `{`, nil)
+	assertJSONError(t, rr, http.StatusServiceUnavailable, "SIP call maker not available")
+
+	switchMaker := &apiHandlerSIPMakerStub{}
+	srv.sipMaker = switchMaker
+
+	rr = doRequest(t, srv.handleSwitch, http.MethodPost, "/switch", `{`, nil)
+	assertJSONError(t, rr, http.StatusBadRequest, "Invalid request body")
+
+	rr = doRequest(t, srv.handleSwitch, http.MethodPost, "/switch", `{"queueNumber":"14131","agentUsername":"00025"}`, nil)
+	assertJSONError(t, rr, http.StatusBadRequest, "Session ID is required")
+
+	rr = doRequest(t, srv.handleSwitch, http.MethodPost, "/switch", `{"sessionId":"s-1","agentUsername":"00025"}`, nil)
+	assertJSONError(t, rr, http.StatusBadRequest, "Queue number is required")
+
+	rr = doRequest(t, srv.handleSwitch, http.MethodPost, "/switch", `{"sessionId":"s-1","queueNumber":"14131"}`, nil)
+	assertJSONError(t, rr, http.StatusBadRequest, "Agent username is required")
+
+	rr = doRequest(t, srv.handleSwitch, http.MethodPost, "/switch", `{"sessionId":"missing","queueNumber":"14131","agentUsername":"00025"}`, nil)
+	assertJSONError(t, rr, http.StatusNotFound, "Session not found")
+
+	noFromSess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+	rr = doRequest(t, srv.handleSwitch, http.MethodPost, "/switch", `{"sessionId":"`+noFromSess.ID+`","queueNumber":"14131","agentUsername":"00025"}`, nil)
+	assertJSONError(t, rr, http.StatusBadRequest, "caller identifier is missing")
+
+	okSess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+	okSess.SetCallInfo("outbound", "sip:0900200002@example.com", "1002", "call-1")
+
+	switchMaker.switchErr = errors.New("trigger failed")
+	rr = doRequest(t, srv.handleSwitch, http.MethodPost, "/switch", `{"sessionId":"`+okSess.ID+`","queueNumber":"14131","agentUsername":"00025"}`, nil)
+	assertJSONError(t, rr, http.StatusInternalServerError, "Failed to trigger switch")
+
+	switchMaker.switchErr = nil
+	rr = doRequest(t, srv.handleSwitch, http.MethodPost, "/switch", `{"sessionId":"`+okSess.ID+`","queueNumber":"14131","agentUsername":"00025"}`, nil)
+	resp := assertJSONDecode[SwitchResponse](t, rr, http.StatusAccepted)
+	if resp.Status != "accepted" || resp.SessionID != okSess.ID {
+		t.Fatalf("unexpected switch response: %+v", resp)
+	}
+	if switchMaker.lastSwitchBody != "@switch:14131|00025" {
+		t.Fatalf("unexpected switch body: %s", switchMaker.lastSwitchBody)
+	}
+	if switchMaker.lastSwitchCallerURI != "sip:0900200002@example.com" {
+		t.Fatalf("unexpected callerURI: %s", switchMaker.lastSwitchCallerURI)
 	}
 }
 

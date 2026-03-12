@@ -93,6 +93,7 @@ type SIPCallMaker interface {
 	// SIP Messaging
 	SendMessage(destination, from, body, contentType string) error
 	SendMessageToSession(sess *session.Session, body, contentType string) error
+	TriggerSwitchMessage(body, callerURI string) error
 }
 
 // WSClient represents a WebSocket client connection
@@ -247,6 +248,7 @@ func (s *Server) Start(ctx context.Context) error {
 		api.HandleFunc("/sessions/stream", s.handleSessionStream).Methods("GET", "OPTIONS")
 		api.HandleFunc("/session/{sessionId}", s.handleGetSession).Methods("GET", "OPTIONS")
 		api.HandleFunc("/dtmf/{sessionId}", s.handleDTMF).Methods("POST", "OPTIONS")
+		api.HandleFunc("/switch", s.handleSwitch).Methods("POST", "OPTIONS")
 		api.HandleFunc("/sessions/history", s.handleListSessionHistory).Methods("GET", "OPTIONS")
 		api.HandleFunc("/sessions/{sessionId}/events", s.handleListSessionEvents).Methods("GET", "OPTIONS")
 		api.HandleFunc("/sessions/{sessionId}/payloads", s.handleListSessionPayloads).Methods("GET", "OPTIONS")
@@ -782,6 +784,16 @@ func (s *Server) handleWSHangup(client *WSClient, msg WSMessage) {
 	})
 	s.logSessionSnapshot(ctx, sess, "ws_hangup")
 
+	// Send state=ended to browser IMMEDIATELY so the frontend knows the
+	// call is ending. This must happen BEFORE Hangup() because Hangup()
+	// blocks waiting for the SIP BYE response (up to 10 s timeout).
+	response := WSMessage{
+		Type:      "state",
+		SessionID: msg.SessionID,
+		State:     string(session.StateEnded),
+	}
+	s.sendWSMessage(client, response)
+
 	// Send SIP BYE (this will wait for completion)
 	if s.sipMaker != nil {
 		if err := s.sipMaker.Hangup(sess); err != nil {
@@ -797,14 +809,6 @@ func (s *Server) handleWSHangup(client *WSClient, msg WSMessage) {
 
 	// Delete session after BYE is sent
 	s.sessionMgr.DeleteSession(msg.SessionID)
-
-	// Send state update
-	response := WSMessage{
-		Type:      "state",
-		SessionID: msg.SessionID,
-		State:     string(session.StateEnded),
-	}
-	s.sendWSMessage(client, response)
 }
 
 // handleWSDTMF handles WebSocket DTMF messages

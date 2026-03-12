@@ -35,6 +35,9 @@ func (s *stubSIPCallMaker) SendMessage(destination, from, body, contentType stri
 func (s *stubSIPCallMaker) SendMessageToSession(sess *session.Session, body, contentType string) error {
 	return nil
 }
+func (s *stubSIPCallMaker) TriggerSwitchMessage(body, callerURI string) error {
+	return nil
+}
 
 func TestHandleWSCallRejectsPublicIdentityChange(t *testing.T) {
 	mgr := newTestSessionManager()

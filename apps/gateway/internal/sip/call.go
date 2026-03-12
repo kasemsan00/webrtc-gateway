@@ -662,8 +662,19 @@ func (s *Server) Hangup(sess *session.Session) error {
 		}
 	}
 
-	// Close and clear media transports for this session.
+	// Close media transports (RTP/RTCP UDP sockets) for this session.
 	sess.CloseMediaTransports()
+
+	// Close the WebRTC PeerConnection so the browser ICE/DTLS connection is
+	// torn down immediately – without this the browser side stays connected
+	// even after receiving the SIP BYE 200 OK.
+	if sess.PeerConnection != nil {
+		if err := sess.PeerConnection.Close(); err != nil {
+			fmt.Printf("[%s] Warning: PeerConnection.Close() error: %v\n", sess.ID, err)
+		} else {
+			fmt.Printf("[%s] ✅ PeerConnection closed\n", sess.ID)
+		}
+	}
 
 	sess.UpdateState(session.StateEnded)
 	s.notifySessionStateChange(sess, session.StateEnded)

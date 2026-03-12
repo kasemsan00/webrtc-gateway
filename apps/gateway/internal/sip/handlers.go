@@ -421,14 +421,28 @@ func (s *Server) handleBYE(req *sip.Request, tx sip.ServerTransaction) {
 			s.publicRegistry.DecrementRefCount(accountKey)
 		}
 
-		// Update session state
+		// Close media transports (RTP/RTCP) immediately so audio/video stops
+		// flowing on both sides before we notify the browser.
+		sess.CloseMediaTransports()
+
+		// Close the WebRTC PeerConnection so the browser ICE/DTLS connection is
+		// torn down right away – this is the reason only one side was cut before.
+		if sess.PeerConnection != nil {
+			if err := sess.PeerConnection.Close(); err != nil {
+				fmt.Printf("⚠️ [%s] PeerConnection.Close() error: %v\n", sess.ID, err)
+			} else {
+				fmt.Printf("✅ [%s] PeerConnection closed\n", sess.ID)
+			}
+		}
+
+		// Update session state and notify WebSocket/SSE clients
 		sess.UpdateState(session.StateEnded)
 		s.notifySessionStateChange(sess, session.StateEnded)
 		s.logSessionSnapshot(ctx, sess, "sip_bye_received")
 
 		fmt.Printf("✅ State change notification sent to client\n")
 
-		// Delete session and cleanup resources
+		// Delete session and cleanup any remaining resources
 		if s.sessionMgr != nil {
 			s.sessionMgr.DeleteSession(sess.ID)
 			fmt.Printf("✅ Session cleaned up\n")
@@ -825,4 +839,21 @@ func (s *Server) handleSwitchMessage(body string, callerURI string) {
 	}
 
 	fmt.Printf("✅ Sent FIR + PLI (Browser + Asterisk) after @switch for session: %s\n", sess.ID)
+}
+
+// TriggerSwitchMessage triggers @switch handling from external callers (e.g. REST API).
+// This method validates input, then runs the heavy switch workflow asynchronously.
+func (s *Server) TriggerSwitchMessage(body string, callerURI string) error {
+	body = strings.TrimSpace(body)
+	callerURI = strings.TrimSpace(callerURI)
+
+	if body == "" {
+		return fmt.Errorf("switch message body is required")
+	}
+	if callerURI == "" {
+		return fmt.Errorf("caller URI is required")
+	}
+
+	go s.handleSwitchMessage(body, callerURI)
+	return nil
 }

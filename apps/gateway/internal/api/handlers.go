@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -95,6 +96,21 @@ type WSClientResponse struct {
 // DTMFRequest represents a DTMF request
 type DTMFRequest struct {
 	Digits string `json:"digits"`
+}
+
+// SwitchRequest represents a REST switch trigger request.
+type SwitchRequest struct {
+	SessionID     string `json:"sessionId"`
+	QueueNumber   string `json:"queueNumber"`
+	AgentUsername string `json:"agentUsername"`
+}
+
+// SwitchResponse contains switch trigger result.
+type SwitchResponse struct {
+	Status        string `json:"status"`
+	SessionID     string `json:"sessionId"`
+	QueueNumber   string `json:"queueNumber"`
+	AgentUsername string `json:"agentUsername"`
 }
 
 // TrunkResponse represents a SIP trunk entry for REST responses
@@ -658,6 +674,86 @@ func (s *Server) handleDTMF(w http.ResponseWriter, r *http.Request) {
 	})
 
 	s.respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleSwitch triggers @switch media-recovery behavior for a session.
+func (s *Server) handleSwitch(w http.ResponseWriter, r *http.Request) {
+	if s.sipMaker == nil {
+		s.respondError(w, http.StatusServiceUnavailable, "SIP call maker not available")
+		return
+	}
+
+	var req SwitchRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.respondError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	req.SessionID = strings.TrimSpace(req.SessionID)
+	req.QueueNumber = strings.TrimSpace(req.QueueNumber)
+	req.AgentUsername = strings.TrimSpace(req.AgentUsername)
+
+	if req.SessionID == "" {
+		s.respondError(w, http.StatusBadRequest, "Session ID is required")
+		return
+	}
+	if req.QueueNumber == "" {
+		s.respondError(w, http.StatusBadRequest, "Queue number is required")
+		return
+	}
+	if req.AgentUsername == "" {
+		s.respondError(w, http.StatusBadRequest, "Agent username is required")
+		return
+	}
+
+	sess, ok := s.sessionMgr.GetSession(req.SessionID)
+	if !ok {
+		s.respondError(w, http.StatusNotFound, "Session not found")
+		return
+	}
+
+	_, fromField, _, _ := sess.GetCallInfo()
+	callerURI := strings.TrimSpace(fromField)
+	if callerURI == "" {
+		s.respondError(w, http.StatusBadRequest, "Session caller identifier is missing")
+		return
+	}
+
+	body := fmt.Sprintf("@switch:%s|%s", req.QueueNumber, req.AgentUsername)
+	if err := s.sipMaker.TriggerSwitchMessage(body, callerURI); err != nil {
+		log.Printf("⚠️ Failed to trigger switch via REST: session=%s caller=%s err=%v", req.SessionID, callerURI, err)
+		s.logEvent(&logstore.Event{
+			Timestamp: time.Now(),
+			SessionID: sess.ID,
+			Category:  "rest",
+			Name:      "rest_switch_trigger_failed",
+			Data: map[string]interface{}{
+				"callerURI": callerURI,
+				"error":     err.Error(),
+			},
+		})
+		s.respondError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to trigger switch: %v", err))
+		return
+	}
+
+	s.logEvent(&logstore.Event{
+		Timestamp: time.Now(),
+		SessionID: sess.ID,
+		Category:  "rest",
+		Name:      "rest_switch_request",
+		Data: map[string]interface{}{
+			"queueNumber":   req.QueueNumber,
+			"agentUsername": req.AgentUsername,
+			"callerURI":     callerURI,
+		},
+	})
+
+	s.respondJSON(w, http.StatusAccepted, SwitchResponse{
+		Status:        "accepted",
+		SessionID:     req.SessionID,
+		QueueNumber:   req.QueueNumber,
+		AgentUsername: req.AgentUsername,
+	})
 }
 
 // handleCreateTrunk creates a new SIP trunk

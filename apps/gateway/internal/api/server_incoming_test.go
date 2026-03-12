@@ -51,6 +51,9 @@ func (s *incomingTestSIPCallMaker) SendMessage(destination, from, body, contentT
 func (s *incomingTestSIPCallMaker) SendMessageToSession(sess *session.Session, body, contentType string) error {
 	return nil
 }
+func (s *incomingTestSIPCallMaker) TriggerSwitchMessage(body, callerURI string) error {
+	return nil
+}
 
 func TestHandleWSAccept_FirstAcceptWins(t *testing.T) {
 	mgr := newTestSessionManager()
