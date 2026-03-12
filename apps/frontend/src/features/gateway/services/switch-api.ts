@@ -2,15 +2,16 @@ import { fetchJson, resolveGatewayApiBaseUrl } from '@/lib/http-client'
 
 export interface SwitchRequestPayload {
   sessionId: string
-  queueNumber: string
-  agentUsername: string
+  queueNumber?: string
+  agentUsername?: string
 }
 
 export interface SwitchResponsePayload {
   status: string
   sessionId: string
-  queueNumber: string
-  agentUsername: string
+  queueNumber?: string
+  agentUsername?: string
+  autoMode?: boolean
 }
 
 const API_BASE = resolveGatewayApiBaseUrl()

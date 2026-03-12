@@ -2064,34 +2064,16 @@ export function sendDTMF(digits: string) {
   appendLog(`DTMF sent: ${digits}`, 'info')
 }
 
-export async function sendSwitch(queueNumber: string, agentUsername: string) {
+export async function sendSwitch() {
   const sessionId = gatewayStore.state.call.sessionId
   if (!sessionId) {
     appendLog('No active session for switch request', 'warning')
     return
   }
 
-  const trimmedQueueNumber = queueNumber.trim()
-  const trimmedAgentUsername = agentUsername.trim()
-  if (!trimmedQueueNumber) {
-    appendLog('Queue number is required', 'error')
-    return
-  }
-  if (!trimmedAgentUsername) {
-    appendLog('Agent username is required', 'error')
-    return
-  }
-
   try {
-    const response = await sendSwitchRequest({
-      sessionId,
-      queueNumber: trimmedQueueNumber,
-      agentUsername: trimmedAgentUsername,
-    })
-    appendLog(
-      `Switch request accepted: queue=${response.queueNumber}, agent=${response.agentUsername}, session=${response.sessionId}`,
-      'success',
-    )
+    await sendSwitchRequest({ sessionId })
+    appendLog('Switch request accepted for current session', 'success')
   } catch (error) {
     appendLog(`Switch request failed: ${(error as Error).message}`, 'error')
   }

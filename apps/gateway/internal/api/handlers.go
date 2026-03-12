@@ -111,6 +111,7 @@ type SwitchResponse struct {
 	SessionID     string `json:"sessionId"`
 	QueueNumber   string `json:"queueNumber"`
 	AgentUsername string `json:"agentUsername"`
+	AutoMode      bool   `json:"autoMode,omitempty"`
 }
 
 // TrunkResponse represents a SIP trunk entry for REST responses
@@ -697,12 +698,8 @@ func (s *Server) handleSwitch(w http.ResponseWriter, r *http.Request) {
 		s.respondError(w, http.StatusBadRequest, "Session ID is required")
 		return
 	}
-	if req.QueueNumber == "" {
-		s.respondError(w, http.StatusBadRequest, "Queue number is required")
-		return
-	}
-	if req.AgentUsername == "" {
-		s.respondError(w, http.StatusBadRequest, "Agent username is required")
+	if (req.QueueNumber == "") != (req.AgentUsername == "") {
+		s.respondError(w, http.StatusBadRequest, "queueNumber and agentUsername must be provided together")
 		return
 	}
 
@@ -717,6 +714,12 @@ func (s *Server) handleSwitch(w http.ResponseWriter, r *http.Request) {
 	if callerURI == "" {
 		s.respondError(w, http.StatusBadRequest, "Session caller identifier is missing")
 		return
+	}
+
+	autoMode := req.QueueNumber == "" && req.AgentUsername == ""
+	if autoMode {
+		req.QueueNumber = "force send PLI"
+		req.AgentUsername = "force send PLI"
 	}
 
 	body := fmt.Sprintf("@switch:%s|%s", req.QueueNumber, req.AgentUsername)
@@ -745,6 +748,7 @@ func (s *Server) handleSwitch(w http.ResponseWriter, r *http.Request) {
 			"queueNumber":   req.QueueNumber,
 			"agentUsername": req.AgentUsername,
 			"callerURI":     callerURI,
+			"autoMode":      autoMode,
 		},
 	})
 
@@ -753,6 +757,7 @@ func (s *Server) handleSwitch(w http.ResponseWriter, r *http.Request) {
 		SessionID:     req.SessionID,
 		QueueNumber:   req.QueueNumber,
 		AgentUsername: req.AgentUsername,
+		AutoMode:      autoMode,
 	})
 }
 

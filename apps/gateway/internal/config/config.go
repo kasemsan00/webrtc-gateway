@@ -50,21 +50,27 @@ type TURNConfig struct {
 
 // SIPConfig holds SIP server configuration
 type SIPConfig struct {
-	Domain             string
-	Username           string
-	Password           string
-	Port               int
-	LocalPort          int
-	LocalIP            string // Local IP to bind listeners (prevents IPv6, default: 0.0.0.0)
-	PublicIP           string // Public IP address for NAT traversal (optional)
-	ListenTCP          bool   // Enable SIP TCP listener (default: true)
-	ListenUDP          bool   // Enable SIP UDP listener (default: false)
-	DebugSIPMessage    bool   // Enable verbose SIP MESSAGE logging
-	DebugSIPInvite     bool   // Enable verbose SIP INVITE logging (header dump)
-	SwitchPLIDelayMS   int    // Delay in milliseconds before sending PLI on @switch message (default: 1000)
-	AudioUseAVPF       bool   // Use RTP/AVPF profile for audio with RTCP feedback (default: false)
-	VideoUseAVPF       bool   // Use RTP/AVPF profile for video with RTCP feedback (PLI/FIR/NACK) (default: false)
-	VideoPreserveSTAPA bool   // Preserve STAP-A packets (don't de-aggregate) when they contain SPS+PPS+IDR (default: false)
+	Domain           string
+	Username         string
+	Password         string
+	Port             int
+	LocalPort        int
+	LocalIP          string // Local IP to bind listeners (prevents IPv6, default: 0.0.0.0)
+	PublicIP         string // Public IP address for NAT traversal (optional)
+	ListenTCP        bool   // Enable SIP TCP listener (default: true)
+	ListenUDP        bool   // Enable SIP UDP listener (default: false)
+	DebugSIPMessage  bool   // Enable verbose SIP MESSAGE logging
+	DebugSIPInvite   bool   // Enable verbose SIP INVITE logging (header dump)
+	SwitchPLIDelayMS int    // Delay in milliseconds before sending PLI on @switch message (default: 1000)
+	AudioUseAVPF     bool   // Use RTP/AVPF profile for audio with RTCP feedback (default: false)
+	VideoUseAVPF     bool   // Use RTP/AVPF profile for video with RTCP feedback (PLI/FIR/NACK) (default: false)
+	// SIP-side transport target for outbound video feedback packets (PLI/FIR/NACK): auto|rtp|rtcp|dual
+	// - auto: legacy learned-RTCP + fallback-window behavior
+	// - rtp:  always send to SIP video RTP port (rtcp-mux style)
+	// - rtcp: always send to learned/rtp+1 RTCP target only
+	// - dual: always send to both RTP and RTCP targets (RTP first)
+	VideoFeedbackTransport string
+	VideoPreserveSTAPA     bool // Preserve STAP-A packets (don't de-aggregate) when they contain SPS+PPS+IDR (default: false)
 	// Keyframe watchdog: request FIR/PLI when keyframes go stale (SIP → WebRTC)
 	VideoKeyframeWatchdogEnabled    bool // Enable keyframe watchdog (default: true)
 	VideoKeyframeWatchdogIntervalMS int  // Check interval in ms (default: 1000)
@@ -77,6 +83,13 @@ type SIPConfig struct {
 	VideoRecoveryBurstStaleMS    int  // Burst stale threshold for PLI in ms (default: 1200)
 	VideoRecoveryBurstFIRStaleMS int  // Burst stale threshold for FIR in ms (default: 2500)
 }
+
+const (
+	SIPVideoFeedbackTransportAuto = "auto"
+	SIPVideoFeedbackTransportRTP  = "rtp"
+	SIPVideoFeedbackTransportRTCP = "rtcp"
+	SIPVideoFeedbackTransportDual = "dual"
+)
 
 // DBConfig holds PostgreSQL database configuration
 type DBConfig struct {
@@ -154,6 +167,7 @@ func Load() (*Config, error) {
 			SwitchPLIDelayMS:                getEnvAsInt("SWITCH_PLI_DELAY_MS", 1000),
 			AudioUseAVPF:                    getEnvAsBool("SIP_AUDIO_USE_AVPF", false),
 			VideoUseAVPF:                    getEnvAsBool("SIP_VIDEO_USE_AVPF", false),
+			VideoFeedbackTransport:          getSIPVideoFeedbackTransport(),
 			VideoPreserveSTAPA:              getEnvAsBool("SIP_VIDEO_PRESERVE_STAPA", false),
 			VideoKeyframeWatchdogEnabled:    getEnvAsBool("SIP_VIDEO_KEYFRAME_WATCHDOG", true),
 			VideoKeyframeWatchdogIntervalMS: getEnvAsInt("SIP_VIDEO_KEYFRAME_WATCHDOG_INTERVAL_MS", 3000),
@@ -253,6 +267,7 @@ func (c *Config) Display() {
 	fmt.Printf("  SIP Listen UDP: %v\n", c.SIP.ListenUDP)
 	fmt.Printf("  Audio Use AVPF: %v\n", c.SIP.AudioUseAVPF)
 	fmt.Printf("  Video Use AVPF: %v\n", c.SIP.VideoUseAVPF)
+	fmt.Printf("  Video Feedback Transport: %s\n", c.SIP.VideoFeedbackTransport)
 	fmt.Printf("  Video Preserve STAP-A: %v\n", c.SIP.VideoPreserveSTAPA)
 	fmt.Printf("  Video Keyframe Watchdog: %v (interval=%dms, stale=%dms, firStale=%dms)\n",
 		c.SIP.VideoKeyframeWatchdogEnabled,
@@ -330,6 +345,17 @@ func (c *Config) Display() {
 	fmt.Printf("  Cleanup Interval: %d seconds\n", c.SessionDir.CleanupIntervalSec)
 
 	fmt.Println("\n=================================")
+}
+
+func getSIPVideoFeedbackTransport() string {
+	value := strings.ToLower(strings.TrimSpace(getEnvWithDefault("SIP_VIDEO_FEEDBACK_TRANSPORT", SIPVideoFeedbackTransportAuto)))
+	switch value {
+	case SIPVideoFeedbackTransportAuto, SIPVideoFeedbackTransportRTP, SIPVideoFeedbackTransportRTCP, SIPVideoFeedbackTransportDual:
+		return value
+	default:
+		fmt.Printf("Warning: invalid SIP_VIDEO_FEEDBACK_TRANSPORT=%q, using %q\n", value, SIPVideoFeedbackTransportAuto)
+		return SIPVideoFeedbackTransportAuto
+	}
 }
 
 // maskDSN masks password in database DSN

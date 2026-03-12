@@ -159,8 +159,6 @@ export function GatewayConsolePage() {
   const state = useStore(gatewayStore, (storeState) => storeState)
   const { theme, toggleTheme } = useTheme()
   const [messageBody, setMessageBody] = useState('')
-  const [switchQueueNumber, setSwitchQueueNumber] = useState('')
-  const [switchAgentUsername, setSwitchAgentUsername] = useState('')
   const [isSendingSwitch, setIsSendingSwitch] = useState(false)
   const [trunkOptions, setTrunkOptions] = useState<Array<{
     value: string
@@ -284,11 +282,11 @@ export function GatewayConsolePage() {
     if (isSendingSwitch) return
     setIsSendingSwitch(true)
     try {
-      await gatewayActions.sendSwitch(switchQueueNumber, switchAgentUsername)
+      await gatewayActions.sendSwitch()
     } finally {
       setIsSendingSwitch(false)
     }
-  }, [isSendingSwitch, switchAgentUsername, switchQueueNumber])
+  }, [isSendingSwitch])
 
   const onExtKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -873,24 +871,6 @@ export function GatewayConsolePage() {
                 <p className="text-[11px] font-medium text-muted-foreground">
                   Switch Trigger
                 </p>
-                <Field label="Queue Number" id="switch-queue">
-                  <Input
-                    id="switch-queue"
-                    className="h-7 text-xs"
-                    placeholder="14131"
-                    value={switchQueueNumber}
-                    onChange={(e) => setSwitchQueueNumber(e.target.value)}
-                  />
-                </Field>
-                <Field label="Agent Username" id="switch-agent">
-                  <Input
-                    id="switch-agent"
-                    className="h-7 text-xs"
-                    placeholder="00025"
-                    value={switchAgentUsername}
-                    onChange={(e) => setSwitchAgentUsername(e.target.value)}
-                  />
-                </Field>
                 <Button
                   variant="outline"
                   className="h-7 w-full text-[11px]"

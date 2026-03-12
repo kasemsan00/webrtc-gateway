@@ -2,7 +2,6 @@ package session
 
 import (
 	"fmt"
-	"net"
 	"strings"
 	"time"
 
@@ -169,64 +168,49 @@ func (s *Session) sendPLIToAsterisk(force bool, trigger string) {
 	learnedAddr, learnedSource := s.GetLearnedVideoRTCPAddr()
 	useFallback := s.ShouldUseVideoRTCPFallback()
 
-	// Primary: Send to learned RTCP address if available; otherwise default RTP+1
-	primaryAddr := learnedAddr
-	primaryLabel := "learned"
-	if primaryAddr == nil {
-		primaryAddr = &net.UDPAddr{
-			IP:   destAddr.IP,
-			Port: destAddr.Port + 1,
-		}
-		primaryLabel = "rtp+1"
-	}
-
-	if _, err := conn.WriteToUDP(out, primaryAddr); err != nil {
-		fmt.Printf("[%s] ⚠️ Error sending PLI to %s RTCP addr %s: %v\n", s.ID, primaryLabel, primaryAddr, err)
-	} else {
-		s.mu.Lock()
-		s.PLISent++
-		s.LastPLISent = now
-		s.LastSipPLISent = now
-		pliCount := s.PLISent
-		s.mu.Unlock()
-
-		if force {
-			if trigger == "" {
-				trigger = "manual"
-			}
-			fmt.Printf("[%s] 🚀 Sent forced PLI #%d to %s RTCP addr %s (source=%s, Sender=%d, Media=%d, trigger=%s)\n",
-				s.ID, pliCount, primaryLabel, primaryAddr, learnedSource, senderSSRC, mediaSSRC, trigger)
-		} else {
-			fmt.Printf("[%s] 🚀 Sent PLI #%d to %s RTCP addr %s (source=%s, Sender=%d, Media=%d)\n",
-				s.ID, pliCount, primaryLabel, primaryAddr, learnedSource, senderSSRC, mediaSSRC)
-		}
-	}
-
-	if !useFallback {
+	targets := s.getVideoFeedbackTargets(destAddr, learnedAddr, useFallback)
+	if len(targets) == 0 {
 		return
 	}
 
-	// Fallback: also send to RTP+1 if learned != RTP+1
-	fallbackRtcpAddr := &net.UDPAddr{
-		IP:   destAddr.IP,
-		Port: destAddr.Port + 1,
-	}
-	if learnedAddr == nil || learnedAddr.Port != fallbackRtcpAddr.Port || !learnedAddr.IP.Equal(fallbackRtcpAddr.IP) {
-		if _, err := conn.WriteToUDP(out, fallbackRtcpAddr); err == nil {
-			fmt.Printf("[%s] 🔄 Sent PLI fallback to RTCP port %s:%d\n",
-				s.ID, fallbackRtcpAddr.IP, fallbackRtcpAddr.Port)
+	pliCount := 0
+	counted := false
+	for _, target := range targets {
+		if _, err := conn.WriteToUDP(out, target.Addr); err != nil {
+			fmt.Printf("[%s] ⚠️ Error sending PLI to %s %s: %v\n", s.ID, target.Label, target.Addr, err)
+			continue
 		}
-	}
 
-	// Fallback: also send to RTP port for mux compatibility
-	rtpAddr := &net.UDPAddr{
-		IP:   destAddr.IP,
-		Port: destAddr.Port,
-	}
-	if learnedAddr == nil || learnedAddr.Port != rtpAddr.Port || !learnedAddr.IP.Equal(rtpAddr.IP) {
-		if _, err := conn.WriteToUDP(out, rtpAddr); err == nil {
+		if !counted {
+			s.mu.Lock()
+			s.PLISent++
+			s.LastPLISent = now
+			s.LastSipPLISent = now
+			pliCount = s.PLISent
+			s.mu.Unlock()
+			counted = true
+		}
+
+		if target.IsPrimary {
+			if force {
+				if trigger == "" {
+					trigger = "manual"
+				}
+				fmt.Printf("[%s] 🚀 Sent forced PLI #%d to %s %s (source=%s, Sender=%d, Media=%d, trigger=%s)\n",
+					s.ID, pliCount, target.Label, target.Addr, learnedSource, senderSSRC, mediaSSRC, trigger)
+			} else {
+				fmt.Printf("[%s] 🚀 Sent PLI #%d to %s %s (source=%s, Sender=%d, Media=%d)\n",
+					s.ID, pliCount, target.Label, target.Addr, learnedSource, senderSSRC, mediaSSRC)
+			}
+			continue
+		}
+
+		if target.Kind == "rtp" {
 			fmt.Printf("[%s] 🔄 Sent PLI fallback to RTP port %s:%d (rtcp-mux compatibility)\n",
-				s.ID, destAddr.IP, rtpAddr.Port)
+				s.ID, target.Addr.IP, target.Addr.Port)
+		} else {
+			fmt.Printf("[%s] 🔄 Sent PLI fallback to RTCP port %s:%d\n",
+				s.ID, target.Addr.IP, target.Addr.Port)
 		}
 	}
 
@@ -289,58 +273,43 @@ func (s *Session) SendFIRToAsterisk() {
 	learnedAddr, learnedSource := s.GetLearnedVideoRTCPAddr()
 	useFallback := s.ShouldUseVideoRTCPFallback()
 
-	// Primary: Send to learned RTCP address if available; otherwise default RTP+1
-	primaryAddr := learnedAddr
-	primaryLabel := "learned"
-	if primaryAddr == nil {
-		primaryAddr = &net.UDPAddr{
-			IP:   destAddr.IP,
-			Port: destAddr.Port + 1,
-		}
-		primaryLabel = "rtp+1"
-	}
-
-	if _, err := conn.WriteToUDP(out, primaryAddr); err != nil {
-		fmt.Printf("[%s] ⚠️ Error sending FIR to %s RTCP addr %s: %v\n", s.ID, primaryLabel, primaryAddr, err)
-	} else {
-		s.mu.Lock()
-		s.PLISent++
-		now := time.Now()
-		s.LastPLISent = now
-		s.LastSipPLISent = now
-		s.LastSipFIRSent = now
-		firCount := s.PLISent
-		s.mu.Unlock()
-
-		fmt.Printf("[%s] 🚀 Sent FIR #%d to %s RTCP addr %s (source=%s, Sender=%d, Media=%d, Seq=%d)\n",
-			s.ID, firCount, primaryLabel, primaryAddr, learnedSource, senderSSRC, mediaSSRC, currentSeq)
-	}
-
-	if !useFallback {
+	targets := s.getVideoFeedbackTargets(destAddr, learnedAddr, useFallback)
+	if len(targets) == 0 {
 		return
 	}
 
-	// Fallback: also send to RTP+1 if learned != RTP+1
-	fallbackRtcpAddr := &net.UDPAddr{
-		IP:   destAddr.IP,
-		Port: destAddr.Port + 1,
-	}
-	if learnedAddr == nil || learnedAddr.Port != fallbackRtcpAddr.Port || !learnedAddr.IP.Equal(fallbackRtcpAddr.IP) {
-		if _, err := conn.WriteToUDP(out, fallbackRtcpAddr); err == nil {
-			fmt.Printf("[%s] 🔄 Sent FIR fallback to RTCP port %s:%d\n",
-				s.ID, fallbackRtcpAddr.IP, fallbackRtcpAddr.Port)
+	firCount := 0
+	counted := false
+	for _, target := range targets {
+		if _, err := conn.WriteToUDP(out, target.Addr); err != nil {
+			fmt.Printf("[%s] ⚠️ Error sending FIR to %s %s: %v\n", s.ID, target.Label, target.Addr, err)
+			continue
 		}
-	}
 
-	// Fallback: also send to RTP port for mux compatibility
-	rtpAddr := &net.UDPAddr{
-		IP:   destAddr.IP,
-		Port: destAddr.Port,
-	}
-	if learnedAddr == nil || learnedAddr.Port != rtpAddr.Port || !learnedAddr.IP.Equal(rtpAddr.IP) {
-		if _, err := conn.WriteToUDP(out, rtpAddr); err == nil {
+		if !counted {
+			s.mu.Lock()
+			s.PLISent++
+			now := time.Now()
+			s.LastPLISent = now
+			s.LastSipPLISent = now
+			s.LastSipFIRSent = now
+			firCount = s.PLISent
+			s.mu.Unlock()
+			counted = true
+		}
+
+		if target.IsPrimary {
+			fmt.Printf("[%s] 🚀 Sent FIR #%d to %s %s (source=%s, Sender=%d, Media=%d, Seq=%d)\n",
+				s.ID, firCount, target.Label, target.Addr, learnedSource, senderSSRC, mediaSSRC, currentSeq)
+			continue
+		}
+
+		if target.Kind == "rtp" {
 			fmt.Printf("[%s] 🔄 Sent FIR fallback to RTP port %s:%d (rtcp-mux compatibility)\n",
-				s.ID, destAddr.IP, rtpAddr.Port)
+				s.ID, target.Addr.IP, target.Addr.Port)
+		} else {
+			fmt.Printf("[%s] 🔄 Sent FIR fallback to RTCP port %s:%d\n",
+				s.ID, target.Addr.IP, target.Addr.Port)
 		}
 	}
 }
@@ -492,44 +461,24 @@ func (s *Session) SendNACKToAsterisk(nacks []rtcp.NackPair) {
 			return
 		}
 
-		primaryAddr := learnedAddr
-		primaryLabel := "learned"
-		if primaryAddr == nil {
-			primaryAddr = &net.UDPAddr{
-				IP:   destAddr.IP,
-				Port: destAddr.Port + 1,
+		targets := s.getVideoFeedbackTargets(destAddr, learnedAddr, useFallback)
+		for _, target := range targets {
+			if _, err := conn.WriteToUDP(out, target.Addr); err != nil {
+				continue
 			}
-			primaryLabel = "rtp+1"
-		}
 
-		if _, err := conn.WriteToUDP(out, primaryAddr); err == nil {
-			fmt.Printf("[%s] 🔄 Sent NACK to %s RTCP addr %s (source=%s, Sender=%d, Media=%d, Nacks=%v)\n",
-				s.ID, primaryLabel, primaryAddr, learnedSource, senderSSRC, mediaSSRC, nacks)
-		}
-
-		if !useFallback {
-			return
-		}
-
-		fallbackRtcpAddr := &net.UDPAddr{
-			IP:   destAddr.IP,
-			Port: destAddr.Port + 1,
-		}
-		if learnedAddr == nil || learnedAddr.Port != fallbackRtcpAddr.Port || !learnedAddr.IP.Equal(fallbackRtcpAddr.IP) {
-			if _, err := conn.WriteToUDP(out, fallbackRtcpAddr); err == nil {
-				fmt.Printf("[%s] 🔄 Sent NACK fallback to RTCP port %s:%d\n",
-					s.ID, fallbackRtcpAddr.IP, fallbackRtcpAddr.Port)
+			if target.IsPrimary {
+				fmt.Printf("[%s] 🔄 Sent NACK to %s %s (source=%s, Sender=%d, Media=%d, Nacks=%v)\n",
+					s.ID, target.Label, target.Addr, learnedSource, senderSSRC, mediaSSRC, nacks)
+				continue
 			}
-		}
 
-		rtpAddr := &net.UDPAddr{
-			IP:   destAddr.IP,
-			Port: destAddr.Port,
-		}
-		if learnedAddr == nil || learnedAddr.Port != rtpAddr.Port || !learnedAddr.IP.Equal(rtpAddr.IP) {
-			if _, err := conn.WriteToUDP(out, rtpAddr); err == nil {
+			if target.Kind == "rtp" {
 				fmt.Printf("[%s] 🔄 Sent NACK fallback to RTP port %s:%d (rtcp-mux compatibility)\n",
-					s.ID, destAddr.IP, rtpAddr.Port)
+					s.ID, target.Addr.IP, target.Addr.Port)
+			} else {
+				fmt.Printf("[%s] 🔄 Sent NACK fallback to RTCP port %s:%d\n",
+					s.ID, target.Addr.IP, target.Addr.Port)
 			}
 		}
 	}

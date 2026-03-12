@@ -47,9 +47,9 @@ export const gatewayRuntimeConfig = {
 }
 
 export const defaultVideoConfig: VideoConfig = {
-  maxBitrate: 1500,
+  maxBitrate: 3000,
   maxFramerate: 30,
-  width: 640,
-  height: 480,
+  width: 1280,
+  height: 720,
   useConstrainedBaseline: false,
 }

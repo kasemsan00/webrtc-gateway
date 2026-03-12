@@ -12,16 +12,13 @@ describe('sendSwitchRequest', () => {
     const response = {
       status: 'accepted',
       sessionId: 'sess-1',
-      queueNumber: '14131',
-      agentUsername: '00025',
+      autoMode: true,
     }
     fetchJsonMock.mockResolvedValueOnce(response)
 
     const { sendSwitchRequest } = await import('./switch-api')
     const result = await sendSwitchRequest({
       sessionId: 'sess-1',
-      queueNumber: '14131',
-      agentUsername: '00025',
     })
 
     expect(result).toEqual(response)
@@ -32,22 +29,18 @@ describe('sendSwitchRequest', () => {
       },
       body: JSON.stringify({
         sessionId: 'sess-1',
-        queueNumber: '14131',
-        agentUsername: '00025',
       }),
     })
   })
 
   it('propagates backend error from fetchJson', async () => {
-    fetchJsonMock.mockRejectedValueOnce(new Error('Queue number is required'))
+    fetchJsonMock.mockRejectedValueOnce(new Error('Session ID is required'))
     const { sendSwitchRequest } = await import('./switch-api')
 
     await expect(
       sendSwitchRequest({
-        sessionId: 'sess-1',
-        queueNumber: '',
-        agentUsername: '00025',
+        sessionId: '',
       }),
-    ).rejects.toThrow('Queue number is required')
+    ).rejects.toThrow('Session ID is required')
   })
 })

@@ -605,10 +605,10 @@ func TestHandleSwitch_ValidationAndSuccess(t *testing.T) {
 	assertJSONError(t, rr, http.StatusBadRequest, "Session ID is required")
 
 	rr = doRequest(t, srv.handleSwitch, http.MethodPost, "/switch", `{"sessionId":"s-1","agentUsername":"00025"}`, nil)
-	assertJSONError(t, rr, http.StatusBadRequest, "Queue number is required")
+	assertJSONError(t, rr, http.StatusBadRequest, "must be provided together")
 
 	rr = doRequest(t, srv.handleSwitch, http.MethodPost, "/switch", `{"sessionId":"s-1","queueNumber":"14131"}`, nil)
-	assertJSONError(t, rr, http.StatusBadRequest, "Agent username is required")
+	assertJSONError(t, rr, http.StatusBadRequest, "must be provided together")
 
 	rr = doRequest(t, srv.handleSwitch, http.MethodPost, "/switch", `{"sessionId":"missing","queueNumber":"14131","agentUsername":"00025"}`, nil)
 	assertJSONError(t, rr, http.StatusNotFound, "Session not found")
@@ -641,6 +641,15 @@ func TestHandleSwitch_ValidationAndSuccess(t *testing.T) {
 	}
 	if switchMaker.lastSwitchCallerURI != "sip:0900200002@example.com" {
 		t.Fatalf("unexpected callerURI: %s", switchMaker.lastSwitchCallerURI)
+	}
+
+	rr = doRequest(t, srv.handleSwitch, http.MethodPost, "/switch", `{"sessionId":"`+okSess.ID+`"}`, nil)
+	resp = assertJSONDecode[SwitchResponse](t, rr, http.StatusAccepted)
+	if !resp.AutoMode {
+		t.Fatalf("expected autoMode true, got %+v", resp)
+	}
+	if switchMaker.lastSwitchBody != "@switch:force send PLI|force send PLI" {
+		t.Fatalf("unexpected auto switch body: %s", switchMaker.lastSwitchBody)
 	}
 }
 

@@ -77,6 +77,7 @@ type Session struct {
 	AsteriskVideoRTCPAddr        *net.UDPAddr  `json:"-"`
 	VideoRTCPLearnedAt           time.Time     `json:"-"`
 	VideoRTCPSource              string        `json:"-"`
+	VideoFeedbackTransport       string        `json:"-"`
 	VideoRTCPFallbackUntil       time.Time     `json:"-"`
 	SymmetricRTPTrustUntil       time.Time     `json:"-"`
 	PLIBurstUntil                time.Time     `json:"-"`
@@ -144,6 +145,11 @@ type Session struct {
 	VideoRTPHistoryPackets [][]byte `json:"-"`
 	VideoRTPHistorySeq     []uint16 `json:"-"`
 	VideoRTPHistorySize    int      `json:"-"`
+	// Browser-side NACK dedupe + log throttling (stability/noise control)
+	LastBrowserNACKSig    string    `json:"-"`
+	LastBrowserNACKAt     time.Time `json:"-"`
+	LastNACKHandledLogSig string    `json:"-"`
+	LastNACKHandledLogAt  time.Time `json:"-"`
 	// Video optimization flags
 	PreserveSTAPA     bool `json:"-"` // If true, preserve STAP-A packets (don't de-aggregate) when they contain SPS+PPS+IDR
 	videoRTPHistoryMu sync.Mutex
@@ -284,6 +290,7 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 		RTPBufferSize:               rtpBufferSize,
 		SwitchSPSPPSInjectRemaining: 0, // 0 = disabled, will be set to 3 when @switch message is received
 		VideoRTCPSource:             "unknown",
+		VideoFeedbackTransport:      cfg.SIP.VideoFeedbackTransport,
 		SymmetricRTPTrustUntil:      time.Now().Add(symmetricRTPTrustWindow),
 		PreserveSTAPA:               cfg.SIP.VideoPreserveSTAPA, // Phase 2: preserve STAP-A if enabled
 		VideoRecoveryBurstEnabled:   cfg.SIP.VideoRecoveryBurstEnabled,
@@ -334,15 +341,22 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 					// Forward to Asterisk to request keyframe
 					session.SendBrowserRecoveryToAsterisk("browser-fir")
 				case *rtcp.TransportLayerNack:
-					fmt.Printf("[%s] 🔄 Received NACK from browser for video (RTPSender) - Nacks=%v\n", id, pkt.Nacks)
 					if len(pkt.Nacks) > 0 {
+						now := time.Now()
+						sig := buildNACKSignature(pkt.Nacks)
+						if session.shouldSuppressBrowserNACK(sig, now) {
+							continue
+						}
+						fmt.Printf("[%s] 🔄 Received NACK from browser for video (RTPSender) - Nacks=%v\n", id, pkt.Nacks)
 						sent, missing := session.RetransmitVideoNACK(pkt.Nacks)
 						if missing > 0 {
 							// Fallback: ask Asterisk to retransmit missing packets (if supported)
 							session.SendNACKToAsterisk(pkt.Nacks)
 						}
 						if sent > 0 || missing > 0 {
-							fmt.Printf("[%s] 🔁 NACK handled (retransmit=%d, missing=%d)\n", id, sent, missing)
+							if !session.shouldSuppressNACKHandledLog(sig, sent, missing, now) {
+								fmt.Printf("[%s] 🔁 NACK handled (retransmit=%d, missing=%d)\n", id, sent, missing)
+							}
 						}
 					}
 				}

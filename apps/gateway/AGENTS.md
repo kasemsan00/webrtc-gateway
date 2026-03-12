@@ -185,6 +185,7 @@ If you add/change a message type, update all of:
 - `SWITCH_PLI_DELAY_MS` (default `1000`)
 - `SIP_AUDIO_USE_AVPF` (default `false`)
 - `SIP_VIDEO_USE_AVPF` (default `false`)
+- `SIP_VIDEO_FEEDBACK_TRANSPORT` (default `auto`; `auto|rtp|rtcp|dual`)
 - `SIP_VIDEO_PRESERVE_STAPA` (default `false`)
 - `SIP_VIDEO_KEYFRAME_WATCHDOG` (default `true`)
 - `SIP_VIDEO_KEYFRAME_WATCHDOG_INTERVAL_MS` (default `1000`)
