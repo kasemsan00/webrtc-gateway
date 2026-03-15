@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"k2-gateway/internal/api"
+	"k2-gateway/internal/auth"
 	"k2-gateway/internal/config"
 	"k2-gateway/internal/logger"
 	"k2-gateway/internal/logstore"
@@ -182,6 +183,28 @@ func runAPIMode(ctx context.Context, cfg *config.Config, unicastAddress string, 
 		trunkMgrInterface = trunkManager
 	}
 	apiServer := api.NewServer(cfg.API, cfg.TURN, cfg.Gateway, sessionMgr, sipServer, publicRegistry, trunkMgrInterface, store)
+	if cfg.Auth.Enable {
+		if cfg.Auth.JWKSURL == "" || cfg.Auth.JWTIssuer == "" || cfg.Auth.JWTAudience == "" {
+			log.Fatalf("AUTH_ENABLE=true requires AUTH_JWKS_URL, AUTH_JWT_ISSUER, and AUTH_JWT_AUDIENCE")
+		}
+		verifier, err := auth.NewVerifier(auth.Config{
+			JWKSURL:   cfg.Auth.JWKSURL,
+			Issuer:    cfg.Auth.JWTIssuer,
+			Audience:  cfg.Auth.JWTAudience,
+			TimeoutMS: cfg.Auth.TimeoutMS,
+		})
+		if err != nil {
+			log.Fatalf("Failed to initialize auth verifier: %v", err)
+		}
+		startupCtx, cancelStartup := context.WithTimeout(ctx, time.Duration(cfg.Auth.TimeoutMS)*time.Millisecond)
+		if err := verifier.Prefetch(startupCtx); err != nil {
+			cancelStartup()
+			log.Fatalf("Failed to prefetch JWKS on startup: %v", err)
+		}
+		cancelStartup()
+		apiServer.SetTokenVerifier(verifier)
+		log.Printf("JWT auth enabled: issuer=%s audience=%s", cfg.Auth.JWTIssuer, cfg.Auth.JWTAudience)
+	}
 
 	// Wire dependencies for BYE request handling
 	sipServer.SetSessionManager(sessionMgr)

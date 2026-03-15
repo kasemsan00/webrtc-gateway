@@ -24,7 +24,7 @@
 K2 Gateway bridges WebRTC clients (browser/mobile) to SIP/RTP endpoints (Asterisk, Kamailio).
 
 - **Language:** Go 1.25.5 (`go.mod`)
-- **Core libs:** `pion/webrtc/v4`, `emiago/sipgo`, `gorilla/websocket`, `gorilla/mux`, `pion/rtp`, `pion/rtcp`, `pion/sdp/v3`, `pgx/v5`
+- **Core libs:** `pion/webrtc/v4`, `emiago/sipgo`, `gorilla/websocket`, `gorilla/mux`, `pion/rtp`, `pion/rtcp`, `pion/sdp/v3`, `pgx/v5`, `golang-jwt/jwt/v5`
 - **Runtime mode:** API mode (HTTP + WebSocket)
 - **Data plane:** SRTP (WebRTC side) <-> RTP/RTCP (SIP side)
 - **Control plane:** JSON over WebSocket/REST <-> SIP signaling
@@ -35,10 +35,11 @@ K2 Gateway bridges WebRTC clients (browser/mobile) to SIP/RTP endpoints (Asteris
 ## 3. Runtime Architecture (As Implemented)
 
 1. `main.go` loads env config, initializes logger, starts LogStore, and boots API mode.
-2. `internal/api/server.go` handles `/ws`, session offers/answers, call control, resume, trunk resolve, SIP messaging, and DTMF.
-3. `internal/session/*` owns per-call state and WebRTC PeerConnection lifecycle.
-4. `internal/sip/*` handles SIP server/client behavior, INVITE/ACK/BYE/MESSAGE/DTMF, SDP generation/parsing, public registry, and trunk manager.
-5. `internal/logstore/*` persists events/payloads/stats/dialog/session snapshots and instance/session directories.
+2. `internal/auth/*` loads JWKS and verifies JWT (`iss`, `aud`, `exp/nbf`, RSA signature).
+3. `internal/api/server.go` handles `/ws`, session offers/answers, call control, resume, trunk resolve, SIP messaging, DTMF, and HTTP/WS auth enforcement.
+4. `internal/session/*` owns per-call state and WebRTC PeerConnection lifecycle.
+5. `internal/sip/*` handles SIP server/client behavior, INVITE/ACK/BYE/MESSAGE/DTMF, SDP generation/parsing, public registry, and trunk manager.
+6. `internal/logstore/*` persists events/payloads/stats/dialog/session snapshots and instance/session directories.
 
 ---
 
@@ -50,7 +51,10 @@ k2-gateway/
 |- internal/
 |  |- api/
 |  |  |- server.go
+|  |  |- auth_http.go
 |  |  `- handlers.go
+|  |- auth/
+|  |  `- verifier.go
 |  |- config/config.go
 |  |- logger/logger.go
 |  |- logstore/
@@ -105,6 +109,10 @@ k2-gateway/
 
 Endpoint: `/ws`  
 Payload format: JSON
+
+Auth behavior:
+- When `AUTH_ENABLE=true`, `/ws` requires `access_token` query parameter (`/ws?access_token=<jwt>`).
+- Token is validated against configured JWKS/issuer/audience before WebSocket upgrade.
 
 ### Client -> Server message types
 
@@ -175,6 +183,20 @@ If you add/change a message type, update all of:
 - `RTP_PORT_MIN` (default `10500`)
 - `RTP_PORT_MAX` (default `10600`)
 - `RTP_BUFFER_SIZE` (default `16384`)
+
+### JWT auth (Keycloak/JWKS)
+
+- `AUTH_ENABLE` (default `false`)
+- `AUTH_JWKS_URL` (required when auth enabled)
+- `AUTH_JWT_ISSUER` (required when auth enabled)
+- `AUTH_JWT_AUDIENCE` (required when auth enabled)
+- `AUTH_JWKS_TIMEOUT_MS` (default `5000`)
+
+When `AUTH_ENABLE=true`:
+- Startup is fail-fast if required auth env is missing.
+- Startup is fail-fast if initial JWKS prefetch fails.
+- `/api/*` requires `Authorization: Bearer <jwt>`.
+- `/ws` requires `?access_token=<jwt>`.
 
 ### Debug and media behavior toggles
 
@@ -329,6 +351,15 @@ Checkpoints:
 ### Auth/register timeouts
 
 - transport consistency matters; requests explicitly set transport to avoid digest retry switching transports.
+
+### 401 Unauthorized on API/WS
+
+Checkpoints:
+- Verify `AUTH_ENABLE`, `AUTH_JWKS_URL`, `AUTH_JWT_ISSUER`, `AUTH_JWT_AUDIENCE` are set correctly.
+- Verify token `iss` and `aud` match configured values exactly.
+- Verify token is not expired (`exp`) and is already valid (`nbf`).
+- Verify JWT header `kid` exists in current JWKS (gateway auto-refreshes JWKS once on unknown `kid`).
+- For WebSocket, verify client sends `access_token` query param on the connect URL.
 
 ---
 

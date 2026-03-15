@@ -15,6 +15,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/pion/webrtc/v4"
 
+	"k2-gateway/internal/auth"
 	"k2-gateway/internal/config"
 	"k2-gateway/internal/logstore"
 	"k2-gateway/internal/session"
@@ -42,6 +43,7 @@ const (
 type Server struct {
 	sessionMgr       *session.Manager
 	sipMaker         SIPCallMaker
+	tokenVerifier    TokenVerifier
 	publicRegistry   PublicAccountRegistry
 	trunkManager     TrunkManager
 	logStore         logstore.LogStore
@@ -57,6 +59,11 @@ type Server struct {
 	sessionStreamSeq int
 	startTime        time.Time
 	mu               sync.RWMutex
+}
+
+// TokenVerifier verifies bearer JWT tokens.
+type TokenVerifier interface {
+	VerifyToken(ctx context.Context, rawToken string) (*auth.VerifiedClaims, error)
 }
 
 // PublicAccountRegistry interface for managing SIP public accounts
@@ -225,6 +232,11 @@ func (s *Server) SetLogStore(store logstore.LogStore) {
 	s.logStore = store
 }
 
+// SetTokenVerifier enables JWT auth enforcement for /api/* and /ws.
+func (s *Server) SetTokenVerifier(verifier TokenVerifier) {
+	s.tokenVerifier = verifier
+}
+
 // Start starts the HTTP server with graceful shutdown support
 func (s *Server) Start(ctx context.Context) error {
 	router := mux.NewRouter()
@@ -241,6 +253,9 @@ func (s *Server) Start(ctx context.Context) error {
 	// REST API endpoints
 	if s.config.EnableREST {
 		api := router.PathPrefix("/api").Subrouter()
+		if s.tokenVerifier != nil {
+			api.Use(s.authMiddleware)
+		}
 		api.HandleFunc("/offer", s.handleOffer).Methods("POST", "OPTIONS")
 		api.HandleFunc("/call", s.handleCall).Methods("POST", "OPTIONS")
 		api.HandleFunc("/hangup/{sessionId}", s.handleHangup).Methods("POST", "OPTIONS")
@@ -318,7 +333,23 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 
 // handleWebSocket handles WebSocket connections
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
-	conn, err := s.upgrader.Upgrade(w, r, nil)
+	req := r
+	if s.tokenVerifier != nil {
+		rawToken := strings.TrimSpace(r.URL.Query().Get("access_token"))
+		if rawToken == "" {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		claims, err := s.tokenVerifier.VerifyToken(r.Context(), rawToken)
+		if err != nil {
+			log.Printf("WebSocket auth rejected: %v", err)
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		req = withAuthClaims(r, claims)
+	}
+
+	conn, err := s.upgrader.Upgrade(w, req, nil)
 	if err != nil {
 		log.Printf("WebSocket upgrade error: %v", err)
 		return

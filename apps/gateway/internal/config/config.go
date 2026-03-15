@@ -16,6 +16,7 @@ type Config struct {
 	TURN       TURNConfig
 	SIP        SIPConfig
 	API        APIConfig
+	Auth       AuthConfig
 	RTP        RTPConfig
 	DB         DBConfig
 	SIPPublic  SIPPublicConfig
@@ -39,6 +40,15 @@ type APIConfig struct {
 	CORSOrigins    string // CORS allowed origins (comma-separated)
 	DebugWebSocket bool   // Enable WebSocket debug logging (ping/pong, messages)
 	DebugTURN      bool   // Enable TURN/ICE debug logging (candidates, selected pair)
+}
+
+// AuthConfig holds JWT/JWKS authentication settings.
+type AuthConfig struct {
+	Enable      bool
+	JWKSURL     string
+	JWTIssuer   string
+	JWTAudience string
+	TimeoutMS   int
 }
 
 // TURNConfig holds TURN server configuration
@@ -187,6 +197,13 @@ func Load() (*Config, error) {
 			DebugWebSocket: getEnvAsBool("DEBUG_WEBSOCKET", false),
 			DebugTURN:      getEnvAsBool("DEBUG_TURN", false),
 		},
+		Auth: AuthConfig{
+			Enable:      getEnvAsBool("AUTH_ENABLE", false),
+			JWKSURL:     os.Getenv("AUTH_JWKS_URL"),
+			JWTIssuer:   os.Getenv("AUTH_JWT_ISSUER"),
+			JWTAudience: os.Getenv("AUTH_JWT_AUDIENCE"),
+			TimeoutMS:   getEnvAsInt("AUTH_JWKS_TIMEOUT_MS", 5000),
+		},
 		RTP: RTPConfig{
 			PortMin:    rtpPortMin,
 			PortMax:    rtpPortMax,
@@ -291,6 +308,16 @@ func (c *Config) Display() {
 	fmt.Printf("  CORS Origins: %s\n", c.API.CORSOrigins)
 	fmt.Printf("  Debug WebSocket: %v\n", c.API.DebugWebSocket)
 	fmt.Printf("  Debug TURN/ICE: %v\n", c.API.DebugTURN)
+
+	// Display Auth Configuration
+	fmt.Println("\nAuth Configuration:")
+	fmt.Printf("  Enabled: %v\n", c.Auth.Enable)
+	if c.Auth.Enable {
+		fmt.Printf("  JWKS URL: %s\n", c.Auth.JWKSURL)
+		fmt.Printf("  JWT Issuer: %s\n", c.Auth.JWTIssuer)
+		fmt.Printf("  JWT Audience: %s\n", c.Auth.JWTAudience)
+		fmt.Printf("  JWKS Timeout: %d ms\n", c.Auth.TimeoutMS)
+	}
 
 	// Display RTP Configuration
 	fmt.Println("\nRTP Configuration:")

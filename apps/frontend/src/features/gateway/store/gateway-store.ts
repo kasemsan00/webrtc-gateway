@@ -19,6 +19,7 @@ import {
   waitForIceGatheringComplete,
 } from '../services/webrtc-client'
 import {
+  buildGatewayWebSocketUrl,
   createGatewayWebSocket,
   isWebSocketOpen,
   sendJson,
@@ -39,6 +40,7 @@ import type {
   VrsConfig,
   VrsFetchStatus,
 } from '../types'
+import { getAccessToken } from '@/features/auth/token-store'
 import { attachPersist } from '@/lib/store-persist'
 
 // WebRTC types not available in global scope
@@ -1544,7 +1546,8 @@ export function connect(urlOverride?: string) {
   }
 
   try {
-    const ws = createGatewayWebSocket(targetUrl)
+    const wsUrl = buildGatewayWebSocketUrl(targetUrl, getAccessToken())
+    const ws = createGatewayWebSocket(wsUrl)
     runtime.ws = ws
 
     ws.onopen = () => {
