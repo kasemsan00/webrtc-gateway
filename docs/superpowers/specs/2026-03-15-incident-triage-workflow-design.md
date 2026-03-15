@@ -39,7 +39,8 @@ This is strictly additive observability; no protocol/media behavior changes.
 
 - Failed-call UI entrypoint opens Incident Triage panel.
 - Panel gathers context: `callId`, `attemptId` (if available), trunk identifier, timestamp.
-- Calls gateway diagnostics endpoint.
+- Calls gateway diagnostics endpoint using `callId` and optional `attemptId`.
+- Trunk identifier and timestamp stay client-side for display context only in v1 (not request parameters).
 - Renders:
   - failure category
   - summary
@@ -51,6 +52,10 @@ This is strictly additive observability; no protocol/media behavior changes.
 
 - New read-only diagnostics handler (single-call lookup).
 - Validates identifiers and resolves available call/session/signaling state.
+- Uses explicit unit boundaries:
+  - `DiagnosticsStateReader` interface: reads call attempt metadata and signaling outcomes.
+  - `DiagnosticsMapper` interface: maps raw outcomes to normalized category, confidence, evidence, and suggested actions.
+  - HTTP handler composes reader + mapper and only formats API responses.
 - Maps raw outcomes into stable categories:
   - `signaling-timeout`
   - `auth-failure`
@@ -62,6 +67,20 @@ This is strictly additive observability; no protocol/media behavior changes.
 ## Proposed API Contract (v1)
 
 `GET /api/incidents/diagnostics?callId=<id>[&attemptId=<id>]`
+
+Access control:
+
+- Endpoint requires existing authenticated operator context.
+- Gateway enforces tenant/instance scoping based on auth context before resolving diagnostics.
+- If caller lacks access to call scope, return `403` with typed error.
+
+Attempt selection rule:
+
+- If `attemptId` is provided, diagnostics are computed for that attempt only.
+- If provided `attemptId` does not exist under `callId`, return `404` with `INCIDENT_NOT_FOUND`.
+- If provided `attemptId` exists but is not a failed attempt, return `400` with `INCIDENT_INVALID_REQUEST`.
+- If `attemptId` is omitted, gateway selects the most recent failed attempt for `callId` by server timestamp.
+- If no failed attempt exists, return `404` with typed error.
 
 Success response shape:
 
@@ -82,11 +101,30 @@ Success response shape:
 }
 ```
 
+`confidence` enum values: `low` | `medium` | `high`.
+
 Error responses:
 
 - `400` invalid/missing identifiers
-- `404` call/session not found
+- `403` forbidden for out-of-scope tenant/instance
+- `404` call/session or failed attempt not found
 - `500` diagnostics computation failure
+
+Typed error body shape:
+
+```json
+{
+  "error": {
+    "code": "INCIDENT_INVALID_REQUEST",
+    "message": "callId is required",
+    "retriable": false
+  },
+  "request_id": "req-123"
+}
+```
+
+Canonical error code set (v1): `INCIDENT_INVALID_REQUEST`, `INCIDENT_FORBIDDEN`, `INCIDENT_NOT_FOUND`, `INCIDENT_INTERNAL`.
+Retryability semantics: only `INCIDENT_INTERNAL` is `retriable=true`; all other v1 error codes are `retriable=false`.
 
 ## Data Flow
 
@@ -103,6 +141,11 @@ Error responses:
   - “Diagnostics unavailable”
   - baseline manual checklist for continued triage
 - Backend returns explicit typed errors; avoid broad catch-all masking.
+- Frontend maps backend error codes to deterministic UI states:
+  - `INCIDENT_INVALID_REQUEST` -> invalid context message
+  - `INCIDENT_FORBIDDEN` -> access denied for this call scope
+  - `INCIDENT_NOT_FOUND` -> no diagnostics available for this call
+  - `INCIDENT_INTERNAL` -> temporary diagnostics service issue
 
 ## Testing Strategy
 
@@ -150,5 +193,7 @@ Error responses:
 
 ## Rollout Notes
 
-- Feature can be shipped behind a frontend flag if needed.
+- Feature is gated by frontend flag `incidentTriageV1` owned by frontend team.
+- Default for first rollout: `off` in production, `on` in local/dev.
+- Enablement decision moves to `on` after internal operator pilot sign-off.
 - Start with internal operator use and collect feedback on category usefulness.
