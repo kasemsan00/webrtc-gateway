@@ -124,6 +124,10 @@ func (s *apiHandlerTrunkManagerStub) ListOwnedTrunks() []*sip.Trunk {
 	return items
 }
 
+func (s *apiHandlerTrunkManagerStub) SetTrunkInUseBy(_ context.Context, _ int64, _ *string) error {
+	return nil
+}
+
 type apiHandlerSIPMakerStub struct {
 	makeCallErr error
 	hangupErr   error

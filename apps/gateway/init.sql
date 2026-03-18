@@ -158,7 +158,10 @@ CREATE TABLE IF NOT EXISTS sip_trunks (
   -- Status
   last_registered_at TIMESTAMPTZ,
   last_error         TEXT,
-  
+
+  -- Active call tracking: set to JWT subject when a call starts, cleared on hangup
+  in_use_by          TEXT,
+
   created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -170,6 +173,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_sip_trunks_public_id ON sip_trunks (public
 CREATE INDEX IF NOT EXISTS idx_sip_trunks_name ON sip_trunks (name);
 CREATE INDEX IF NOT EXISTS idx_sip_trunks_username ON sip_trunks (username);
 CREATE INDEX IF NOT EXISTS idx_sip_trunks_enabled_default ON sip_trunks (enabled, is_default);
+CREATE INDEX IF NOT EXISTS idx_sip_trunks_in_use_by ON sip_trunks (in_use_by) WHERE in_use_by IS NOT NULL;
 
 
 -- ============================================================================

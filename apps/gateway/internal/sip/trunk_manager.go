@@ -90,8 +90,12 @@ type Trunk struct {
 	// Registration status
 	LastRegisteredAt *time.Time
 	LastError        *string
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+
+	// Active call tracking (set to JWT subject on call start, cleared on hangup)
+	InUseBy *string
+
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // TrunkManager manages SIP trunk registrations with DB-based lease
@@ -243,7 +247,7 @@ func (tm *TrunkManager) loadTrunks() error {
 
 	rows, err := tm.db.Query(ctx, `
 		SELECT id, public_id, name, domain, port, username, password, transport, enabled, is_default,
-		       lease_owner, lease_until, last_registered_at, last_error, created_at, updated_at
+		       lease_owner, lease_until, last_registered_at, last_error, in_use_by, created_at, updated_at
 		FROM sip_trunks
 		WHERE enabled = true
 		ORDER BY id
@@ -1146,7 +1150,7 @@ func (tm *TrunkManager) ListTrunks(ctx context.Context, params TrunkListParams) 
 	offset := (params.Page - 1) * params.PageSize
 	dataSQL := fmt.Sprintf(`
 		SELECT id, public_id, name, domain, port, username, password, transport, enabled, is_default,
-		       lease_owner, lease_until, last_registered_at, last_error, created_at, updated_at
+		       lease_owner, lease_until, last_registered_at, last_error, in_use_by, created_at, updated_at
 		FROM sip_trunks
 		%s
 		ORDER BY %s %s
@@ -1168,7 +1172,7 @@ func (tm *TrunkManager) ListTrunks(ctx context.Context, params TrunkListParams) 
 			&trunk.Username, &trunk.Password, &trunk.Transport,
 			&trunk.Enabled, &trunk.IsDefault,
 			&trunk.LeaseOwner, &trunk.LeaseUntil,
-			&trunk.LastRegisteredAt, &trunk.LastError,
+			&trunk.LastRegisteredAt, &trunk.LastError, &trunk.InUseBy,
 			&trunk.CreatedAt, &trunk.UpdatedAt,
 		)
 		if err != nil {
@@ -1244,7 +1248,7 @@ func (tm *TrunkManager) CreateTrunk(ctx context.Context, payload CreateTrunkPayl
 		INSERT INTO sip_trunks (public_id, name, domain, port, username, password, transport, enabled, is_default)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		RETURNING id, public_id, name, domain, port, username, password, transport, enabled, is_default,
-		          lease_owner, lease_until, last_registered_at, last_error, created_at, updated_at
+		          lease_owner, lease_until, last_registered_at, last_error, in_use_by, created_at, updated_at
 	`, publicID, payload.Name, payload.Domain, payload.Port, payload.Username, payload.Password,
 		payload.Transport, payload.Enabled, payload.IsDefault,
 	).Scan(
@@ -1252,7 +1256,7 @@ func (tm *TrunkManager) CreateTrunk(ctx context.Context, payload CreateTrunkPayl
 		&created.Username, &created.Password, &created.Transport,
 		&created.Enabled, &created.IsDefault,
 		&created.LeaseOwner, &created.LeaseUntil,
-		&created.LastRegisteredAt, &created.LastError,
+		&created.LastRegisteredAt, &created.LastError, &created.InUseBy,
 		&created.CreatedAt, &created.UpdatedAt,
 	)
 	if err != nil {
@@ -1351,7 +1355,7 @@ func (tm *TrunkManager) UpdateTrunk(ctx context.Context, trunkID int64, patch Tr
 	current := &Trunk{}
 	err = tx.QueryRow(ctx, `
 		SELECT id, public_id, name, domain, port, username, password, transport, enabled, is_default,
-		       lease_owner, lease_until, last_registered_at, last_error, created_at, updated_at
+		       lease_owner, lease_until, last_registered_at, last_error, in_use_by, created_at, updated_at
 		FROM sip_trunks
 		WHERE id = $1
 		FOR UPDATE
@@ -1360,7 +1364,7 @@ func (tm *TrunkManager) UpdateTrunk(ctx context.Context, trunkID int64, patch Tr
 		&current.Username, &current.Password, &current.Transport,
 		&current.Enabled, &current.IsDefault,
 		&current.LeaseOwner, &current.LeaseUntil,
-		&current.LastRegisteredAt, &current.LastError,
+		&current.LastRegisteredAt, &current.LastError, &current.InUseBy,
 		&current.CreatedAt, &current.UpdatedAt,
 	)
 	if err != nil {
@@ -1442,7 +1446,7 @@ func (tm *TrunkManager) UpdateTrunk(ctx context.Context, trunkID int64, patch Tr
 	updated := &Trunk{}
 	err = tx.QueryRow(ctx, `
 		SELECT id, public_id, name, domain, port, username, password, transport, enabled, is_default,
-		       lease_owner, lease_until, last_registered_at, last_error, created_at, updated_at
+		       lease_owner, lease_until, last_registered_at, last_error, in_use_by, created_at, updated_at
 		FROM sip_trunks
 		WHERE id = $1
 	`, trunkID).Scan(
@@ -1450,7 +1454,7 @@ func (tm *TrunkManager) UpdateTrunk(ctx context.Context, trunkID int64, patch Tr
 		&updated.Username, &updated.Password, &updated.Transport,
 		&updated.Enabled, &updated.IsDefault,
 		&updated.LeaseOwner, &updated.LeaseUntil,
-		&updated.LastRegisteredAt, &updated.LastError,
+		&updated.LastRegisteredAt, &updated.LastError, &updated.InUseBy,
 		&updated.CreatedAt, &updated.UpdatedAt,
 	)
 	if err != nil {
@@ -1671,7 +1675,7 @@ func (tm *TrunkManager) getTrunkByIDFromDB(ctx context.Context, trunkID int64) (
 	trunk := &Trunk{}
 	err := tm.db.QueryRow(ctx, `
 		SELECT id, public_id, name, domain, port, username, password, transport, enabled, is_default,
-		       lease_owner, lease_until, last_registered_at, last_error, created_at, updated_at
+		       lease_owner, lease_until, last_registered_at, last_error, in_use_by, created_at, updated_at
 		FROM sip_trunks
 		WHERE id = $1
 	`, trunkID).Scan(
@@ -1679,7 +1683,7 @@ func (tm *TrunkManager) getTrunkByIDFromDB(ctx context.Context, trunkID int64) (
 		&trunk.Username, &trunk.Password, &trunk.Transport,
 		&trunk.Enabled, &trunk.IsDefault,
 		&trunk.LeaseOwner, &trunk.LeaseUntil,
-		&trunk.LastRegisteredAt, &trunk.LastError,
+		&trunk.LastRegisteredAt, &trunk.LastError, &trunk.InUseBy,
 		&trunk.CreatedAt, &trunk.UpdatedAt,
 	)
 	if err != nil {
@@ -1690,4 +1694,30 @@ func (tm *TrunkManager) getTrunkByIDFromDB(ctx context.Context, trunkID int64) (
 	}
 
 	return trunk, nil
+}
+
+// SetTrunkInUseBy sets or clears the in_use_by field for a trunk.
+// Pass a non-nil username pointer to set it, nil to clear it.
+func (tm *TrunkManager) SetTrunkInUseBy(ctx context.Context, trunkID int64, username *string) error {
+	if tm.db == nil {
+		return fmt.Errorf("database not available for trunk manager")
+	}
+
+	dbCtx, cancel := context.WithTimeout(ctx, trunkManagerDBTimeout)
+	defer cancel()
+
+	_, err := tm.db.Exec(dbCtx, `
+		UPDATE sip_trunks SET in_use_by = $1, updated_at = NOW() WHERE id = $2
+	`, username, trunkID)
+	if err != nil {
+		return fmt.Errorf("set in_use_by failed: %w", err)
+	}
+
+	tm.mu.Lock()
+	if trunk, ok := tm.trunks[trunkID]; ok {
+		trunk.InUseBy = username
+	}
+	tm.mu.Unlock()
+
+	return nil
 }

@@ -32,9 +32,11 @@ type OfferResponse struct {
 
 // CallRequest represents an outbound call request
 type CallRequest struct {
-	SessionID   string `json:"sessionId"`
-	Destination string `json:"destination"`
-	From        string `json:"from,omitempty"`
+	SessionID     string `json:"sessionId"`
+	Destination   string `json:"destination"`
+	From          string `json:"from,omitempty"`
+	TrunkID       int64  `json:"trunkId,omitempty"`
+	TrunkPublicID string `json:"trunkPublicId,omitempty"`
 }
 
 // CallResponse contains call initiation result
@@ -133,6 +135,7 @@ type TrunkResponse struct {
 	LastRegisteredAt   string   `json:"lastRegisteredAt,omitempty"`
 	IsRegistered       bool     `json:"isRegistered"`
 	LastError          string   `json:"lastError,omitempty"`
+	InUseBy            *string  `json:"inUseBy,omitempty"`
 	CreatedAt          string   `json:"createdAt"`
 	UpdatedAt          string   `json:"updatedAt"`
 }
@@ -470,6 +473,53 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 	sess.SetCallInfo("outbound", req.From, req.Destination, "")
 
 	ctx := r.Context()
+
+	// Trunk mode: resolve trunk, enforce auth, and record who is using it.
+	if req.TrunkID > 0 || req.TrunkPublicID != "" {
+		if s.trunkManager == nil {
+			s.respondError(w, http.StatusServiceUnavailable, "Trunk manager not available")
+			return
+		}
+
+		var trunkID int64
+		if req.TrunkID > 0 {
+			trunkID = req.TrunkID
+			if _, found := s.trunkManager.GetTrunkByID(trunkID); !found {
+				s.respondError(w, http.StatusNotFound, fmt.Sprintf("Trunk %d not found", trunkID))
+				return
+			}
+		} else {
+			normalized, ok := sip.NormalizeTrunkPublicID(req.TrunkPublicID)
+			if !ok {
+				s.respondError(w, http.StatusBadRequest, "Invalid trunkPublicId")
+				return
+			}
+			resolved, found := s.trunkManager.GetTrunkIDByPublicID(normalized)
+			if !found {
+				s.respondError(w, http.StatusNotFound, fmt.Sprintf("Trunk %s not found", normalized))
+				return
+			}
+			trunkID = resolved
+		}
+
+		// Require an authenticated user to use a trunk.
+		claims, hasClaims := AuthClaimsFromContext(ctx)
+		if s.tokenVerifier != nil && !hasClaims {
+			s.respondError(w, http.StatusUnauthorized, "Token authentication required to use trunk")
+			return
+		}
+
+		// Record who is using this trunk.
+		if hasClaims {
+			username := claims.Subject
+			if err := s.trunkManager.SetTrunkInUseBy(ctx, trunkID, &username); err != nil {
+				log.Printf("⚠️ [REST Call] Failed to set in_use_by for trunk %d: %v", trunkID, err)
+			}
+		}
+
+		sess.SetSIPAuthContext("trunk", "", trunkID, "", "", "", 0)
+	}
+
 	s.logEvent(&logstore.Event{
 		Timestamp: time.Now(),
 		SessionID: sess.ID,
@@ -524,6 +574,15 @@ func (s *Server) handleHangup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+
+	// Clear in_use_by for trunk sessions.
+	authMode, _, trunkID, _, _, _, _ := sess.GetSIPAuthContext()
+	if authMode == "trunk" && trunkID > 0 && s.trunkManager != nil {
+		if err := s.trunkManager.SetTrunkInUseBy(ctx, trunkID, nil); err != nil {
+			log.Printf("⚠️ [REST Hangup] Failed to clear in_use_by for trunk %d: %v", trunkID, err)
+		}
+	}
+
 	s.logEvent(&logstore.Event{
 		Timestamp: time.Now(),
 		SessionID: sess.ID,
@@ -1228,6 +1287,9 @@ func trunkResponseFrom(trunk *sip.Trunk, activeCallCount int, activeDestinations
 	}
 	if trunk.LastError != nil {
 		response.LastError = *trunk.LastError
+	}
+	if trunk.InUseBy != nil {
+		response.InUseBy = trunk.InUseBy
 	}
 	return response
 }

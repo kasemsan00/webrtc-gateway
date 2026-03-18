@@ -88,6 +88,7 @@ type TrunkManager interface {
 	ListTrunks(ctx context.Context, params sip.TrunkListParams) (*sip.TrunkListResult, error)
 	GetTrunkByIDFromDB(ctx context.Context, trunkID int64) (*sip.Trunk, error)
 	ListOwnedTrunks() []*sip.Trunk
+	SetTrunkInUseBy(ctx context.Context, trunkID int64, username *string) error
 }
 
 // SIPCallMaker interface for making SIP calls (implemented by SIP server)
@@ -111,6 +112,7 @@ type WSClient struct {
 	resolvedTrunkID int64
 	send            chan []byte
 	ConnectedAt     time.Time
+	authClaims      *auth.VerifiedClaims // populated when tokenVerifier is set
 }
 
 // WSMessage represents a WebSocket message
@@ -360,6 +362,9 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		conn:        conn,
 		send:        make(chan []byte, 256),
 		ConnectedAt: time.Now(),
+	}
+	if claims, ok := AuthClaimsFromContext(req.Context()); ok {
+		client.authClaims = claims
 	}
 	s.mu.Lock()
 	s.wsConnections[client] = struct{}{}
@@ -674,6 +679,20 @@ func (s *Server) handleWSCall(client *WSClient, msg WSMessage) {
 		// Set trunk auth context in session
 		sess.SetSIPAuthContext("trunk", "", trunkID, "", "", "", 0)
 
+		// Require authenticated user to use a trunk.
+		if s.tokenVerifier != nil && client.authClaims == nil {
+			s.sendWSError(client, msg.SessionID, "Token authentication required to use trunk")
+			return
+		}
+
+		// Record who is using this trunk.
+		if client.authClaims != nil && s.trunkManager != nil {
+			username := client.authClaims.Subject
+			if err := s.trunkManager.SetTrunkInUseBy(ctx, trunkID, &username); err != nil {
+				log.Printf("⚠️ [WS Call] Failed to set in_use_by for trunk %d: %v", trunkID, err)
+			}
+		}
+
 		log.Printf(
 			"📞 [WS Call] Session %s using trunk mode (trunkId=%d, trunkPublicId=%s)",
 			sess.ID, trunkID, trunkPublicID,
@@ -833,9 +852,16 @@ func (s *Server) handleWSHangup(client *WSClient, msg WSMessage) {
 	}
 
 	// Decrement public account refcount if applicable (before deleting session)
-	authMode, accountKey, _, _, _, _, _ := sess.GetSIPAuthContext()
+	authMode, accountKey, trunkID, _, _, _, _ := sess.GetSIPAuthContext()
 	if authMode == "public" && accountKey != "" && s.publicRegistry != nil {
 		s.publicRegistry.DecrementRefCount(accountKey)
+	}
+
+	// Clear in_use_by for trunk sessions.
+	if authMode == "trunk" && trunkID > 0 && s.trunkManager != nil {
+		if err := s.trunkManager.SetTrunkInUseBy(context.Background(), trunkID, nil); err != nil {
+			log.Printf("⚠️ [WS Hangup] Failed to clear in_use_by for trunk %d: %v", trunkID, err)
+		}
 	}
 
 	// Delete session after BYE is sent
