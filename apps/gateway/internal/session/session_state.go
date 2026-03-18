@@ -28,6 +28,9 @@ func (s *Session) SetState(state SessionState) {
 	defer s.mu.Unlock()
 	s.State = state
 	s.UpdatedAt = time.Now()
+	if state == StateEnded && s.cancel != nil {
+		s.cancel()
+	}
 }
 
 // GetState returns the current state of the session

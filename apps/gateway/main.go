@@ -130,6 +130,7 @@ func runAPIMode(ctx context.Context, cfg *config.Config, unicastAddress string, 
 
 	// Create session manager
 	sessionMgr := session.NewManager(cfg)
+	sessionMgr.StartCleanup(ctx, 30*time.Second)
 
 	// Initialize SIP server (with nil audio track - sessions will have their own)
 	sipServer, err := sip.NewServer(cfg.SIP, cfg.RTP, nil, unicastAddress, cfg.SIP.LocalPort)

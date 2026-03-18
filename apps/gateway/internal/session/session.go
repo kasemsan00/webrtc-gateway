@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
@@ -151,7 +152,9 @@ type Session struct {
 	LastNACKHandledLogSig string    `json:"-"`
 	LastNACKHandledLogAt  time.Time `json:"-"`
 	// Video optimization flags
-	PreserveSTAPA     bool `json:"-"` // If true, preserve STAP-A packets (don't de-aggregate) when they contain SPS+PPS+IDR
+	PreserveSTAPA     bool               `json:"-"` // If true, preserve STAP-A packets (don't de-aggregate) when they contain SPS+PPS+IDR
+	ctx               context.Context    `json:"-"`
+	cancel            context.CancelFunc `json:"-"`
 	videoRTPHistoryMu sync.Mutex
 	mu                sync.RWMutex
 }
@@ -300,6 +303,7 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 		VideoRecoveryBurstFIRStale:  burstFIRStale,
 	}
 	session.initVideoRTPHistory()
+	session.ctx, session.cancel = context.WithCancel(context.Background())
 
 	// Start reading RTCP packets from the audio sender
 	go func() {
@@ -489,7 +493,11 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 				startRecoveryBurstReason = "ice-reconnecting"
 
 				go func() {
-					time.Sleep(reconnectGracePeriod)
+					select {
+					case <-time.After(reconnectGracePeriod):
+					case <-session.ctx.Done():
+						return
+					}
 					session.mu.Lock()
 					defer session.mu.Unlock()
 
@@ -497,6 +505,9 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 					if session.State == StateReconnecting {
 						fmt.Printf("[%s] ⏰ Grace period expired - ending session\n", id)
 						session.State = StateEnded
+						if session.cancel != nil {
+							session.cancel()
+						}
 						if session.RTPConn != nil {
 							session.RTPConn.Close()
 							session.RTPConn = nil
@@ -520,6 +531,9 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 		case webrtc.ICEConnectionStateFailed:
 			// ICE failed is truly terminal - end immediately
 			session.State = StateEnded
+			if session.cancel != nil {
+				session.cancel()
+			}
 			if session.RTPConn != nil {
 				session.RTPConn.Close()
 				session.RTPConn = nil

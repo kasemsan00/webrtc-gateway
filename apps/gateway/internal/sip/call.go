@@ -366,6 +366,9 @@ func (s *Server) MakeCall(destination, from string, sess *session.Session) error
 			return nil
 
 		case <-ctx.Done():
+			// Best-effort CANCEL to terminate the pending INVITE on the SIP peer
+			s.trySendCancel(inviteReq, sess)
+
 			sess.UpdateState(session.StateEnded)
 			s.notifySessionStateChange(sess, session.StateEnded)
 			s.logEvent(&logstore.Event{
@@ -1458,5 +1461,60 @@ func (s *Server) sendAckForInvite(inviteReq *sip.Request, res *sip.Response) {
 		fmt.Printf("Error sending ACK: %v\n", err)
 	} else {
 		fmt.Printf("ACK sent successfully (Request-URI: %s)\n", recipient.String())
+	}
+}
+
+// trySendCancel sends a best-effort SIP CANCEL for an in-progress INVITE.
+// Used when the INVITE context times out to free resources on the SIP peer.
+func (s *Server) trySendCancel(inviteReq *sip.Request, sess *session.Session) {
+	if s.sipClient == nil {
+		return
+	}
+
+	cancelReq := sip.NewRequest(sip.CANCEL, inviteReq.Recipient)
+
+	// RFC 3261 §9.1: CANCEL must carry same Call-ID, From, To, CSeq number
+	if h := inviteReq.CallID(); h != nil {
+		cancelReq.AppendHeader(sip.NewHeader("Call-ID", h.Value()))
+	}
+	if h := inviteReq.From(); h != nil {
+		cancelReq.AppendHeader(sip.NewHeader("From", h.Value()))
+	}
+	if h := inviteReq.To(); h != nil {
+		cancelReq.AppendHeader(sip.NewHeader("To", h.Value()))
+	}
+	cancelReq.AppendHeader(sip.NewHeader("CSeq", "1 CANCEL"))
+	cancelReq.AppendHeader(sip.NewHeader("Max-Forwards", "70"))
+
+	if dest := inviteReq.Destination(); dest != "" {
+		cancelReq.SetDestination(dest)
+	}
+
+	cancelCtx, cancelFn := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelFn()
+
+	tx, err := s.sipClient.TransactionRequest(cancelCtx, cancelReq)
+	if err != nil {
+		fmt.Printf("[%s] Failed to send CANCEL: %v\n", sess.ID, err)
+		return
+	}
+	defer tx.Terminate()
+
+	s.logEvent(&logstore.Event{
+		Timestamp: time.Now(),
+		SessionID: sess.ID,
+		Category:  "sip",
+		Name:      "sip_cancel_sent",
+		SIPCallID: inviteReq.CallID().Value(),
+	})
+
+	select {
+	case res := <-tx.Responses():
+		if res != nil {
+			fmt.Printf("[%s] CANCEL response: %d %s\n", sess.ID, res.StatusCode, res.Reason)
+		}
+	case <-tx.Done():
+	case <-cancelCtx.Done():
+		fmt.Printf("[%s] CANCEL timed out\n", sess.ID)
 	}
 }

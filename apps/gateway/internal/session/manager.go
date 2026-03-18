@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync"
@@ -97,44 +98,30 @@ func (m *Manager) GetSessionByFromUsername(username string) (*Session, bool) {
 	return nil, false
 }
 
-// DeleteSession removes a session and cleans up resources
+// DeleteSession removes a session and cleans up resources.
+// The map lock is released before closing heavy resources (PeerConnection, sockets)
+// to avoid blocking other session operations.
 func (m *Manager) DeleteSession(id string) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	session, ok := m.sessions[id]
 	if !ok {
+		m.mu.Unlock()
 		return
 	}
+	delete(m.sessions, id)
+	m.mu.Unlock()
 
-	// Close peer connection
+	// Signal all session goroutines to stop (calls cancel() internally)
+	session.SetState(StateEnded)
+
+	// Close media transports outside map lock (reuses existing safe close pattern)
+	session.CloseMediaTransports()
+
+	// Close peer connection outside map lock (can block during ICE cleanup)
 	if session.PeerConnection != nil {
 		session.PeerConnection.Close()
 	}
 
-	// Close RTP connections (audio and video)
-	if session.RTPConn != nil {
-		session.RTPConn.Close()
-	}
-	if session.VideoRTPConn != nil {
-		session.VideoRTPConn.Close()
-	}
-
-	// Close RTCP connections (audio and video)
-	if session.AudioRTCPConn != nil {
-		session.AudioRTCPConn.Close()
-	}
-	if session.VideoRTCPConn != nil {
-		session.VideoRTCPConn.Close()
-	}
-
-	// Update state
-	session.mu.Lock()
-	session.State = StateEnded
-	session.UpdatedAt = time.Now()
-	session.mu.Unlock()
-
-	delete(m.sessions, id)
 	fmt.Printf("[%s] Deleted session\n", id)
 }
 
@@ -148,4 +135,58 @@ func (m *Manager) ListSessions() []*Session {
 		sessions = append(sessions, session)
 	}
 	return sessions
+}
+
+const staleSessionThreshold = 60 * time.Second
+
+// StartCleanup starts a background goroutine that periodically removes
+// sessions stuck in StateEnded from the session map (prevents memory leak).
+func (m *Manager) StartCleanup(ctx context.Context, interval time.Duration) {
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				m.cleanupEndedSessions()
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+}
+
+func (m *Manager) cleanupEndedSessions() {
+	now := time.Now()
+
+	m.mu.Lock()
+	var toCleanup []*Session
+	var toDeleteIDs []string
+	for id, sess := range m.sessions {
+		if sess.GetState() == StateEnded {
+			sess.mu.RLock()
+			updatedAt := sess.UpdatedAt
+			sess.mu.RUnlock()
+			if now.Sub(updatedAt) > staleSessionThreshold {
+				toDeleteIDs = append(toDeleteIDs, id)
+				toCleanup = append(toCleanup, sess)
+			}
+		}
+	}
+	for _, id := range toDeleteIDs {
+		delete(m.sessions, id)
+	}
+	m.mu.Unlock()
+
+	// Safety net: ensure resources are released outside lock
+	for _, sess := range toCleanup {
+		sess.CloseMediaTransports()
+		if sess.PeerConnection != nil {
+			sess.PeerConnection.Close()
+		}
+	}
+
+	if len(toDeleteIDs) > 0 {
+		fmt.Printf("[SessionManager] Cleaned up %d stale ended sessions\n", len(toDeleteIDs))
+	}
 }

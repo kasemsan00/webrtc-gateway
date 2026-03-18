@@ -1,17 +1,46 @@
 import { getAccessToken } from '@/features/auth/token-store'
+import { readAppEnvValue } from './runtime-env'
 
 const DEFAULT_TIMEOUT_MS = 15_000
 
-export function resolveGatewayApiBaseUrl(): string {
-  const envUrl = (
-    import.meta.env.VITE_GATEWAY_URL as string | undefined
-  )?.trim()
-  if (!envUrl) {
-    throw new Error('VITE_GATEWAY_URL is not configured')
+const DEFAULT_GATEWAY_PORT = '8000'
+
+const isBrowser = () => typeof window !== 'undefined'
+
+function resolveFallbackGatewayOrigin(): string {
+  if (!isBrowser()) {
+    return `http://localhost:${DEFAULT_GATEWAY_PORT}`
   }
 
-  const hasProtocol = /^https?:\/\//i.test(envUrl)
-  const normalizedOrigin = hasProtocol ? envUrl : `https://${envUrl}`
+  if (window.location.hostname === 'k2-gateway.kasemsan.com') {
+    return 'https://k2-gateway.kasemsan.com'
+  }
+
+  const protocol = window.location.protocol === 'https:' ? 'https' : 'http'
+  return `${protocol}://${window.location.hostname}:${DEFAULT_GATEWAY_PORT}`
+}
+
+type ResolveGatewayApiBaseUrlOptions = {
+  envUrlOverride?: string
+  skipEnv?: boolean
+}
+
+export function resolveGatewayApiBaseUrl(
+  options: ResolveGatewayApiBaseUrlOptions = {},
+): string {
+  const overrideUrl = options.envUrlOverride?.trim()
+  const envUrl = overrideUrl
+    ? overrideUrl
+    : options.skipEnv
+      ? undefined
+      : readAppEnvValue('VITE_GATEWAY_URL')
+
+  const normalizedOrigin = envUrl
+    ? /^https?:\/\//i.test(envUrl)
+      ? envUrl
+      : `https://${envUrl}`
+    : resolveFallbackGatewayOrigin()
+
   return `${normalizedOrigin.replace(/\/+$/, '')}/api`
 }
 

@@ -1,7 +1,36 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { buildAuthHeaders, fetchJson } from './http-client'
+import {
+  buildAuthHeaders,
+  fetchJson,
+  resolveGatewayApiBaseUrl,
+} from './http-client'
 import { clearAccessToken, setAccessToken } from '@/features/auth/token-store'
+
+describe('resolveGatewayApiBaseUrl', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('uses configured env value when provided', () => {
+    expect(
+      resolveGatewayApiBaseUrl({ envUrlOverride: 'gateway.example.test' }),
+    ).toBe('https://gateway.example.test/api')
+  })
+
+  it('falls back to browser hostname when env is missing', () => {
+    vi.stubGlobal('window', {
+      location: {
+        protocol: 'http:',
+        hostname: 'localhost',
+      },
+    })
+
+    expect(resolveGatewayApiBaseUrl({ skipEnv: true })).toBe(
+      'http://localhost:8000/api',
+    )
+  })
+})
 
 describe('buildAuthHeaders', () => {
   afterEach(() => {

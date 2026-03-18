@@ -102,6 +102,7 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 
 		// Forward to Asterisk
 		s.mu.Lock() // Lock for updating Seq/SSRC and Injection
+		var pendingWrites [][]byte
 		var destAddr *net.UDPAddr
 		var conn *net.UDPConn
 
@@ -190,8 +191,9 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 								}
 							}
 						}
-						time.Sleep(200 * time.Millisecond)
-						if s.GetState() == StateEnded {
+						select {
+						case <-time.After(200 * time.Millisecond):
+						case <-s.ctx.Done():
 							return
 						}
 					}
@@ -284,7 +286,7 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 						}
 						if out, err := spsPacket.Marshal(); err == nil {
 							if destAddr != nil && conn != nil {
-								conn.WriteToUDP(out, destAddr)
+								pendingWrites = append(pendingWrites, out)
 								if injectReason == "@switch" {
 									fmt.Printf("[%s] 💉 @switch STAP-A: Injected SPS (NRI=3) copy %d/%d (Seq=%d, Size=%d)\n",
 										s.ID, i+1, redundancyCount, spsPacket.Header.SequenceNumber, len(out))
@@ -307,7 +309,7 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 						}
 						if out, err := ppsPacket.Marshal(); err == nil {
 							if destAddr != nil && conn != nil {
-								conn.WriteToUDP(out, destAddr)
+								pendingWrites = append(pendingWrites, out)
 								if injectReason == "@switch" {
 									fmt.Printf("[%s] 💉 @switch STAP-A: Injected PPS (NRI=3) copy %d/%d (Seq=%d, Size=%d)\n",
 										s.ID, i+1, redundancyCount, ppsPacket.Header.SequenceNumber, len(out))
@@ -361,7 +363,7 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 
 						if out, err := nalPacket.Marshal(); err == nil {
 							if destAddr != nil && conn != nil {
-								conn.WriteToUDP(out, destAddr)
+								pendingWrites = append(pendingWrites, out)
 								if packetCount <= 50 {
 									fmt.Printf("[%s] 📤 De-aggregated STAP-A NAL #%d type=%d (Seq=%d, Size=%d, Marker=%v)\n",
 										s.ID, nalCount, nalType, nalPacket.Header.SequenceNumber, len(out), nalPacket.Header.Marker)
@@ -372,6 +374,10 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 				}
 
 				s.mu.Unlock()
+				// Flush buffered writes outside lock
+				for _, w := range pendingWrites {
+					conn.WriteToUDP(w, destAddr)
+				}
 				continue // STAP-A handled, skip normal forwarding
 			}
 
@@ -414,7 +420,7 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 
 					if out, err := spsPacket.Marshal(); err == nil {
 						if destAddr != nil && conn != nil {
-							conn.WriteToUDP(out, destAddr)
+							pendingWrites = append(pendingWrites, out)
 							if (isKeyframe && i == 0) || packetCount <= 100 {
 								fmt.Printf("[%s] 💉 Injected SPS (NRI=3) copy %d/%d (Seq=%d, Size=%d, Keyframe=%v)\n",
 									s.ID, i+1, redundancyCount, spsPacket.Header.SequenceNumber, len(out), isKeyframe)
@@ -439,7 +445,7 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 
 					if out, err := ppsPacket.Marshal(); err == nil {
 						if destAddr != nil && conn != nil {
-							conn.WriteToUDP(out, destAddr)
+							pendingWrites = append(pendingWrites, out)
 							if (isKeyframe && i == 0) || packetCount <= 100 {
 								fmt.Printf("[%s] 💉 Injected PPS (NRI=3) copy %d/%d (Seq=%d, Size=%d, Keyframe=%v)\n",
 									s.ID, i+1, redundancyCount, ppsPacket.Header.SequenceNumber, len(out), isKeyframe)
@@ -460,6 +466,11 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 			packet.Header.Padding = false
 		}
 		s.mu.Unlock()
+
+		// Flush any buffered SPS/PPS injection writes outside lock
+		for _, w := range pendingWrites {
+			conn.WriteToUDP(w, destAddr)
+		}
 
 		if destAddr != nil && conn != nil {
 			// Serialize packet
