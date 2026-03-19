@@ -1,0 +1,24 @@
+{
+  "name": "gateway-capacity-default",
+  "codecMix": {
+    "audioOnlyPercent": 70,
+    "audioVideoPercent": 30
+  },
+  "callDurationSeconds": 300,
+  "ramp": {
+    "sessionStep": 25,
+    "intervalSeconds": 120
+  },
+  "networkProfiles": [
+    {
+      "name": "baseline-lan",
+      "packetLossPercent": 0,
+      "jitterMs": 0
+    },
+    {
+      "name": "impaired",
+      "packetLossPercent": 1,
+      "jitterMs": 30
+    }
+  ]
+}

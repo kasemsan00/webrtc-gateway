@@ -1,0 +1,115 @@
+https://webrtc-gateway-ui.app.kasemsan.com/
+
+# WebRTC Gateway Monorepo
+
+Monorepo สำหรับระบบ WebRTC <-> SIP Gateway โดยแยกเป็น frontend สำหรับ operations UI และ backend gateway service สำหรับ signaling/media.
+
+## Supported Call Flows
+
+ระบบรองรับการใช้งานพร้อมกัน 2 flow:
+
+1. `browser -> gateway -> kamailio/asterisk -> linphone desktop`
+2. `browser frontend -> gateway -> kamailio/asterisk -> gateway -> browser frontend`
+
+สถาปัตยกรรมหลักคือให้ `gateway` เป็น media/signaling bridge เสมอ และใช้ trunk mapping เป็นฐาน route สำหรับสายเข้า/สายออก
+
+รายละเอียด flow แบบเต็ม: `apps/gateway/docs/dual-flow.md`
+
+## Project Structure
+
+- `apps/frontend` : React + TypeScript + Vite UI
+- `apps/gateway` : Go service สำหรับ WebRTC <-> SIP bridge
+- `packages/ui` : shared UI components
+- `packages/eslint-config` : shared ESLint config
+- `packages/typescript-config` : shared TypeScript config
+
+## Tech Stack
+
+- Monorepo: `pnpm` workspaces + `turborepo`
+- Frontend: React, TypeScript, Vite, TanStack Router
+- Backend: Go (`k2-gateway`), Pion WebRTC, SIP stack
+
+## Prerequisites
+
+- Node.js `>= 18`
+- `pnpm@9`
+- Go `1.25.5` (สำหรับ `apps/gateway`)
+
+## Install Dependencies
+
+รันที่ root ของ repo:
+
+```bash
+pnpm install
+```
+
+## Root Commands
+
+```bash
+pnpm build
+pnpm lint
+pnpm check-types
+pnpm dev
+```
+
+## Run Each App
+
+Frontend (จาก root):
+
+```bash
+pnpm dev:frontend
+```
+
+Backend (จาก root):
+
+```bash
+pnpm dev:backend
+```
+
+## App-Level Commands
+
+Frontend scripts: ดูที่ `apps/frontend/package.json`
+
+Backend targets: ดูที่ `apps/gateway/project.json`
+
+ตัวอย่าง backend แบบตรงโฟลเดอร์:
+
+```bash
+cd apps/gateway
+go run .
+go test ./...
+```
+
+## Environment Setup
+
+ตั้งค่า environment แยกตามแอปก่อนรัน:
+
+- Frontend: `apps/frontend/.env.example`
+- Backend: `apps/gateway/.env.example`
+
+สำหรับ flow browser-to-browser ผ่าน SIP core ต้องใช้ trunk/DB:
+
+- `DB_ENABLE=true`
+- `SIP_TRUNK_ENABLE=true`
+- ตั้ง `GATEWAY_INSTANCE_ID` ให้คงที่
+- ตั้ง `GATEWAY_PUBLIC_WS_URL` ใน environment จริงเพื่อรองรับ redirect/recovery ข้าม instance
+
+ไฟล์อ้างอิงเพิ่มเติม:
+
+- `apps/frontend/README.md`
+- `apps/gateway/AGENTS.md`
+- `apps/gateway/docs/dual-flow.md`
+
+## Development Notes
+
+- แก้โค้ดให้ scope อยู่ในแอป/แพ็กเกจที่เกี่ยวข้องเท่านั้น
+- หลีกเลี่ยงแก้ไฟล์ generated เช่น `apps/frontend/src/routeTree.gen.ts`
+- การเปลี่ยน media path ใน `apps/gateway` มีความเสี่ยงสูง ควรเลี่ยงหากไม่ได้ตั้งใจแก้พฤติกรรมโปรโตคอล
+
+## Key References
+
+- Monorepo tasks: `turbo.json`
+- Workspace config: `pnpm-workspace.yaml`
+- Root scripts: `package.json`
+- Frontend guide: `apps/frontend/AGENTS.md`
+- Backend guide: `apps/gateway/AGENTS.md`

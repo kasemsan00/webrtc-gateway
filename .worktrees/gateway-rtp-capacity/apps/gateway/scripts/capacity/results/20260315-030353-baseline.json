@@ -1,0 +1,96 @@
+{
+  "tag": "baseline",
+  "dryRun": false,
+  "startedAt": "2026-03-15T03:03:53.3298942Z",
+  "profile": {
+    "name": "gateway-capacity-default",
+    "codecMix": {
+      "audioOnlyPercent": 70,
+      "audioVideoPercent": 30
+    },
+    "callDurationSeconds": 300,
+    "ramp": {
+      "sessionStep": 25,
+      "intervalSeconds": 120
+    },
+    "networkProfiles": [
+      {
+        "name": "baseline-lan",
+        "packetLossPercent": 0,
+        "jitterMs": 0
+      },
+      {
+        "name": "impaired",
+        "packetLossPercent": 1,
+        "jitterMs": 30
+      }
+    ]
+  },
+  "steps": [
+    {
+      "stepIndex": 1,
+      "targetSessions": 25,
+      "intervalSeconds": 120,
+      "status": "pending-execution",
+      "setupSuccessRate": null,
+      "setupLatencyP95Ms": null,
+      "rtpForwardLoopP95Ms": null,
+      "cpuPercentAvg5m": null,
+      "memoryPercent": null,
+      "goroutineCount": null,
+      "wsQueueFullEvents": null,
+      "qualityAlarmWindowSec": null,
+      "bottleneck": null,
+      "pass": null
+    },
+    {
+      "stepIndex": 2,
+      "targetSessions": 50,
+      "intervalSeconds": 120,
+      "status": "pending-execution",
+      "setupSuccessRate": null,
+      "setupLatencyP95Ms": null,
+      "rtpForwardLoopP95Ms": null,
+      "cpuPercentAvg5m": null,
+      "memoryPercent": null,
+      "goroutineCount": null,
+      "wsQueueFullEvents": null,
+      "qualityAlarmWindowSec": null,
+      "bottleneck": null,
+      "pass": null
+    },
+    {
+      "stepIndex": 3,
+      "targetSessions": 75,
+      "intervalSeconds": 120,
+      "status": "pending-execution",
+      "setupSuccessRate": null,
+      "setupLatencyP95Ms": null,
+      "rtpForwardLoopP95Ms": null,
+      "cpuPercentAvg5m": null,
+      "memoryPercent": null,
+      "goroutineCount": null,
+      "wsQueueFullEvents": null,
+      "qualityAlarmWindowSec": null,
+      "bottleneck": null,
+      "pass": null
+    },
+    {
+      "stepIndex": 4,
+      "targetSessions": 100,
+      "intervalSeconds": 120,
+      "status": "pending-execution",
+      "setupSuccessRate": null,
+      "setupLatencyP95Ms": null,
+      "rtpForwardLoopP95Ms": null,
+      "cpuPercentAvg5m": null,
+      "memoryPercent": null,
+      "goroutineCount": null,
+      "wsQueueFullEvents": null,
+      "qualityAlarmWindowSec": null,
+      "bottleneck": null,
+      "pass": null
+    }
+  ],
+  "finishedAt": "2026-03-15T03:03:53.3379115Z"
+}

@@ -1,0 +1,18 @@
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VITE_GATEWAY_URL: ${VITE_GATEWAY_URL}
+        VITE_TURN_URL: ${VITE_TURN_URL}
+        VITE_TURN_USERNAME: ${VITE_TURN_USERNAME}
+        VITE_TURN_CREDENTIAL: ${VITE_TURN_CREDENTIAL}
+        VITE_KEYCLOAK_URL: ${VITE_KEYCLOAK_URL}
+        VITE_KEYCLOAK_REALM: ${VITE_KEYCLOAK_REALM}
+        VITE_KEYCLOAK_CLIENT: ${VITE_KEYCLOAK_CLIENT}
+        VITE_CONFIG_AUTORECORD: ${VITE_CONFIG_AUTORECORD}
+    ports:
+      - "4173:4173"
+    environment:
+      NODE_ENV: production

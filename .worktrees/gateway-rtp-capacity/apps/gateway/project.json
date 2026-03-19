@@ -1,0 +1,50 @@
+{
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "name": "gateway",
+  "projectType": "application",
+  "sourceRoot": "apps/gateway",
+  "tags": ["scope:gateway", "type:backend", "lang:go"],
+  "targets": {
+    "serve": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "apps/gateway",
+        "command": "go run ."
+      }
+    },
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "apps/gateway",
+        "command": "go build -o k2-gateway ."
+      },
+      "outputs": ["{projectRoot}/k2-gateway"]
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "apps/gateway",
+        "command": "go test ./..."
+      },
+      "configurations": {
+        "coverage": {
+          "command": "go test -covermode=atomic -coverprofile=coverage.out ./... && go tool cover -func=coverage.out"
+        }
+      }
+    },
+    "tidy": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "apps/gateway",
+        "command": "go mod tidy"
+      }
+    },
+    "docker-build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "apps/gateway",
+        "command": "docker build -t gateway:local ."
+      }
+    }
+  }
+}

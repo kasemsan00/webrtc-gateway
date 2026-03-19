@@ -1,0 +1,61 @@
+{
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "name": "frontend",
+  "projectType": "application",
+  "sourceRoot": "apps/frontend/src",
+  "tags": ["scope:gateway", "type:frontend"],
+  "targets": {
+    "dev": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "pnpm --filter frontend run dev"
+      }
+    },
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "pnpm --filter frontend run build"
+      },
+      "outputs": [
+        "{projectRoot}/.output",
+        "{projectRoot}/dist",
+        "{projectRoot}/build"
+      ]
+    },
+    "preview": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "pnpm --filter frontend run preview"
+      }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "pnpm --filter frontend run test"
+      },
+      "configurations": {
+        "coverage": {
+          "command": "pnpm --filter frontend run test:coverage"
+        }
+      }
+    },
+    "e2e-smoke": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "pnpm --filter frontend run test:smoke"
+      }
+    },
+    "lint": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "pnpm --filter frontend run lint"
+      }
+    },
+    "check": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "pnpm --filter frontend run check"
+      }
+    }
+  }
+}

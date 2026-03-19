@@ -1,0 +1,108 @@
+{
+  "tag": "baseline-8vcpu16gb",
+  "dryRun": false,
+  "startedAt": "2026-03-15T03:51:35.4201269Z",
+  "profile": {
+    "name": "gateway-capacity-default",
+    "codecMix": {
+      "audioOnlyPercent": 70,
+      "audioVideoPercent": 30
+    },
+    "callDurationSeconds": 300,
+    "ramp": {
+      "sessionStep": 25,
+      "intervalSeconds": 120
+    },
+    "networkProfiles": [
+      {
+        "name": "baseline-lan",
+        "packetLossPercent": 0,
+        "jitterMs": 0
+      },
+      {
+        "name": "impaired",
+        "packetLossPercent": 1,
+        "jitterMs": 30
+      }
+    ]
+  },
+  "telemetry": {
+    "perfSummaryUrl": "http://127.0.0.1:8080/api/perf-summary",
+    "source": "runtime"
+  },
+  "steps": [
+    {
+      "stepIndex": 1,
+      "targetSessions": 25,
+      "intervalSeconds": 120,
+      "status": "telemetry-unavailable",
+      "telemetryComplete": false,
+      "cpuWindowSeconds": 1,
+      "setupSuccessRate": -1.0,
+      "setupLatencyP95Ms": 0.0,
+      "rtpForwardLoopP95Ms": 0.0,
+      "cpuPercentAvg5m": 1.6,
+      "memoryPercent": 0.0,
+      "goroutineCount": 0.0,
+      "wsQueueFullEvents": 0.0,
+      "qualityAlarmWindowSec": 0.0,
+      "bottleneck": "telemetry-unavailable",
+      "pass": false
+    },
+    {
+      "stepIndex": 2,
+      "targetSessions": 50,
+      "intervalSeconds": 120,
+      "status": "telemetry-unavailable",
+      "telemetryComplete": false,
+      "cpuWindowSeconds": 1,
+      "setupSuccessRate": -1.0,
+      "setupLatencyP95Ms": 0.0,
+      "rtpForwardLoopP95Ms": 0.0,
+      "cpuPercentAvg5m": 4.3,
+      "memoryPercent": 0.0,
+      "goroutineCount": 0.0,
+      "wsQueueFullEvents": 0.0,
+      "qualityAlarmWindowSec": 0.0,
+      "bottleneck": "telemetry-unavailable",
+      "pass": false
+    },
+    {
+      "stepIndex": 3,
+      "targetSessions": 75,
+      "intervalSeconds": 120,
+      "status": "telemetry-unavailable",
+      "telemetryComplete": false,
+      "cpuWindowSeconds": 1,
+      "setupSuccessRate": -1.0,
+      "setupLatencyP95Ms": 0.0,
+      "rtpForwardLoopP95Ms": 0.0,
+      "cpuPercentAvg5m": 3.41,
+      "memoryPercent": 0.0,
+      "goroutineCount": 0.0,
+      "wsQueueFullEvents": 0.0,
+      "qualityAlarmWindowSec": 0.0,
+      "bottleneck": "telemetry-unavailable",
+      "pass": false
+    },
+    {
+      "stepIndex": 4,
+      "targetSessions": 100,
+      "intervalSeconds": 120,
+      "status": "telemetry-unavailable",
+      "telemetryComplete": false,
+      "cpuWindowSeconds": 1,
+      "setupSuccessRate": -1.0,
+      "setupLatencyP95Ms": 0.0,
+      "rtpForwardLoopP95Ms": 0.0,
+      "cpuPercentAvg5m": 1.12,
+      "memoryPercent": 0.0,
+      "goroutineCount": 0.0,
+      "wsQueueFullEvents": 0.0,
+      "qualityAlarmWindowSec": 0.0,
+      "bottleneck": "telemetry-unavailable",
+      "pass": false
+    }
+  ],
+  "finishedAt": "2026-03-15T03:51:47.9594014Z"
+}
