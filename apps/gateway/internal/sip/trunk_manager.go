@@ -810,10 +810,44 @@ func (tm *TrunkManager) GetTrunkByPublicID(publicID string) (interface{}, bool) 
 
 // GetTrunkIDByPublicID resolves trunk ID from public ID.
 func (tm *TrunkManager) GetTrunkIDByPublicID(publicID string) (int64, bool) {
+	normalizedPublicID, ok := NormalizeTrunkPublicID(publicID)
+	if !ok {
+		return 0, false
+	}
+
 	tm.mu.RLock()
-	defer tm.mu.RUnlock()
-	trunkID, ok := tm.trunkByPublic[publicID]
-	return trunkID, ok
+	trunkID, found := tm.trunkByPublic[normalizedPublicID]
+	tm.mu.RUnlock()
+	if found {
+		return trunkID, true
+	}
+
+	if tm.db == nil {
+		return 0, false
+	}
+
+	ctx, cancel := tm.dbContext()
+	defer cancel()
+
+	err := tm.db.QueryRow(ctx, `
+		SELECT id
+		FROM sip_trunks
+		WHERE lower(public_id::text) = $1
+		  AND enabled = true
+		LIMIT 1
+	`, normalizedPublicID).Scan(&trunkID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, false
+		}
+		return 0, false
+	}
+
+	tm.mu.Lock()
+	tm.trunkByPublic[normalizedPublicID] = trunkID
+	tm.mu.Unlock()
+
+	return trunkID, true
 }
 
 // ListOwnedTrunks returns all trunks currently owned by this instance

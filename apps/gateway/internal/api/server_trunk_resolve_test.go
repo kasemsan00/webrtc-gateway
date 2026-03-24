@@ -26,8 +26,9 @@ type stubResolveStore struct {
 }
 
 type stubResolveTrunkManager struct {
-	byID       map[int64]*sip.Trunk
-	byPublicID map[string]int64
+	byID        map[int64]*sip.Trunk
+	byPublicID  map[string]int64
+	lookupCount int
 }
 
 func (s *stubResolveTrunkManager) GetTrunkByID(id int64) (interface{}, bool) {
@@ -42,6 +43,7 @@ func (s *stubResolveTrunkManager) GetTrunkByPublicID(publicID string) (interface
 	return s.GetTrunkByID(id)
 }
 func (s *stubResolveTrunkManager) GetTrunkIDByPublicID(publicID string) (int64, bool) {
+	s.lookupCount++
 	id, ok := s.byPublicID[publicID]
 	return id, ok
 }
@@ -434,6 +436,50 @@ func TestHandleWSTrunkResolve_ByTrunkPublicID_ResolvedWhenOwnedByInstance(t *tes
 	}
 	if client.resolvedTrunkID != 42 {
 		t.Fatalf("expected client.resolvedTrunkID=42 for trunk_resolved by trunkPublicId, got %d", client.resolvedTrunkID)
+	}
+	if trunkMgr.lookupCount == 0 {
+		t.Fatalf("expected GetTrunkIDByPublicID to be used")
+	}
+}
+
+func TestHandleWSTrunkResolve_ByTrunkPublicID_NormalizesUppercaseValue(t *testing.T) {
+	owner := "gw-1"
+	future := time.Now().Add(2 * time.Minute)
+	trunkMgr := &stubResolveTrunkManager{
+		byID: map[int64]*sip.Trunk{
+			42: {
+				ID:         42,
+				PublicID:   "8f6f6d70-2b5a-4fe7-a0d5-9d0af0e90d3a",
+				LeaseOwner: &owner,
+				LeaseUntil: &future,
+			},
+		},
+		byPublicID: map[string]int64{
+			"8f6f6d70-2b5a-4fe7-a0d5-9d0af0e90d3a": 42,
+		},
+	}
+
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{InstanceID: "gw-1"}, nil, nil, nil, trunkMgr, &stubResolveStore{})
+	client := &WSClient{send: make(chan []byte, 8)}
+
+	srv.handleWSTrunkResolve(client, WSMessage{
+		Type:          "trunk_resolve",
+		SessionID:     "s1",
+		TrunkPublicID: "8F6F6D70-2B5A-4FE7-A0D5-9D0AF0E90D3A",
+	})
+
+	msgs := readWSMessages(t, client.send)
+	if len(msgs) != 1 || msgs[0].Type != "trunk_resolved" {
+		t.Fatalf("expected trunk_resolved, got %+v", msgs)
+	}
+	if msgs[0].TrunkPublicID != "8f6f6d70-2b5a-4fe7-a0d5-9d0af0e90d3a" {
+		t.Fatalf("expected normalized trunkPublicId in response, got %q", msgs[0].TrunkPublicID)
+	}
+	if !client.trunkResolved {
+		t.Fatalf("expected client.trunkResolved=true for normalized trunkPublicId")
+	}
+	if client.resolvedTrunkID != 42 {
+		t.Fatalf("expected client.resolvedTrunkID=42 for normalized trunkPublicId, got %d", client.resolvedTrunkID)
 	}
 }
 
