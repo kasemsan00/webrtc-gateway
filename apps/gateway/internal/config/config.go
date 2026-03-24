@@ -73,7 +73,7 @@ type SIPConfig struct {
 	DebugSIPInvite   bool   // Enable verbose SIP INVITE logging (header dump)
 	SwitchPLIDelayMS int    // Delay in milliseconds before sending PLI on @switch message (default: 1000)
 	AudioUseAVPF     bool   // Use RTP/AVPF profile for audio with RTCP feedback (default: false)
-	VideoUseAVPF     bool   // Use RTP/AVPF profile for video with RTCP feedback (PLI/FIR/NACK) (default: false)
+	VideoUseAVPF     bool   // Use RTP/AVPF profile for video with RTCP feedback (PLI/FIR/NACK) (default: true)
 	// SIP-side transport target for outbound video feedback packets (PLI/FIR/NACK): auto|rtp|rtcp|dual
 	// - auto: legacy learned-RTCP + fallback-window behavior
 	// - rtp:  always send to SIP video RTP port (rtcp-mux style)
@@ -176,13 +176,13 @@ func Load() (*Config, error) {
 			DebugSIPInvite:                  getEnvAsBool("DEBUG_SIP_INVITE", false),
 			SwitchPLIDelayMS:                getEnvAsInt("SWITCH_PLI_DELAY_MS", 1000),
 			AudioUseAVPF:                    getEnvAsBool("SIP_AUDIO_USE_AVPF", false),
-			VideoUseAVPF:                    getEnvAsBool("SIP_VIDEO_USE_AVPF", false),
+			VideoUseAVPF:                    getEnvAsBool("SIP_VIDEO_USE_AVPF", true),
 			VideoFeedbackTransport:          getSIPVideoFeedbackTransport(),
 			VideoPreserveSTAPA:              getEnvAsBool("SIP_VIDEO_PRESERVE_STAPA", false),
 			VideoKeyframeWatchdogEnabled:    getEnvAsBool("SIP_VIDEO_KEYFRAME_WATCHDOG", true),
-			VideoKeyframeWatchdogIntervalMS: getEnvAsInt("SIP_VIDEO_KEYFRAME_WATCHDOG_INTERVAL_MS", 3000),
-			VideoKeyframeStaleMS:            getEnvAsInt("SIP_VIDEO_KEYFRAME_STALE_MS", 5000),
-			VideoKeyframeFIRStaleMS:         getEnvAsInt("SIP_VIDEO_KEYFRAME_FIR_STALE_MS", 10000),
+			VideoKeyframeWatchdogIntervalMS: getEnvAsInt("SIP_VIDEO_KEYFRAME_WATCHDOG_INTERVAL_MS", 1500),
+			VideoKeyframeStaleMS:            getEnvAsInt("SIP_VIDEO_KEYFRAME_STALE_MS", 2000),
+			VideoKeyframeFIRStaleMS:         getEnvAsInt("SIP_VIDEO_KEYFRAME_FIR_STALE_MS", 5000),
 			VideoRecoveryBurstEnabled:       getEnvAsBool("SIP_VIDEO_RECOVERY_BURST_ENABLED", true),
 			VideoRecoveryBurstWindowMS:      getEnvAsInt("SIP_VIDEO_RECOVERY_BURST_WINDOW_MS", 12000),
 			VideoRecoveryBurstIntervalMS:    getEnvAsInt("SIP_VIDEO_RECOVERY_BURST_INTERVAL_MS", 800),

@@ -10,12 +10,12 @@ import (
 )
 
 const (
-	pliKeyframeGrace    = 500 * time.Millisecond
-	pliMinInterval      = 200 * time.Millisecond
-	pliForceMinInterval = 200 * time.Millisecond
-	browserFIRInterval  = 2000 * time.Millisecond
-	browserPLIStale     = 1500 * time.Millisecond
-	browserFIRStale     = 3000 * time.Millisecond
+	pliKeyframeGrace    = 400 * time.Millisecond
+	pliMinInterval      = 150 * time.Millisecond
+	pliForceMinInterval = 150 * time.Millisecond
+	browserFIRInterval  = 1000 * time.Millisecond
+	browserPLIStale     = 600 * time.Millisecond
+	browserFIRStale     = 1500 * time.Millisecond
 )
 
 // shouldSendPLIToAsterisk gates PLI forwarding to avoid flooding.

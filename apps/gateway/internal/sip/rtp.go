@@ -309,9 +309,9 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 	const (
 		burstGapTrigger        = 8
 		gapRecoveryMinInterval = 1200 * time.Millisecond
-		startupPLIAttempts     = 3
-		startupPLIInterval     = 250 * time.Millisecond
-		startupKeyframeFresh   = 1200 * time.Millisecond
+		startupPLIAttempts     = 6
+		startupPLIInterval     = 150 * time.Millisecond
+		startupKeyframeFresh   = 800 * time.Millisecond
 	)
 
 	fmt.Printf("[%s] Video RTP handler started, VideoTrack is nil: %v\n", sess.ID, sess.VideoTrack == nil)

@@ -464,20 +464,23 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 				if wasReconnecting {
 					fmt.Printf("[%s] ✅ ICE reconnected - resuming call\n", id)
 					startRecoveryBurstReason = "ice-reconnected"
+				} else {
+					fmt.Printf("[%s] ✅ ICE connected - starting initial call recovery burst\n", id)
+					startRecoveryBurstReason = "initial-call"
 				}
 			}
-			// Send FIR first (to request SPS/PPS + IDR), then PLI burst for fast video start
+			// Send a conservative FIR + single forced PLI for startup recovery.
+			// Keep this lightweight to avoid over-driving upstream encoder adaptation
+			// during source/resolution transitions (e.g. switch VGA -> CIF).
+			// If RemoteVideoSSRC is still unknown here, rtp.go triggers follow-up once learned.
 			go func() {
-				fmt.Printf("[%s] 🚀 ICE Connected - Sending FIR + PLI requests for fast video start (with SPS/PPS)\n", id)
-				// Send FIR first to request full keyframe with parameter sets
+				fmt.Printf("[%s] 🚀 ICE Connected - Sending conservative FIR + PLI startup recovery\n", id)
+				// Wait briefly for first SIP RTP to arrive and learn SSRC
+				time.Sleep(300 * time.Millisecond)
 				session.SendFIRToAsterisk()
-				time.Sleep(100 * time.Millisecond)
-				// Then send PLI multiple times with short delays to ensure keyframe is received
-				for i := 0; i < 3; i++ {
-					time.Sleep(100 * time.Millisecond)
-					session.SendPLIToAsteriskForced("ice-connected")
-					session.SendPLItoWebRTC() // PLI to browser
-				}
+				time.Sleep(250 * time.Millisecond)
+				session.SendPLIToAsteriskForced("ice-connected")
+				session.SendPLItoWebRTC()
 			}()
 
 		case webrtc.ICEConnectionStateDisconnected, webrtc.ICEConnectionStateClosed:

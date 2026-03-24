@@ -2,14 +2,36 @@ package session
 
 import (
 	"fmt"
+	"os"
+	"strconv"
 	"sync"
 	"time"
 )
 
 const (
-	reorderWindowSize = 64
-	reorderTimeoutMS  = 40
+	reorderWindowSize       = 64
+	defaultReorderTimeoutMS = 60
 )
+
+var reorderTimeout = loadReorderTimeout()
+
+func loadReorderTimeout() time.Duration {
+	timeoutMS := defaultReorderTimeoutMS
+	envValue := os.Getenv("SIP_VIDEO_REORDER_TIMEOUT_MS")
+	if envValue != "" {
+		parsed, err := strconv.Atoi(envValue)
+		if err == nil {
+			if parsed < 20 {
+				parsed = 20
+			}
+			if parsed > 200 {
+				parsed = 200
+			}
+			timeoutMS = parsed
+		}
+	}
+	return time.Duration(timeoutMS) * time.Millisecond
+}
 
 // reorderEntry holds a buffered RTP packet with metadata.
 type reorderEntry struct {
@@ -156,7 +178,7 @@ func (b *VideoReorderBuffer) resetTimerLocked() {
 	if b.timer != nil {
 		b.timer.Stop()
 	}
-	b.timer = time.AfterFunc(reorderTimeoutMS*time.Millisecond, b.timeoutFlush)
+	b.timer = time.AfterFunc(reorderTimeout, b.timeoutFlush)
 }
 
 // timeoutFlush is called when the reorder timer fires.

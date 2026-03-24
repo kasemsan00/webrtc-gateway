@@ -72,7 +72,7 @@ func (s *Server) createSDPOffer(rtpPort int, sess *session.Session) []byte {
 	// - Some endpoints are strict about profile-level-id matching the actual SPS.
 	// - Android can send very small SPS/PPS early (often inside STAP-A) that indicate a different level
 	//   than our previous hardcoded profile-level-id. Mismatch can lead to black screen.
-	defaultProfileLevelID := "42801F"
+	defaultProfileLevelID := "42E01F"
 	videoProfileLevelID := defaultProfileLevelID
 	videoFmtp := fmt.Sprintf("a=fmtp:96 profile-level-id=%s;packetization-mode=1", videoProfileLevelID)
 	if sps, pps, ok := sess.GetCachedSPSPPS(); ok {
@@ -81,8 +81,10 @@ func (s *Server) createSDPOffer(rtpPort int, sess *session.Session) []byte {
 		derived := ""
 		if len(sps) >= 4 {
 			derived = fmt.Sprintf("%02X%02X%02X", sps[1], sps[2], sps[3])
-			if derived != "" {
+			if strings.HasPrefix(strings.ToUpper(derived), "42E0") {
 				videoProfileLevelID = derived
+			} else if derived != "" {
+				fmt.Printf("[%s] ⚠ Ignoring derived non-baseline profile-level-id=%s, keeping %s\n", sess.ID, derived, defaultProfileLevelID)
 			}
 		}
 
