@@ -61,6 +61,12 @@ type Server struct {
 	mu               sync.RWMutex
 }
 
+type trunkOutboundValidation struct {
+	trunk    *sip.Trunk
+	notFound bool
+	reason   string
+}
+
 // TokenVerifier verifies bearer JWT tokens.
 type TokenVerifier interface {
 	VerifyToken(ctx context.Context, rawToken string) (*auth.VerifiedClaims, error)
@@ -618,6 +624,33 @@ func (s *Server) handleWSoffer(client *WSClient, msg WSMessage) {
 	s.logSessionSnapshot(ctx, sess, "")
 }
 
+func (s *Server) validateTrunkReadyForOutboundCall(ctx context.Context, trunkID int64) trunkOutboundValidation {
+	if s.trunkManager == nil {
+		return trunkOutboundValidation{reason: "Trunk manager not available"}
+	}
+
+	trunk, err := s.trunkManager.GetTrunkByIDFromDB(ctx, trunkID)
+	if err != nil || trunk == nil {
+		return trunkOutboundValidation{
+			notFound: true,
+			reason:   fmt.Sprintf("Trunk %d not found", trunkID),
+		}
+	}
+
+	if trunk.LeaseOwner == nil || strings.TrimSpace(*trunk.LeaseOwner) == "" || trunk.LeaseUntil == nil || trunk.LeaseUntil.Before(time.Now()) {
+		return trunkOutboundValidation{reason: "Trunk lease not active"}
+	}
+
+	leaseOwner := strings.TrimSpace(*trunk.LeaseOwner)
+	if leaseOwner != s.gatewayConfig.InstanceID {
+		return trunkOutboundValidation{
+			reason: fmt.Sprintf("Trunk is owned by another gateway instance (%s)", leaseOwner),
+		}
+	}
+
+	return trunkOutboundValidation{trunk: trunk}
+}
+
 // handleWSCall handles WebSocket call messages
 func (s *Server) handleWSCall(client *WSClient, msg WSMessage) {
 	if msg.SessionID == "" {
@@ -653,14 +686,6 @@ func (s *Server) handleWSCall(client *WSClient, msg WSMessage) {
 		}
 		if msg.TrunkID > 0 {
 			trunkID = msg.TrunkID
-			trunk, found := s.trunkManager.GetTrunkByID(trunkID)
-			if !found {
-				s.sendWSError(client, msg.SessionID, fmt.Sprintf("Trunk %d not found", trunkID))
-				return
-			}
-			if typedTrunk, ok := trunk.(*sip.Trunk); ok {
-				trunkPublicID = typedTrunk.PublicID
-			}
 		} else {
 			normalized, ok := sip.NormalizeTrunkPublicID(msg.TrunkPublicID)
 			if !ok {
@@ -674,6 +699,27 @@ func (s *Server) handleWSCall(client *WSClient, msg WSMessage) {
 				return
 			}
 			trunkID = resolvedID
+		}
+
+		if !client.trunkResolved || client.resolvedTrunkID != trunkID {
+			s.sendWSError(client, msg.SessionID, "Trunk must be resolved before placing call")
+			return
+		}
+
+		validation := s.validateTrunkReadyForOutboundCall(ctx, trunkID)
+		if validation.notFound {
+			s.sendWSError(client, msg.SessionID, validation.reason)
+			return
+		}
+		if validation.reason != "" {
+			client.trunkResolved = false
+			client.resolvedTrunkID = 0
+			s.sendWSMessage(client, WSMessage{Type: "trunk_not_ready", Reason: validation.reason})
+			s.sendWSError(client, msg.SessionID, fmt.Sprintf("Trunk not ready: %s", validation.reason))
+			return
+		}
+		if validation.trunk != nil {
+			trunkPublicID = validation.trunk.PublicID
 		}
 
 		// Set trunk auth context in session

@@ -472,6 +472,10 @@ export function isCallInProgress(state: GatewayState) {
 }
 
 export function canPlaceCall(state: GatewayState) {
+  if (state.mode === 'siptrunk' && state.trunk.status !== 'resolved') {
+    return false
+  }
+
   return (
     state.connection.status === 'connected' &&
     hasCredentialReady(state) &&
@@ -1959,6 +1963,14 @@ async function resolveVrsAndCall() {
 export function makeCall() {
   if (!isWebSocketOpen(runtime.ws)) {
     appendLog('WebSocket not connected', 'error')
+    return
+  }
+
+  if (
+    gatewayStore.state.mode === 'siptrunk' &&
+    gatewayStore.state.trunk.status !== 'resolved'
+  ) {
+    appendLog('Resolve trunk successfully before placing a call', 'warning')
     return
   }
 

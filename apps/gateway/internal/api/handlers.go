@@ -502,6 +502,16 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 			trunkID = resolved
 		}
 
+		validation := s.validateTrunkReadyForOutboundCall(ctx, trunkID)
+		if validation.notFound {
+			s.respondError(w, http.StatusNotFound, validation.reason)
+			return
+		}
+		if validation.reason != "" {
+			s.respondError(w, http.StatusConflict, fmt.Sprintf("Trunk not ready: %s", validation.reason))
+			return
+		}
+
 		// Require an authenticated user to use a trunk.
 		claims, hasClaims := AuthClaimsFromContext(ctx)
 		if s.tokenVerifier != nil && !hasClaims {

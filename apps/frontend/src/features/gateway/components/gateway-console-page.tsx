@@ -1065,7 +1065,9 @@ export function GatewayConsolePage() {
             onClick={() => {
               void handleToggleRemoteFullscreen()
             }}
-            disabled={!document.fullscreenEnabled}
+            disabled={
+              typeof document !== 'undefined' && !document.fullscreenEnabled
+            }
             aria-label={
               isRemoteFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'
             }

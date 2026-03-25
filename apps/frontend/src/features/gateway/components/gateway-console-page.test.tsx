@@ -281,4 +281,12 @@ describe('GatewayConsolePage trunk selection UI', () => {
     fireEvent.click(enabledResolveButton)
     expect(gatewayActionsMock.resolveTrunk).toHaveBeenCalled()
   })
+
+  it('disables call button when canPlaceCall is false', async () => {
+    canPlaceCallMock.mockReturnValue(false)
+    render(<GatewayConsolePage />)
+
+    const callButton = await screen.findByRole('button', { name: /call/i })
+    expect((callButton as HTMLButtonElement).disabled).toBe(true)
+  })
 })

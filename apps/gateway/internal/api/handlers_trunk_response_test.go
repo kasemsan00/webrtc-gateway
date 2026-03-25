@@ -9,6 +9,7 @@ import (
 
 func TestTrunkResponseFrom_IncludesPublicIDBothFields(t *testing.T) {
 	now := time.Now()
+	inUseBy := "alice"
 	trunk := &sip.Trunk{
 		ID:               7,
 		PublicID:         "e1f7d53d-e06d-4b77-9f78-f04ece6d21a7",
@@ -19,6 +20,7 @@ func TestTrunkResponseFrom_IncludesPublicIDBothFields(t *testing.T) {
 		Transport:        "tcp",
 		Enabled:          true,
 		IsDefault:        false,
+		InUseBy:          &inUseBy,
 		LastRegisteredAt: &now,
 		CreatedAt:        now,
 		UpdatedAt:        now,
@@ -39,5 +41,8 @@ func TestTrunkResponseFrom_IncludesPublicIDBothFields(t *testing.T) {
 	}
 	if resp.ActiveDestinations[0] != "0891112222" {
 		t.Fatalf("unexpected first destination: %s", resp.ActiveDestinations[0])
+	}
+	if resp.InUseBy == nil || *resp.InUseBy != inUseBy {
+		t.Fatalf("expected inUseBy=%s, got %v", inUseBy, resp.InUseBy)
 	}
 }

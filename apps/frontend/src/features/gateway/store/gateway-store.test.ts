@@ -157,6 +157,26 @@ describe('canPlaceCall', () => {
     ).toBe(true)
   })
 
+  it('returns false in sip trunk mode when trunk is not resolved', () => {
+    expect(
+      canPlaceCall(
+        createState({
+          mode: 'siptrunk',
+          trunk: {
+            status: 'not-ready',
+            credentials: {
+              trunkId: '88',
+              sipDomain: '',
+              sipUsername: '',
+              sipPassword: '',
+              sipPort: 5060,
+            },
+          },
+        }),
+      ),
+    ).toBe(false)
+  })
+
   it('supports sip trunk mode when trunk public id is uuid', () => {
     expect(
       canPlaceCall(

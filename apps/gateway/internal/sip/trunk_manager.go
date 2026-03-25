@@ -43,6 +43,8 @@ var (
 	ErrTrunkNotFound   = errors.New("trunk not found")
 	ErrTrunkConflict   = errors.New("trunk conflict")
 	ErrTrunkValidation = errors.New("trunk validation")
+	ErrTrunkLeaseLost  = errors.New("trunk lease lost")
+	ErrTrunkLeaseRetry = errors.New("trunk lease renew transient failure")
 )
 
 // TrunkUpdatePatch defines mutable trunk fields for partial updates.
@@ -114,6 +116,7 @@ type TrunkManager struct {
 	ownedLeases    map[int64]bool                   // Trunks we currently own
 	registrations  map[int64]*sip.ClientTransaction // Active registration transactions
 	refreshWorkers map[int64]chan struct{}          // Stop signals for refresh workers
+	leaseRetryRuns map[int64]int                    // Consecutive lease-renew transient failures
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -152,6 +155,7 @@ func NewTrunkManager(db *pgxpool.Pool, cfg *config.Config, userAgent *sipgo.User
 		ownedLeases:    make(map[int64]bool),
 		registrations:  make(map[int64]*sip.ClientTransaction),
 		refreshWorkers: make(map[int64]chan struct{}),
+		leaseRetryRuns: make(map[int64]int),
 		ctx:            ctx,
 		cancel:         cancel,
 	}
@@ -270,7 +274,7 @@ func (tm *TrunkManager) loadTrunks() error {
 			&trunk.Username, &trunk.Password, &trunk.Transport,
 			&trunk.Enabled, &trunk.IsDefault,
 			&trunk.LeaseOwner, &trunk.LeaseUntil,
-			&trunk.LastRegisteredAt, &trunk.LastError,
+			&trunk.LastRegisteredAt, &trunk.LastError, &trunk.InUseBy,
 			&trunk.CreatedAt, &trunk.UpdatedAt,
 		)
 		if err != nil {
@@ -342,20 +346,17 @@ func (tm *TrunkManager) acquireLease(trunkID int64) error {
 	`, tm.instanceID, leaseUntil, trunkID)
 
 	if err != nil {
-		return fmt.Errorf("lease update failed: %w", err)
+		return fmt.Errorf("%w: lease update failed for trunk %d on instance %s: %v", ErrTrunkLeaseRetry, trunkID, tm.instanceID, err)
 	}
 
 	if result.RowsAffected() == 0 {
-		// Another instance owns the lease
-		tm.mu.Lock()
-		delete(tm.ownedLeases, trunkID)
-		tm.mu.Unlock()
-		return fmt.Errorf("trunk %d lease held by another instance", trunkID)
+		return fmt.Errorf("%w: trunk %d lease held by another instance or trunk disabled", ErrTrunkLeaseLost, trunkID)
 	}
 
 	// Successfully acquired/renewed lease
 	tm.mu.Lock()
 	tm.ownedLeases[trunkID] = true
+	delete(tm.leaseRetryRuns, trunkID)
 	if trunk, ok := tm.trunks[trunkID]; ok {
 		lo := tm.instanceID
 		trunk.LeaseOwner = &lo
@@ -365,6 +366,45 @@ func (tm *TrunkManager) acquireLease(trunkID int64) error {
 
 	fmt.Printf("📞 [TrunkManager] Acquired lease for trunk %d (until %s)\n", trunkID, leaseUntil.Format(time.RFC3339))
 	return nil
+}
+
+func (tm *TrunkManager) markLeaseLost(trunkID int64) {
+	tm.mu.Lock()
+	if stopCh, exists := tm.refreshWorkers[trunkID]; exists {
+		close(stopCh)
+		delete(tm.refreshWorkers, trunkID)
+	}
+	delete(tm.registrations, trunkID)
+	delete(tm.ownedLeases, trunkID)
+	delete(tm.leaseRetryRuns, trunkID)
+	tm.mu.Unlock()
+}
+
+func (tm *TrunkManager) incrementLeaseRetry(trunkID int64) int {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	tm.leaseRetryRuns[trunkID]++
+	return tm.leaseRetryRuns[trunkID]
+}
+
+func (tm *TrunkManager) resetLeaseRetry(trunkID int64) {
+	tm.mu.Lock()
+	delete(tm.leaseRetryRuns, trunkID)
+	tm.mu.Unlock()
+}
+
+func (tm *TrunkManager) handleLeaseRenewResult(trunkID int64, err error) (leaseLost bool, retryCount int) {
+	if err == nil {
+		tm.resetLeaseRetry(trunkID)
+		return false, 0
+	}
+
+	if errors.Is(err, ErrTrunkLeaseLost) {
+		tm.markLeaseLost(trunkID)
+		return true, 0
+	}
+
+	return false, tm.incrementLeaseRetry(trunkID)
 }
 
 // releaseLease releases the lease for a trunk (best-effort)
@@ -386,6 +426,7 @@ func (tm *TrunkManager) releaseLease(trunkID int64) {
 
 	tm.mu.Lock()
 	delete(tm.ownedLeases, trunkID)
+	delete(tm.leaseRetryRuns, trunkID)
 	tm.mu.Unlock()
 }
 
@@ -552,6 +593,7 @@ func (tm *TrunkManager) unregisterTrunk(trunkID int64) {
 
 	tm.mu.Lock()
 	delete(tm.registrations, trunkID)
+	delete(tm.leaseRetryRuns, trunkID)
 	tm.mu.Unlock()
 }
 
@@ -722,16 +764,15 @@ func (tm *TrunkManager) leaseHeartbeatWorker() {
 
 			for _, id := range ownedIDs {
 				if err := tm.acquireLease(id); err != nil {
-					fmt.Printf("⚠️ [TrunkManager] Failed to renew lease for trunk %d: %v\n", id, err)
-					// Lost lease - stop refresh worker
-					tm.mu.Lock()
-					if stopCh, exists := tm.refreshWorkers[id]; exists {
-						close(stopCh)
-						delete(tm.refreshWorkers, id)
+					leaseLost, retryCount := tm.handleLeaseRenewResult(id, err)
+					if leaseLost {
+						fmt.Printf("⚠️ [TrunkManager] Lease lost for trunk %d on instance %s: %v\n", id, tm.instanceID, err)
+						continue
 					}
-					delete(tm.registrations, id)
-					tm.mu.Unlock()
+					fmt.Printf("⚠️ [TrunkManager] Lease renew transient failure (retry=%d) for trunk %d on instance %s: %v\n", retryCount, id, tm.instanceID, err)
+					continue
 				}
+				tm.handleLeaseRenewResult(id, nil)
 			}
 
 		case <-tm.ctx.Done():
@@ -1596,6 +1637,7 @@ func (tm *TrunkManager) UnregisterTrunk(trunkID int64, force bool) error {
 	}
 	delete(tm.registrations, trunkID)
 	delete(tm.ownedLeases, trunkID)
+	delete(tm.leaseRetryRuns, trunkID)
 	if loaded, ok := tm.trunks[trunkID]; ok {
 		loaded.LeaseOwner = nil
 		loaded.LeaseUntil = nil
@@ -1635,6 +1677,7 @@ func (tm *TrunkManager) releaseLeaseForce(trunkID int64) {
 
 	tm.mu.Lock()
 	delete(tm.ownedLeases, trunkID)
+	delete(tm.leaseRetryRuns, trunkID)
 	if trunk, ok := tm.trunks[trunkID]; ok {
 		trunk.LeaseOwner = nil
 		trunk.LeaseUntil = nil
