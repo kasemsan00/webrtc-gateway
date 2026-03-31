@@ -1798,3 +1798,38 @@ func (tm *TrunkManager) SetTrunkInUseBy(ctx context.Context, trunkID int64, user
 
 	return nil
 }
+
+// FindTrunkByInUseBy finds a trunk currently assigned to the given in_use_by value.
+// Returns (nil, nil) if no trunk is found.
+func (tm *TrunkManager) FindTrunkByInUseBy(ctx context.Context, inUseBy string) (*Trunk, error) {
+	if tm.db == nil {
+		return nil, fmt.Errorf("database not available for trunk manager")
+	}
+
+	dbCtx, cancel := context.WithTimeout(ctx, trunkManagerDBTimeout)
+	defer cancel()
+
+	trunk := &Trunk{}
+	err := tm.db.QueryRow(dbCtx, `
+		SELECT id, public_id, name, domain, port, username, password, transport, enabled, is_default,
+		       lease_owner, lease_until, last_registered_at, last_error, in_use_by, created_at, updated_at
+		FROM sip_trunks
+		WHERE in_use_by = $1
+		LIMIT 1
+	`, inUseBy).Scan(
+		&trunk.ID, &trunk.PublicID, &trunk.Name, &trunk.Domain, &trunk.Port,
+		&trunk.Username, &trunk.Password, &trunk.Transport,
+		&trunk.Enabled, &trunk.IsDefault,
+		&trunk.LeaseOwner, &trunk.LeaseUntil,
+		&trunk.LastRegisteredAt, &trunk.LastError, &trunk.InUseBy,
+		&trunk.CreatedAt, &trunk.UpdatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("find trunk by in_use_by failed: %w", err)
+	}
+
+	return trunk, nil
+}

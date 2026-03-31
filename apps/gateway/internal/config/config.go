@@ -13,16 +13,17 @@ import (
 
 // Config holds all application configuration
 type Config struct {
-	TURN       TURNConfig
-	SIP        SIPConfig
-	API        APIConfig
-	Auth       AuthConfig
-	RTP        RTPConfig
-	DB         DBConfig
-	SIPPublic  SIPPublicConfig
-	SIPTrunk   SIPTrunkConfig
-	Gateway    GatewayConfig
-	SessionDir SessionDirectoryConfig
+	TURN             TURNConfig
+	SIP              SIPConfig
+	API              APIConfig
+	Auth             AuthConfig
+	RTP              RTPConfig
+	DB               DBConfig
+	SIPPublic        SIPPublicConfig
+	SIPTrunk         SIPTrunkConfig
+	Gateway          GatewayConfig
+	SessionDir       SessionDirectoryConfig
+	PushNotification PushNotificationConfig
 }
 
 // RTPConfig holds RTP UDP port range configuration
@@ -145,6 +146,18 @@ type SessionDirectoryConfig struct {
 	CleanupIntervalSec int // Cleanup expired entries interval (default: 300 = 5 min)
 }
 
+// PushNotificationConfig holds push notification configuration for incoming calls
+type PushNotificationConfig struct {
+	Enable                  bool   // Enable push notifications on incoming trunk calls (default: false)
+	TTRSAPIURL              string // TTRS Notification API base URL (e.g., https://api.ttrs.or.th)
+	TTRSAPITimeoutMS        int    // TTRS API HTTP timeout in milliseconds (default: 5000)
+	TTRSKeycloakTokenURL    string // Keycloak token endpoint for client credentials grant
+	TTRSClientID            string // Keycloak client ID for TTRS API auth
+	TTRSClientSecret        string // Keycloak client secret for TTRS API auth
+	FirebaseCredentialsFile string // Path to Firebase service account JSON file
+	FirebaseProjectID       string // Firebase project ID for FCM v1 API
+}
+
 // Load loads configuration from .env file and environment variables
 func Load() (*Config, error) {
 	// Load .env file
@@ -242,6 +255,16 @@ func Load() (*Config, error) {
 		SessionDir: SessionDirectoryConfig{
 			TTLSeconds:         getEnvAsInt("SESSION_DIRECTORY_TTL_SECONDS", 7200),
 			CleanupIntervalSec: getEnvAsInt("SESSION_DIRECTORY_CLEANUP_INTERVAL_SECONDS", 300),
+		},
+		PushNotification: PushNotificationConfig{
+			Enable:                  getEnvAsBool("PUSH_ENABLE", false),
+			TTRSAPIURL:              os.Getenv("PUSH_TTRS_API_URL"),
+			TTRSAPITimeoutMS:        getEnvAsInt("PUSH_TTRS_API_TIMEOUT_MS", 5000),
+			TTRSKeycloakTokenURL:    os.Getenv("PUSH_TTRS_KEYCLOAK_TOKEN_URL"),
+			TTRSClientID:            os.Getenv("PUSH_TTRS_CLIENT_ID"),
+			TTRSClientSecret:        os.Getenv("PUSH_TTRS_CLIENT_SECRET"),
+			FirebaseCredentialsFile: os.Getenv("PUSH_FIREBASE_CREDENTIALS_FILE"),
+			FirebaseProjectID:       os.Getenv("PUSH_FIREBASE_PROJECT_ID"),
 		},
 	}, nil
 }
@@ -370,6 +393,21 @@ func (c *Config) Display() {
 	fmt.Println("\nSession Directory Configuration:")
 	fmt.Printf("  TTL: %d seconds\n", c.SessionDir.TTLSeconds)
 	fmt.Printf("  Cleanup Interval: %d seconds\n", c.SessionDir.CleanupIntervalSec)
+
+	// Display Push Notification Configuration
+	fmt.Println("\nPush Notification Configuration:")
+	fmt.Printf("  Enabled: %v\n", c.PushNotification.Enable)
+	if c.PushNotification.Enable {
+		fmt.Printf("  TTRS API URL: %s\n", c.PushNotification.TTRSAPIURL)
+		fmt.Printf("  TTRS API Timeout: %d ms\n", c.PushNotification.TTRSAPITimeoutMS)
+		fmt.Printf("  TTRS Keycloak Token URL: %s\n", c.PushNotification.TTRSKeycloakTokenURL)
+		fmt.Printf("  TTRS Client ID: %s\n", c.PushNotification.TTRSClientID)
+		if c.PushNotification.TTRSClientSecret != "" {
+			fmt.Printf("  TTRS Client Secret: %s\n", maskPassword(c.PushNotification.TTRSClientSecret))
+		}
+		fmt.Printf("  Firebase Credentials File: %s\n", c.PushNotification.FirebaseCredentialsFile)
+		fmt.Printf("  Firebase Project ID: %s\n", c.PushNotification.FirebaseProjectID)
+	}
 
 	fmt.Println("\n=================================")
 }

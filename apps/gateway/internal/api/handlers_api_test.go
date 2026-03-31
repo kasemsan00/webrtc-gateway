@@ -15,6 +15,7 @@ import (
 
 	"github.com/gorilla/mux"
 
+	"k2-gateway/internal/auth"
 	"k2-gateway/internal/config"
 	"k2-gateway/internal/logstore"
 	"k2-gateway/internal/session"
@@ -126,6 +127,15 @@ func (s *apiHandlerTrunkManagerStub) ListOwnedTrunks() []*sip.Trunk {
 
 func (s *apiHandlerTrunkManagerStub) SetTrunkInUseBy(_ context.Context, _ int64, _ *string) error {
 	return nil
+}
+
+func (s *apiHandlerTrunkManagerStub) FindTrunkByInUseBy(_ context.Context, inUseBy string) (*sip.Trunk, error) {
+	for _, t := range s.byID {
+		if t.InUseBy != nil && *t.InUseBy == inUseBy {
+			return t, nil
+		}
+	}
+	return nil, nil
 }
 
 type apiHandlerSIPMakerStub struct {
@@ -955,4 +965,58 @@ func TestHandleSessionDetailHandlers_NegativePaths(t *testing.T) {
 	store.statsListErr = errors.New("stats failed")
 	rr = doRequest(t, srv.handleListSessionStats, http.MethodGet, "/sessions/s-1/stats", "", map[string]string{"sessionId": "s-1"})
 	assertJSONError(t, rr, http.StatusInternalServerError, "Failed to list stats")
+}
+
+func TestHandleUserTrunkHeartbeat(t *testing.T) {
+	inUseByVal := "1429900148716"
+	trunkMgr := &apiHandlerTrunkManagerStub{
+		byID: map[int64]*sip.Trunk{
+			1: {ID: 1, PublicID: "aaa-bbb", Name: "test-trunk", Domain: "sip.example.com", Port: 5060, Username: "sipuser", InUseBy: &inUseByVal},
+		},
+	}
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, nil, nil, nil, trunkMgr, nil)
+
+	// No auth claims -> 401
+	rr := doRequest(t, srv.handleUserTrunkHeartbeat, http.MethodPut, "/api/user/trunk", "", nil)
+	assertJSONError(t, rr, http.StatusUnauthorized, "Authentication required")
+
+	// With claims, trunk found -> 200
+	handler := http.HandlerFunc(srv.handleUserTrunkHeartbeat)
+	req := httptest.NewRequest(http.MethodPut, "/api/user/trunk", nil)
+	req = withAuthClaims(req, &auth.VerifiedClaims{
+		Subject:           "b1570549-6e07-4833-b55c-ca1537867a13",
+		PreferredUsername: "1429900148716",
+	})
+	rr = httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	var resp map[string]interface{}
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp["publicId"] != "aaa-bbb" {
+		t.Fatalf("expected publicId=aaa-bbb, got %v", resp["publicId"])
+	}
+
+	// With claims, trunk not found -> 404
+	req2 := httptest.NewRequest(http.MethodPut, "/api/user/trunk", nil)
+	req2 = withAuthClaims(req2, &auth.VerifiedClaims{
+		Subject:           "other-user-id",
+		PreferredUsername: "9999999999999",
+	})
+	rr2 := httptest.NewRecorder()
+	handler.ServeHTTP(rr2, req2)
+	assertJSONError(t, rr2, http.StatusNotFound, "No trunk assigned to user")
+
+	// With claims but empty preferred_username -> 400
+	req3 := httptest.NewRequest(http.MethodPut, "/api/user/trunk", nil)
+	req3 = withAuthClaims(req3, &auth.VerifiedClaims{
+		Subject:           "some-sub",
+		PreferredUsername: "",
+	})
+	rr3 := httptest.NewRecorder()
+	handler.ServeHTTP(rr3, req3)
+	assertJSONError(t, rr3, http.StatusBadRequest, "Token missing preferred_username")
 }

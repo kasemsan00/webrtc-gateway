@@ -13,9 +13,11 @@ require (
 	github.com/pion/sdp/v3 v3.0.17
 	github.com/pion/stun v0.6.1
 	github.com/pion/webrtc/v4 v4.2.4
+	golang.org/x/oauth2 v0.36.0
 )
 
 require (
+	cloud.google.com/go/compute/metadata v0.3.0 // indirect
 	github.com/pion/transport/v4 v4.0.1 // indirect
 	golang.org/x/time v0.14.0 // indirect
 )

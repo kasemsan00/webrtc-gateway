@@ -18,6 +18,7 @@ import (
 	"k2-gateway/internal/auth"
 	"k2-gateway/internal/config"
 	"k2-gateway/internal/logstore"
+	"k2-gateway/internal/push"
 	"k2-gateway/internal/session"
 	"k2-gateway/internal/sip"
 )
@@ -47,6 +48,7 @@ type Server struct {
 	publicRegistry   PublicAccountRegistry
 	trunkManager     TrunkManager
 	logStore         logstore.LogStore
+	pushService      *push.Service
 	config           config.APIConfig
 	turnConfig       config.TURNConfig
 	gatewayConfig    config.GatewayConfig
@@ -95,6 +97,7 @@ type TrunkManager interface {
 	GetTrunkByIDFromDB(ctx context.Context, trunkID int64) (*sip.Trunk, error)
 	ListOwnedTrunks() []*sip.Trunk
 	SetTrunkInUseBy(ctx context.Context, trunkID int64, username *string) error
+	FindTrunkByInUseBy(ctx context.Context, inUseBy string) (*sip.Trunk, error)
 }
 
 // SIPCallMaker interface for making SIP calls (implemented by SIP server)
@@ -245,6 +248,11 @@ func (s *Server) SetTokenVerifier(verifier TokenVerifier) {
 	s.tokenVerifier = verifier
 }
 
+// SetPushService enables push notifications on incoming calls.
+func (s *Server) SetPushService(svc *push.Service) {
+	s.pushService = svc
+}
+
 // Start starts the HTTP server with graceful shutdown support
 func (s *Server) Start(ctx context.Context) error {
 	router := mux.NewRouter()
@@ -291,6 +299,7 @@ func (s *Server) Start(ctx context.Context) error {
 		api.HandleFunc("/trunk/{id}", s.handleUpdateTrunk).Methods("PUT", "OPTIONS")
 		api.HandleFunc("/trunk/{id}/register", s.handleTrunkRegister).Methods("POST", "OPTIONS")
 		api.HandleFunc("/trunk/{id}/unregister", s.handleTrunkUnregister).Methods("POST", "OPTIONS")
+		api.HandleFunc("/user/trunk", s.handleUserTrunkHeartbeat).Methods("PUT", "OPTIONS")
 		fmt.Printf("REST API endpoints enabled: /api/*\n")
 	}
 
@@ -733,7 +742,7 @@ func (s *Server) handleWSCall(client *WSClient, msg WSMessage) {
 
 		// Record who is using this trunk.
 		if client.authClaims != nil && s.trunkManager != nil {
-			username := client.authClaims.Subject
+			username := client.authClaims.PreferredUsername
 			if err := s.trunkManager.SetTrunkInUseBy(ctx, trunkID, &username); err != nil {
 				log.Printf("⚠️ [WS Call] Failed to set in_use_by for trunk %d: %v", trunkID, err)
 			}
@@ -1134,6 +1143,21 @@ func (s *Server) NotifyIncomingCall(sessionID, from, to string, trunkID int64) {
 		return
 	}
 	log.Printf("📲 Incoming fanout summary: sessionID=%s trunkID=%d recipients=%d recipientSessionIDs=%v filtered=%d total=%d", sessionID, trunkID, recipients, recipientSessionIDs, totalConnections-recipients, totalConnections)
+
+	// Send push notification in a separate goroutine (fire-and-forget).
+	if s.pushService != nil && s.trunkManager != nil {
+		go func() {
+			trunkIface, ok := s.trunkManager.GetTrunkByID(trunkID)
+			if !ok {
+				return
+			}
+			trunk, ok := trunkIface.(*sip.Trunk)
+			if !ok || trunk.InUseBy == nil || *trunk.InUseBy == "" {
+				return
+			}
+			s.pushService.NotifyIncomingCall(*trunk.InUseBy, sessionID, from, to)
+		}()
+	}
 }
 
 // handleWSAccept handles WebSocket accept messages for incoming calls

@@ -21,6 +21,7 @@ import (
 	"k2-gateway/internal/config"
 	"k2-gateway/internal/logger"
 	"k2-gateway/internal/logstore"
+	"k2-gateway/internal/push"
 	"k2-gateway/internal/session"
 	"k2-gateway/internal/sip"
 	"k2-gateway/internal/webrtc"
@@ -205,6 +206,28 @@ func runAPIMode(ctx context.Context, cfg *config.Config, unicastAddress string, 
 		cancelStartup()
 		apiServer.SetTokenVerifier(verifier)
 		log.Printf("JWT auth enabled: issuer=%s audience=%s", cfg.Auth.JWTIssuer, cfg.Auth.JWTAudience)
+	}
+
+	// Initialize push notification service (FCM via TTRS Notification API)
+	if cfg.PushNotification.Enable {
+		ttrsClient := push.NewTTRSClient(
+			cfg.PushNotification.TTRSAPIURL,
+			cfg.PushNotification.TTRSKeycloakTokenURL,
+			cfg.PushNotification.TTRSClientID,
+			cfg.PushNotification.TTRSClientSecret,
+			cfg.PushNotification.TTRSAPITimeoutMS,
+		)
+		fcmSender, err := push.NewFCMSender(
+			cfg.PushNotification.FirebaseCredentialsFile,
+			cfg.PushNotification.FirebaseProjectID,
+		)
+		if err != nil {
+			log.Printf("⚠️ Warning: Push notification disabled — FCM init failed: %v", err)
+		} else {
+			pushService := push.NewService(ttrsClient, fcmSender)
+			apiServer.SetPushService(pushService)
+			log.Printf("🔔 Push notifications enabled (project=%s)", cfg.PushNotification.FirebaseProjectID)
+		}
 	}
 
 	// Wire dependencies for BYE request handling

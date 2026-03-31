@@ -83,6 +83,10 @@ func (s *stubResolveTrunkManager) SetTrunkInUseBy(_ context.Context, _ int64, _ 
 	return nil
 }
 
+func (s *stubResolveTrunkManager) FindTrunkByInUseBy(_ context.Context, _ string) (*sip.Trunk, error) {
+	return nil, nil
+}
+
 func (s *stubResolveStore) ResolveTrunkByCredentials(ctx context.Context, domain string, port int, username, password string) (int64, *string, *time.Time, bool, error) {
 	return s.resolveTrunkID, s.resolveLeaseOwner, s.resolveLeaseUntil, s.resolveFound, s.resolveErr
 }

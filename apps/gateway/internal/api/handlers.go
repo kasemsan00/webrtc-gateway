@@ -521,7 +521,7 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 
 		// Record who is using this trunk.
 		if hasClaims {
-			username := claims.Subject
+			username := claims.PreferredUsername
 			if err := s.trunkManager.SetTrunkInUseBy(ctx, trunkID, &username); err != nil {
 				log.Printf("⚠️ [REST Call] Failed to set in_use_by for trunk %d: %v", trunkID, err)
 			}
@@ -1947,4 +1947,51 @@ func (s *Server) respondJSON(w http.ResponseWriter, status int, data interface{}
 // respondError sends an error response
 func (s *Server) respondError(w http.ResponseWriter, status int, message string) {
 	s.respondJSON(w, status, ErrorResponse{Error: message})
+}
+
+// handleUserTrunkHeartbeat checks if a trunk is assigned to the authenticated user
+// and refreshes its updated_at timestamp. If no trunk is found, logs an alert.
+func (s *Server) handleUserTrunkHeartbeat(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	claims, hasClaims := AuthClaimsFromContext(ctx)
+	if !hasClaims {
+		s.respondError(w, http.StatusUnauthorized, "Authentication required")
+		return
+	}
+
+	preferredUsername := claims.PreferredUsername
+	if preferredUsername == "" {
+		s.respondError(w, http.StatusBadRequest, "Token missing preferred_username claim")
+		return
+	}
+
+	trunk, err := s.trunkManager.FindTrunkByInUseBy(ctx, preferredUsername)
+	if err != nil {
+		s.respondError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to lookup trunk: %v", err))
+		return
+	}
+
+	if trunk == nil {
+		log.Printf("⚠️ [User Trunk] Trunk does not exist for user %s (sub=%s), alert!", preferredUsername, claims.Subject)
+		s.respondError(w, http.StatusNotFound, fmt.Sprintf("No trunk assigned to user %s", preferredUsername))
+		return
+	}
+
+	// Refresh updated_at by re-setting in_use_by to the same value.
+	if err := s.trunkManager.SetTrunkInUseBy(ctx, trunk.ID, &preferredUsername); err != nil {
+		s.respondError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to refresh trunk: %v", err))
+		return
+	}
+
+	s.respondJSON(w, http.StatusOK, map[string]interface{}{
+		"trunkId":   trunk.ID,
+		"publicId":  trunk.PublicID,
+		"name":      trunk.Name,
+		"domain":    trunk.Domain,
+		"port":      trunk.Port,
+		"username":  trunk.Username,
+		"inUseBy":   preferredUsername,
+		"updatedAt": time.Now().UTC().Format(time.RFC3339),
+	})
 }

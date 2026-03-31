@@ -29,11 +29,12 @@ type Config struct {
 
 // VerifiedClaims are claims extracted from a verified token.
 type VerifiedClaims struct {
-	Subject   string
-	Issuer    string
-	Audience  []string
-	ExpiresAt *time.Time
-	NotBefore *time.Time
+	Subject           string
+	Issuer            string
+	Audience          []string
+	ExpiresAt         *time.Time
+	NotBefore         *time.Time
+	PreferredUsername string
 }
 
 // Verifier validates JWTs against keys loaded from a JWKS endpoint.
@@ -98,7 +99,7 @@ func (v *Verifier) VerifyToken(ctx context.Context, rawToken string) (*VerifiedC
 		return nil, fmt.Errorf("token is empty")
 	}
 
-	claims := &jwt.RegisteredClaims{}
+	claims := &keycloakClaims{}
 	parser := jwt.NewParser(
 		jwt.WithValidMethods([]string{
 			jwt.SigningMethodRS256.Alg(),
@@ -141,11 +142,18 @@ func (v *Verifier) VerifyToken(ctx context.Context, rawToken string) (*VerifiedC
 	return toVerifiedClaims(claims), nil
 }
 
-func toVerifiedClaims(claims *jwt.RegisteredClaims) *VerifiedClaims {
+// keycloakClaims embeds standard registered claims and adds Keycloak-specific fields.
+type keycloakClaims struct {
+	jwt.RegisteredClaims
+	PreferredUsername string `json:"preferred_username"`
+}
+
+func toVerifiedClaims(claims *keycloakClaims) *VerifiedClaims {
 	out := &VerifiedClaims{
-		Subject:  claims.Subject,
-		Issuer:   claims.Issuer,
-		Audience: append([]string(nil), claims.Audience...),
+		Subject:           claims.Subject,
+		Issuer:            claims.Issuer,
+		Audience:          append([]string(nil), claims.Audience...),
+		PreferredUsername: claims.PreferredUsername,
 	}
 	if claims.ExpiresAt != nil {
 		t := claims.ExpiresAt.Time
