@@ -2,6 +2,8 @@ export interface Trunk {
   id: number
   public_id?: string
   publicId?: string
+  in_use_by?: string | null
+  inUseBy?: string | null
   name: string
   domain: string
   port: number

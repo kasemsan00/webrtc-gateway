@@ -88,6 +88,11 @@ function formatDestinations(destinations?: Array<string>) {
     .join(', ')
 }
 
+function formatInUseBy(trunk: Pick<Trunk, 'in_use_by' | 'inUseBy'>) {
+  const value = trunk.in_use_by ?? trunk.inUseBy
+  return <Badge variant="success">{value ? value : 'Not in use'}</Badge>
+}
+
 function trunkIdentityText(trunk?: Trunk | null) {
   if (!trunk) return '-'
   return `${trunk.name} (#${trunk.id}, uid: ${formatUid(normalizeTrunkUid(trunk))})`
@@ -1174,6 +1179,15 @@ function TrunkTable({
         ),
       },
       {
+        id: 'inUseBy',
+        header: 'In Use By',
+        cell: ({ row }) => (
+          <span className="text-muted-foreground">
+            {formatInUseBy(row.original)}
+          </span>
+        ),
+      },
+      {
         id: 'register',
         header: 'Register',
         cell: ({ row }) => (
@@ -1335,6 +1349,7 @@ function TrunkCard({
               </span>
             }
           />
+          <Detail label="In Use By" value={formatInUseBy(trunk)} />
           <Detail label="Lease Owner" value={trunk.leaseOwner || '-'} />
           <Detail
             label="Register"
