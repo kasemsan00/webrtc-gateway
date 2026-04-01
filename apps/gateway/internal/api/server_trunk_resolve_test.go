@@ -87,6 +87,10 @@ func (s *stubResolveTrunkManager) FindTrunkByInUseBy(_ context.Context, _ string
 	return nil, nil
 }
 
+func (s *stubResolveTrunkManager) SetTrunkNotifyUserID(_ context.Context, _ int64, _ *string) error {
+	return nil
+}
+
 func (s *stubResolveStore) ResolveTrunkByCredentials(ctx context.Context, domain string, port int, username, password string) (int64, *string, *time.Time, bool, error) {
 	return s.resolveTrunkID, s.resolveLeaseOwner, s.resolveLeaseUntil, s.resolveFound, s.resolveErr
 }

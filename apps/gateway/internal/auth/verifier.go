@@ -35,6 +35,7 @@ type VerifiedClaims struct {
 	ExpiresAt         *time.Time
 	NotBefore         *time.Time
 	PreferredUsername string
+	Realm             TokenRealm
 }
 
 // Verifier validates JWTs against keys loaded from a JWKS endpoint.
@@ -61,12 +62,6 @@ type jwkKey struct {
 func NewVerifier(cfg Config) (*Verifier, error) {
 	if strings.TrimSpace(cfg.JWKSURL) == "" {
 		return nil, fmt.Errorf("jwks url is required")
-	}
-	if strings.TrimSpace(cfg.Issuer) == "" {
-		return nil, fmt.Errorf("jwt issuer is required")
-	}
-	if strings.TrimSpace(cfg.Audience) == "" {
-		return nil, fmt.Errorf("jwt audience is required")
 	}
 	timeout := cfg.TimeoutMS
 	if timeout <= 0 {
@@ -100,16 +95,21 @@ func (v *Verifier) VerifyToken(ctx context.Context, rawToken string) (*VerifiedC
 	}
 
 	claims := &keycloakClaims{}
-	parser := jwt.NewParser(
+	parserOptions := []jwt.ParserOption{
 		jwt.WithValidMethods([]string{
 			jwt.SigningMethodRS256.Alg(),
 			jwt.SigningMethodRS384.Alg(),
 			jwt.SigningMethodRS512.Alg(),
 		}),
-		jwt.WithIssuer(v.cfg.Issuer),
-		jwt.WithAudience(v.cfg.Audience),
 		jwt.WithLeeway(defaultLeeway),
-	)
+	}
+	if v.cfg.Issuer != "" {
+		parserOptions = append(parserOptions, jwt.WithIssuer(v.cfg.Issuer))
+	}
+	if v.cfg.Audience != "" {
+		parserOptions = append(parserOptions, jwt.WithAudience(v.cfg.Audience))
+	}
+	parser := jwt.NewParser(parserOptions...)
 
 	token, err := parser.ParseWithClaims(tokenString, claims, func(parsed *jwt.Token) (interface{}, error) {
 		kid, _ := parsed.Header["kid"].(string)

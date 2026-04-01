@@ -129,6 +129,10 @@ func (s *apiHandlerTrunkManagerStub) SetTrunkInUseBy(_ context.Context, _ int64,
 	return nil
 }
 
+func (s *apiHandlerTrunkManagerStub) SetTrunkNotifyUserID(_ context.Context, _ int64, _ *string) error {
+	return nil
+}
+
 func (s *apiHandlerTrunkManagerStub) FindTrunkByInUseBy(_ context.Context, inUseBy string) (*sip.Trunk, error) {
 	for _, t := range s.byID {
 		if t.InUseBy != nil && *t.InUseBy == inUseBy {

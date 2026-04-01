@@ -186,26 +186,73 @@ func runAPIMode(ctx context.Context, cfg *config.Config, unicastAddress string, 
 	}
 	apiServer := api.NewServer(cfg.API, cfg.TURN, cfg.Gateway, sessionMgr, sipServer, publicRegistry, trunkMgrInterface, store)
 	if cfg.Auth.Enable {
-		if cfg.Auth.JWKSURL == "" || cfg.Auth.JWTIssuer == "" || cfg.Auth.JWTAudience == "" {
-			log.Fatalf("AUTH_ENABLE=true requires AUTH_JWKS_URL, AUTH_JWT_ISSUER, and AUTH_JWT_AUDIENCE")
+		if cfg.Auth.User.JWKSURL == "" && cfg.Auth.Employee.JWKSURL == "" {
+			log.Fatalf("AUTH_ENABLE=true requires at least one realm JWKS URL: AUTH_TTRS_USERS_JWKS_URL or AUTH_TTRS_EMPLOYEE_JWKS_URL")
 		}
-		verifier, err := auth.NewVerifier(auth.Config{
-			JWKSURL:   cfg.Auth.JWKSURL,
-			Issuer:    cfg.Auth.JWTIssuer,
-			Audience:  cfg.Auth.JWTAudience,
-			TimeoutMS: cfg.Auth.TimeoutMS,
-		})
-		if err != nil {
-			log.Fatalf("Failed to initialize auth verifier: %v", err)
-		}
-		startupCtx, cancelStartup := context.WithTimeout(ctx, time.Duration(cfg.Auth.TimeoutMS)*time.Millisecond)
-		if err := verifier.Prefetch(startupCtx); err != nil {
+
+		var userVerifier *auth.Verifier
+		if cfg.Auth.User.JWKSURL != "" {
+			verifier, err := auth.NewVerifier(auth.Config{
+				JWKSURL:   cfg.Auth.User.JWKSURL,
+				Issuer:    cfg.Auth.User.JWTIssuer,
+				Audience:  cfg.Auth.User.JWTAudience,
+				TimeoutMS: cfg.Auth.TimeoutMS,
+			})
+			if err != nil {
+				log.Fatalf("Failed to initialize user auth verifier: %v", err)
+			}
+			startupCtx, cancelStartup := context.WithTimeout(ctx, time.Duration(cfg.Auth.TimeoutMS)*time.Millisecond)
+			if err := verifier.Prefetch(startupCtx); err != nil {
+				cancelStartup()
+				log.Fatalf("Failed to prefetch user JWKS on startup: %v", err)
+			}
 			cancelStartup()
-			log.Fatalf("Failed to prefetch JWKS on startup: %v", err)
+			userVerifier = verifier
 		}
-		cancelStartup()
-		apiServer.SetTokenVerifier(verifier)
-		log.Printf("JWT auth enabled: issuer=%s audience=%s", cfg.Auth.JWTIssuer, cfg.Auth.JWTAudience)
+
+		var employeeVerifier *auth.Verifier
+		if cfg.Auth.Employee.JWKSURL != "" {
+			verifier, err := auth.NewVerifier(auth.Config{
+				JWKSURL:   cfg.Auth.Employee.JWKSURL,
+				Issuer:    cfg.Auth.Employee.JWTIssuer,
+				Audience:  cfg.Auth.Employee.JWTAudience,
+				TimeoutMS: cfg.Auth.TimeoutMS,
+			})
+			if err != nil {
+				log.Fatalf("Failed to initialize employee auth verifier: %v", err)
+			}
+			startupCtx, cancelStartup := context.WithTimeout(ctx, time.Duration(cfg.Auth.TimeoutMS)*time.Millisecond)
+			if err := verifier.Prefetch(startupCtx); err != nil {
+				cancelStartup()
+				log.Fatalf("Failed to prefetch employee JWKS on startup: %v", err)
+			}
+			cancelStartup()
+			employeeVerifier = verifier
+		}
+
+		realmVerifier, err := auth.NewRealmVerifier(userVerifier, employeeVerifier)
+		if err != nil {
+			log.Fatalf("Failed to initialize realm auth verifier: %v", err)
+		}
+		apiServer.SetTokenVerifier(realmVerifier)
+
+		logRealmInfo := func(name string, realmCfg config.AuthRealmConfig) {
+			issuerInfo := "(not enforced)"
+			if realmCfg.JWTIssuer != "" {
+				issuerInfo = realmCfg.JWTIssuer
+			}
+			audienceInfo := "(not enforced)"
+			if realmCfg.JWTAudience != "" {
+				audienceInfo = realmCfg.JWTAudience
+			}
+			log.Printf("JWT auth realm enabled: realm=%s issuer=%s audience=%s", name, issuerInfo, audienceInfo)
+		}
+		if userVerifier != nil {
+			logRealmInfo("user", cfg.Auth.User)
+		}
+		if employeeVerifier != nil {
+			logRealmInfo("employee", cfg.Auth.Employee)
+		}
 	}
 
 	// Initialize push notification service (FCM via TTRS Notification API)

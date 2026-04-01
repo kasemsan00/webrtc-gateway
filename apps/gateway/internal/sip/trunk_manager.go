@@ -96,6 +96,9 @@ type Trunk struct {
 	// Active call tracking (set to JWT subject on call start, cleared on hangup)
 	InUseBy *string
 
+	// Push notification target: Keycloak sub (UUID), persisted across sessions
+	NotifyUserID *string
+
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -251,7 +254,7 @@ func (tm *TrunkManager) loadTrunks() error {
 
 	rows, err := tm.db.Query(ctx, `
 		SELECT id, public_id, name, domain, port, username, password, transport, enabled, is_default,
-		       lease_owner, lease_until, last_registered_at, last_error, in_use_by, created_at, updated_at
+		       lease_owner, lease_until, last_registered_at, last_error, in_use_by, notify_user_id, created_at, updated_at
 		FROM sip_trunks
 		WHERE enabled = true
 		ORDER BY id
@@ -274,7 +277,7 @@ func (tm *TrunkManager) loadTrunks() error {
 			&trunk.Username, &trunk.Password, &trunk.Transport,
 			&trunk.Enabled, &trunk.IsDefault,
 			&trunk.LeaseOwner, &trunk.LeaseUntil,
-			&trunk.LastRegisteredAt, &trunk.LastError, &trunk.InUseBy,
+			&trunk.LastRegisteredAt, &trunk.LastError, &trunk.InUseBy, &trunk.NotifyUserID,
 			&trunk.CreatedAt, &trunk.UpdatedAt,
 		)
 		if err != nil {
@@ -1225,7 +1228,7 @@ func (tm *TrunkManager) ListTrunks(ctx context.Context, params TrunkListParams) 
 	offset := (params.Page - 1) * params.PageSize
 	dataSQL := fmt.Sprintf(`
 		SELECT id, public_id, name, domain, port, username, password, transport, enabled, is_default,
-		       lease_owner, lease_until, last_registered_at, last_error, in_use_by, created_at, updated_at
+		       lease_owner, lease_until, last_registered_at, last_error, in_use_by, notify_user_id, created_at, updated_at
 		FROM sip_trunks
 		%s
 		ORDER BY %s %s
@@ -1247,7 +1250,7 @@ func (tm *TrunkManager) ListTrunks(ctx context.Context, params TrunkListParams) 
 			&trunk.Username, &trunk.Password, &trunk.Transport,
 			&trunk.Enabled, &trunk.IsDefault,
 			&trunk.LeaseOwner, &trunk.LeaseUntil,
-			&trunk.LastRegisteredAt, &trunk.LastError, &trunk.InUseBy,
+			&trunk.LastRegisteredAt, &trunk.LastError, &trunk.InUseBy, &trunk.NotifyUserID,
 			&trunk.CreatedAt, &trunk.UpdatedAt,
 		)
 		if err != nil {
@@ -1752,7 +1755,7 @@ func (tm *TrunkManager) getTrunkByIDFromDB(ctx context.Context, trunkID int64) (
 	trunk := &Trunk{}
 	err := tm.db.QueryRow(ctx, `
 		SELECT id, public_id, name, domain, port, username, password, transport, enabled, is_default,
-		       lease_owner, lease_until, last_registered_at, last_error, in_use_by, created_at, updated_at
+		       lease_owner, lease_until, last_registered_at, last_error, in_use_by, notify_user_id, created_at, updated_at
 		FROM sip_trunks
 		WHERE id = $1
 	`, trunkID).Scan(
@@ -1760,7 +1763,7 @@ func (tm *TrunkManager) getTrunkByIDFromDB(ctx context.Context, trunkID int64) (
 		&trunk.Username, &trunk.Password, &trunk.Transport,
 		&trunk.Enabled, &trunk.IsDefault,
 		&trunk.LeaseOwner, &trunk.LeaseUntil,
-		&trunk.LastRegisteredAt, &trunk.LastError, &trunk.InUseBy,
+		&trunk.LastRegisteredAt, &trunk.LastError, &trunk.InUseBy, &trunk.NotifyUserID,
 		&trunk.CreatedAt, &trunk.UpdatedAt,
 	)
 	if err != nil {
@@ -1799,6 +1802,91 @@ func (tm *TrunkManager) SetTrunkInUseBy(ctx context.Context, trunkID int64, user
 	return nil
 }
 
+// SetTrunkNotifyUserID sets or clears the notify_user_id field for a trunk.
+// This stores the Keycloak sub (UUID) used for push notifications.
+// Unlike InUseBy, this is NOT cleared on hangup — it persists so push works when offline.
+func (tm *TrunkManager) SetTrunkNotifyUserID(ctx context.Context, trunkID int64, userID *string) error {
+	if tm.db == nil {
+		return fmt.Errorf("database not available for trunk manager")
+	}
+
+	var normalizedUserID *string
+	if userID != nil {
+		trimmed := strings.TrimSpace(*userID)
+		if trimmed != "" {
+			normalizedUserID = &trimmed
+		}
+	}
+
+	dbCtx, cancel := context.WithTimeout(ctx, trunkManagerDBTimeout)
+	defer cancel()
+
+	tx, err := tm.db.BeginTx(dbCtx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("begin transaction failed: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback(dbCtx)
+	}()
+
+	var targetUsername, targetDomain string
+	var targetPort int
+	err = tx.QueryRow(dbCtx, `
+		SELECT username, domain, port
+		FROM sip_trunks
+		WHERE id = $1
+		FOR UPDATE
+	`, trunkID).Scan(&targetUsername, &targetDomain, &targetPort)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("%w: trunk %d", ErrTrunkNotFound, trunkID)
+		}
+		return fmt.Errorf("load target trunk failed: %w", err)
+	}
+
+	if normalizedUserID != nil {
+		_, err = tx.Exec(dbCtx, `
+			UPDATE sip_trunks
+			SET notify_user_id = NULL, updated_at = NOW()
+			WHERE notify_user_id = $1
+			  AND id <> $2
+			  AND (username <> $3 OR domain <> $4 OR port <> $5)
+		`, *normalizedUserID, trunkID, targetUsername, targetDomain, targetPort)
+		if err != nil {
+			return fmt.Errorf("clear conflicting notify_user_id failed: %w", err)
+		}
+	}
+
+	_, err = tx.Exec(dbCtx, `
+		UPDATE sip_trunks SET notify_user_id = $1, updated_at = NOW() WHERE id = $2
+	`, normalizedUserID, trunkID)
+	if err != nil {
+		return fmt.Errorf("set notify_user_id failed: %w", err)
+	}
+
+	if err := tx.Commit(dbCtx); err != nil {
+		return fmt.Errorf("commit set notify_user_id failed: %w", err)
+	}
+
+	tm.mu.Lock()
+	if trunk, ok := tm.trunks[trunkID]; ok {
+		trunk.NotifyUserID = normalizedUserID
+	}
+	if normalizedUserID != nil {
+		for id, trunk := range tm.trunks {
+			if id == trunkID || trunk.NotifyUserID == nil || *trunk.NotifyUserID != *normalizedUserID {
+				continue
+			}
+			if trunk.Username != targetUsername || trunk.Domain != targetDomain || trunk.Port != targetPort {
+				trunk.NotifyUserID = nil
+			}
+		}
+	}
+	tm.mu.Unlock()
+
+	return nil
+}
+
 // FindTrunkByInUseBy finds a trunk currently assigned to the given in_use_by value.
 // Returns (nil, nil) if no trunk is found.
 func (tm *TrunkManager) FindTrunkByInUseBy(ctx context.Context, inUseBy string) (*Trunk, error) {
@@ -1812,7 +1900,7 @@ func (tm *TrunkManager) FindTrunkByInUseBy(ctx context.Context, inUseBy string) 
 	trunk := &Trunk{}
 	err := tm.db.QueryRow(dbCtx, `
 		SELECT id, public_id, name, domain, port, username, password, transport, enabled, is_default,
-		       lease_owner, lease_until, last_registered_at, last_error, in_use_by, created_at, updated_at
+		       lease_owner, lease_until, last_registered_at, last_error, in_use_by, notify_user_id, created_at, updated_at
 		FROM sip_trunks
 		WHERE in_use_by = $1
 		LIMIT 1
@@ -1821,7 +1909,7 @@ func (tm *TrunkManager) FindTrunkByInUseBy(ctx context.Context, inUseBy string) 
 		&trunk.Username, &trunk.Password, &trunk.Transport,
 		&trunk.Enabled, &trunk.IsDefault,
 		&trunk.LeaseOwner, &trunk.LeaseUntil,
-		&trunk.LastRegisteredAt, &trunk.LastError, &trunk.InUseBy,
+		&trunk.LastRegisteredAt, &trunk.LastError, &trunk.InUseBy, &trunk.NotifyUserID,
 		&trunk.CreatedAt, &trunk.UpdatedAt,
 	)
 	if err != nil {

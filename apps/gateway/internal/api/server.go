@@ -71,7 +71,7 @@ type trunkOutboundValidation struct {
 
 // TokenVerifier verifies bearer JWT tokens.
 type TokenVerifier interface {
-	VerifyToken(ctx context.Context, rawToken string) (*auth.VerifiedClaims, error)
+	VerifyToken(ctx context.Context, rawToken string, hint auth.TokenRealm) (*auth.VerifiedClaims, error)
 }
 
 // PublicAccountRegistry interface for managing SIP public accounts
@@ -98,6 +98,7 @@ type TrunkManager interface {
 	ListOwnedTrunks() []*sip.Trunk
 	SetTrunkInUseBy(ctx context.Context, trunkID int64, username *string) error
 	FindTrunkByInUseBy(ctx context.Context, inUseBy string) (*sip.Trunk, error)
+	SetTrunkNotifyUserID(ctx context.Context, trunkID int64, userID *string) error
 }
 
 // SIPCallMaker interface for making SIP calls (implemented by SIP server)
@@ -357,12 +358,14 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
-		claims, err := s.tokenVerifier.VerifyToken(r.Context(), rawToken)
+		realmHint := extractAuthRealmHint(r)
+		claims, err := s.tokenVerifier.VerifyToken(r.Context(), rawToken, realmHint)
 		if err != nil {
-			log.Printf("WebSocket auth rejected: %v", err)
+			log.Printf("WebSocket auth rejected: hint=%s err=%v", realmHint, err)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
+		log.Printf("WebSocket auth accepted: hint=%s realm=%s sub=%s", realmHint, claims.Realm, claims.Subject)
 		req = withAuthClaims(r, claims)
 	}
 
@@ -1145,6 +1148,8 @@ func (s *Server) NotifyIncomingCall(sessionID, from, to string, trunkID int64) {
 	log.Printf("📲 Incoming fanout summary: sessionID=%s trunkID=%d recipients=%d recipientSessionIDs=%v filtered=%d total=%d", sessionID, trunkID, recipients, recipientSessionIDs, totalConnections-recipients, totalConnections)
 
 	// Send push notification in a separate goroutine (fire-and-forget).
+	// Uses notify_user_id (Keycloak sub UUID) which persists across sessions,
+	// so push works even when the user is offline / app is closed.
 	if s.pushService != nil && s.trunkManager != nil {
 		go func() {
 			trunkIface, ok := s.trunkManager.GetTrunkByID(trunkID)
@@ -1152,10 +1157,10 @@ func (s *Server) NotifyIncomingCall(sessionID, from, to string, trunkID int64) {
 				return
 			}
 			trunk, ok := trunkIface.(*sip.Trunk)
-			if !ok || trunk.InUseBy == nil || *trunk.InUseBy == "" {
+			if !ok || trunk.NotifyUserID == nil || *trunk.NotifyUserID == "" {
 				return
 			}
-			s.pushService.NotifyIncomingCall(*trunk.InUseBy, sessionID, from, to)
+			s.pushService.NotifyIncomingCall(*trunk.NotifyUserID, sessionID, from, to)
 		}()
 	}
 }
@@ -1833,6 +1838,16 @@ func (s *Server) handleWSTrunkResolve(client *WSClient, msg WSMessage) {
 	if *leaseOwner == s.gatewayConfig.InstanceID {
 		client.trunkResolved = true
 		client.resolvedTrunkID = trunkID
+
+		// Persist Keycloak sub (UUID) for offline push notifications.
+		if client.authClaims != nil && s.trunkManager != nil {
+			if sub := client.authClaims.Subject; sub != "" {
+				if err := s.trunkManager.SetTrunkNotifyUserID(ctx, trunkID, &sub); err != nil {
+					log.Printf("⚠️ Failed to set notify_user_id for trunk %d: %v", trunkID, err)
+				}
+			}
+		}
+
 		s.sendWSMessage(client, WSMessage{
 			Type:          "trunk_resolved",
 			TrunkID:       trunkID,

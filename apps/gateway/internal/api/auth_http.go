@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"strings"
 
@@ -34,14 +35,25 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		claims, err := s.tokenVerifier.VerifyToken(r.Context(), token)
+		realmHint := extractAuthRealmHint(r)
+		claims, err := s.tokenVerifier.VerifyToken(r.Context(), token, realmHint)
 		if err != nil {
+			log.Printf("REST auth rejected: path=%s hint=%s err=%v", r.URL.Path, realmHint, err)
 			writeUnauthorized(w)
 			return
 		}
+		log.Printf("REST auth accepted: path=%s hint=%s realm=%s sub=%s", r.URL.Path, realmHint, claims.Realm, claims.Subject)
 
 		next.ServeHTTP(w, withAuthClaims(r, claims))
 	})
+}
+
+func extractAuthRealmHint(r *http.Request) auth.TokenRealm {
+	hint := strings.TrimSpace(r.Header.Get("X-Auth-Type"))
+	if hint == "" {
+		hint = strings.TrimSpace(r.URL.Query().Get("auth_type"))
+	}
+	return auth.ParseTokenRealm(hint)
 }
 
 func extractBearerToken(header string) (string, bool) {

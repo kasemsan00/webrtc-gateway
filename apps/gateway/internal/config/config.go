@@ -45,11 +45,17 @@ type APIConfig struct {
 
 // AuthConfig holds JWT/JWKS authentication settings.
 type AuthConfig struct {
-	Enable      bool
+	Enable    bool
+	TimeoutMS int
+	User      AuthRealmConfig
+	Employee  AuthRealmConfig
+}
+
+// AuthRealmConfig holds JWT verification settings for one realm.
+type AuthRealmConfig struct {
 	JWKSURL     string
 	JWTIssuer   string
 	JWTAudience string
-	TimeoutMS   int
 }
 
 // TURNConfig holds TURN server configuration
@@ -211,11 +217,18 @@ func Load() (*Config, error) {
 			DebugTURN:      getEnvAsBool("DEBUG_TURN", false),
 		},
 		Auth: AuthConfig{
-			Enable:      getEnvAsBool("AUTH_ENABLE", false),
-			JWKSURL:     os.Getenv("AUTH_JWKS_URL"),
-			JWTIssuer:   os.Getenv("AUTH_JWT_ISSUER"),
-			JWTAudience: os.Getenv("AUTH_JWT_AUDIENCE"),
-			TimeoutMS:   getEnvAsInt("AUTH_JWKS_TIMEOUT_MS", 5000),
+			Enable:    getEnvAsBool("AUTH_ENABLE", false),
+			TimeoutMS: getEnvAsInt("AUTH_JWKS_TIMEOUT_MS", 5000),
+			User: AuthRealmConfig{
+				JWKSURL:     os.Getenv("AUTH_TTRS_USERS_JWKS_URL"),
+				JWTIssuer:   os.Getenv("AUTH_TTRS_USERS_JWT_ISSUER"),
+				JWTAudience: os.Getenv("AUTH_TTRS_USERS_JWT_AUDIENCE"),
+			},
+			Employee: AuthRealmConfig{
+				JWKSURL:     os.Getenv("AUTH_TTRS_EMPLOYEE_JWKS_URL"),
+				JWTIssuer:   os.Getenv("AUTH_TTRS_EMPLOYEE_JWT_ISSUER"),
+				JWTAudience: os.Getenv("AUTH_TTRS_EMPLOYEE_JWT_AUDIENCE"),
+			},
 		},
 		RTP: RTPConfig{
 			PortMin:    rtpPortMin,
@@ -260,9 +273,9 @@ func Load() (*Config, error) {
 			Enable:                  getEnvAsBool("PUSH_ENABLE", false),
 			TTRSAPIURL:              os.Getenv("PUSH_TTRS_API_URL"),
 			TTRSAPITimeoutMS:        getEnvAsInt("PUSH_TTRS_API_TIMEOUT_MS", 5000),
-			TTRSKeycloakTokenURL:    os.Getenv("PUSH_TTRS_KEYCLOAK_TOKEN_URL"),
-			TTRSClientID:            os.Getenv("PUSH_TTRS_CLIENT_ID"),
-			TTRSClientSecret:        os.Getenv("PUSH_TTRS_CLIENT_SECRET"),
+			TTRSKeycloakTokenURL:    os.Getenv("AUTH_TTRS_EMPLOYEE_TOKEN_URL"),
+			TTRSClientID:            os.Getenv("AUTH_TTRS_EMPLOYEE_CLIENT_ID"),
+			TTRSClientSecret:        os.Getenv("AUTH_TTRS_EMPLOYEE_CLIENT_SECRET"),
 			FirebaseCredentialsFile: os.Getenv("PUSH_FIREBASE_CREDENTIALS_FILE"),
 			FirebaseProjectID:       os.Getenv("PUSH_FIREBASE_PROJECT_ID"),
 		},
@@ -336,10 +349,13 @@ func (c *Config) Display() {
 	fmt.Println("\nAuth Configuration:")
 	fmt.Printf("  Enabled: %v\n", c.Auth.Enable)
 	if c.Auth.Enable {
-		fmt.Printf("  JWKS URL: %s\n", c.Auth.JWKSURL)
-		fmt.Printf("  JWT Issuer: %s\n", c.Auth.JWTIssuer)
-		fmt.Printf("  JWT Audience: %s\n", c.Auth.JWTAudience)
 		fmt.Printf("  JWKS Timeout: %d ms\n", c.Auth.TimeoutMS)
+		fmt.Printf("  User JWKS URL: %s\n", c.Auth.User.JWKSURL)
+		fmt.Printf("  User JWT Issuer: %s\n", c.Auth.User.JWTIssuer)
+		fmt.Printf("  User JWT Audience: %s\n", c.Auth.User.JWTAudience)
+		fmt.Printf("  Employee JWKS URL: %s\n", c.Auth.Employee.JWKSURL)
+		fmt.Printf("  Employee JWT Issuer: %s\n", c.Auth.Employee.JWTIssuer)
+		fmt.Printf("  Employee JWT Audience: %s\n", c.Auth.Employee.JWTAudience)
 	}
 
 	// Display RTP Configuration

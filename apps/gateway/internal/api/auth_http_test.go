@@ -16,11 +16,11 @@ import (
 )
 
 type tokenVerifierStub struct {
-	verify func(ctx context.Context, raw string) (*auth.VerifiedClaims, error)
+	verify func(ctx context.Context, raw string, hint auth.TokenRealm) (*auth.VerifiedClaims, error)
 }
 
-func (s tokenVerifierStub) VerifyToken(ctx context.Context, raw string) (*auth.VerifiedClaims, error) {
-	return s.verify(ctx, raw)
+func (s tokenVerifierStub) VerifyToken(ctx context.Context, raw string, hint auth.TokenRealm) (*auth.VerifiedClaims, error) {
+	return s.verify(ctx, raw, hint)
 }
 
 func TestAuthMiddlewareForREST(t *testing.T) {
@@ -28,9 +28,15 @@ func TestAuthMiddlewareForREST(t *testing.T) {
 
 	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, nil, nil, nil, nil, nil)
 	srv.SetTokenVerifier(tokenVerifierStub{
-		verify: func(_ context.Context, raw string) (*auth.VerifiedClaims, error) {
+		verify: func(_ context.Context, raw string, hint auth.TokenRealm) (*auth.VerifiedClaims, error) {
 			if raw == "valid-token" {
-				return &auth.VerifiedClaims{Subject: "user-1"}, nil
+				return &auth.VerifiedClaims{Subject: "user-1", Realm: auth.TokenRealmUser}, nil
+			}
+			if raw == "employee-token" {
+				if hint == auth.TokenRealmUser {
+					return nil, context.DeadlineExceeded
+				}
+				return &auth.VerifiedClaims{Subject: "employee-1", Realm: auth.TokenRealmEmployee}, nil
 			}
 			return nil, context.DeadlineExceeded
 		},
@@ -74,6 +80,17 @@ func TestAuthMiddlewareForREST(t *testing.T) {
 			t.Fatalf("expected 200, got %d", rr.Code)
 		}
 	})
+
+	t.Run("employee token with explicit hint", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/health", nil)
+		req.Header.Set("Authorization", "Bearer employee-token")
+		req.Header.Set("X-Auth-Type", "employee")
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", rr.Code)
+		}
+	})
 }
 
 func TestWebSocketAuthAccessToken(t *testing.T) {
@@ -81,9 +98,15 @@ func TestWebSocketAuthAccessToken(t *testing.T) {
 
 	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, nil, nil, nil, nil, nil)
 	srv.SetTokenVerifier(tokenVerifierStub{
-		verify: func(_ context.Context, raw string) (*auth.VerifiedClaims, error) {
+		verify: func(_ context.Context, raw string, hint auth.TokenRealm) (*auth.VerifiedClaims, error) {
 			if raw == "valid-token" {
-				return &auth.VerifiedClaims{Subject: "user-1"}, nil
+				return &auth.VerifiedClaims{Subject: "user-1", Realm: auth.TokenRealmUser}, nil
+			}
+			if raw == "employee-token" {
+				if hint == auth.TokenRealmUser {
+					return nil, context.DeadlineExceeded
+				}
+				return &auth.VerifiedClaims{Subject: "employee-1", Realm: auth.TokenRealmEmployee}, nil
 			}
 			return nil, context.DeadlineExceeded
 		},
@@ -131,6 +154,18 @@ func TestWebSocketAuthAccessToken(t *testing.T) {
 
 	t.Run("valid token", func(t *testing.T) {
 		conn, resp, err := dialer.Dial(wsURL+"?access_token=valid-token", nil)
+		if err != nil {
+			status := 0
+			if resp != nil {
+				status = resp.StatusCode
+			}
+			t.Fatalf("expected successful ws upgrade, err=%v status=%d", err, status)
+		}
+		_ = conn.Close()
+	})
+
+	t.Run("employee token with explicit auth_type", func(t *testing.T) {
+		conn, resp, err := dialer.Dial(wsURL+"?access_token=employee-token&auth_type=employee", nil)
 		if err != nil {
 			status := 0
 			if resp != nil {
