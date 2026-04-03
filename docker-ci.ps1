@@ -1,4 +1,4 @@
-$branch = $env:BRANCH ?? "1.1.1"
+$branch = $env:BRANCH ?? "1.1.2"
 $registry = $env:REGISTRY ?? "registry.kasemsan.com"
 
 docker build --push `
