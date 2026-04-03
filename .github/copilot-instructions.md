@@ -8,8 +8,8 @@ Give AI agents a fast, safe starting point for this monorepo. Keep instructions 
 
 - This file is root-level bootstrap guidance for the full monorepo.
 - App-specific rules take precedence:
-	- `apps/frontend/AGENTS.md`
-	- `apps/gateway/AGENTS.md`
+  - `apps/frontend/AGENTS.md`
+  - `apps/gateway/AGENTS.md`
 
 ## Start here
 
@@ -31,14 +31,16 @@ Run from repo root unless a task explicitly targets an app folder.
 
 - Do not edit generated files such as `apps/frontend/src/routeTree.gen.ts`.
 - Changes in `apps/gateway` media/SDP/SIP paths are high risk; preserve behavior unless task requires protocol changes.
+- When a task targets `apps/gateway`, use the `golang-pro` skill for Go implementation and review.
+- Treat Pion as the gateway WebRTC stack (`github.com/pion/webrtc/v4` and related Pion packages); do not replace or mix WebRTC stacks unless explicitly requested.
 - Keep API/WS contract compatibility across clients when changing signaling payloads.
 - Prefer scoped changes in one app/package; avoid cross-repo refactors unless required.
 
 ## Environment setup
 
 - Configure app env files before running local dev:
-	- `apps/frontend/.env.example`
-	- `apps/gateway/.env.example`
+  - `apps/frontend/.env.example`
+  - `apps/gateway/.env.example`
 
 ## Link-first references
 
