@@ -8,7 +8,7 @@
 - Non-goals ที่สำคัญ: ไม่ทำ audio transcoding; จำกัด video ที่ H.264
 
 ## 2) Technical Stack
-- Go: **1.25.5** (`go.mod`)
+- Go: **1.26.2** (`go.mod`)
 - HTTP/Web API: **net/http + gorilla/mux**
 - WebSocket: **gorilla/websocket**
 - ORM: **ไม่มี ORM** (ใช้ SQL ตรงผ่าน `pgx/v5` + `pgxpool`)

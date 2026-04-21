@@ -228,7 +228,7 @@ Trunk คือ "บัญชี SIP" ที่ใช้สำหรับรั
 
 - Node.js `>= 18`
 - `pnpm@9`
-- Go `1.25.5` (สำหรับ `apps/gateway`)
+- Go `1.26.2` (สำหรับ `apps/gateway`)
 
 ## Install Dependencies
 

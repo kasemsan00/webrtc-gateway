@@ -23,7 +23,7 @@
 
 K2 Gateway bridges WebRTC clients (browser/mobile) to SIP/RTP endpoints (Asterisk, Kamailio).
 
-- **Language:** Go 1.25.5 (`go.mod`)
+- **Language:** Go 1.26.2 (`go.mod`)
 - **Core libs:** `pion/webrtc/v4`, `emiago/sipgo`, `gorilla/websocket`, `gorilla/mux`, `pion/rtp`, `pion/rtcp`, `pion/sdp/v3`, `pgx/v5`, `golang-jwt/jwt/v5`
 - **Runtime mode:** API mode (HTTP + WebSocket)
 - **Data plane:** SRTP (WebRTC side) <-> RTP/RTCP (SIP side)
@@ -111,6 +111,7 @@ Endpoint: `/ws`
 Payload format: JSON
 
 Auth behavior:
+
 - When `AUTH_ENABLE=true`, `/ws` requires `access_token` query parameter (`/ws?access_token=<jwt>`).
 - Token is validated against configured JWKS/issuer/audience before WebSocket upgrade.
 
@@ -193,6 +194,7 @@ If you add/change a message type, update all of:
 - `AUTH_JWKS_TIMEOUT_MS` (default `5000`)
 
 When `AUTH_ENABLE=true`:
+
 - Startup is fail-fast if required auth env is missing.
 - Startup is fail-fast if initial JWKS prefetch fails.
 - `/api/*` requires `Authorization: Bearer <jwt>`.
@@ -355,6 +357,7 @@ Checkpoints:
 ### 401 Unauthorized on API/WS
 
 Checkpoints:
+
 - Verify `AUTH_ENABLE`, `AUTH_JWKS_URL`, `AUTH_JWT_ISSUER`, `AUTH_JWT_AUDIENCE` are set correctly.
 - Verify token `iss` and `aud` match configured values exactly.
 - Verify token is not expired (`exp`) and is already valid (`nbf`).
