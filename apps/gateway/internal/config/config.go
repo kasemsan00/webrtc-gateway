@@ -78,9 +78,14 @@ type SIPConfig struct {
 	ListenUDP        bool   // Enable SIP UDP listener (default: false)
 	DebugSIPMessage  bool   // Enable verbose SIP MESSAGE logging
 	DebugSIPInvite   bool   // Enable verbose SIP INVITE logging (header dump)
-	SwitchPLIDelayMS int    // Delay in milliseconds before sending PLI on @switch message (default: 1000)
-	AudioUseAVPF     bool   // Use RTP/AVPF profile for audio with RTCP feedback (default: false)
-	VideoUseAVPF     bool   // Use RTP/AVPF profile for video with RTCP feedback (PLI/FIR/NACK) (default: true)
+	SwitchPLIDelayMS int    // Delay in milliseconds before sending PLI on @switch message (default: 0)
+	// @switch video transition hold (SIP->WebRTC): temporarily drop remote video packets
+	// to intentionally keep screen black before showing target video.
+	SwitchVideoBlackoutEnabled   bool // Enable @switch blackout hold policy (default: true)
+	SwitchVideoBlackoutMS        int  // Minimum blackout duration in ms (default: 700)
+	SwitchVideoBlackoutMaxWaitMS int  // Max wait for keyframe after blackout in ms (default: 2000)
+	AudioUseAVPF                 bool // Use RTP/AVPF profile for audio with RTCP feedback (default: false)
+	VideoUseAVPF                 bool // Use RTP/AVPF profile for video with RTCP feedback (PLI/FIR/NACK) (default: true)
 	// SIP-side transport target for outbound video feedback packets (PLI/FIR/NACK): auto|rtp|rtcp|dual
 	// - auto: legacy learned-RTCP + fallback-window behavior
 	// - rtp:  always send to SIP video RTP port (rtcp-mux style)
@@ -193,7 +198,10 @@ func Load() (*Config, error) {
 			ListenUDP:                       getEnvAsBool("SIP_LISTEN_UDP", false),
 			DebugSIPMessage:                 getEnvAsBool("DEBUG_SIP_MESSAGE", false),
 			DebugSIPInvite:                  getEnvAsBool("DEBUG_SIP_INVITE", false),
-			SwitchPLIDelayMS:                getEnvAsInt("SWITCH_PLI_DELAY_MS", 1000),
+			SwitchPLIDelayMS:                getEnvAsInt("SWITCH_PLI_DELAY_MS", 0),
+			SwitchVideoBlackoutEnabled:      getEnvAsBool("SIP_SWITCH_VIDEO_BLACKOUT_ENABLED", true),
+			SwitchVideoBlackoutMS:           getEnvAsInt("SIP_SWITCH_VIDEO_BLACKOUT_MS", 700),
+			SwitchVideoBlackoutMaxWaitMS:    getEnvAsInt("SIP_SWITCH_VIDEO_BLACKOUT_MAX_WAIT_MS", 2000),
 			AudioUseAVPF:                    getEnvAsBool("SIP_AUDIO_USE_AVPF", false),
 			VideoUseAVPF:                    getEnvAsBool("SIP_VIDEO_USE_AVPF", true),
 			VideoFeedbackTransport:          getSIPVideoFeedbackTransport(),
@@ -334,6 +342,11 @@ func (c *Config) Display() {
 		c.SIP.VideoRecoveryBurstIntervalMS,
 		c.SIP.VideoRecoveryBurstStaleMS,
 		c.SIP.VideoRecoveryBurstFIRStaleMS,
+	)
+	fmt.Printf("  @switch Video Blackout: %v (blackout=%dms, maxWait=%dms)\n",
+		c.SIP.SwitchVideoBlackoutEnabled,
+		c.SIP.SwitchVideoBlackoutMS,
+		c.SIP.SwitchVideoBlackoutMaxWaitMS,
 	)
 
 	// Display API Configuration

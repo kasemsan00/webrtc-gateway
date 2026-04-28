@@ -531,6 +531,10 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 				}
 			}
 
+			if sess.ShouldHoldSwitchVideoPacket(time.Now(), isKeyframe) {
+				continue
+			}
+
 			// Push into reorder buffer (handles sequencing + SPS/PPS injection at flush time)
 			if sess.VideoTrack != nil {
 				reorderBuf.Push(seq, buffer[:n], isKeyframe)

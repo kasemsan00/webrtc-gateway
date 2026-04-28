@@ -230,6 +230,7 @@ func (s *Server) MakeCall(destination, from string, sess *session.Session) error
 				// Answered - call established
 				sess.UpdateState(session.StateActive)
 				s.notifySessionStateChange(sess, session.StateActive)
+				sess.StartVideoRecoveryBurst("sip-200-ok")
 				s.logEvent(&logstore.Event{
 					Timestamp:     time.Now(),
 					SessionID:     sess.ID,
@@ -863,6 +864,7 @@ func (s *Server) AcceptCall(sess *session.Session) error {
 	// Update session state
 	sess.UpdateState(session.StateActive)
 	s.notifySessionStateChange(sess, session.StateActive)
+	sess.StartVideoRecoveryBurst("sip-accept-ok")
 	s.logEvent(&logstore.Event{
 		Timestamp: time.Now(),
 		SessionID: sess.ID,

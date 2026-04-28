@@ -808,37 +808,64 @@ func (s *Server) handleSwitchMessage(body string, callerURI string) {
 
 	fmt.Printf("📍 Found session %s for caller %s (queue: %s, agent: %s)\n", sess.ID, callerUsername, queueNumber, agentUsername)
 
+	// 3. Immediate fast-start kick before any optional delay.
+	// Send FIR + PLI once to both endpoints to reduce first-keyframe latency.
+	fmt.Printf("[%s] 🔀 Sending @switch: immediate FIR + PLI kick to both endpoints\n", sess.ID)
+	sess.SendFIRToWebRTC()   // FIR to browser
+	sess.SendFIRToAsterisk() // FIR to Asterisk
+	sess.SendPLItoWebRTC()   // PLI to browser
+	sess.SendPLIToAsteriskForced("switch")
+
+	// 3.1 Enable temporary @switch blackout on SIP->WebRTC video path (if enabled).
+	// Keep remote screen intentionally black until target video stabilizes
+	// (keyframe received) or max wait timeout is reached.
+	if s.config.SwitchVideoBlackoutEnabled {
+		blackout := time.Duration(s.config.SwitchVideoBlackoutMS) * time.Millisecond
+		if blackout <= 0 {
+			blackout = 700 * time.Millisecond
+		}
+		maxWait := time.Duration(s.config.SwitchVideoBlackoutMaxWaitMS) * time.Millisecond
+		if maxWait < blackout {
+			maxWait = blackout
+		}
+		sess.StartSwitchVideoBlackout(blackout, maxWait, "switch")
+	}
+
+	// Enable the same temporary aggressive recovery policy used by reconnect/resume.
+	sess.StartVideoRecoveryBurst("switch")
+
 	if queueNumber != "force send PLI" {
-		// 3. Delay before sending FIR/PLI (configurable via SWITCH_PLI_DELAY_MS)
+		// 3.2 Optional delay (configurable via SWITCH_PLI_DELAY_MS)
+		// Applied after immediate kick so first keyframe request is never delayed.
 		delayMs := s.config.SwitchPLIDelayMS
 		if delayMs > 0 {
 			time.Sleep(time.Duration(delayMs) * time.Millisecond)
 		}
 	}
 
-	// 4. Send FIR first (3 times) to request full keyframe with parameter sets (SPS/PPS)
-	fmt.Printf("[%s] 🔀 Sending @switch: FIR requests (3x) for fast video start with SPS/PPS\n", sess.ID)
-	for i := 0; i < 10; i++ {
+	// 4. Send FIR burst (6x, 50ms) to request keyframe with SPS/PPS quickly.
+	fmt.Printf("[%s] 🔀 Sending @switch: FIR burst (6x @ 50ms)\n", sess.ID)
+	for i := 0; i < 6; i++ {
 		if sess.GetState() == session.StateEnded {
 			return
 		}
 		sess.SendFIRToWebRTC()   // FIR to browser
 		sess.SendFIRToAsterisk() // FIR to Asterisk
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond)
 	}
 
-	// 5. Send PLI to both Browser and Asterisk in a loop for redundancy
-	fmt.Printf("[%s] 🔀 Sending @switch: PLI requests (10x) for fast video start\n", sess.ID)
-	for i := 0; i < 10; i++ {
+	// 5. Send PLI burst (6x, 50ms) for redundancy and faster stabilization.
+	fmt.Printf("[%s] 🔀 Sending @switch: PLI burst (6x @ 50ms)\n", sess.ID)
+	for i := 0; i < 6; i++ {
 		if sess.GetState() == session.StateEnded {
 			return
 		}
 		sess.SendPLItoWebRTC() // PLI to browser
 		sess.SendPLIToAsteriskForced("switch")
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond)
 	}
 
-	fmt.Printf("✅ Sent FIR + PLI (Browser + Asterisk) after @switch for session: %s\n", sess.ID)
+	fmt.Printf("✅ Sent @switch immediate kick + FIR/PLI bursts (Browser + Asterisk) for session: %s\n", sess.ID)
 }
 
 // TriggerSwitchMessage triggers @switch handling from external callers (e.g. REST API).

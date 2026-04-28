@@ -365,6 +365,9 @@ func (s *Session) ResetMediaState() {
 	s.VideoRTCPLearnedAt = time.Time{}
 	s.VideoRTCPSource = "unknown"
 	s.VideoRTCPFallbackUntil = time.Time{}
+	s.SwitchVideoBlackoutStarted = time.Time{}
+	s.SwitchVideoBlackoutUntil = time.Time{}
+	s.SwitchVideoBlackoutMaxWait = time.Time{}
 	s.SymmetricRTPTrustUntil = time.Now().Add(symmetricRTPTrustWindow)
 	s.PLIBurstUntil = time.Time{}
 

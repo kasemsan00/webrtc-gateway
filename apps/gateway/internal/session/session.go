@@ -92,6 +92,11 @@ type Session struct {
 	VideoRecoveryBurstUntil      time.Time     `json:"-"`
 	VideoRecoveryBurstStartedAt  time.Time     `json:"-"`
 	VideoRecoveryBurstLastReason string        `json:"-"`
+	// @switch blackout hold (SIP->WebRTC): keep screen black briefly by dropping video RTP
+	SwitchVideoBlackoutEnabled bool      `json:"-"`
+	SwitchVideoBlackoutStarted time.Time `json:"-"`
+	SwitchVideoBlackoutUntil   time.Time `json:"-"`
+	SwitchVideoBlackoutMaxWait time.Time `json:"-"`
 	// RTP State for re-packetization
 	AudioSeq        uint16 `json:"-"`
 	AudioSSRC       uint32 `json:"-"`
@@ -301,6 +306,7 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 		VideoRecoveryBurstInterval:  burstInterval,
 		VideoRecoveryBurstStale:     burstStale,
 		VideoRecoveryBurstFIRStale:  burstFIRStale,
+		SwitchVideoBlackoutEnabled:  cfg.SIP.SwitchVideoBlackoutEnabled,
 	}
 	session.initVideoRTPHistory()
 	session.ctx, session.cancel = context.WithCancel(context.Background())
