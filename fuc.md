@@ -35,7 +35,7 @@ API และ Interface ของระบบ `webrtc-gateway`
    4. `reject` ปฏิเสธสายเรียกเข้าที่ gateway แจ้งมายัง client โดยสามารถส่งเหตุผลการปฏิเสธได้
    5. `hangup` สั่งวางสายและยุติ session ปัจจุบันจากฝั่ง client
    6. `dtmf` ส่ง digits ระหว่างการสนทนาเพื่อควบคุม IVR หรือระบบปลายทางที่ต้องการสัญญาณปุ่มกด
-   7. `send_message` ส่งข้อความจาก client ไปยังปลายทาง โดยรองรับทั้งในระหว่างสายและนอกสายตามบริบทของ session
+   7. `send_message` ส่งข้อความจาก client ไปยังปลายทาง โดยรองรับทั้งในระหว่างสายและนอกสายตามบริบทของ session เมื่อ translation เปิดใช้งาน gateway จะแปลข้อความจาก source_language → target_language ก่อนส่งต่อเป็น SIP MESSAGE ไปยังปลายทาง โดยส่งข้อความที่แปลแล้วเท่านั้น (ไม่ส่งต้นฉบับ)
    8. `resume` ขอ reconnect และ resume session เดิมเมื่อการเชื่อมต่อหลุดหรือมีการเปลี่ยนเครือข่าย
    9. `trunk_resolve` ขอให้ gateway ค้นหา trunk ที่ตรงกับข้อมูล SIP credential หรือข้อมูล trunk ที่ระบุ ก่อนนำไปรับสายหรือโทรออก
    10. `ping` ส่ง keepalive เพื่อตรวจสอบว่า WebSocket connection ยังใช้งานได้ตามปกติ
@@ -43,7 +43,7 @@ API และ Interface ของระบบ `webrtc-gateway`
    1. `answer` ส่ง SDP answer จาก gateway กลับไปยัง client หลังจากระบบประมวลผล offer แล้ว
    2. `state` แจ้งสถานะของสายหรือ session เช่น ringing, active, ended หรือสถานะสำคัญอื่นของการโทร
    3. `incoming` แจ้งว่ามีสายเรียกเข้าเข้ามายัง client พร้อมข้อมูลที่จำเป็นสำหรับการรับหรือปฏิเสธสาย
-   4. `message` ส่งข้อความที่รับเข้ามาจากปลายทางมายัง client
+   4. `message` ส่งข้อความที่รับเข้ามาจากปลายทางมายัง client เมื่อ translation เปิดใช้งาน gateway จะแปลข้อความ SIP MESSAGE จาก target_language → source_language ก่อนส่งให้ client
    5. `messageSent` ยืนยันผลการส่งข้อความจาก client ไปยังปลายทางว่าได้รับการส่งออกจาก gateway แล้ว
    6. `dtmf` แจ้งสัญญาณ DTMF ที่รับเข้ามาจากอีกฝั่งของการสนทนา
    7. `resumed` แจ้งว่า session เดิมถูกกู้คืนสำเร็จและสามารถกลับมาใช้งานสายเดิมต่อได้
@@ -139,6 +139,79 @@ API และ Interface ของระบบ `webrtc-gateway`
 8. มุมมอง RTT composer และ RTT reader
 9. มุมมอง PiP overlay
 10. มุมมอง permission หรือสถานะ media และ network ที่เกี่ยวข้อง
+
+ระบบ `AzureGrpcTranslationServer` สำหรับบริการแปลภาษา Speech-to-Speech (S2S)
+
+1. ฟังก์ชันรับ streaming audio (PCM 16kHz 16-bit mono) จาก gRPC client ผ่าน `Translate()` bidirectional stream และส่งกลับ translated audio ดังนี้
+   1. โหมด S2T ส่งข้อความแปลกลับ (translated_text) แบบ partial (recognizing) และ final (recognized)
+   2. โหมด S2S ส่งข้อความแปลกลับ (translated_text) พร้อม audio ที่สังเคราะห์ด้วย TTS (PCM 16kHz 16-bit mono)
+   3. โหมด T2S รับข้อความเข้าและสังเคราะห์เสียงพูดจากข้อความที่แปลแล้ว
+2. ฟังก์ชันระบุภาษาและเสียงที่ใช้ในการสังเคราะห์ ผ่าน field ใน gRPC request
+   1. `source_language` ภาษาต้นทาง เช่น "en-US"
+   2. `target_language` ภาษาปลายทาง เช่น "th"
+   3. `tts_voice_name` เสียง TTS ที่ใช้สังเคราะห์ เช่น "th-TH-PremwadeeNeural"
+3. ฟังก์ชันอ่านค่า Azure credentials จาก `.env` file ได้แก่ `AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION`, `AZURE_TRANSLATOR_KEY`, `AZURE_TRANSLATOR_REGION`
+4. ฟังก์ชันแสดงสถานะ health check ที่ port 5001 (HTTP GET /) สำหรับตรวจสอบ service ว่าทำงานปกติ
+5. ฟังก์ชันบันทึก log การทำงานในแต่ละ session พร้อม timestamp ทุกรายการลงไฟล์ `Server-YYYY-MM-DD.log`
+6. ฟังก์ชันบันทึก audio input ที่ได้รับจาก client เป็นไฟล์ WAV สำหรับ debug
+
+ระบบ `webrtc-gateway` สำหรับ Backend Gateway (ส่วนเพิ่มการแปลภาษา S2S)
+
+1. ฟังก์ชันเชื่อมต่อกับ AzureGrpcTranslationServer ผ่าน gRPC bidirectional stream สำหรับรับส่ง audio ที่จะแปล
+2. ฟังก์ชัน fork audio pipeline จาก WebRTC session โดยเมื่อเปิดใช้ translation จะไม่ส่ง Opus audio ต้นฉบับไปยัง Asterisk แต่จะ decode Opus เป็น PCM แล้วส่งเข้า Azure S2S แทน
+3. ฟังก์ชัน Opus decode แปลง RTP payload (Opus) จาก WebRTC track เป็น PCM 16kHz 16-bit mono สำหรับส่งเข้า gRPC stream
+4. ฟังก์ชัน Opus encode แปลง PCM audio ที่ได้จาก Azure S2S TTS (16kHz 16-bit mono) เป็น RTP packet (Opus) สำหรับส่งต่อไปยัง Asterisk/Linphone
+5. ฟังก์ชัน RTP packetization สำหรับ Opus encoded audio โดยกำหนด SSRC, Sequence Number, Timestamp, Payload Type ให้สอดคล้องกับ SIP session เดิม
+6. ฟังก์ชันจัดการ audio buffer และ latency โดยรวบรวม PCM chunk จาก gRPC stream แล้ว flush เป็น Opus RTP packets ไปยัง Asterisk ตามจังหวะที่เหมาะสม
+7. ฟังก์ชันกำหนดค่า translation ผ่าน environment variables เพิ่มเติมดังนี้
+   1. `TRANSLATOR_ENABLE` เปิด/ปิดการทำงานของ translation pipeline
+   2. `TRANSLATOR_ADDR` ที่อยู่ของ AzureGrpcTranslationServer (ip:port)
+   3. `TRANSLATOR_SOURCE_LANG` ภาษาต้นทาง เช่น en-US
+   4. `TRANSLATOR_TARGET_LANG` ภาษาปลายทาง เช่น th
+   5. `TRANSLATOR_TTS_VOICE` ชื่อเสียง TTS ที่ใช้ เช่น th-TH-PremwadeeNeural
+   6. `TRANSLATOR_END_SILENCE_TIMEOUT_MS` ระยะเวลาหยุดพูดที่ถือว่าจบ phrase (default 1000ms)
+   7. `TRANSLATOR_OPUS_BITRATE` อัตรา bitrate สำหรับ Opus encoder (default 32000)
+8. ฟังก์ชันจัดการกรณี AzureGrpcTranslationServer ไม่พร้อมใช้งาน โดยไม่阻断 audio pipeline หรือ revert กลับเป็น Opus passthrough ตามปกติ
+9. ฟังก์ชันจัดการ gRPC connection lifecycle (reconnect, timeout, error handling) โดยไม่กระทบ session ที่กำลัง active
+10. ฟังก์ชันติดตามสถานะ translation ใน session log และ logstore event สำหรับ audit
+11. ฟังก์ชันแปลภาษาข้อความ chat (SIP MESSAGE) ที่พิมพ์โต้ตอบกันระหว่างสาย โดยเมื่อ translation เปิดใช้งาน gateway จะ intercept ข้อความที่รับจากฝั่ง ttrs-vri หรือ SIP endpoint (Linphone) ส่งเข้า Azure T2S เพื่อแปล แล้ว forward ข้อความที่แปลแล้วไปยังปลายทาง
+    1. รองรับการแปลข้อความที่รับจาก ttrs-vri (WebSocket `send_message`) → แปล → ส่งเป็น SIP MESSAGE ไปยัง Linphone
+    2. รองรับการแปลข้อความที่รับจาก Linphone (SIP MESSAGE) → แปล → ส่งกลับผ่าน WebSocket `message` ไปยัง ttrs-vri
+12. ฟังก์ชันแปลภาษา Real-Time Text (RTT) ที่พิมพ์โต้ตอบกันระหว่างสาย โดย gateway จะ intercept RTT text ที่ส่งผ่าน DataChannel หรือ SIP MESSAGE RTT XML แล้วส่งเข้า Azure T2S เพื่อแปล และ forward ข้อความที่แปลแล้วไปยังฝั่งตรงข้ามแบบ real-time
+    1. รองรับการแปล RTT ที่พิมพ์จาก ttrs-vri → ส่ง RTT XML (แปลแล้ว) ไปยัง Linphone ผ่าน SIP MESSAGE
+    2. รองรับการแปล RTT ที่พิมพ์จาก Linphone ผ่าน SIP MESSAGE → แปล → ส่ง RTT text กลับไปยัง ttrs-vri ผ่าน WebSocket
+
+ระบบ `ttrs-vri-webrtc-react-native` สำหรับ Mobile Softphone (ส่วนเพิ่มการแปลภาษา)
+
+1. ฟังก์ชันเลือกภาษาปลายทางที่ต้องการให้แปล (เช่น ไทย, อังกฤษ, จีน, ญี่ปุ่น, เกาหลี) ก่อนเริ่มสายหรือระหว่างสาย
+2. ฟังก์ชัน toggle เปิด/ปิดการแปลภาษาจากหน้าจอ in-call โดยเมื่อเปิดใช้ translation จะมีผลกับสายที่ active อยู่เท่านั้น
+3. ฟังก์ชันแสดงสถานะ translation บน in-call UI เช่น "กำลังแปล...", "แปลภาษา: EN→TH" หรือสถานะ error เมื่อ translation ไม่พร้อม
+4. ฟังก์ชันส่งคำสั่ง translation ไปยัง gateway ผ่าน WebSocket message type `translate` พร้อมพารามิเตอร์ source language, target language, tts voice name
+5. ฟังก์ชันรับผลลัพธ์และสถานะ translation จาก gateway ผ่าน WebSocket message type `translation_state`
+6. ฟังก์ชันบันทึกการตั้งค่าภาษา translation ใน local settings เพื่อให้จำค่าที่เลือกไว้ครั้งล่าสุด
+7. ฟังก์ชันแสดงข้อความ chat และ RTT ที่ผ่านการแปลแล้วใน in-call UI โดยแยกเป็นข้อความต้นฉบับและข้อความที่แปลแล้ว พร้อมระบุภาษาของแต่ละฝั่ง
+
+API และ Interface ของระบบ `webrtc-gateway` (ส่วนเพิ่มการแปลภาษา)
+
+1. ฟังก์ชันรับคำสั่งจาก client ผ่าน WebSocket สำหรับควบคุมการแปลภาษา
+   1. `translate` ส่งคำขอเปิด translation จาก client พร้อมระบุ source_language, target_language, tts_voice_name
+   2. `translate_stop` ส่งคำขอยกเลิก translation ระหว่าง session
+2. ฟังก์ชันส่งผลลัพธ์และสถานะการแปลภาษากลับไปยัง client ผ่าน WebSocket
+   1. `translation_started` แจ้งว่า translation pipeline เริ่มทำงานแล้ว พร้อมข้อมูลภาษาที่ใช้
+   2. `translation_stopped` แจ้งว่า translation หยุดทำงานและ audio กลับสู่โหมด passthrough
+   3. `translation_error` แจ้งข้อผิดพลาดเกี่ยวกับการแปลภาษา เช่น translation service ไม่พร้อม
+   4. `translated_text` ส่งข้อความที่แปลแล้วในรูปแบบ plain text (สำหรับแสดง subtitle หรือ status)
+   5. `translated_message` ส่งข้อความ chat ที่ผ่านการแปลแล้วไปยัง client พร้อม original text, translated text, source language และ target language
+3. ฟังก์ชัน REST API สำหรับขอสถานะ translation service
+   1. `GET /api/translator/status` ตรวจสอบว่า AzureGrpcTranslationServer พร้อมใช้งาน
+   2. `GET /api/translator/sessions` ดูรายการ session ที่กำลังใช้ translation อยู่
+
+ข้อมูลหลักที่ระบบต้องจัดเก็บหรือแสดงผล (ส่วนเพิ่มการแปลภาษา)
+
+1. ข้อมูล Translation Session ได้แก่ sessionId, source language, target language, tts voice, status (active/inactive/error)
+2. ข้อมูล Translation Event ได้แก่ recognized text, translated text, timestamp และ sessionId
+3. ข้อมูล Translation Config ได้แก่ translator address, source language, target language, voice name และ timeout
+4. ข้อมูล Translated Message ได้แก่ original text, translated text, source language, target language, timestamp, sessionId และ sender (client/SIP)
 
 ข้อกำหนดเชิงเทคนิคที่ควรระบุใน TOR
 
