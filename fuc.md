@@ -26,6 +26,68 @@
 12. ฟังก์ชันรองรับการทำงานหลาย gateway instances พร้อม registry, redirect และ resume ข้าม instance
 13. ฟังก์ชันบันทึก event, payload, stats, dialogs และ session history ลงฐานข้อมูลสำหรับ audit และรายงานย้อนหลัง
 
+API และ Interface ของระบบ `webrtc-gateway`
+
+1. ฟังก์ชันรับคำสั่งจาก client ผ่าน WebSocket สำหรับการสร้างสาย ควบคุมสาย ส่งข้อความ ค้นหา trunk และตรวจสอบสถานะการเชื่อมต่อ
+   1. `offer` ใช้ส่ง SDP offer จาก client ไปยัง gateway เพื่อเริ่มสร้าง WebRTC session และรอรับ SDP answer กลับมา
+   2. `call` ใช้สั่งให้ gateway เริ่มโทรออกไปยังปลายทาง SIP endpoint หรือ trunk ที่ระบุ หลังจากสร้าง session แล้ว
+   3. `accept` ใช้ตอบรับสายเรียกเข้าที่ gateway แจ้งมายัง client เพื่อให้ระบบส่งสัญญาณรับสายไปยังฝั่ง SIP
+   4. `reject` ใช้ปฏิเสธสายเรียกเข้าที่ gateway แจ้งมายัง client โดยสามารถส่งเหตุผลการปฏิเสธได้
+   5. `hangup` ใช้สั่งวางสายและยุติ session ปัจจุบันจากฝั่ง client
+   6. `dtmf` ใช้ส่ง digits ระหว่างการสนทนาเพื่อควบคุม IVR หรือระบบปลายทางที่ต้องการสัญญาณปุ่มกด
+   7. `send_message` ใช้ส่งข้อความจาก client ไปยังปลายทาง โดยใช้ได้ทั้งในระหว่างสายและนอกสายตามบริบทของ session
+   8. `resume` ใช้ขอ reconnect และ resume session เดิมเมื่อการเชื่อมต่อหลุดหรือมีการเปลี่ยนเครือข่าย
+   9. `trunk_resolve` ใช้ขอให้ gateway ค้นหา trunk ที่ตรงกับข้อมูล SIP credential หรือข้อมูล trunk ที่ระบุ ก่อนนำไปใช้รับสายหรือโทรออก
+   10. `ping` ใช้ส่ง keepalive เพื่อตรวจสอบว่า WebSocket connection ยังใช้งานได้ตามปกติ
+2. ฟังก์ชันส่งผลลัพธ์และสถานะกลับไปยัง client ผ่าน WebSocket สำหรับตอบ SDP แจ้งสถานะสาย แจ้งข้อความ แจ้งผลการ resume และแจ้งผลการค้นหา trunk
+   1. `answer` ใช้ส่ง SDP answer จาก gateway กลับไปยัง client หลังจากระบบประมวลผล offer แล้ว
+   2. `state` ใช้แจ้งสถานะของสายหรือ session เช่น ringing, active, ended หรือสถานะสำคัญอื่นของการโทร
+   3. `incoming` ใช้แจ้งว่ามีสายเรียกเข้าเข้ามายัง client พร้อมข้อมูลที่จำเป็นสำหรับการรับหรือปฏิเสธสาย
+   4. `message` ใช้ส่งข้อความที่รับเข้ามาจากปลายทางมายัง client
+   5. `messageSent` ใช้ยืนยันผลการส่งข้อความจาก client ไปยังปลายทางว่าได้รับการส่งออกจาก gateway แล้ว
+   6. `dtmf` ใช้แจ้งสัญญาณ DTMF ที่รับเข้ามาจากอีกฝั่งของการสนทนา
+   7. `resumed` ใช้แจ้งว่า session เดิมถูกกู้คืนสำเร็จและสามารถกลับมาใช้งานสายเดิมต่อได้
+   8. `resume_failed` ใช้แจ้งว่าการกู้คืน session ไม่สำเร็จ เช่น ไม่พบ session เดิมหรือ session หมดอายุแล้ว
+   9. `resume_redirect` ใช้แจ้งให้ client เปลี่ยนไปเชื่อมต่อกับ gateway instance อื่นเพื่อกู้คืน session เดิม
+   10. `trunk_resolved` ใช้แจ้งผลการค้นหา trunk สำเร็จ พร้อมข้อมูล trunk ที่สามารถนำไปใช้งานต่อได้
+   11. `trunk_redirect` ใช้แจ้งให้ client เปลี่ยนไปใช้ gateway instance อื่นที่เป็นเจ้าของ trunk นั้นอยู่
+   12. `trunk_not_found` ใช้แจ้งว่าไม่พบ trunk ที่ตรงกับเงื่อนไขหรือข้อมูลที่ client ส่งมา
+   13. `trunk_not_ready` ใช้แจ้งว่า trunk ที่พบยังไม่พร้อมใช้งาน เช่น ยังไม่ register หรืออยู่ในสถานะที่ใช้โทรไม่ได้
+   14. `pong` ใช้ตอบกลับคำสั่ง `ping` เพื่อยืนยันว่า WebSocket connection ยัง active อยู่
+   15. `error` ใช้แจ้งข้อผิดพลาดที่เกิดขึ้นระหว่างการประมวลผลคำสั่งจาก client
+3. ฟังก์ชัน Public API สำหรับขอ temporary SIP credential เพื่อใช้กับ public-entry flow ของ mobile softphone
+   1. `POST {EXPO_PUBLIC_API_URL}/extension/public` ใช้ขอข้อมูล SIP credential ชั่วคราว เช่น domain, extension หรือ secret สำหรับเริ่มสายแบบ public-entry
+4. ฟังก์ชัน REST API สำหรับสร้าง session สั่งโทรออก และวางสาย
+   1. `POST /api/offer` ใช้ส่ง SDP offer ผ่าน REST เพื่อสร้าง WebRTC session และรับ SDP answer กลับมา
+   2. `POST /api/call` ใช้สั่งให้ gateway โทรออกไปยังหมายเลขหรือปลายทางที่กำหนด โดยอ้างอิง session ที่สร้างไว้แล้ว
+   3. `POST /api/hangup/{sessionId}` ใช้สั่งวางสายของ session ที่ระบุผ่าน sessionId
+5. ฟังก์ชัน REST API สำหรับดูข้อมูล session ปัจจุบันและติดตามการเปลี่ยนแปลงของ session
+   1. `GET /api/sessions` ใช้ดูรายการ session ที่กำลังมีอยู่ในระบบ ณ ขณะนั้น
+   2. `GET /api/sessions/stream` ใช้ติดตาม event หรือการเปลี่ยนแปลงของ session แบบต่อเนื่อง
+   3. `GET /api/session/{sessionId}` ใช้ดูรายละเอียดของ session ใด session หนึ่งตาม sessionId
+6. ฟังก์ชัน REST API สำหรับส่ง DTMF ระหว่างการสนทนา
+   1. `POST /api/dtmf/{sessionId}` ใช้ส่ง digits ไปยัง session ที่กำหนดระหว่างที่สายกำลัง active อยู่
+7. ฟังก์ชัน REST API สำหรับดูประวัติ session, event, payload, dialog และ media stats ของแต่ละสาย
+   1. `GET /api/sessions/history` ใช้ดูประวัติ session ที่สิ้นสุดแล้วหรือข้อมูลย้อนหลังของสายทั้งหมด
+   2. `GET /api/sessions/{sessionId}/events` ใช้ดูรายการ event ของ session ที่ระบุ เช่น state change หรือเหตุการณ์สำคัญระหว่างสาย
+   3. `GET /api/sessions/{sessionId}/payloads` ใช้ดู payload ที่เกี่ยวข้องกับ session เช่น signaling payload หรือ SDP ที่ใช้ในการ troubleshoot
+   4. `GET /api/sessions/{sessionId}/dialogs` ใช้ดูข้อมูล SIP dialog ของ session ที่ระบุ
+   5. `GET /api/sessions/{sessionId}/stats` ใช้ดู media stats ของ session เช่น packet loss, jitter, latency หรือ bitrate
+8. ฟังก์ชัน REST API สำหรับดูข้อมูล infrastructure และสถานะการทำงานของระบบ
+   1. `GET /api/gateway/instances` ใช้ดูรายการ gateway instances ที่กำลังทำงานและข้อมูลที่เกี่ยวข้องกับแต่ละ instance
+   2. `GET /api/session-directory` ใช้ดูข้อมูล session directory ที่ใช้ช่วยในการ redirect หรือ resume ข้าม instance
+   3. `GET /api/public-accounts` ใช้ดูรายการ public SIP accounts ที่ระบบจัดการอยู่
+   4. `GET /api/ws-clients` ใช้ดูรายการ WebSocket clients ที่เชื่อมต่ออยู่กับระบบในขณะนั้น
+   5. `GET /api/dashboard` ใช้ดึงข้อมูลสรุปภาพรวมของระบบเพื่อแสดงบน dashboard
+9. ฟังก์ชัน REST API สำหรับบริหารจัดการ trunk และสถานะการลงทะเบียน trunk
+   1. `GET /api/trunks` ใช้ดูรายการ trunk ทั้งหมด พร้อมข้อมูลสถานะและข้อมูลประกอบที่เกี่ยวข้อง
+   2. `GET /api/trunk/{id}` ใช้ดูรายละเอียดของ trunk รายการใดรายการหนึ่งตาม id
+   3. `POST /api/trunks` ใช้สร้าง trunk ใหม่ในระบบ
+   4. `PUT /api/trunk/{id}` ใช้แก้ไขข้อมูล trunk ที่มีอยู่ เช่น domain, username, transport หรือสถานะ enabled
+   5. `POST /api/trunk/{id}/register` ใช้สั่งให้ trunk ที่ระบุทำการ register กับ SIP core
+   6. `POST /api/trunk/{id}/unregister` ใช้สั่งให้ trunk ที่ระบุยกเลิกการ register กับ SIP core
+   7. `POST /api/trunks/refresh` ใช้สั่ง refresh สถานะ trunk และโหลดข้อมูล trunk ใหม่จากแหล่งข้อมูลที่ระบบใช้งานอยู่
+
 ระบบ `ttrs-vri-webrtc-react-native` สำหรับ Mobile Softphone
 
 1. ฟังก์ชันเลือกโหมดการติดต่ออย่างน้อย normal และ emergency ก่อนเริ่มการโทร
@@ -93,62 +155,6 @@
 11. ระบบรองรับหลาย gateway instances และ shared session หรือ trunk visibility
 12. ระบบ mobile รองรับ Android และ iOS พร้อม platform-specific media recovery
 13. ระบบรองรับการบันทึก event, stats, payload และข้อมูลย้อนหลังลงฐานข้อมูล
-
-รายการ API และ Interface สำคัญของระบบ
-
-1. WebSocket messages ฝั่ง client
-   1. `offer`
-   2. `call`
-   3. `accept`
-   4. `reject`
-   5. `hangup`
-   6. `dtmf`
-   7. `send_message`
-   8. `resume`
-   9. `trunk_resolve`
-   10. `ping`
-2. WebSocket messages ฝั่ง server
-   1. `answer`
-   2. `state`
-   3. `incoming`
-   4. `message`
-   5. `messageSent`
-   6. `dtmf`
-   7. `resumed`
-   8. `resume_failed`
-   9. `resume_redirect`
-   10. `trunk_resolved`
-   11. `trunk_redirect`
-   12. `trunk_not_found`
-   13. `trunk_not_ready`
-   14. `pong`
-   15. `error`
-3. REST API สำคัญ
-   1. `POST {EXPO_PUBLIC_API_URL}/extension/public`
-   2. `POST /api/offer`
-   3. `POST /api/call`
-   4. `POST /api/hangup/{sessionId}`
-   5. `GET /api/sessions`
-   6. `GET /api/sessions/stream`
-   7. `GET /api/session/{sessionId}`
-   8. `POST /api/dtmf/{sessionId}`
-   9. `GET /api/sessions/history`
-   10. `GET /api/sessions/{sessionId}/events`
-   11. `GET /api/sessions/{sessionId}/payloads`
-   12. `GET /api/sessions/{sessionId}/dialogs`
-   13. `GET /api/sessions/{sessionId}/stats`
-   14. `GET /api/gateway/instances`
-   15. `GET /api/session-directory`
-   16. `GET /api/public-accounts`
-   17. `GET /api/ws-clients`
-   18. `GET /api/dashboard`
-   19. `GET /api/trunks`
-   20. `GET /api/trunk/{id}`
-   21. `POST /api/trunks`
-   22. `PUT /api/trunk/{id}`
-   23. `POST /api/trunk/{id}/register`
-   24. `POST /api/trunk/{id}/unregister`
-   25. `POST /api/trunks/refresh`
 
 ข้อเสนอการนำไปใช้ใน TOR
 
