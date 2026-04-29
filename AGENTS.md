@@ -1,88 +1,70 @@
 # Project Guidelines
 
-## **Copilot / AI Agent Instructions**
+## Hierarchy
 
-- **Purpose:** Provide concise, repo-specific guidance for AI assistants and contributors.
-- **Where to run:** Prefer running workspace commands from the repo root unless an app README instructs otherwise.
-- **Essential commands:**
-  - Install: `pnpm install`
-  - Full workspace: `pnpm build`, `pnpm lint`, `pnpm check-types`, `pnpm dev`
-  - Frontend dev: `pnpm dev:frontend` (or `pnpm --filter frontend run dev`)
-  - Backend dev: `pnpm dev:backend` (or run `go` commands in `apps/gateway` / use `project.json`)
-- **Environments:** Copy per-app env examples before running: `apps/frontend/.env.example`, `apps/gateway/.env.example`.
-- **Don't edit generated files:** e.g. `apps/frontend/src/routeTree.gen.ts`.
-- **High-risk areas:** Changes to SDP/media/SIP in `apps/gateway` are high risk — require tests and design review.
-- **DB lifecycle rules:** Follow app guides for entities with soft-delete or managed lifecycles (e.g., SIP trunks).
+This file defines root defaults. App-level rules take precedence:
+- `apps/frontend/AGENTS.md`
+- `apps/gateway/AGENTS.md`
 
-## Scope And Hierarchy
+## Commands
 
-- This file defines root defaults for the monorepo.
-- More specific rules in app folders override these defaults:
-  - `apps/frontend/AGENTS.md`
-  - `apps/gateway/AGENTS.md`
+Run from repo root unless working in a specific app directory.
+
+- `pnpm install` — install all deps (requires pnpm@10, Node >= 18)
+- `pnpm build` — build all workspaces
+- `pnpm lint` — lint all workspaces
+- `pnpm check-types` — type-check all workspaces
+- `pnpm format` — format with Prettier
+- `pnpm dev:frontend` — frontend dev (port 3150)
+- `pnpm dev:backend` — runs `go run .` in `apps/gateway`
+
+Go commands (run from `apps/gateway`):
+- `go test ./...`
+- `go build -o k2-gateway .`
+- `go test -v ./internal/sip -run "TestBuildPublicAccountKey|TestResolveSIPDestination"`
+
+Frontend single-test (from root):
+- `pnpm --filter frontend run test -- src/features/trunk/types.test.ts`
+- `pnpm --filter frontend run test -- -t "test name pattern"`
+
+## Environment
+
+Copy per-app env examples before running:
+- `apps/frontend/.env.example` → `.env`
+- `apps/gateway/.env.example` → `.env`
+
+Gateway env is loaded via `godotenv`; `AUTH_ENABLE` triggers fail-fast startup checks for JWKS, issuer, and audience.
 
 ## Architecture
 
-- Monorepo tooling:
-  - `pnpm` workspaces (`apps/*`, `packages/*`)
-  - Turborepo task orchestration (`turbo.json`)
-- Main applications:
-  - `apps/frontend`: React + TypeScript + Vite operations UI.
-  - `apps/gateway`: Go WebRTC <-> SIP gateway service.
-- Shared packages:
-  - `packages/eslint-config`
-  - `packages/typescript-config`
-  - `packages/ui`
+- Monorepo: `pnpm` workspaces (`apps/*`, `packages/*`) + Turborepo (`turbo.json`)
+- `apps/frontend`: React + TypeScript + **TanStack Start** (SSR via Vite, port 3150)
+- `apps/gateway`: Go WebRTC↔SIP bridge, module path `k2-gateway`, Go 1.26.2
+- `apps/gateway/llm.txt`: compact onboarding context; sync with contract/media changes
+- `packages/`: `eslint-config`, `typescript-config`, `ui`
+- `pnpm-workspace.yaml` blocks native builds (`esbuild`, `sharp`, etc.) on virtiofs mounts
 
-## Build And Test
+## Critical Rules
 
-- Install dependencies from repo root:
-  - `pnpm install`
-- Run all workspace tasks:
-  - `pnpm build`
-  - `pnpm lint`
-  - `pnpm check-types`
-  - `pnpm dev`
-- Run focused app development:
-  - Frontend: `pnpm dev:frontend`
-  - Backend: `pnpm dev:backend`
-- App-specific commands:
-  - Frontend commands are in `apps/frontend/package.json`.
-  - Backend commands are in `apps/gateway/project.json`.
+- **Never edit generated files:** `apps/frontend/src/routeTree.gen.ts`
+- **SDP/media/SIP changes in `apps/gateway` are high risk** — invariants: Opus audio passthrough (no transcoding), H.264 video only, SPS/PPS caching and keyframe injection preserved
+- **Pion (`github.com/pion/webrtc/v4`) is the WebRTC stack** — do not replace or mix stacks without explicit request
+- **Keep WS/API contract compatibility** across frontend and mobile clients; if you add/change a message type, update both `internal/api/server.go` and the frontend `gateway-store.ts`
+- **Trunks are soft-deleted** (`enabled=false`), never hard-deleted from `sip_trunks`
+- **No panics in hot paths** — RTP/RTCP/SIP loops should log and continue
+- **Avoid cross-app refactors** — scope changes to the target app or package
 
-## Conventions
+## Testing
 
-- Keep changes scoped to the target app or package; avoid cross-app refactors unless required.
-- Prefer strict typing and explicit data-shape handling at API boundaries.
-- Follow existing formatter/linter config rather than introducing new style rules.
-- Do not manually edit generated files such as `apps/frontend/src/routeTree.gen.ts`.
-
-## Pitfalls
-
-- Frontend and backend require app-level environment setup before running. Check:
-  - `apps/frontend/README.md`
-  - `apps/gateway/.env.example`
-- Media-path changes in `apps/gateway` are high risk. Preserve behavior unless the task explicitly requires protocol/media changes.
+- Frontend: Vitest with jsdom; config is in `vite.config.ts` (no separate vitest config file)
+- Backend: `go test ./...`; fix bugs by adding a focused `_test.go` in the affected package
+- No CI workflows exist (`.github/workflows/` is empty)
 
 ## Key References
 
-- Monorepo tasks: `turbo.json`
+- Frontend guide: `apps/frontend/AGENTS.md`
+- Gateway guide + WebSocket contract + config reference: `apps/gateway/AGENTS.md`
+- Dual-flow architecture: `apps/gateway/docs/dual-flow.md`
+- Call resume behavior: `apps/gateway/docs/call-resume.md`
+- Docker CI build script: `docker-ci.ps1`
 - Workspace layout: `pnpm-workspace.yaml`
-- Root scripts: `package.json`
-- Frontend implementation guide: `apps/frontend/AGENTS.md`
-- Backend implementation guide: `apps/gateway/AGENTS.md`
-
-## **Example Prompts for AI Agents**
-
-- _Start a local dev environment:_ "Run the recommended steps to start the frontend and backend locally (install, envs, dev servers) and list any missing env vars."
-- _Code change + tests:_ "Add a new typed API handler in `apps/gateway/internal/api` for X, include unit tests, and update docs."
-- _Safe refactor:_ "Refactor `apps/frontend/src/lib/http-client.ts` to use a shared fetch wrapper, preserve behavior and add unit tests."
-- _Investigate bug:_ "Search for occurrences of 'routeTree.gen.ts' edits and report where generated files were modified manually."
-
-## **Suggested Agent Customizations**
-
-- Create `.github/copilot-instructions.md` (applyTo: root) with a brief excerpt of this section for GitHub Copilot to read in PRs.
-- Create `apps/frontend/.agent.md` that documents the Vite dev flow and lists generated files to ignore.
-- Create `apps/gateway/.agent.md` that highlights SDP/SIP hotspots and database lifecycle constraints.
-
-If you want, I can (1) create the `.github/copilot-instructions.md` file with a minimal excerpt, or (2) scaffold the per-app `.agent.md` files now. Which would you like me to create?
