@@ -1,0 +1,35 @@
+﻿syntax = "proto3";
+option csharp_namespace = "AzureGrpcTranslationServer";
+
+// Extended to support Text->Speech (T2S) without breaking old clients
+enum TranslationMode {
+  MODE_UNSPECIFIED = 0;
+  MODE_S2T = 1; // Speech -> Text
+  MODE_S2S = 2; // Speech -> Speech
+  MODE_T2S = 3; // Text -> Speech
+}
+
+service SpeechTranslator {
+  // One BiDi stream for all modes (S2T / S2S / T2S)
+  rpc Translate(stream TranslationRequest) returns (stream TranslationResult);
+}
+
+message TranslationRequest {
+  // Original fields
+  string source_language = 1;
+  string target_language = 2;
+  bool return_audio = 3;
+  string tts_voice_name = 4;
+  bytes audio_data = 5;
+
+  // New for T2S / explicit control
+  string text_input = 6;
+  TranslationMode mode = 7;
+}
+
+message TranslationResult {
+  string recognized_text = 1;
+  string translated_text = 2;
+  bytes audio_data = 3;
+  string tts_voice_used = 4;
+}

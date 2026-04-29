@@ -24,6 +24,7 @@ import (
 	"k2-gateway/internal/push"
 	"k2-gateway/internal/session"
 	"k2-gateway/internal/sip"
+	"k2-gateway/internal/translator"
 	"k2-gateway/internal/webrtc"
 )
 
@@ -184,7 +185,7 @@ func runAPIMode(ctx context.Context, cfg *config.Config, unicastAddress string, 
 	if trunkManager != nil {
 		trunkMgrInterface = trunkManager
 	}
-	apiServer := api.NewServer(cfg.API, cfg.TURN, cfg.Gateway, sessionMgr, sipServer, publicRegistry, trunkMgrInterface, store)
+	apiServer := api.NewServer(cfg.API, cfg.TURN, cfg.Gateway, cfg.Translator, sessionMgr, sipServer, publicRegistry, trunkMgrInterface, store)
 	if cfg.Auth.Enable {
 		if cfg.Auth.User.JWKSURL == "" && cfg.Auth.Employee.JWKSURL == "" {
 			log.Fatalf("AUTH_ENABLE=true requires at least one realm JWKS URL: AUTH_TTRS_USERS_JWKS_URL or AUTH_TTRS_EMPLOYEE_JWKS_URL")
@@ -275,6 +276,37 @@ func runAPIMode(ctx context.Context, cfg *config.Config, unicastAddress string, 
 			apiServer.SetPushService(pushService)
 			log.Printf("🔔 Push notifications enabled (project=%s)", cfg.PushNotification.FirebaseProjectID)
 		}
+	}
+
+	// Initialize translator client for S2S speech translation
+	if cfg.Translator.Enable {
+		tc := translator.NewClient(translator.Config{
+			Addr:        cfg.Translator.Addr,
+			SourceLang:  cfg.Translator.SourceLang,
+			TargetLang:  cfg.Translator.TargetLang,
+			TTSVoice:    cfg.Translator.TTSVoice,
+			OpusBitrate: cfg.Translator.OpusBitrate,
+		})
+		connectCtx, connectCancel := context.WithTimeout(ctx, 10*time.Second)
+		if err := tc.Connect(connectCtx); err != nil {
+			connectCancel()
+			log.Printf("⚠️ Warning: Translator client failed to connect (%v); translation disabled", err)
+		} else {
+			connectCancel()
+			apiServer.SetTranslatorClient(tc)
+			log.Printf("🎤 Translator client connected to %s (%s → %s)", cfg.Translator.Addr, cfg.Translator.SourceLang, cfg.Translator.TargetLang)
+
+			// Health check
+			healthCtx, healthCancel := context.WithTimeout(ctx, 3*time.Second)
+			if err := tc.CheckHealth(healthCtx); err != nil {
+				healthCancel()
+				log.Printf("⚠️ Warning: Translator health check failed (%v); translation may not work", err)
+			} else {
+				healthCancel()
+				log.Printf("✅ Translator health check passed")
+			}
+		}
+		defer tc.Close()
 	}
 
 	// Wire dependencies for BYE request handling

@@ -35,8 +35,8 @@ Start from these files before widening scope:
 - `apps/gateway/internal/sip/server.go`, `handlers.go`, `call.go`, `dialog.go`, and `registration.go` for SIP signaling behavior
 - `apps/gateway/internal/sip/sdp.go` and `rtp.go` for SIP media negotiation and RTP flow
 - `apps/gateway/internal/sip/trunk_manager.go` and `trunk_public_id.go` for trunk resolution and multi-instance routing
-- `apps/gateway/docs/dual-flow.md` for end-to-end flow expectations
-- `apps/gateway/docs/call-resume.md` for reconnect and resume behavior
+- `docs/dual-flow.md` for end-to-end flow expectations
+- `docs/call-resume.md` for reconnect and resume behavior
 
 ## Procedure
 
@@ -81,8 +81,8 @@ Start from these files before widening scope:
 ## Required References
 
 - Read `apps/gateway/AGENTS.md` before substantial gateway changes.
-- Use `apps/gateway/docs/dual-flow.md` for call flow or signaling behavior.
-- Use `apps/gateway/docs/call-resume.md` for resume or reconnect changes.
+- Use `docs/dual-flow.md` for call flow or signaling behavior.
+- Use `docs/call-resume.md` for resume or reconnect changes.
 - Check `apps/gateway/project.json` for standard build and test commands.
 
 ## Completion Criteria

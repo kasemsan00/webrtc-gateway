@@ -43,7 +43,7 @@ func createActiveSession(t *testing.T, mgr *session.Manager) *session.Session {
 
 func TestHandleWSResume_SessionNotFound(t *testing.T) {
 	mgr := newTestSessionManager()
-	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, mgr, nil, nil, nil, nil)
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, nil, nil, nil, nil)
 	client := &WSClient{send: make(chan []byte, 8)}
 
 	srv.handleWSResume(client, WSMessage{
@@ -65,7 +65,7 @@ func TestHandleWSResume_SessionNotFound(t *testing.T) {
 
 func TestHandleWSResume_EmptySessionID(t *testing.T) {
 	mgr := newTestSessionManager()
-	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, mgr, nil, nil, nil, nil)
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, nil, nil, nil, nil)
 	client := &WSClient{send: make(chan []byte, 8)}
 
 	srv.handleWSResume(client, WSMessage{
@@ -87,7 +87,7 @@ func TestHandleWSResume_StateNotResumable(t *testing.T) {
 	sess := createActiveSession(t, mgr)
 	sess.SetState(session.StateEnded)
 
-	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, mgr, nil, nil, nil, nil)
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, nil, nil, nil, nil)
 	client := &WSClient{send: make(chan []byte, 8)}
 
 	srv.handleWSResume(client, WSMessage{
@@ -111,7 +111,7 @@ func TestHandleWSResume_SuccessWithoutSDP(t *testing.T) {
 	mgr := newTestSessionManager()
 	sess := createActiveSession(t, mgr)
 
-	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, mgr, nil, nil, nil, nil)
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, nil, nil, nil, nil)
 	client := &WSClient{send: make(chan []byte, 8)}
 
 	srv.handleWSResume(client, WSMessage{
@@ -139,7 +139,7 @@ func TestHandleWSResume_ReconnectingSessionReturnsActiveState(t *testing.T) {
 	sess := createActiveSession(t, mgr)
 	sess.SetState(session.StateReconnecting)
 
-	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, mgr, nil, nil, nil, nil)
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, nil, nil, nil, nil)
 	client := &WSClient{send: make(chan []byte, 8)}
 
 	srv.handleWSResume(client, WSMessage{
@@ -176,6 +176,7 @@ func TestHandleWSResume_LocalSessionHitSkipsDirectoryLookup(t *testing.T) {
 		config.APIConfig{},
 		config.TURNConfig{},
 		config.GatewayConfig{InstanceID: "gw-a"},
+		config.TranslatorConfig{},
 		mgr,
 		nil,
 		nil,
@@ -206,7 +207,7 @@ func TestHandleWSResume_WithInvalidSDPFailsRenegotiation(t *testing.T) {
 	mgr := newTestSessionManager()
 	sess := createActiveSession(t, mgr)
 
-	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, mgr, nil, nil, nil, nil)
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, nil, nil, nil, nil)
 	client := &WSClient{send: make(chan []byte, 8)}
 
 	srv.handleWSResume(client, WSMessage{

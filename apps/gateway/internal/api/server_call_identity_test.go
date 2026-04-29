@@ -50,7 +50,7 @@ func TestHandleWSCallRejectsPublicIdentityChange(t *testing.T) {
 	sess.SetSIPAuthContext("public", "userA@example.com", 0, "example.com", "userA", "old-secret", 5060)
 
 	sipMaker := &stubSIPCallMaker{}
-	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, mgr, sipMaker, nil, nil, nil)
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, sipMaker, nil, nil, nil)
 	client := &WSClient{send: make(chan []byte, 8)}
 
 	srv.handleWSCall(client, WSMessage{
@@ -89,7 +89,7 @@ func TestHandleWSCallAllowsSamePublicIdentity(t *testing.T) {
 	sess.SetSIPAuthContext("public", "userA@example.com", 0, "example.com", "userA", "old-secret", 5060)
 
 	sipMaker := &stubSIPCallMaker{}
-	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, mgr, sipMaker, nil, nil, nil)
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, sipMaker, nil, nil, nil)
 	client := &WSClient{send: make(chan []byte, 8)}
 
 	srv.handleWSCall(client, WSMessage{
@@ -128,7 +128,7 @@ func TestHandleWSCall_AllowsIdentityChangeForNonPublicMode(t *testing.T) {
 	sess.SetSIPAuthContext("trunk", "", 1, "example.com", "userA", "old-secret", 5060)
 
 	sipMaker := &stubSIPCallMaker{}
-	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, mgr, sipMaker, nil, nil, nil)
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, sipMaker, nil, nil, nil)
 	client := &WSClient{send: make(chan []byte, 8)}
 
 	srv.handleWSCall(client, WSMessage{
@@ -166,7 +166,7 @@ func TestHandleWSCallRejectsTrunkCallWhenNotResolved(t *testing.T) {
 	}
 
 	sipMaker := &stubSIPCallMaker{}
-	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{InstanceID: "gw-1"}, mgr, sipMaker, nil, trunkMgr, nil)
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{InstanceID: "gw-1"}, config.TranslatorConfig{}, mgr, sipMaker, nil, trunkMgr, nil)
 	client := &WSClient{send: make(chan []byte, 8)}
 
 	srv.handleWSCall(client, WSMessage{
@@ -211,7 +211,7 @@ func TestHandleWSCallRejectsTrunkCallWhenLeaseNotActive(t *testing.T) {
 	}
 
 	sipMaker := &stubSIPCallMaker{}
-	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{InstanceID: "gw-1"}, mgr, sipMaker, nil, trunkMgr, nil)
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{InstanceID: "gw-1"}, config.TranslatorConfig{}, mgr, sipMaker, nil, trunkMgr, nil)
 	client := &WSClient{
 		send:            make(chan []byte, 8),
 		trunkResolved:   true,

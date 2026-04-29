@@ -118,7 +118,7 @@ func readWSMessages(t *testing.T, ch <-chan []byte) []WSMessage {
 }
 
 func TestHandleWSTrunkResolve_InvalidPayload(t *testing.T) {
-	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{InstanceID: "gw-1"}, nil, nil, nil, nil, nil)
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{InstanceID: "gw-1"}, config.TranslatorConfig{}, nil, nil, nil, nil, nil)
 	client := &WSClient{send: make(chan []byte, 8)}
 
 	srv.handleWSTrunkResolve(client, WSMessage{Type: "trunk_resolve", SessionID: "s1"})
@@ -133,7 +133,7 @@ func TestHandleWSTrunkResolve_InvalidPayload(t *testing.T) {
 
 func TestHandleWSTrunkResolve_NotFoundSendsTrunkNotFoundAndError(t *testing.T) {
 	store := &stubResolveStore{resolveFound: false}
-	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{InstanceID: "gw-1"}, nil, nil, nil, nil, store)
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{InstanceID: "gw-1"}, config.TranslatorConfig{}, nil, nil, nil, nil, store)
 	client := &WSClient{send: make(chan []byte, 8)}
 
 	srv.handleWSTrunkResolve(client, WSMessage{
@@ -173,7 +173,7 @@ func TestHandleWSTrunkResolve_LeaseNotActive(t *testing.T) {
 		resolveFound:      true,
 	}
 
-	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{InstanceID: "gw-1"}, nil, nil, nil, nil, store)
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{InstanceID: "gw-1"}, config.TranslatorConfig{}, nil, nil, nil, nil, store)
 	client := &WSClient{send: make(chan []byte, 8)}
 
 	srv.handleWSTrunkResolve(client, WSMessage{
@@ -210,7 +210,7 @@ func TestHandleWSTrunkResolve_ResolvedWhenOwnedByInstance(t *testing.T) {
 		resolveFound:      true,
 	}
 
-	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{InstanceID: "gw-1"}, nil, nil, nil, nil, store)
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{InstanceID: "gw-1"}, config.TranslatorConfig{}, nil, nil, nil, nil, store)
 	client := &WSClient{send: make(chan []byte, 8)}
 
 	srv.handleWSTrunkResolve(client, WSMessage{
@@ -267,7 +267,7 @@ func TestHandleWSTrunkResolve_ResolvedReplaysPendingIncoming(t *testing.T) {
 	otherIncoming.SetCallInfo("inbound", "sip:other@example.com", "sip:agent@example.com", "sip-call-100")
 	otherIncoming.SetSIPAuthContext("trunk", "", 99, "sip.example.com", "1002", "secret", 5060)
 
-	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{InstanceID: "gw-1"}, mgr, nil, nil, nil, store)
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{InstanceID: "gw-1"}, config.TranslatorConfig{}, mgr, nil, nil, nil, store)
 	client := &WSClient{send: make(chan []byte, 8)}
 
 	srv.handleWSTrunkResolve(client, WSMessage{
@@ -315,7 +315,7 @@ func TestHandleWSTrunkResolve_RedirectWhenOwnedByOtherInstance(t *testing.T) {
 		lookupFound:       true,
 	}
 
-	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{InstanceID: "gw-1"}, nil, nil, nil, nil, store)
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{InstanceID: "gw-1"}, config.TranslatorConfig{}, nil, nil, nil, nil, store)
 	client := &WSClient{send: make(chan []byte, 8)}
 
 	srv.handleWSTrunkResolve(client, WSMessage{
@@ -344,7 +344,7 @@ func TestHandleWSTrunkResolve_RedirectWhenOwnedByOtherInstance(t *testing.T) {
 
 func TestHandleWSTrunkResolve_ResolveFailure(t *testing.T) {
 	store := &stubResolveStore{resolveErr: errors.New("db down")}
-	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{InstanceID: "gw-1"}, nil, nil, nil, nil, store)
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{InstanceID: "gw-1"}, config.TranslatorConfig{}, nil, nil, nil, nil, store)
 	client := &WSClient{send: make(chan []byte, 8)}
 
 	srv.handleWSTrunkResolve(client, WSMessage{
@@ -388,7 +388,7 @@ func TestHandleWSTrunkResolve_ByTrunkID_ResolvedWhenOwnedByInstance(t *testing.T
 		},
 	}
 
-	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{InstanceID: "gw-1"}, nil, nil, nil, trunkMgr, &stubResolveStore{})
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{InstanceID: "gw-1"}, config.TranslatorConfig{}, nil, nil, nil, trunkMgr, &stubResolveStore{})
 	client := &WSClient{send: make(chan []byte, 8)}
 
 	srv.handleWSTrunkResolve(client, WSMessage{
@@ -426,7 +426,7 @@ func TestHandleWSTrunkResolve_ByTrunkPublicID_ResolvedWhenOwnedByInstance(t *tes
 		},
 	}
 
-	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{InstanceID: "gw-1"}, nil, nil, nil, trunkMgr, &stubResolveStore{})
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{InstanceID: "gw-1"}, config.TranslatorConfig{}, nil, nil, nil, trunkMgr, &stubResolveStore{})
 	client := &WSClient{send: make(chan []byte, 8)}
 
 	srv.handleWSTrunkResolve(client, WSMessage{
@@ -467,7 +467,7 @@ func TestHandleWSTrunkResolve_ByTrunkPublicID_NormalizesUppercaseValue(t *testin
 		},
 	}
 
-	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{InstanceID: "gw-1"}, nil, nil, nil, trunkMgr, &stubResolveStore{})
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{InstanceID: "gw-1"}, config.TranslatorConfig{}, nil, nil, nil, trunkMgr, &stubResolveStore{})
 	client := &WSClient{send: make(chan []byte, 8)}
 
 	srv.handleWSTrunkResolve(client, WSMessage{
@@ -505,7 +505,7 @@ func TestHandleWSTrunkResolve_ByTrunkID_NotReadyWhenLeaseExpired(t *testing.T) {
 		},
 	}
 
-	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{InstanceID: "gw-1"}, nil, nil, nil, trunkMgr, &stubResolveStore{})
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{InstanceID: "gw-1"}, config.TranslatorConfig{}, nil, nil, nil, trunkMgr, &stubResolveStore{})
 	client := &WSClient{send: make(chan []byte, 8)}
 
 	srv.handleWSTrunkResolve(client, WSMessage{
@@ -544,7 +544,7 @@ func TestHandleWSTrunkResolve_ByTrunkID_RedirectWhenOwnedByOtherInstance(t *test
 		lookupFound: true,
 	}
 
-	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{InstanceID: "gw-1"}, nil, nil, nil, trunkMgr, store)
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{InstanceID: "gw-1"}, config.TranslatorConfig{}, nil, nil, nil, trunkMgr, store)
 	client := &WSClient{send: make(chan []byte, 8)}
 
 	srv.handleWSTrunkResolve(client, WSMessage{

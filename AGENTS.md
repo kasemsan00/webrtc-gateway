@@ -64,7 +64,8 @@ Gateway env is loaded via `godotenv`; `AUTH_ENABLE` triggers fail-fast startup c
 
 - Frontend guide: `apps/frontend/AGENTS.md`
 - Gateway guide + WebSocket contract + config reference: `apps/gateway/AGENTS.md`
-- Dual-flow architecture: `apps/gateway/docs/dual-flow.md`
-- Call resume behavior: `apps/gateway/docs/call-resume.md`
+- Dual-flow architecture: `docs/dual-flow.md`
+- Call resume behavior: `docs/call-resume.md`
+- Client integration guides: `docs/web.md`, `docs/react-native.md`, `docs/ios.md`, `docs/android.md`
 - Docker CI build script: `docker-ci.ps1`
 - Workspace layout: `pnpm-workspace.yaml`

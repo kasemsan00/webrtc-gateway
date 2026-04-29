@@ -26,7 +26,7 @@ func (s tokenVerifierStub) VerifyToken(ctx context.Context, raw string, hint aut
 func TestAuthMiddlewareForREST(t *testing.T) {
 	t.Parallel()
 
-	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, nil, nil, nil, nil, nil)
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, nil, nil, nil, nil, nil)
 	srv.SetTokenVerifier(tokenVerifierStub{
 		verify: func(_ context.Context, raw string, hint auth.TokenRealm) (*auth.VerifiedClaims, error) {
 			if raw == "valid-token" {
@@ -96,7 +96,7 @@ func TestAuthMiddlewareForREST(t *testing.T) {
 func TestWebSocketAuthAccessToken(t *testing.T) {
 	t.Parallel()
 
-	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, nil, nil, nil, nil, nil)
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, nil, nil, nil, nil, nil)
 	srv.SetTokenVerifier(tokenVerifierStub{
 		verify: func(_ context.Context, raw string, hint auth.TokenRealm) (*auth.VerifiedClaims, error) {
 			if raw == "valid-token" {

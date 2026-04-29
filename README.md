@@ -57,7 +57,7 @@ Browser A  ──WS──►  Gateway A  ──SIP──►  Kamailio  ──SIP
 
 ทั้งสองเบราว์เซอร์เชื่อมผ่าน gateway คนละตัว โดย SIP core เป็นตัว route สาย
 
-> รายละเอียดเต็มดูที่ `apps/gateway/docs/dual-flow.md`
+> รายละเอียดเต็มดูที่ `docs/dual-flow.md`
 
 ---
 
@@ -307,7 +307,7 @@ go test ./...
 
 - `apps/frontend/README.md`
 - `apps/gateway/AGENTS.md`
-- `apps/gateway/docs/dual-flow.md`
+- `docs/dual-flow.md`
 
 ## Development Notes
 
@@ -332,4 +332,4 @@ go test ./...
 - Root scripts: `package.json`
 - Frontend guide: `apps/frontend/AGENTS.md`
 - Backend guide: `apps/gateway/AGENTS.md`
-- Dual flow docs: `apps/gateway/docs/dual-flow.md`
+- Dual flow docs: `docs/dual-flow.md`

@@ -21,6 +21,7 @@ import (
 	"k2-gateway/internal/push"
 	"k2-gateway/internal/session"
 	"k2-gateway/internal/sip"
+	"k2-gateway/internal/translator"
 )
 
 const (
@@ -52,6 +53,8 @@ type Server struct {
 	config           config.APIConfig
 	turnConfig       config.TURNConfig
 	gatewayConfig    config.GatewayConfig
+	translatorCfg    config.TranslatorConfig
+	translatorClient *translator.Client
 	upgrader         websocket.Upgrader
 	wsClients        map[string]*WSClient
 	wsConnections    map[*WSClient]struct{}
@@ -213,16 +216,17 @@ func analyzeResumeOfferVideoSDP(sdp string) resumeVideoOfferDiagnostics {
 }
 
 // NewServer creates a new API server
-func NewServer(cfg config.APIConfig, turnCfg config.TURNConfig, gatewayCfg config.GatewayConfig, sessionMgr *session.Manager, sipMaker SIPCallMaker, publicRegistry PublicAccountRegistry, trunkMgr TrunkManager, logStore logstore.LogStore) *Server {
+func NewServer(cfg config.APIConfig, turnCfg config.TURNConfig, gatewayCfg config.GatewayConfig, translatorCfg config.TranslatorConfig, sessionMgr *session.Manager, sipMaker SIPCallMaker, publicRegistry PublicAccountRegistry, trunkMgr TrunkManager, logStore logstore.LogStore) *Server {
 	return &Server{
-		sessionMgr:     sessionMgr,
-		sipMaker:       sipMaker,
-		publicRegistry: publicRegistry,
-		trunkManager:   trunkMgr,
-		logStore:       logStore,
-		config:         cfg,
-		turnConfig:     turnCfg,
-		gatewayConfig:  gatewayCfg,
+		sessionMgr:      sessionMgr,
+		sipMaker:        sipMaker,
+		publicRegistry:  publicRegistry,
+		trunkManager:    trunkMgr,
+		logStore:        logStore,
+		config:          cfg,
+		turnConfig:      turnCfg,
+		gatewayConfig:   gatewayCfg,
+		translatorCfg:   translatorCfg,
 		upgrader: websocket.Upgrader{
 			ReadBufferSize:  1024,
 			WriteBufferSize: 1024,
@@ -237,6 +241,11 @@ func NewServer(cfg config.APIConfig, turnCfg config.TURNConfig, gatewayCfg confi
 		sessionStreams: make(map[int]chan []byte),
 		startTime:      time.Now(),
 	}
+}
+
+// SetTranslatorClient sets the translator client for S2S translation.
+func (s *Server) SetTranslatorClient(client *translator.Client) {
+	s.translatorClient = client
 }
 
 // SetLogStore sets the log store for database logging.
@@ -507,6 +516,10 @@ func (s *Server) handleWSMessage(client *WSClient, message []byte) {
 		s.handleWSRequestKeyframe(client, msg)
 	case "trunk_resolve":
 		s.handleWSTrunkResolve(client, msg)
+	case "translate":
+		s.handleWSTranslate(client, msg)
+	case "translate_stop":
+		s.handleWSTranslateStop(client, msg)
 	default:
 		s.sendWSError(client, msg.SessionID, "Unknown message type")
 	}

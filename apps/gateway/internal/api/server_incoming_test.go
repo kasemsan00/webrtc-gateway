@@ -65,7 +65,7 @@ func TestHandleWSAccept_FirstAcceptWins(t *testing.T) {
 	incomingSess.SetCallInfo("inbound", "1001", "1002", "sip-call-1")
 
 	sipMaker := &incomingTestSIPCallMaker{}
-	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, mgr, sipMaker, nil, nil, nil)
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, sipMaker, nil, nil, nil)
 
 	client1 := &WSClient{send: make(chan []byte, 8)}
 	client2 := &WSClient{send: make(chan []byte, 8)}
@@ -114,7 +114,7 @@ func TestHandleWSReject_DefaultReasonAndDeletesSession(t *testing.T) {
 	incomingSess.SetCallInfo("inbound", "1001", "1002", "sip-call-2")
 
 	sipMaker := &incomingTestSIPCallMaker{}
-	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, mgr, sipMaker, nil, nil, nil)
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, sipMaker, nil, nil, nil)
 	client := &WSClient{send: make(chan []byte, 8)}
 
 	srv.handleWSReject(client, WSMessage{
@@ -155,7 +155,7 @@ func TestHandleWSReject_BenignTransactionTerminatedIsTreatedAsEnded(t *testing.T
 	sipMaker := &incomingTestSIPCallMaker{
 		rejectErr: errors.New("failed to send reject response: transaction terminated"),
 	}
-	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, mgr, sipMaker, nil, nil, nil)
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, sipMaker, nil, nil, nil)
 	client := &WSClient{send: make(chan []byte, 8)}
 
 	srv.handleWSReject(client, WSMessage{
@@ -188,7 +188,7 @@ func TestHandleWSReject_NonBenignErrorReturnsWSError(t *testing.T) {
 	sipMaker := &incomingTestSIPCallMaker{
 		rejectErr: errors.New("network timeout"),
 	}
-	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, mgr, sipMaker, nil, nil, nil)
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, sipMaker, nil, nil, nil)
 	client := &WSClient{send: make(chan []byte, 8)}
 
 	srv.handleWSReject(client, WSMessage{
@@ -210,7 +210,7 @@ func TestHandleWSReject_NonBenignErrorReturnsWSError(t *testing.T) {
 }
 
 func TestNotifyIncomingCall_SendsOnlyClientsResolvedOnSameTrunk(t *testing.T) {
-	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, nil, nil, nil, nil, nil)
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, nil, nil, nil, nil, nil)
 	clientA := &WSClient{sessionID: "a", trunkResolved: true, resolvedTrunkID: 1, send: make(chan []byte, 8)}
 	clientB := &WSClient{sessionID: "b", trunkResolved: true, resolvedTrunkID: 1, send: make(chan []byte, 8)}
 	clientC := &WSClient{sessionID: "c", trunkResolved: true, resolvedTrunkID: 2, send: make(chan []byte, 8)}
@@ -246,7 +246,7 @@ func TestNotifyIncomingCall_SendsOnlyClientsResolvedOnSameTrunk(t *testing.T) {
 }
 
 func TestNotifyIncomingCall_TargetsResolvedTrunkID(t *testing.T) {
-	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, nil, nil, nil, nil, nil)
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, nil, nil, nil, nil, nil)
 	clientTrunk1 := &WSClient{sessionID: "trunk-1-client", trunkResolved: true, resolvedTrunkID: 1, send: make(chan []byte, 8)}
 	clientTrunk2 := &WSClient{sessionID: "trunk-2-client", trunkResolved: true, resolvedTrunkID: 2, send: make(chan []byte, 8)}
 
@@ -280,7 +280,7 @@ func TestIncomingAcceptThenHangup_UsesSessionWithDialogState(t *testing.T) {
 	incomingSess.SetCallInfo("inbound", "sip:00025@203.150.245.42:5060", "sip:1100@203.151.21.121:5060", "sip-call-3")
 
 	sipMaker := &incomingTestSIPCallMaker{}
-	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, mgr, sipMaker, nil, nil, nil)
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, sipMaker, nil, nil, nil)
 	client := &WSClient{send: make(chan []byte, 16)}
 
 	srv.handleWSAccept(client, WSMessage{

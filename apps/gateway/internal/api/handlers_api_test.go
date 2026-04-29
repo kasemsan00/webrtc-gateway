@@ -246,7 +246,7 @@ func (s *apiHandlerLogStoreStub) ListStats(_ context.Context, params logstore.St
 func newAPIHandlerTestServer(t *testing.T, trunkMgr TrunkManager, sipMaker SIPCallMaker, store logstore.LogStore) (*Server, *session.Manager) {
 	t.Helper()
 	mgr := newTestSessionManager()
-	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, mgr, sipMaker, nil, trunkMgr, store)
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, sipMaker, nil, trunkMgr, store)
 	return srv, mgr
 }
 
@@ -329,7 +329,7 @@ func TestHandleCreateTrunk_Table(t *testing.T) {
 	}{
 		{
 			name:           "manager missing",
-			srv:            NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, newTestSessionManager(), nil, nil, nil, nil),
+			srv:            NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, newTestSessionManager(), nil, nil, nil, nil),
 			body:           `{}`,
 			wantStatus:     http.StatusServiceUnavailable,
 			wantErrContain: "Trunk manager not available",
@@ -415,7 +415,7 @@ func TestHandleListAndGetTrunks(t *testing.T) {
 }
 
 func TestHandleListTrunks_NegativePaths(t *testing.T) {
-	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, newTestSessionManager(), nil, nil, nil, nil)
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, newTestSessionManager(), nil, nil, nil, nil)
 	rr := doRequest(t, srv.handleListTrunks, http.MethodGet, "/trunks", "", nil)
 	assertJSONError(t, rr, http.StatusServiceUnavailable, "Trunk manager not available")
 
@@ -454,7 +454,7 @@ func TestHandleUpdateTrunk(t *testing.T) {
 }
 
 func TestHandleUpdateTrunk_NegativePaths(t *testing.T) {
-	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, newTestSessionManager(), nil, nil, nil, nil)
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, newTestSessionManager(), nil, nil, nil, nil)
 	rr := doRequest(t, srv.handleUpdateTrunk, http.MethodPatch, "/trunks/1", `{}`, map[string]string{"id": "1"})
 	assertJSONError(t, rr, http.StatusServiceUnavailable, "Trunk manager not available")
 
@@ -766,7 +766,7 @@ func TestHandleSSEStreams_Contract(t *testing.T) {
 }
 
 func TestHandleRefreshTrunks(t *testing.T) {
-	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, newTestSessionManager(), nil, nil, nil, nil)
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, newTestSessionManager(), nil, nil, nil, nil)
 	rr := doRequest(t, srv.handleRefreshTrunks, http.MethodPost, "/trunks/refresh", "", nil)
 	assertJSONError(t, rr, http.StatusServiceUnavailable, "Trunk manager not available")
 
@@ -784,7 +784,7 @@ func TestHandleRefreshTrunks(t *testing.T) {
 }
 
 func TestHandleTrunkRegisterUnregister(t *testing.T) {
-	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, newTestSessionManager(), nil, nil, nil, nil)
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, newTestSessionManager(), nil, nil, nil, nil)
 	rr := doRequest(t, srv.handleTrunkRegister, http.MethodPost, "/trunks/1/register", "", map[string]string{"id": "1"})
 	assertJSONError(t, rr, http.StatusServiceUnavailable, "Trunk manager not available")
 	rr = doRequest(t, srv.handleTrunkUnregister, http.MethodPost, "/trunks/1/unregister", "", map[string]string{"id": "1"})
@@ -978,7 +978,7 @@ func TestHandleUserTrunkHeartbeat(t *testing.T) {
 			1: {ID: 1, PublicID: "aaa-bbb", Name: "test-trunk", Domain: "sip.example.com", Port: 5060, Username: "sipuser", InUseBy: &inUseByVal},
 		},
 	}
-	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, nil, nil, nil, trunkMgr, nil)
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, nil, nil, nil, trunkMgr, nil)
 
 	// No auth claims -> 401
 	rr := doRequest(t, srv.handleUserTrunkHeartbeat, http.MethodPut, "/api/user/trunk", "", nil)

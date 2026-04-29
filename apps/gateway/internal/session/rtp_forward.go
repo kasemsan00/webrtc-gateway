@@ -122,6 +122,26 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 					s.ID, packetCount, packet.Header.PayloadType, len(packet.Payload))
 			}
 
+			// S2S Translation: if translator is active, process audio through the pipeline
+			if s.TranslatorEnabled && s.Translator != nil {
+				s.mu.Unlock() // Release lock before potentially blocking translator call
+				translated, err := s.Translator.Process(packet)
+				s.mu.Lock()
+
+				if err != nil {
+					// Translation failed — fall through to original forwarding (passthrough)
+					fmt.Printf("[%s] ⚠️ Translation error for packet #%d: %v (falling back to passthrough)\n",
+						s.ID, packetCount, err)
+				} else if translated != nil {
+					// Use translated packet instead of original
+					packet = translated
+					if packetCount <= 5 {
+						fmt.Printf("[%s] 🎤 Translated audio packet #%d: %d bytes → %d bytes\n",
+							s.ID, packetCount, len(packet.Payload), len(translated.Payload))
+					}
+				}
+			}
+
 			// Rewrite Header (passthrough mode - no transcoding)
 			s.AudioSeq++
 			packet.Header.SSRC = s.AudioSSRC

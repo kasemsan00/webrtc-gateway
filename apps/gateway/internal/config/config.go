@@ -24,6 +24,17 @@ type Config struct {
 	Gateway          GatewayConfig
 	SessionDir       SessionDirectoryConfig
 	PushNotification PushNotificationConfig
+	Translator       TranslatorConfig
+}
+
+// TranslatorConfig holds S2S speech translation configuration
+type TranslatorConfig struct {
+	Enable     bool   // Enable translation client (default: false)
+	Addr       string // gRPC server address (default: "localhost:5000")
+	SourceLang string // Source language code (default: "en")
+	TargetLang string // Target language code (default: "th")
+	TTSVoice   string // TTS voice name (default: "th-TH-Sarawut")
+	OpusBitrate int   // Opus encoding bitrate (default: 24000)
 }
 
 // RTPConfig holds RTP UDP port range configuration
@@ -287,6 +298,14 @@ func Load() (*Config, error) {
 			FirebaseCredentialsFile: os.Getenv("PUSH_FIREBASE_CREDENTIALS_FILE"),
 			FirebaseProjectID:       os.Getenv("PUSH_FIREBASE_PROJECT_ID"),
 		},
+		Translator: TranslatorConfig{
+			Enable:      getEnvAsBool("TRANSLATOR_ENABLE", false),
+			Addr:        getEnvWithDefault("TRANSLATOR_ADDR", "localhost:5000"),
+			SourceLang:  getEnvWithDefault("TRANSLATOR_SOURCE_LANG", "en"),
+			TargetLang:  getEnvWithDefault("TRANSLATOR_TARGET_LANG", "th"),
+			TTSVoice:    getEnvWithDefault("TRANSLATOR_TTS_VOICE", "th-TH-Sarawut"),
+			OpusBitrate: getEnvAsInt("TRANSLATOR_OPUS_BITRATE", 24000),
+		},
 	}, nil
 }
 
@@ -436,6 +455,18 @@ func (c *Config) Display() {
 		}
 		fmt.Printf("  Firebase Credentials File: %s\n", c.PushNotification.FirebaseCredentialsFile)
 		fmt.Printf("  Firebase Project ID: %s\n", c.PushNotification.FirebaseProjectID)
+	}
+
+	// Display Translator Configuration
+	fmt.Println("\nTranslator Configuration:")
+	if c.Translator.Enable {
+		fmt.Printf("  Enabled: true\n")
+		fmt.Printf("  gRPC Address: %s\n", c.Translator.Addr)
+		fmt.Printf("  Source Lang: %s → Target Lang: %s\n", c.Translator.SourceLang, c.Translator.TargetLang)
+		fmt.Printf("  TTS Voice: %s\n", c.Translator.TTSVoice)
+		fmt.Printf("  Opus Bitrate: %d\n", c.Translator.OpusBitrate)
+	} else {
+		fmt.Println("  Disabled")
 	}
 
 	fmt.Println("\n=================================")

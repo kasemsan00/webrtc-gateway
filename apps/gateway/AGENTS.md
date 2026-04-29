@@ -45,6 +45,8 @@ K2 Gateway bridges WebRTC clients (browser/mobile) to SIP/RTP endpoints (Asteris
 
 ## 4. Repository Map (Current)
 
+> Root-level `docs/` contains client integration guides and call flows: see `docs/dual-flow.md`, `docs/call-resume.md`, `docs/web.md`, `docs/react-native.md`, `docs/ios.md`, `docs/android.md`.
+
 ```text
 k2-gateway/
 |- main.go
@@ -92,12 +94,6 @@ k2-gateway/
 |  |  `- logging.go
 |  |- webrtc/webrtc.go
 |  `- pkg/webrtc/utils.go
-|- docs/
-|  |- web.md
-|  |- react-native.md
-|  |- ios.md
-|  |- android.md
-|  `- call-resume.md
 |- init.sql
 |- docker-compose.yml
 `- .env.example

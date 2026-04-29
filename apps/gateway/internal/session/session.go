@@ -14,6 +14,7 @@ import (
 	"github.com/pion/webrtc/v4"
 
 	"k2-gateway/internal/config"
+	"k2-gateway/internal/translator"
 	pkg_webrtc "k2-gateway/internal/pkg/webrtc"
 )
 
@@ -158,27 +159,38 @@ type Session struct {
 	LastNACKHandledLogAt  time.Time `json:"-"`
 	// Video optimization flags
 	PreserveSTAPA     bool               `json:"-"` // If true, preserve STAP-A packets (don't de-aggregate) when they contain SPS+PPS+IDR
-	ctx               context.Context    `json:"-"`
-	cancel            context.CancelFunc `json:"-"`
+	// Speech-to-Speech translation pipeline
+	Translator         *translator.S2SPipeline `json:"-"`
+	TranslatorClient   *translator.Client      `json:"-"`
+	TranslatorEnabled  bool                    `json:"-"`
+	TranslatorSrcLang  string                  `json:"-"`
+	TranslatorTgtLang  string                  `json:"-"`
+	TranslatorTTSVoice string                  `json:"-"`
+	ctx                context.Context         `json:"-"`
+	cancel             context.CancelFunc      `json:"-"`
 	videoRTPHistoryMu sync.Mutex
 	mu                sync.RWMutex
 }
 
 // Snapshot provides a thread-safe view of session metadata for logging.
 type Snapshot struct {
-	ID            string
-	State         SessionState
-	Direction     string
-	From          string
-	To            string
-	SIPCallID     string
-	RTPPort       int
-	VideoRTPPort  int
-	AudioRTCPPort int
-	VideoRTCPPort int
-	SIPOpusPT     uint8
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	ID                string
+	State             SessionState
+	Direction         string
+	From              string
+	To                string
+	SIPCallID         string
+	RTPPort           int
+	VideoRTPPort      int
+	AudioRTCPPort     int
+	VideoRTCPPort     int
+	SIPOpusPT         uint8
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+	TranslatorEnabled bool
+	TranslatorSrcLang string
+	TranslatorTgtLang string
+	TranslatorTTSVoice string
 }
 
 // Snapshot returns a thread-safe snapshot of session metadata for logging.
@@ -187,19 +199,23 @@ func (s *Session) Snapshot() Snapshot {
 	defer s.mu.RUnlock()
 
 	return Snapshot{
-		ID:            s.ID,
-		State:         s.State,
-		Direction:     s.Direction,
-		From:          s.From,
-		To:            s.To,
-		SIPCallID:     s.SIPCallID,
-		RTPPort:       s.RTPPort,
-		VideoRTPPort:  s.VideoRTPPort,
-		AudioRTCPPort: s.AudioRTCPPort,
-		VideoRTCPPort: s.VideoRTCPPort,
-		SIPOpusPT:     s.SIPOpusPT,
-		CreatedAt:     s.CreatedAt,
-		UpdatedAt:     s.UpdatedAt,
+		ID:                 s.ID,
+		State:              s.State,
+		Direction:          s.Direction,
+		From:               s.From,
+		To:                 s.To,
+		SIPCallID:          s.SIPCallID,
+		RTPPort:            s.RTPPort,
+		VideoRTPPort:       s.VideoRTPPort,
+		AudioRTCPPort:      s.AudioRTCPPort,
+		VideoRTCPPort:      s.VideoRTCPPort,
+		SIPOpusPT:          s.SIPOpusPT,
+		CreatedAt:          s.CreatedAt,
+		UpdatedAt:          s.UpdatedAt,
+		TranslatorEnabled:  s.TranslatorEnabled,
+		TranslatorSrcLang:  s.TranslatorSrcLang,
+		TranslatorTgtLang:  s.TranslatorTgtLang,
+		TranslatorTTSVoice: s.TranslatorTTSVoice,
 	}
 }
 
@@ -911,4 +927,57 @@ func (s *Session) WaitForSPSPPS(timeout time.Duration) bool {
 			return false
 		}
 	}
+}
+
+// SetTranslator configures the S2S translation pipeline for this session (thread-safe).
+func (s *Session) SetTranslator(client *translator.Client, srcLang, tgtLang, ttsVoice string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.TranslatorClient = client
+	s.TranslatorSrcLang = srcLang
+	s.TranslatorTgtLang = tgtLang
+	s.TranslatorTTSVoice = ttsVoice
+}
+
+// EnableTranslator activates the S2S translation pipeline for this session (thread-safe).
+func (s *Session) EnableTranslator() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.TranslatorClient == nil || s.TranslatorEnabled {
+		return
+	}
+	codec, err := createOpusCodec(24000)
+	if err != nil {
+		fmt.Printf("[%s] Failed to create Opus codec for translator: %v\n", s.ID, err)
+		return
+	}
+	pipeline := translator.NewS2SPipeline(s.TranslatorClient, codec)
+	pipeline.Start()
+	s.Translator = pipeline
+	s.TranslatorEnabled = true
+	fmt.Printf("[%s] 🎤 Translation enabled: %s → %s (voice: %s)\n", s.ID, s.TranslatorSrcLang, s.TranslatorTgtLang, s.TranslatorTTSVoice)
+}
+
+// DisableTranslator deactivates the S2S translation pipeline (thread-safe).
+func (s *Session) DisableTranslator() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.Translator != nil {
+		s.Translator.Stop()
+		s.Translator = nil
+	}
+	s.TranslatorEnabled = false
+	fmt.Printf("[%s] 🎤 Translation disabled\n", s.ID)
+}
+
+// IsTranslatorEnabled returns whether translation is active (thread-safe).
+func (s *Session) IsTranslatorEnabled() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.TranslatorEnabled
+}
+
+// createOpusCodec creates a new OpusCodec, extracted for testability.
+var createOpusCodec = func(bitrate int) (translator.OpusCodec, error) {
+	return translator.NewOpusCodec(bitrate)
 }

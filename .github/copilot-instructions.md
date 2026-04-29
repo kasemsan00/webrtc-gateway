@@ -48,8 +48,8 @@ Run from repo root unless a task explicitly targets an app folder.
 - Frontend implementation details: `apps/frontend/AGENTS.md`
 - Frontend runtime/env behavior: `apps/frontend/README.md`
 - Gateway implementation details: `apps/gateway/AGENTS.md`
-- Gateway architecture and flows: `apps/gateway/docs/dual-flow.md`
-- Gateway reconnect behavior: `apps/gateway/docs/call-resume.md`
+- Gateway architecture and flows: `docs/dual-flow.md`
+- Gateway reconnect behavior: `docs/call-resume.md`
 
 ## Example prompts
 

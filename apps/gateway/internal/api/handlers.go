@@ -1995,3 +1995,70 @@ func (s *Server) handleUserTrunkHeartbeat(w http.ResponseWriter, r *http.Request
 		"updatedAt": time.Now().UTC().Format(time.RFC3339),
 	})
 }
+
+// handleWSTranslate enables S2S speech translation for a session.
+func (s *Server) handleWSTranslate(client *WSClient, msg WSMessage) {
+	if s.translatorClient == nil {
+		s.sendWSError(client, msg.SessionID, "Translator not available")
+		return
+	}
+
+	sessionID := msg.SessionID
+	if sessionID == "" {
+		sessionID = client.sessionID
+	}
+	if sessionID == "" {
+		s.sendWSError(client, "", "Session ID required")
+		return
+	}
+
+	sess, ok := s.sessionMgr.GetSession(sessionID)
+	if !ok {
+		s.sendWSError(client, sessionID, "Session not found")
+		return
+	}
+
+	srcLang := s.translatorCfg.SourceLang
+	tgtLang := s.translatorCfg.TargetLang
+	ttsVoice := s.translatorCfg.TTSVoice
+
+	sess.SetTranslator(s.translatorClient, srcLang, tgtLang, ttsVoice)
+	sess.EnableTranslator()
+
+	log.Printf("[%s] 🎤 Translation enabled via WS: %s → %s (voice: %s)",
+		sessionID, srcLang, tgtLang, ttsVoice)
+
+	s.sendWSMessage(client, WSMessage{
+		Type:      "translate",
+		SessionID: sessionID,
+		State:     "enabled",
+	})
+}
+
+// handleWSTranslateStop disables S2S speech translation for a session.
+func (s *Server) handleWSTranslateStop(client *WSClient, msg WSMessage) {
+	sessionID := msg.SessionID
+	if sessionID == "" {
+		sessionID = client.sessionID
+	}
+	if sessionID == "" {
+		s.sendWSError(client, "", "Session ID required")
+		return
+	}
+
+	sess, ok := s.sessionMgr.GetSession(sessionID)
+	if !ok {
+		s.sendWSError(client, sessionID, "Session not found")
+		return
+	}
+
+	sess.DisableTranslator()
+
+	log.Printf("[%s] 🎤 Translation disabled via WS", sessionID)
+
+	s.sendWSMessage(client, WSMessage{
+		Type:      "translate_stop",
+		SessionID: sessionID,
+		State:     "disabled",
+	})
+}
