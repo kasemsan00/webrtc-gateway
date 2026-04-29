@@ -96,6 +96,9 @@ const initialState: GatewayState = {
     state: 'idle',
     elapsedSeconds: 0,
     callCount: 0,
+    translatorEnabled: false,
+    translatorSrcLang: '',
+    translatorTgtLang: '',
   },
   mode: 'siptrunk',
   publicCredentials: {
@@ -1514,6 +1517,34 @@ function handleMessage(event: MessageEvent<string>) {
       }
       break
     }
+    case 'translate': {
+      const srcLang = message.sourceLang ? String(message.sourceLang) : ''
+      const tgtLang = message.targetLang ? String(message.targetLang) : ''
+      gatewayStore.setState((s) => ({
+        ...s,
+        call: {
+          ...s.call,
+          translatorEnabled: true,
+          translatorSrcLang: srcLang,
+          translatorTgtLang: tgtLang,
+        },
+      }))
+      appendLog(`Translation enabled${srcLang ? ` (${srcLang} → ${tgtLang})` : ''}`, 'success')
+      break
+    }
+    case 'translate_stop': {
+      gatewayStore.setState((s) => ({
+        ...s,
+        call: {
+          ...s.call,
+          translatorEnabled: false,
+          translatorSrcLang: '',
+          translatorTgtLang: '',
+        },
+      }))
+      appendLog('Translation disabled', 'info')
+      break
+    }
     default:
       break
   }
@@ -2107,6 +2138,35 @@ export async function sendSwitch() {
   }
 }
 
+export function toggleTranslator(sourceLang?: string, targetLang?: string, ttsVoice?: string) {
+  const state = gatewayStore.state
+  const sessionId = state.call.sessionId
+  if (!sessionId) {
+    appendLog('No active session for translation toggle', 'warning')
+    return
+  }
+  if (!runtime.ws) {
+    appendLog('WebSocket not connected', 'error')
+    return
+  }
+  if (state.call.translatorEnabled) {
+    sendJson(runtime.ws, { type: 'translate_stop', sessionId })
+    appendLog('Sending translate_stop...', 'info')
+  } else {
+    sendJson(runtime.ws, {
+      type: 'translate',
+      sessionId,
+      sourceLang: sourceLang ?? '',
+      targetLang: targetLang ?? '',
+      ttsVoice: ttsVoice ?? '',
+    })
+    appendLog(
+      `Sending translate... ${sourceLang ? `${sourceLang} → ${targetLang}` : ''}`,
+      'info',
+    )
+  }
+}
+
 export function acceptCall() {
   const incoming = gatewayStore.state.incomingCall
   if (!incoming?.sessionId) {
@@ -2685,6 +2745,7 @@ export const gatewayActions = {
   sendPing,
   sendDTMF,
   sendSwitch,
+  toggleTranslator,
   acceptCall,
   rejectCall,
   sendSIPMessage,

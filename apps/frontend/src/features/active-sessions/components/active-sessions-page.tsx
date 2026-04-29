@@ -4,6 +4,7 @@ import {
   RiPhoneLine,
   RiRefreshLine,
   RiSunLine,
+  RiTranslate2,
 } from '@remixicon/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ColumnDef } from '@tanstack/react-table'
@@ -140,6 +141,24 @@ export function ActiveSessionsPage() {
           {formatDuration(row.original.durationSec)}
         </span>
       ),
+    },
+    {
+      accessorKey: 'translatorEnabled',
+      header: 'Translator',
+      cell: ({ row }) => {
+        const enabled = row.original.translatorEnabled
+        if (!enabled) return <span className="text-xs text-muted-foreground">-</span>
+        return (
+          <Badge
+            variant="success"
+            className="flex w-fit items-center gap-1 text-[10px]"
+            title={`${row.original.translatorSrcLang ?? '?'} → ${row.original.translatorTgtLang ?? '?'}`}
+          >
+            <RiTranslate2 className="size-3" />
+            {row.original.translatorSrcLang ?? '?'}→{row.original.translatorTgtLang ?? '?'}
+          </Badge>
+        )
+      },
     },
   ]
 

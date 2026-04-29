@@ -153,6 +153,9 @@ export interface GatewayState {
     state: CallStatus
     elapsedSeconds: number
     callCount: number
+    translatorEnabled: boolean
+    translatorSrcLang: string
+    translatorTgtLang: string
   }
   mode: CallMode
   publicCredentials: PublicCredentials

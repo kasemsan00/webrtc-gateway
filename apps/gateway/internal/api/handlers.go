@@ -48,19 +48,23 @@ type CallResponse struct {
 
 // SessionResponse represents session information
 type SessionResponse struct {
-	ID          string `json:"id"`
-	State       string `json:"state"`
-	Direction   string `json:"direction,omitempty"`
-	From        string `json:"from,omitempty"`
-	To          string `json:"to,omitempty"`
-	SIPCallID   string `json:"sipCallId,omitempty"`
-	AuthMode    string `json:"authMode,omitempty"`
-	TrunkID     int64  `json:"trunkId,omitempty"`
-	TrunkName   string `json:"trunkName,omitempty"`
-	SIPUsername string `json:"sipUsername,omitempty"`
-	DurationSec int64  `json:"durationSec"`
-	CreatedAt   string `json:"createdAt"`
-	UpdatedAt   string `json:"updatedAt"`
+	ID                string `json:"id"`
+	State             string `json:"state"`
+	Direction         string `json:"direction,omitempty"`
+	From              string `json:"from,omitempty"`
+	To                string `json:"to,omitempty"`
+	SIPCallID         string `json:"sipCallId,omitempty"`
+	AuthMode          string `json:"authMode,omitempty"`
+	TrunkID           int64  `json:"trunkId,omitempty"`
+	TrunkName         string `json:"trunkName,omitempty"`
+	SIPUsername       string `json:"sipUsername,omitempty"`
+	DurationSec       int64  `json:"durationSec"`
+	CreatedAt         string `json:"createdAt"`
+	UpdatedAt         string `json:"updatedAt"`
+	TranslatorEnabled bool   `json:"translatorEnabled,omitempty"`
+	TranslatorSrcLang string `json:"translatorSrcLang,omitempty"`
+	TranslatorTgtLang string `json:"translatorTgtLang,omitempty"`
+	TranslatorTTSVoice string `json:"translatorTtsVoice,omitempty"`
 }
 
 // PublicAccountResponse represents a public SIP account for REST responses
@@ -620,11 +624,10 @@ func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	for i, sess := range sessions {
 		direction, from, to, sipCallID := sess.GetCallInfo()
 		authMode, _, trunkID, _, sipUsername, _, _ := sess.GetSIPAuthContext()
+		snap := sess.Snapshot()
 
-		// Calculate duration
 		durationSec := int64(time.Since(sess.CreatedAt).Seconds())
 
-		// Get trunk name if trunk mode
 		var trunkName string
 		if authMode == "trunk" && trunkID > 0 && s.trunkManager != nil {
 			if trunk, err := s.trunkManager.GetTrunkByIDFromDB(r.Context(), trunkID); err == nil {
@@ -633,19 +636,23 @@ func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 		}
 
 		response[i] = SessionResponse{
-			ID:          sess.ID,
-			State:       string(sess.GetState()),
-			Direction:   direction,
-			From:        from,
-			To:          to,
-			SIPCallID:   sipCallID,
-			AuthMode:    authMode,
-			TrunkID:     trunkID,
-			TrunkName:   trunkName,
-			SIPUsername: sipUsername,
-			DurationSec: durationSec,
-			CreatedAt:   sess.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
-			UpdatedAt:   sess.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+			ID:                 sess.ID,
+			State:              string(sess.GetState()),
+			Direction:          direction,
+			From:               from,
+			To:                 to,
+			SIPCallID:          sipCallID,
+			AuthMode:           authMode,
+			TrunkID:            trunkID,
+			TrunkName:          trunkName,
+			SIPUsername:        sipUsername,
+			DurationSec:        durationSec,
+			CreatedAt:          sess.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+			UpdatedAt:          sess.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+			TranslatorEnabled:  snap.TranslatorEnabled,
+			TranslatorSrcLang:  snap.TranslatorSrcLang,
+			TranslatorTgtLang:  snap.TranslatorTgtLang,
+			TranslatorTTSVoice: snap.TranslatorTTSVoice,
 		}
 	}
 
@@ -670,11 +677,10 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 
 	direction, from, to, sipCallID := sess.GetCallInfo()
 	authMode, _, trunkID, _, sipUsername, _, _ := sess.GetSIPAuthContext()
+	snap := sess.Snapshot()
 
-	// Calculate duration
 	durationSec := int64(time.Since(sess.CreatedAt).Seconds())
 
-	// Get trunk name if trunk mode
 	var trunkName string
 	if authMode == "trunk" && trunkID > 0 && s.trunkManager != nil {
 		if trunk, err := s.trunkManager.GetTrunkByIDFromDB(r.Context(), trunkID); err == nil {
@@ -683,19 +689,23 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response := SessionResponse{
-		ID:          sess.ID,
-		State:       string(sess.GetState()),
-		Direction:   direction,
-		From:        from,
-		To:          to,
-		SIPCallID:   sipCallID,
-		AuthMode:    authMode,
-		TrunkID:     trunkID,
-		TrunkName:   trunkName,
-		SIPUsername: sipUsername,
-		DurationSec: durationSec,
-		CreatedAt:   sess.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
-		UpdatedAt:   sess.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		ID:                 sess.ID,
+		State:              string(sess.GetState()),
+		Direction:          direction,
+		From:               from,
+		To:                 to,
+		SIPCallID:          sipCallID,
+		AuthMode:           authMode,
+		TrunkID:            trunkID,
+		TrunkName:          trunkName,
+		SIPUsername:        sipUsername,
+		DurationSec:        durationSec,
+		CreatedAt:          sess.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		UpdatedAt:          sess.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		TranslatorEnabled:  snap.TranslatorEnabled,
+		TranslatorSrcLang:  snap.TranslatorSrcLang,
+		TranslatorTgtLang:  snap.TranslatorTgtLang,
+		TranslatorTTSVoice: snap.TranslatorTTSVoice,
 	}
 
 	s.respondJSON(w, http.StatusOK, response)
@@ -2018,9 +2028,18 @@ func (s *Server) handleWSTranslate(client *WSClient, msg WSMessage) {
 		return
 	}
 
-	srcLang := s.translatorCfg.SourceLang
-	tgtLang := s.translatorCfg.TargetLang
-	ttsVoice := s.translatorCfg.TTSVoice
+	srcLang := msg.SourceLang
+	if srcLang == "" {
+		srcLang = s.translatorCfg.SourceLang
+	}
+	tgtLang := msg.TargetLang
+	if tgtLang == "" {
+		tgtLang = s.translatorCfg.TargetLang
+	}
+	ttsVoice := msg.TTSVoice
+	if ttsVoice == "" {
+		ttsVoice = s.translatorCfg.TTSVoice
+	}
 
 	sess.SetTranslator(s.translatorClient, srcLang, tgtLang, ttsVoice)
 	sess.EnableTranslator()
@@ -2029,9 +2048,12 @@ func (s *Server) handleWSTranslate(client *WSClient, msg WSMessage) {
 		sessionID, srcLang, tgtLang, ttsVoice)
 
 	s.sendWSMessage(client, WSMessage{
-		Type:      "translate",
-		SessionID: sessionID,
-		State:     "enabled",
+		Type:       "translate",
+		SessionID:  sessionID,
+		State:      "enabled",
+		SourceLang: srcLang,
+		TargetLang: tgtLang,
+		TTSVoice:   ttsVoice,
 	})
 }
 

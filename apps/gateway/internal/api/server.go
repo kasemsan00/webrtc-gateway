@@ -154,6 +154,10 @@ type WSMessage struct {
 	// For SIP Trunk mode outbound call: include trunkId or trunkPublicId
 	TrunkID       int64  `json:"trunkId,omitempty"`       // Use trunk from DB (0 = not specified)
 	TrunkPublicID string `json:"trunkPublicId,omitempty"` // Stable public trunk reference
+	// S2S Translation fields
+	SourceLang string `json:"sourceLang,omitempty"`
+	TargetLang string `json:"targetLang,omitempty"`
+	TTSVoice   string `json:"ttsVoice,omitempty"`
 	// Session resume redirect
 	RedirectURL string `json:"redirectUrl,omitempty"` // Server response: resume_redirect with new WS URL
 }

@@ -12,6 +12,7 @@ import {
   RiShutDownLine,
   RiSignalWifiLine,
   RiSunLine,
+  RiTranslate,
   RiVideoOffLine,
   RiVideoOnLine,
 } from '@remixicon/react'
@@ -20,6 +21,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import Header from '@/components/Header'
 import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
@@ -159,6 +167,10 @@ export function GatewayConsolePage() {
   const state = useStore(gatewayStore, (storeState) => storeState)
   const { theme, toggleTheme } = useTheme()
   const [messageBody, setMessageBody] = useState('')
+  const [translatorOpen, setTranslatorOpen] = useState(false)
+  const [translatorSrcLang, setTranslatorSrcLang] = useState('en')
+  const [translatorTgtLang, setTranslatorTgtLang] = useState('th')
+  const [translatorVoice, setTranslatorVoice] = useState('th-TH-Sarawut')
   const [isSendingSwitch, setIsSendingSwitch] = useState(false)
   const [trunkOptions, setTrunkOptions] = useState<Array<{
     value: string
@@ -943,6 +955,7 @@ export function GatewayConsolePage() {
           )}
 
           {/* Floating controls */}
+          {inCall ? (
           <div className="absolute bottom-3 left-1/2 flex -translate-x-1/2 flex-col items-center gap-1.5">
             <div className="flex items-center gap-1.5 rounded-full px-3 py-1.5 backdrop-blur">
               <Button
@@ -1005,6 +1018,20 @@ export function GatewayConsolePage() {
               >
                 <RiSignalWifiLine className="size-5" />
               </Button>
+              <Button
+                size="icon"
+                className="size-12"
+                variant={
+                  state.call.translatorEnabled ? 'default' : 'outline'
+                }
+                onClick={() => {
+                  setTranslatorOpen(true)
+                }}
+                aria-label="Translation settings"
+                aria-pressed={state.call.translatorEnabled}
+              >
+                <RiTranslate className="size-5" />
+              </Button>
             </div>
             {state.media.status === 'active' ? (
               <div className="flex items-center gap-1.5 rounded-full bg-black/50 px-2 py-1 backdrop-blur">
@@ -1057,6 +1084,7 @@ export function GatewayConsolePage() {
               </div>
             ) : null}
           </div>
+          ) : null}
 
           <Button
             size="icon"
@@ -1287,6 +1315,104 @@ export function GatewayConsolePage() {
           </Card>
         </div>
       ) : null}
+
+      {/* Translator Settings Dialog */}
+      <Dialog open={translatorOpen} onOpenChange={setTranslatorOpen}>
+        <DialogContent className="sm:max-w-xs">
+          <DialogHeader>
+            <DialogTitle>Translation Settings</DialogTitle>
+            <DialogDescription>
+              Configure speech translation for this call.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-4">
+            {state.call.translatorEnabled ? (
+              <Button
+                variant="destructive"
+                className="w-full"
+                onClick={() => {
+                  setTranslatorOpen(false)
+                  gatewayActions.toggleTranslator()
+                }}
+              >
+                <RiTranslate className="mr-2 size-4" />
+                Stop Translation
+              </Button>
+            ) : (
+              <>
+                <div className="flex items-center gap-2">
+                  <Select
+                    value={translatorSrcLang}
+                    onValueChange={setTranslatorSrcLang}
+                  >
+                    <SelectTrigger className="h-9">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="en">English</SelectItem>
+                      <SelectItem value="th">Thai</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <span className="text-xs text-muted-foreground">→</span>
+                  <Select
+                    value={translatorTgtLang}
+                    onValueChange={setTranslatorTgtLang}
+                  >
+                    <SelectTrigger className="h-9">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="th">Thai</SelectItem>
+                      <SelectItem value="en">English</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <span className="text-xs font-medium text-muted-foreground">
+                    TTS Voice
+                  </span>
+                  <Select
+                    value={translatorVoice}
+                    onValueChange={setTranslatorVoice}
+                  >
+                    <SelectTrigger className="h-9">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="th-TH-Sarawut">
+                        Thai — Sarawut (male)
+                      </SelectItem>
+                      <SelectItem value="th-TH-Premwadea">
+                        Thai — Premwadea (female)
+                      </SelectItem>
+                      <SelectItem value="en-US-AriaNeural">
+                        English — Aria (female)
+                      </SelectItem>
+                      <SelectItem value="en-US-GuyNeural">
+                        English — Guy (male)
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <Button
+                  className="w-full"
+                  onClick={() => {
+                    setTranslatorOpen(false)
+                    gatewayActions.toggleTranslator(
+                      translatorSrcLang,
+                      translatorTgtLang,
+                      translatorVoice,
+                    )
+                  }}
+                >
+                  <RiTranslate className="mr-2 size-4" />
+                  Start Translation
+                </Button>
+              </>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

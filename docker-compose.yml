@@ -1,6 +1,12 @@
 version: "3.8"
 
 services:
+  frontend:
+    image: registry.kasemsan.com/k2-frontend:1.1.2
+    restart: unless-stopped
+    env_file:
+      - .env
+    network_mode: host
   webrtc-gateway:
     image: registry.kasemsan.com/k2-gateway:1.1.2
     restart: unless-stopped

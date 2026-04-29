@@ -103,6 +103,9 @@ function createState(overrides?: Partial<GatewayState>): GatewayState {
       state: 'idle',
       elapsedSeconds: 0,
       callCount: 0,
+      translatorEnabled: false,
+      translatorSrcLang: '',
+      translatorTgtLang: '',
     },
     mode: 'siptrunk',
     publicCredentials: {

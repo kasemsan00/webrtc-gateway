@@ -12,6 +12,10 @@ export interface ActiveSession {
   durationSec: number
   createdAt: string
   updatedAt: string
+  translatorEnabled: boolean
+  translatorSrcLang?: string
+  translatorTgtLang?: string
+  translatorTtsVoice?: string
 }
 
 export interface ActiveSessionsListResponse {
