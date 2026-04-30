@@ -256,3 +256,49 @@ type SessionDirectoryListResult struct {
 	Page     int                       `json:"page"`
 	PageSize int                       `json:"pageSize"`
 }
+
+// DashboardSummaryParams defines query parameters for dashboard aggregations.
+type DashboardSummaryParams struct {
+	Period        string
+	RangeStartUTC time.Time
+	RangeEndUTC   time.Time
+	Timezone      string
+	TopTrunks     int
+}
+
+// DashboardSeriesPoint represents one time bucket for session totals.
+type DashboardSeriesPoint struct {
+	Bucket string `json:"bucket"`
+	Count  int    `json:"count"`
+}
+
+// DashboardStateCount represents one final-state count bucket.
+type DashboardStateCount struct {
+	State string `json:"state"`
+	Count int    `json:"count"`
+}
+
+// DashboardTrunkCount represents one trunk volume bucket.
+type DashboardTrunkCount struct {
+	TrunkKey  string `json:"trunkKey"`
+	TrunkName string `json:"trunkName"`
+	Count     int    `json:"count"`
+}
+
+// DashboardDirectionCount represents inbound/outbound counts.
+type DashboardDirectionCount struct {
+	Direction string `json:"direction"`
+	Count     int    `json:"count"`
+}
+
+// DashboardSummaryResult contains aggregate metrics for dashboard charts.
+type DashboardSummaryResult struct {
+	TotalSessions         int                       `json:"totalSessions"`
+	SessionDirectoryCount int                       `json:"sessionDirectoryCount"`
+	AvgDurationSec        float64                   `json:"avgDurationSec"`
+	MaxDurationSec        int                       `json:"maxDurationSec"`
+	Series                []DashboardSeriesPoint    `json:"series"`
+	States                []DashboardStateCount     `json:"states"`
+	Directions            []DashboardDirectionCount `json:"directions"`
+	TopTrunks             []DashboardTrunkCount     `json:"topTrunks"`
+}

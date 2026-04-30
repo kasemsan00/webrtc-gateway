@@ -14,6 +14,7 @@ import { Route as SessionsRouteImport } from './routes/sessions'
 import { Route as SessionDirectoryRouteImport } from './routes/session-directory'
 import { Route as PublicAccountsRouteImport } from './routes/public-accounts'
 import { Route as InstancesRouteImport } from './routes/instances'
+import { Route as DashboardRouteImport } from './routes/dashboard'
 import { Route as ActiveSessionsRouteImport } from './routes/active-sessions'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as SessionsIndexRouteImport } from './routes/sessions.index'
@@ -44,6 +45,11 @@ const InstancesRoute = InstancesRouteImport.update({
   path: '/instances',
   getParentRoute: () => rootRouteImport,
 } as any)
+const DashboardRoute = DashboardRouteImport.update({
+  id: '/dashboard',
+  path: '/dashboard',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ActiveSessionsRoute = ActiveSessionsRouteImport.update({
   id: '/active-sessions',
   path: '/active-sessions',
@@ -68,6 +74,7 @@ const SessionsSessionIdRoute = SessionsSessionIdRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/active-sessions': typeof ActiveSessionsRoute
+  '/dashboard': typeof DashboardRoute
   '/instances': typeof InstancesRoute
   '/public-accounts': typeof PublicAccountsRoute
   '/session-directory': typeof SessionDirectoryRoute
@@ -79,6 +86,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/active-sessions': typeof ActiveSessionsRoute
+  '/dashboard': typeof DashboardRoute
   '/instances': typeof InstancesRoute
   '/public-accounts': typeof PublicAccountsRoute
   '/session-directory': typeof SessionDirectoryRoute
@@ -90,6 +98,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/active-sessions': typeof ActiveSessionsRoute
+  '/dashboard': typeof DashboardRoute
   '/instances': typeof InstancesRoute
   '/public-accounts': typeof PublicAccountsRoute
   '/session-directory': typeof SessionDirectoryRoute
@@ -103,6 +112,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/active-sessions'
+    | '/dashboard'
     | '/instances'
     | '/public-accounts'
     | '/session-directory'
@@ -114,6 +124,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/active-sessions'
+    | '/dashboard'
     | '/instances'
     | '/public-accounts'
     | '/session-directory'
@@ -124,6 +135,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/active-sessions'
+    | '/dashboard'
     | '/instances'
     | '/public-accounts'
     | '/session-directory'
@@ -136,6 +148,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ActiveSessionsRoute: typeof ActiveSessionsRoute
+  DashboardRoute: typeof DashboardRoute
   InstancesRoute: typeof InstancesRoute
   PublicAccountsRoute: typeof PublicAccountsRoute
   SessionDirectoryRoute: typeof SessionDirectoryRoute
@@ -178,6 +191,13 @@ declare module '@tanstack/react-router' {
       path: '/instances'
       fullPath: '/instances'
       preLoaderRoute: typeof InstancesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/dashboard': {
+      id: '/dashboard'
+      path: '/dashboard'
+      fullPath: '/dashboard'
+      preLoaderRoute: typeof DashboardRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/active-sessions': {
@@ -228,6 +248,7 @@ const SessionsRouteWithChildren = SessionsRoute._addFileChildren(
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ActiveSessionsRoute: ActiveSessionsRoute,
+  DashboardRoute: DashboardRoute,
   InstancesRoute: InstancesRoute,
   PublicAccountsRoute: PublicAccountsRoute,
   SessionDirectoryRoute: SessionDirectoryRoute,

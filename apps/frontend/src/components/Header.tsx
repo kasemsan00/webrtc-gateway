@@ -4,6 +4,7 @@ import { toast } from 'sonner'
 
 import {
   RiAccountCircleLine,
+  RiBarChartGroupedLine,
   RiCloseLine,
   RiComputerLine,
   RiHistoryLine,
@@ -166,6 +167,18 @@ export default function Header({ children }: { children?: React.ReactNode }) {
                 >
                   <RiPhoneLine size={16} />
                   <span className="font-medium">Gateway Console</span>
+                </Link>
+                <Link
+                  to="/dashboard"
+                  onClick={close}
+                  className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors hover:bg-muted"
+                  activeProps={{
+                    className:
+                      'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm bg-cyan-600/10 text-cyan-700 dark:bg-cyan-600/20 dark:text-cyan-300 hover:bg-cyan-600/20 dark:hover:bg-cyan-600/30 transition-colors',
+                  }}
+                >
+                  <RiBarChartGroupedLine size={16} />
+                  <span className="font-medium">Dashboard</span>
                 </Link>
                 <Link
                   to="/trunks"

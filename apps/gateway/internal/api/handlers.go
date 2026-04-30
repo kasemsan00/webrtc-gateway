@@ -48,22 +48,22 @@ type CallResponse struct {
 
 // SessionResponse represents session information
 type SessionResponse struct {
-	ID                string `json:"id"`
-	State             string `json:"state"`
-	Direction         string `json:"direction,omitempty"`
-	From              string `json:"from,omitempty"`
-	To                string `json:"to,omitempty"`
-	SIPCallID         string `json:"sipCallId,omitempty"`
-	AuthMode          string `json:"authMode,omitempty"`
-	TrunkID           int64  `json:"trunkId,omitempty"`
-	TrunkName         string `json:"trunkName,omitempty"`
-	SIPUsername       string `json:"sipUsername,omitempty"`
-	DurationSec       int64  `json:"durationSec"`
-	CreatedAt         string `json:"createdAt"`
-	UpdatedAt         string `json:"updatedAt"`
-	TranslatorEnabled bool   `json:"translatorEnabled,omitempty"`
-	TranslatorSrcLang string `json:"translatorSrcLang,omitempty"`
-	TranslatorTgtLang string `json:"translatorTgtLang,omitempty"`
+	ID                 string `json:"id"`
+	State              string `json:"state"`
+	Direction          string `json:"direction,omitempty"`
+	From               string `json:"from,omitempty"`
+	To                 string `json:"to,omitempty"`
+	SIPCallID          string `json:"sipCallId,omitempty"`
+	AuthMode           string `json:"authMode,omitempty"`
+	TrunkID            int64  `json:"trunkId,omitempty"`
+	TrunkName          string `json:"trunkName,omitempty"`
+	SIPUsername        string `json:"sipUsername,omitempty"`
+	DurationSec        int64  `json:"durationSec"`
+	CreatedAt          string `json:"createdAt"`
+	UpdatedAt          string `json:"updatedAt"`
+	TranslatorEnabled  bool   `json:"translatorEnabled,omitempty"`
+	TranslatorSrcLang  string `json:"translatorSrcLang,omitempty"`
+	TranslatorTgtLang  string `json:"translatorTgtLang,omitempty"`
 	TranslatorTTSVoice string `json:"translatorTtsVoice,omitempty"`
 }
 
@@ -91,6 +91,53 @@ type DashboardResponse struct {
 	PublicAccounts   int    `json:"publicAccounts"`
 	WSClients        int    `json:"wsClients"`
 	DBConnected      bool   `json:"dbConnected"`
+}
+
+type DashboardSummaryMetricsResponse struct {
+	PeriodSessions      int     `json:"periodSessions"`
+	ActiveSessions      int     `json:"activeSessions"`
+	TotalTrunks         int     `json:"totalTrunks"`
+	EnabledTrunks       int     `json:"enabledTrunks"`
+	RegisteredTrunks    int     `json:"registeredTrunks"`
+	PublicAccounts      int     `json:"publicAccounts"`
+	SessionDirectoryNow int     `json:"sessionDirectoryNow"`
+	WSClients           int     `json:"wsClients"`
+	AvgDurationSec      float64 `json:"avgDurationSec"`
+	MaxDurationSec      int     `json:"maxDurationSec"`
+}
+
+type DashboardSummarySeriesPointResponse struct {
+	Bucket string `json:"bucket"`
+	Count  int    `json:"count"`
+}
+
+type DashboardSummaryStateResponse struct {
+	State string `json:"state"`
+	Count int    `json:"count"`
+}
+
+type DashboardSummaryTrunkResponse struct {
+	TrunkKey  string `json:"trunkKey"`
+	TrunkName string `json:"trunkName"`
+	Count     int    `json:"count"`
+}
+
+type DashboardSummaryDirectionResponse struct {
+	Direction string `json:"direction"`
+	Count     int    `json:"count"`
+}
+
+type DashboardSummaryResponse struct {
+	Period     string                                `json:"period"`
+	AnchorDate string                                `json:"anchorDate"`
+	Timezone   string                                `json:"timezone"`
+	RangeStart string                                `json:"rangeStart"`
+	RangeEnd   string                                `json:"rangeEnd"`
+	Metrics    DashboardSummaryMetricsResponse       `json:"metrics"`
+	Series     []DashboardSummarySeriesPointResponse `json:"series"`
+	States     []DashboardSummaryStateResponse       `json:"states"`
+	Directions []DashboardSummaryDirectionResponse   `json:"directions"`
+	TopTrunks  []DashboardSummaryTrunkResponse       `json:"topTrunks"`
 }
 
 // WSClientResponse represents a connected WebSocket client
@@ -1945,6 +1992,170 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.respondJSON(w, http.StatusOK, response)
+}
+
+func dashboardSummaryLocation() *time.Location {
+	location, err := time.LoadLocation("Asia/Bangkok")
+	if err == nil {
+		return location
+	}
+
+	// Fallback when tzdata is unavailable in runtime images.
+	return time.FixedZone("Asia/Bangkok", 7*60*60)
+}
+
+func parseDashboardSummaryRange(period, anchorDate string) (time.Time, time.Time, string, error) {
+	location := dashboardSummaryLocation()
+
+	nowInLocation := time.Now().In(location)
+	if anchorDate == "" {
+		anchorDate = nowInLocation.Format("2006-01-02")
+	}
+
+	anchor, err := time.ParseInLocation("2006-01-02", anchorDate, location)
+	if err != nil {
+		return time.Time{}, time.Time{}, "", fmt.Errorf("anchorDate must be YYYY-MM-DD")
+	}
+
+	anchor = time.Date(anchor.Year(), anchor.Month(), anchor.Day(), 0, 0, 0, 0, location)
+
+	var startLocal time.Time
+	var endLocal time.Time
+
+	switch period {
+	case "day":
+		startLocal = anchor
+		endLocal = startLocal.AddDate(0, 0, 1)
+	case "month":
+		startLocal = time.Date(anchor.Year(), anchor.Month(), 1, 0, 0, 0, 0, location)
+		endLocal = startLocal.AddDate(0, 1, 0)
+	case "year":
+		startLocal = time.Date(anchor.Year(), time.January, 1, 0, 0, 0, 0, location)
+		endLocal = startLocal.AddDate(1, 0, 0)
+	default:
+		return time.Time{}, time.Time{}, "", fmt.Errorf("period must be day, month, or year")
+	}
+
+	return startLocal.UTC(), endLocal.UTC(), anchor.Format("2006-01-02"), nil
+}
+
+// handleDashboardSummary returns aggregate dashboard data for a selected period.
+func (s *Server) handleDashboardSummary(w http.ResponseWriter, r *http.Request) {
+	if s.logStore == nil {
+		s.respondError(w, http.StatusServiceUnavailable, "Database logging not available")
+		return
+	}
+
+	query := r.URL.Query()
+	period := strings.ToLower(strings.TrimSpace(query.Get("period")))
+	if period == "" {
+		period = "day"
+	}
+
+	rangeStartUTC, rangeEndUTC, normalizedAnchor, err := parseDashboardSummaryRange(period, strings.TrimSpace(query.Get("anchorDate")))
+	if err != nil {
+		s.respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	summary, err := s.logStore.GetDashboardSummary(r.Context(), logstore.DashboardSummaryParams{
+		Period:        period,
+		RangeStartUTC: rangeStartUTC,
+		RangeEndUTC:   rangeEndUTC,
+		Timezone:      "Asia/Bangkok",
+		TopTrunks:     10,
+	})
+	if err != nil {
+		s.respondError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to load dashboard summary: %v", err))
+		return
+	}
+
+	activeSessions := 0
+	if s.sessionMgr != nil {
+		activeSessions = len(s.sessionMgr.ListSessions())
+	}
+
+	totalTrunks := 0
+	enabledTrunks := 0
+	registeredTrunks := 0
+	if s.trunkManager != nil {
+		trunks := s.trunkManager.ListOwnedTrunks()
+		totalTrunks = len(trunks)
+		for _, trunk := range trunks {
+			if trunk.Enabled {
+				enabledTrunks++
+			}
+			if trunk.LastRegisteredAt != nil {
+				registeredTrunks++
+			}
+		}
+	}
+
+	publicAccounts := 0
+	if s.publicRegistry != nil {
+		publicAccounts = len(s.publicRegistry.ListAccounts())
+	}
+
+	s.mu.RLock()
+	wsClients := len(s.wsClients)
+	s.mu.RUnlock()
+
+	series := make([]DashboardSummarySeriesPointResponse, 0, len(summary.Series))
+	for _, point := range summary.Series {
+		series = append(series, DashboardSummarySeriesPointResponse{
+			Bucket: point.Bucket,
+			Count:  point.Count,
+		})
+	}
+
+	states := make([]DashboardSummaryStateResponse, 0, len(summary.States))
+	for _, state := range summary.States {
+		states = append(states, DashboardSummaryStateResponse{
+			State: state.State,
+			Count: state.Count,
+		})
+	}
+
+	topTrunks := make([]DashboardSummaryTrunkResponse, 0, len(summary.TopTrunks))
+	for _, trunk := range summary.TopTrunks {
+		topTrunks = append(topTrunks, DashboardSummaryTrunkResponse{
+			TrunkKey:  trunk.TrunkKey,
+			TrunkName: trunk.TrunkName,
+			Count:     trunk.Count,
+		})
+	}
+
+	directions := make([]DashboardSummaryDirectionResponse, 0, len(summary.Directions))
+	for _, dir := range summary.Directions {
+		directions = append(directions, DashboardSummaryDirectionResponse{
+			Direction: dir.Direction,
+			Count:     dir.Count,
+		})
+	}
+
+	s.respondJSON(w, http.StatusOK, DashboardSummaryResponse{
+		Period:     period,
+		AnchorDate: normalizedAnchor,
+		Timezone:   "Asia/Bangkok",
+		RangeStart: rangeStartUTC.Format(time.RFC3339),
+		RangeEnd:   rangeEndUTC.Format(time.RFC3339),
+		Metrics: DashboardSummaryMetricsResponse{
+			PeriodSessions:      summary.TotalSessions,
+			ActiveSessions:      activeSessions,
+			TotalTrunks:         totalTrunks,
+			EnabledTrunks:       enabledTrunks,
+			RegisteredTrunks:    registeredTrunks,
+			PublicAccounts:      publicAccounts,
+			SessionDirectoryNow: summary.SessionDirectoryCount,
+			WSClients:           wsClients,
+			AvgDurationSec:      summary.AvgDurationSec,
+			MaxDurationSec:      summary.MaxDurationSec,
+		},
+		Series:     series,
+		States:     states,
+		Directions: directions,
+		TopTrunks:  topTrunks,
+	})
 }
 
 // respondJSON sends a JSON response

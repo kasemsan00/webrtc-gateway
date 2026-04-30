@@ -222,15 +222,15 @@ func analyzeResumeOfferVideoSDP(sdp string) resumeVideoOfferDiagnostics {
 // NewServer creates a new API server
 func NewServer(cfg config.APIConfig, turnCfg config.TURNConfig, gatewayCfg config.GatewayConfig, translatorCfg config.TranslatorConfig, sessionMgr *session.Manager, sipMaker SIPCallMaker, publicRegistry PublicAccountRegistry, trunkMgr TrunkManager, logStore logstore.LogStore) *Server {
 	return &Server{
-		sessionMgr:      sessionMgr,
-		sipMaker:        sipMaker,
-		publicRegistry:  publicRegistry,
-		trunkManager:    trunkMgr,
-		logStore:        logStore,
-		config:          cfg,
-		turnConfig:      turnCfg,
-		gatewayConfig:   gatewayCfg,
-		translatorCfg:   translatorCfg,
+		sessionMgr:     sessionMgr,
+		sipMaker:       sipMaker,
+		publicRegistry: publicRegistry,
+		trunkManager:   trunkMgr,
+		logStore:       logStore,
+		config:         cfg,
+		turnConfig:     turnCfg,
+		gatewayConfig:  gatewayCfg,
+		translatorCfg:  translatorCfg,
 		upgrader: websocket.Upgrader{
 			ReadBufferSize:  1024,
 			WriteBufferSize: 1024,
@@ -305,6 +305,7 @@ func (s *Server) Start(ctx context.Context) error {
 		api.HandleFunc("/public-accounts", s.handleListPublicAccounts).Methods("GET", "OPTIONS")
 		api.HandleFunc("/ws-clients", s.handleListWSClients).Methods("GET", "OPTIONS")
 		api.HandleFunc("/dashboard", s.handleDashboard).Methods("GET", "OPTIONS")
+		api.HandleFunc("/dashboard/summary", s.handleDashboardSummary).Methods("GET", "OPTIONS")
 		api.HandleFunc("/trunks", s.handleListTrunks).Methods("GET", "OPTIONS")
 		api.HandleFunc("/trunks/stream", s.handleTrunkStream).Methods("GET", "OPTIONS")
 		api.HandleFunc("/trunks", s.handleCreateTrunk).Methods("POST", "OPTIONS")

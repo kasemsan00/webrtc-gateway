@@ -159,6 +159,22 @@ type apiHandlerSIPMakerStub struct {
 	lastSwitchCallerURI   string
 }
 
+type apiHandlerPublicRegistryStub struct {
+	accounts []*sip.PublicAccount
+}
+
+func (s *apiHandlerPublicRegistryStub) AcquireAndRegister(_ context.Context, _, _, _ string, _ int) (string, error) {
+	return "", nil
+}
+
+func (s *apiHandlerPublicRegistryStub) IncrementRefCount(_ string) {}
+
+func (s *apiHandlerPublicRegistryStub) DecrementRefCount(_ string) {}
+
+func (s *apiHandlerPublicRegistryStub) ListAccounts() []*sip.PublicAccount {
+	return s.accounts
+}
+
 func (s *apiHandlerSIPMakerStub) MakeCall(_ string, _ string, sess *session.Session) error {
 	s.makeCallCount++
 	if sess != nil {
@@ -211,6 +227,9 @@ type apiHandlerLogStoreStub struct {
 	statsListResult   *logstore.StatsListResult
 	statsListErr      error
 	statsListParams   logstore.StatsListParams
+	dashboardResult   *logstore.DashboardSummaryResult
+	dashboardErr      error
+	dashboardParams   logstore.DashboardSummaryParams
 }
 
 func (s *apiHandlerLogStoreStub) ListSessions(_ context.Context, params logstore.SessionListParams) (*logstore.SessionListResult, error) {
@@ -241,6 +260,11 @@ func (s *apiHandlerLogStoreStub) ListDialogs(_ context.Context, params logstore.
 func (s *apiHandlerLogStoreStub) ListStats(_ context.Context, params logstore.StatsListParams) (*logstore.StatsListResult, error) {
 	s.statsListParams = params
 	return s.statsListResult, s.statsListErr
+}
+
+func (s *apiHandlerLogStoreStub) GetDashboardSummary(_ context.Context, params logstore.DashboardSummaryParams) (*logstore.DashboardSummaryResult, error) {
+	s.dashboardParams = params
+	return s.dashboardResult, s.dashboardErr
 }
 
 func newAPIHandlerTestServer(t *testing.T, trunkMgr TrunkManager, sipMaker SIPCallMaker, store logstore.LogStore) (*Server, *session.Manager) {
@@ -1023,4 +1047,136 @@ func TestHandleUserTrunkHeartbeat(t *testing.T) {
 	rr3 := httptest.NewRecorder()
 	handler.ServeHTTP(rr3, req3)
 	assertJSONError(t, rr3, http.StatusBadRequest, "Token missing preferred_username")
+}
+
+func TestParseDashboardSummaryRange(t *testing.T) {
+	location := time.FixedZone("Asia/Bangkok", 7*60*60)
+
+	startUTC, endUTC, anchor, err := parseDashboardSummaryRange("month", "2026-04-30")
+	if err != nil {
+		t.Fatalf("parse range failed: %v", err)
+	}
+
+	if anchor != "2026-04-30" {
+		t.Fatalf("expected anchor 2026-04-30, got %s", anchor)
+	}
+
+	expectedStartUTC := time.Date(2026, time.April, 1, 0, 0, 0, 0, location).UTC()
+	expectedEndUTC := time.Date(2026, time.May, 1, 0, 0, 0, 0, location).UTC()
+
+	if !startUTC.Equal(expectedStartUTC) {
+		t.Fatalf("unexpected start utc: got %s want %s", startUTC, expectedStartUTC)
+	}
+	if !endUTC.Equal(expectedEndUTC) {
+		t.Fatalf("unexpected end utc: got %s want %s", endUTC, expectedEndUTC)
+	}
+
+	_, _, _, err = parseDashboardSummaryRange("quarter", "2026-04-30")
+	if err == nil {
+		t.Fatalf("expected invalid period error")
+	}
+}
+
+func TestHandleDashboardSummary(t *testing.T) {
+	now := time.Now().UTC()
+	registeredAt := now
+	tm := &apiHandlerTrunkManagerStub{
+		byID: map[int64]*sip.Trunk{
+			1: {
+				ID:               1,
+				PublicID:         "11111111-1111-4111-8111-111111111111",
+				Name:             "Main trunk",
+				Domain:           "sip.example.com",
+				Port:             5060,
+				Username:         "1001",
+				Enabled:          true,
+				LastRegisteredAt: &registeredAt,
+				CreatedAt:        now,
+				UpdatedAt:        now,
+			},
+		},
+	}
+	store := &apiHandlerLogStoreStub{
+		dashboardResult: &logstore.DashboardSummaryResult{
+			TotalSessions:         42,
+			SessionDirectoryCount: 7,
+			Series: []logstore.DashboardSeriesPoint{
+				{Bucket: "2026-04-01", Count: 12},
+				{Bucket: "2026-04-02", Count: 30},
+			},
+			States: []logstore.DashboardStateCount{
+				{State: "ended", Count: 39},
+				{State: "failed", Count: 3},
+			},
+			TopTrunks: []logstore.DashboardTrunkCount{
+				{TrunkKey: "1", TrunkName: "Main trunk", Count: 28},
+			},
+		},
+	}
+
+	srv, mgr := newAPIHandlerTestServer(t, tm, nil, store)
+	createTestSessionWithTrunk(t, mgr, 1, "15550001111")
+	srv.publicRegistry = &apiHandlerPublicRegistryStub{
+		accounts: []*sip.PublicAccount{
+			{
+				Key:          "1001@sip.example.com",
+				Domain:       "sip.example.com",
+				Port:         5060,
+				Username:     "1001",
+				LastUsedAt:   now,
+				ExpiresAt:    now.Add(time.Hour),
+				IsRegistered: true,
+			},
+		},
+	}
+
+	srv.mu.Lock()
+	srv.wsClients["session-1"] = &WSClient{ConnectedAt: now}
+	srv.mu.Unlock()
+
+	path := "/dashboard/summary?period=month&anchorDate=2026-04-30"
+	rr := doRequest(t, srv.handleDashboardSummary, http.MethodGet, path, "", nil)
+	resp := assertJSONDecode[DashboardSummaryResponse](t, rr, http.StatusOK)
+
+	if resp.Period != "month" || resp.AnchorDate != "2026-04-30" {
+		t.Fatalf("unexpected period metadata: %+v", resp)
+	}
+	if resp.Metrics.PeriodSessions != 42 || resp.Metrics.SessionDirectoryNow != 7 {
+		t.Fatalf("unexpected summary metrics: %+v", resp.Metrics)
+	}
+	if resp.Metrics.ActiveSessions != 1 || resp.Metrics.TotalTrunks != 1 || resp.Metrics.PublicAccounts != 1 || resp.Metrics.WSClients != 1 {
+		t.Fatalf("unexpected runtime metrics: %+v", resp.Metrics)
+	}
+	if len(resp.Series) != 2 || len(resp.States) != 2 || len(resp.TopTrunks) != 1 {
+		t.Fatalf("unexpected chart payload: %+v", resp)
+	}
+
+	if store.dashboardParams.Period != "month" || store.dashboardParams.Timezone != "Asia/Bangkok" {
+		t.Fatalf("unexpected dashboard params: %+v", store.dashboardParams)
+	}
+
+	location := time.FixedZone("Asia/Bangkok", 7*60*60)
+	expectedStart := time.Date(2026, time.April, 1, 0, 0, 0, 0, location).UTC()
+	expectedEnd := time.Date(2026, time.May, 1, 0, 0, 0, 0, location).UTC()
+	if !store.dashboardParams.RangeStartUTC.Equal(expectedStart) || !store.dashboardParams.RangeEndUTC.Equal(expectedEnd) {
+		t.Fatalf("unexpected range start/end: got %s %s", store.dashboardParams.RangeStartUTC, store.dashboardParams.RangeEndUTC)
+	}
+}
+
+func TestHandleDashboardSummary_NegativePaths(t *testing.T) {
+	srv, _ := newAPIHandlerTestServer(t, nil, nil, nil)
+	rr := doRequest(t, srv.handleDashboardSummary, http.MethodGet, "/dashboard/summary", "", nil)
+	assertJSONError(t, rr, http.StatusServiceUnavailable, "Database logging not available")
+
+	store := &apiHandlerLogStoreStub{
+		dashboardErr: errors.New("summary failed"),
+	}
+	srv, _ = newAPIHandlerTestServer(t, nil, nil, store)
+	rr = doRequest(t, srv.handleDashboardSummary, http.MethodGet, "/dashboard/summary?period=day&anchorDate=2026-04-30", "", nil)
+	assertJSONError(t, rr, http.StatusInternalServerError, "Failed to load dashboard summary")
+
+	store = &apiHandlerLogStoreStub{dashboardResult: &logstore.DashboardSummaryResult{}}
+	srv, _ = newAPIHandlerTestServer(t, nil, nil, store)
+	rr = doRequest(t, srv.handleDashboardSummary, http.MethodGet, "/dashboard/summary?period=invalid", "", nil)
+	assertJSONError(t, rr, http.StatusBadRequest, "period must be day, month, or year")
 }

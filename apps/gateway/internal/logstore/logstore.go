@@ -62,6 +62,7 @@ type LogStore interface {
 	// Ops queries
 	ListGatewayInstances(ctx context.Context, params GatewayInstanceListParams) (*GatewayInstanceListResult, error)
 	ListSessionDirectory(ctx context.Context, params SessionDirectoryListParams) (*SessionDirectoryListResult, error)
+	GetDashboardSummary(ctx context.Context, params DashboardSummaryParams) (*DashboardSummaryResult, error)
 
 	// DB access (for TrunkManager)
 	GetDB() *pgxpool.Pool
@@ -133,6 +134,15 @@ func (n *noopStore) ListGatewayInstances(ctx context.Context, params GatewayInst
 }
 func (n *noopStore) ListSessionDirectory(ctx context.Context, params SessionDirectoryListParams) (*SessionDirectoryListResult, error) {
 	return &SessionDirectoryListResult{Items: []*SessionDirectoryRecord{}, Total: 0, Page: 1, PageSize: 20}, nil
+}
+func (n *noopStore) GetDashboardSummary(ctx context.Context, params DashboardSummaryParams) (*DashboardSummaryResult, error) {
+	return &DashboardSummaryResult{
+		TotalSessions:         0,
+		SessionDirectoryCount: 0,
+		Series:                []DashboardSeriesPoint{},
+		States:                []DashboardStateCount{},
+		TopTrunks:             []DashboardTrunkCount{},
+	}, nil
 }
 func (n *noopStore) GetDB() *pgxpool.Pool {
 	return nil
@@ -1206,6 +1216,174 @@ func (s *logStore) ListSessionDirectory(ctx context.Context, params SessionDirec
 	}
 
 	return &SessionDirectoryListResult{Items: items, Total: total, Page: params.Page, PageSize: params.PageSize}, nil
+}
+
+// GetDashboardSummary returns aggregate metrics for dashboard cards and charts.
+func (s *logStore) GetDashboardSummary(ctx context.Context, params DashboardSummaryParams) (*DashboardSummaryResult, error) {
+	if s.pool == nil {
+		return nil, fmt.Errorf("database pool not initialized")
+	}
+
+	period := params.Period
+	switch period {
+	case "day", "month", "year":
+	default:
+		return nil, fmt.Errorf("invalid period: %s", period)
+	}
+
+	timezone := params.Timezone
+	if timezone == "" {
+		timezone = "Asia/Bangkok"
+	}
+
+	topTrunks := params.TopTrunks
+	if topTrunks < 1 {
+		topTrunks = 10
+	}
+
+	result := &DashboardSummaryResult{
+		Series:     make([]DashboardSeriesPoint, 0),
+		States:     make([]DashboardStateCount, 0),
+		Directions: make([]DashboardDirectionCount, 0),
+		TopTrunks:  make([]DashboardTrunkCount, 0),
+	}
+
+	if err := s.pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM call_sessions WHERE created_at >= $1 AND created_at < $2`,
+		params.RangeStartUTC,
+		params.RangeEndUTC,
+	).Scan(&result.TotalSessions); err != nil {
+		return nil, fmt.Errorf("dashboard total sessions query failed: %w", err)
+	}
+
+	// Duration stats: average and max call duration (seconds)
+	if err := s.pool.QueryRow(ctx, `
+		SELECT
+			COALESCE(AVG(EXTRACT(EPOCH FROM (ended_at - created_at)))::double precision, 0),
+			COALESCE(MAX(EXTRACT(EPOCH FROM (ended_at - created_at)))::int, 0)
+		FROM call_sessions
+		WHERE created_at >= $1 AND created_at < $2
+		  AND ended_at IS NOT NULL
+	`, params.RangeStartUTC, params.RangeEndUTC).Scan(&result.AvgDurationSec, &result.MaxDurationSec); err != nil {
+		return nil, fmt.Errorf("dashboard duration query failed: %w", err)
+	}
+
+	if err := s.pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM session_directory WHERE expires_at >= NOW()`,
+	).Scan(&result.SessionDirectoryCount); err != nil {
+		return nil, fmt.Errorf("dashboard session directory count query failed: %w", err)
+	}
+
+	bucketExpr := "date_trunc('hour', created_at AT TIME ZONE $1)"
+	bucketFormat := "YYYY-MM-DD HH24:00"
+	if period == "month" {
+		bucketExpr = "date_trunc('day', created_at AT TIME ZONE $1)"
+		bucketFormat = "YYYY-MM-DD"
+	} else if period == "year" {
+		bucketExpr = "date_trunc('month', created_at AT TIME ZONE $1)"
+		bucketFormat = "YYYY-MM"
+	}
+
+	seriesSQL := fmt.Sprintf(`
+		SELECT to_char(%s, '%s') AS bucket, COUNT(*)
+		FROM call_sessions
+		WHERE created_at >= $2 AND created_at < $3
+		GROUP BY 1
+		ORDER BY 1 ASC
+	`, bucketExpr, bucketFormat)
+
+	seriesRows, err := s.pool.Query(ctx, seriesSQL, timezone, params.RangeStartUTC, params.RangeEndUTC)
+	if err != nil {
+		return nil, fmt.Errorf("dashboard series query failed: %w", err)
+	}
+	defer seriesRows.Close()
+
+	for seriesRows.Next() {
+		var item DashboardSeriesPoint
+		if err := seriesRows.Scan(&item.Bucket, &item.Count); err != nil {
+			return nil, fmt.Errorf("dashboard series scan failed: %w", err)
+		}
+		result.Series = append(result.Series, item)
+	}
+	if err := seriesRows.Err(); err != nil {
+		return nil, fmt.Errorf("dashboard series rows failed: %w", err)
+	}
+
+	stateRows, err := s.pool.Query(ctx, `
+		SELECT COALESCE(NULLIF(final_state, ''), 'unknown') AS state, COUNT(*)
+		FROM call_sessions
+		WHERE created_at >= $1 AND created_at < $2
+		GROUP BY 1
+		ORDER BY COUNT(*) DESC, state ASC
+	`, params.RangeStartUTC, params.RangeEndUTC)
+	if err != nil {
+		return nil, fmt.Errorf("dashboard state query failed: %w", err)
+	}
+	defer stateRows.Close()
+
+	for stateRows.Next() {
+		var item DashboardStateCount
+		if err := stateRows.Scan(&item.State, &item.Count); err != nil {
+			return nil, fmt.Errorf("dashboard state scan failed: %w", err)
+		}
+		result.States = append(result.States, item)
+	}
+	if err := stateRows.Err(); err != nil {
+		return nil, fmt.Errorf("dashboard state rows failed: %w", err)
+	}
+
+	// Direction breakdown (inbound / outbound)
+	dirRows, err := s.pool.Query(ctx, `
+		SELECT direction, COUNT(*)
+		FROM call_sessions
+		WHERE created_at >= $1 AND created_at < $2
+		GROUP BY direction
+		ORDER BY COUNT(*) DESC
+	`, params.RangeStartUTC, params.RangeEndUTC)
+	if err != nil {
+		return nil, fmt.Errorf("dashboard direction query failed: %w", err)
+	}
+	defer dirRows.Close()
+
+	for dirRows.Next() {
+		var item DashboardDirectionCount
+		if err := dirRows.Scan(&item.Direction, &item.Count); err != nil {
+			return nil, fmt.Errorf("dashboard direction scan failed: %w", err)
+		}
+		result.Directions = append(result.Directions, item)
+	}
+	if err := dirRows.Err(); err != nil {
+		return nil, fmt.Errorf("dashboard direction rows failed: %w", err)
+	}
+
+	trunkRows, err := s.pool.Query(ctx, `
+		SELECT
+			COALESCE(trunk_id::text, 'unknown') AS trunk_key,
+			COALESCE(NULLIF(trunk_name, ''), CASE WHEN trunk_id IS NOT NULL THEN CONCAT('Trunk #', trunk_id::text) ELSE 'Public/Unknown' END) AS trunk_name,
+			COUNT(*)
+		FROM call_sessions
+		WHERE created_at >= $1 AND created_at < $2
+		GROUP BY 1, 2
+		ORDER BY COUNT(*) DESC, trunk_name ASC
+		LIMIT $3
+	`, params.RangeStartUTC, params.RangeEndUTC, topTrunks)
+	if err != nil {
+		return nil, fmt.Errorf("dashboard trunk query failed: %w", err)
+	}
+	defer trunkRows.Close()
+
+	for trunkRows.Next() {
+		var item DashboardTrunkCount
+		if err := trunkRows.Scan(&item.TrunkKey, &item.TrunkName, &item.Count); err != nil {
+			return nil, fmt.Errorf("dashboard trunk scan failed: %w", err)
+		}
+		result.TopTrunks = append(result.TopTrunks, item)
+	}
+	if err := trunkRows.Err(); err != nil {
+		return nil, fmt.Errorf("dashboard trunk rows failed: %w", err)
+	}
+
+	return result, nil
 }
 
 // GetDB returns the underlying database pool (for TrunkManager)
