@@ -39,6 +39,9 @@ const (
 
 	// Log slow resume requests to help diagnose renegotiation/network bottlenecks.
 	resumeSlowLogThreshold = 3 * time.Second
+
+	// Timeout for loading trunk notify_user_id from DB before dispatching push.
+	incomingPushTrunkLookupTimeout = 5 * time.Second
 )
 
 // Server represents the HTTP/WebSocket API server
@@ -1161,26 +1164,44 @@ func (s *Server) NotifyIncomingCall(sessionID, from, to string, trunkID int64) {
 
 	if totalConnections == 0 {
 		log.Printf("⚠️ No WebSocket clients connected for incoming call notification")
-		return
+	} else {
+		log.Printf("📲 Incoming fanout summary: sessionID=%s trunkID=%d recipients=%d recipientSessionIDs=%v filtered=%d total=%d", sessionID, trunkID, recipients, recipientSessionIDs, totalConnections-recipients, totalConnections)
 	}
-	log.Printf("📲 Incoming fanout summary: sessionID=%s trunkID=%d recipients=%d recipientSessionIDs=%v filtered=%d total=%d", sessionID, trunkID, recipients, recipientSessionIDs, totalConnections-recipients, totalConnections)
 
 	// Send push notification in a separate goroutine (fire-and-forget).
 	// Uses notify_user_id (Keycloak sub UUID) which persists across sessions,
 	// so push works even when the user is offline / app is closed.
-	if s.pushService != nil && s.trunkManager != nil {
-		go func() {
-			trunkIface, ok := s.trunkManager.GetTrunkByID(trunkID)
-			if !ok {
-				return
-			}
-			trunk, ok := trunkIface.(*sip.Trunk)
-			if !ok || trunk.NotifyUserID == nil || *trunk.NotifyUserID == "" {
-				return
-			}
-			s.pushService.NotifyIncomingCall(*trunk.NotifyUserID, sessionID, from, to)
-		}()
+	if s.pushService == nil {
+		log.Printf("🔔 [Push] Skip incoming call push: push service is not configured (sessionID=%s trunkID=%d)", sessionID, trunkID)
+		return
 	}
+	if s.trunkManager == nil {
+		log.Printf("🔔 [Push] Skip incoming call push: trunk manager is not available (sessionID=%s trunkID=%d)", sessionID, trunkID)
+		return
+	}
+
+	go func() {
+		lookupCtx, cancel := context.WithTimeout(context.Background(), incomingPushTrunkLookupTimeout)
+		defer cancel()
+
+		trunk, err := s.trunkManager.GetTrunkByIDFromDB(lookupCtx, trunkID)
+		if err != nil {
+			log.Printf("🔔 [Push] Skip incoming call push: failed to load trunk from DB (sessionID=%s trunkID=%d err=%v)", sessionID, trunkID, err)
+			return
+		}
+		if trunk == nil {
+			log.Printf("🔔 [Push] Skip incoming call push: trunk not found in DB (sessionID=%s trunkID=%d)", sessionID, trunkID)
+			return
+		}
+
+		if trunk.NotifyUserID == nil || *trunk.NotifyUserID == "" {
+			log.Printf("🔔 [Push] Skip incoming call push: notify_user_id is empty (sessionID=%s trunkID=%d)", sessionID, trunkID)
+			return
+		}
+
+		log.Printf("🔔 [Push] Dispatch incoming call push: userID=%s sessionID=%s trunkID=%d", *trunk.NotifyUserID, sessionID, trunkID)
+		s.pushService.NotifyIncomingCall(*trunk.NotifyUserID, sessionID, from, to)
+	}()
 }
 
 // handleWSAccept handles WebSocket accept messages for incoming calls

@@ -17,7 +17,7 @@ services:
     ports:
       - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U k2user -d k2_gateway"]
+      test: [ "CMD-SHELL", "pg_isready -U k2user -d k2_gateway" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -48,7 +48,8 @@ services:
       # HTTP/WebSocket API
       - "${API_PORT:-8080}:${API_PORT:-8080}/tcp"
       # RTP media (UDP port range)
-      - "${RTP_PORT_MIN:-10500}-${RTP_PORT_MAX:-10600}:${RTP_PORT_MIN:-10500}-${RTP_PORT_MAX:-10600}/udp"
+      - "${RTP_PORT_MIN:-10500}-${RTP_PORT_MAX:-10600}:${RTP_PORT_MIN:-10500}-$\
+        {RTP_PORT_MAX:-10600}/udp"
 
     # Environment variables (override .env)
     environment:
@@ -79,6 +80,10 @@ services:
       - DB_LOG_FULL_SIP=${DB_LOG_FULL_SIP:-true}
       - DB_BATCH_SIZE=${DB_BATCH_SIZE:-100}
       - DB_BATCH_INTERVAL_MS=${DB_BATCH_INTERVAL_MS:-1000}
+      - PUSH_FIREBASE_CREDENTIALS_FILE=/app/softphone-c5e2f-01c0a81fa2a5.json
+
+    volumes:
+      - ./softphone-c5e2f-01c0a81fa2a5.json:/app/softphone-c5e2f-01c0a81fa2a5.json:ro
 
     networks:
       - k2_network

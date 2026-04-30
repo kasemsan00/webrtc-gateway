@@ -1,11 +1,15 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"k2-gateway/internal/config"
+	"k2-gateway/internal/push"
 	"k2-gateway/internal/session"
+	"k2-gateway/internal/sip"
 )
 
 type incomingTestSIPCallMaker struct {
@@ -52,6 +56,98 @@ func (s *incomingTestSIPCallMaker) SendMessageToSession(sess *session.Session, b
 	return nil
 }
 func (s *incomingTestSIPCallMaker) TriggerSwitchMessage(body, callerURI string) error {
+	return nil
+}
+
+type incomingNotifyTestTrunkManager struct {
+	trunkByID             map[int64]*sip.Trunk
+	getTrunkByIDCalls     int
+	getTrunkByDBCalls     int
+	getTrunkByDBErr       error
+	getTrunkByDBCompleted chan struct{}
+}
+
+func (s *incomingNotifyTestTrunkManager) signalDBLookupComplete() {
+	if s.getTrunkByDBCompleted == nil {
+		return
+	}
+	select {
+	case s.getTrunkByDBCompleted <- struct{}{}:
+	default:
+	}
+}
+
+func (s *incomingNotifyTestTrunkManager) GetTrunkByID(id int64) (interface{}, bool) {
+	s.getTrunkByIDCalls++
+	trunk, ok := s.trunkByID[id]
+	if !ok {
+		return nil, false
+	}
+	return trunk, true
+}
+
+func (s *incomingNotifyTestTrunkManager) GetTrunkByPublicID(publicID string) (interface{}, bool) {
+	return nil, false
+}
+
+func (s *incomingNotifyTestTrunkManager) GetTrunkIDByPublicID(publicID string) (int64, bool) {
+	return 0, false
+}
+
+func (s *incomingNotifyTestTrunkManager) GetDefaultTrunk() (interface{}, bool) {
+	return nil, false
+}
+
+func (s *incomingNotifyTestTrunkManager) RefreshTrunks() error {
+	return nil
+}
+
+func (s *incomingNotifyTestTrunkManager) CreateTrunk(ctx context.Context, payload sip.CreateTrunkPayload) (*sip.Trunk, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (s *incomingNotifyTestTrunkManager) UpdateTrunk(ctx context.Context, trunkID int64, patch sip.TrunkUpdatePatch) (*sip.Trunk, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (s *incomingNotifyTestTrunkManager) RegisterTrunk(trunkID int64, force bool) error {
+	return nil
+}
+
+func (s *incomingNotifyTestTrunkManager) UnregisterTrunk(trunkID int64, force bool) error {
+	return nil
+}
+
+func (s *incomingNotifyTestTrunkManager) ListTrunks(ctx context.Context, params sip.TrunkListParams) (*sip.TrunkListResult, error) {
+	return &sip.TrunkListResult{Items: []*sip.Trunk{}, Total: 0, Page: 1, PageSize: 10}, nil
+}
+
+func (s *incomingNotifyTestTrunkManager) GetTrunkByIDFromDB(ctx context.Context, trunkID int64) (*sip.Trunk, error) {
+	s.getTrunkByDBCalls++
+	defer s.signalDBLookupComplete()
+	if s.getTrunkByDBErr != nil {
+		return nil, s.getTrunkByDBErr
+	}
+	trunk, ok := s.trunkByID[trunkID]
+	if !ok {
+		return nil, nil
+	}
+	return trunk, nil
+}
+
+func (s *incomingNotifyTestTrunkManager) ListOwnedTrunks() []*sip.Trunk {
+	return []*sip.Trunk{}
+}
+
+func (s *incomingNotifyTestTrunkManager) SetTrunkInUseBy(ctx context.Context, trunkID int64, username *string) error {
+	return nil
+}
+
+func (s *incomingNotifyTestTrunkManager) FindTrunkByInUseBy(ctx context.Context, inUseBy string) (*sip.Trunk, error) {
+	return nil, nil
+}
+
+func (s *incomingNotifyTestTrunkManager) SetTrunkNotifyUserID(ctx context.Context, trunkID int64, userID *string) error {
 	return nil
 }
 
@@ -267,6 +363,62 @@ func TestNotifyIncomingCall_TargetsResolvedTrunkID(t *testing.T) {
 	}
 	if msgs2[0].Type != "incoming" || msgs2[0].SessionID != "incoming-trunk-2" {
 		t.Fatalf("unexpected message for trunk-2 client: %+v", msgs2[0])
+	}
+}
+
+func TestNotifyIncomingCall_PushLookupUsesDBPath(t *testing.T) {
+	trunkMgr := &incomingNotifyTestTrunkManager{
+		trunkByID: map[int64]*sip.Trunk{
+			1: {
+				ID:           1,
+				NotifyUserID: nil,
+			},
+		},
+		getTrunkByDBCompleted: make(chan struct{}, 1),
+	}
+
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, nil, nil, nil, trunkMgr, nil)
+	srv.SetPushService(&push.Service{})
+
+	srv.NotifyIncomingCall("incoming-db-lookup", "sip:alice@example.com", "sip:bob@example.com", 1)
+
+	select {
+	case <-trunkMgr.getTrunkByDBCompleted:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected DB lookup to complete for push path")
+	}
+
+	if trunkMgr.getTrunkByDBCalls != 1 {
+		t.Fatalf("expected GetTrunkByIDFromDB to be called once, got %d", trunkMgr.getTrunkByDBCalls)
+	}
+	if trunkMgr.getTrunkByIDCalls != 0 {
+		t.Fatalf("expected cache GetTrunkByID not to be used, got %d", trunkMgr.getTrunkByIDCalls)
+	}
+}
+
+func TestNotifyIncomingCall_PushLookupDBErrorStillAvoidsCachePath(t *testing.T) {
+	trunkMgr := &incomingNotifyTestTrunkManager{
+		trunkByID:             map[int64]*sip.Trunk{},
+		getTrunkByDBErr:       errors.New("db unavailable"),
+		getTrunkByDBCompleted: make(chan struct{}, 1),
+	}
+
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, nil, nil, nil, trunkMgr, nil)
+	srv.SetPushService(&push.Service{})
+
+	srv.NotifyIncomingCall("incoming-db-error", "sip:alice@example.com", "sip:bob@example.com", 1)
+
+	select {
+	case <-trunkMgr.getTrunkByDBCompleted:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected DB lookup attempt for push path")
+	}
+
+	if trunkMgr.getTrunkByDBCalls != 1 {
+		t.Fatalf("expected GetTrunkByIDFromDB to be called once, got %d", trunkMgr.getTrunkByDBCalls)
+	}
+	if trunkMgr.getTrunkByIDCalls != 0 {
+		t.Fatalf("expected cache GetTrunkByID not to be used, got %d", trunkMgr.getTrunkByIDCalls)
 	}
 }
 

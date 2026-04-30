@@ -32,6 +32,8 @@ func (s *Service) NotifyIncomingCall(userID, sessionID, from, to string) {
 	ctx, cancel := context.WithTimeout(context.Background(), pushTimeout)
 	defer cancel()
 
+	log.Printf("🔔 [Push] Start incoming call push: userID=%s sessionID=%s", userID, sessionID)
+
 	entries, err := s.ttrs.FetchNotifications(ctx, userID)
 	if err != nil {
 		log.Printf("🔔 [Push] Failed to fetch notifications for user %s: %v", userID, err)
@@ -43,6 +45,7 @@ func (s *Service) NotifyIncomingCall(userID, sessionID, from, to string) {
 		log.Printf("🔔 [Push] No service_id=%s tokens found for user %s", pushServiceID, userID)
 		return
 	}
+	log.Printf("🔔 [Push] Found %d token(s) for user %s (service_id=%s)", len(tokens), userID, pushServiceID)
 
 	data := map[string]string{
 		"type":      "incoming_call",
