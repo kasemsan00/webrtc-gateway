@@ -8,7 +8,8 @@ fi
 
 COMMAND="$1"
 ARG1="${2:-}"
-DIR="${MIGRATIONS_DIR:-apps/gateway/migrations}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+DIR="${MIGRATIONS_DIR:-$SCRIPT_DIR/../migrations}"
 GOOSE_VERSION="${GOOSE_VERSION:-v3.24.1}"
 GOOSE_BIN="github.com/pressly/goose/v3/cmd/goose@${GOOSE_VERSION}"
 

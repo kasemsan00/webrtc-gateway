@@ -7,12 +7,18 @@ param(
   [string]$Name,
 
   [string]$Dsn = $env:DB_DSN,
-  [string]$Dir = 'apps/gateway/migrations',
+  [string]$Dir,
   [string]$GooseVersion = 'v3.24.1'
 )
 
 $ErrorActionPreference = 'Stop'
 $goose = "go run github.com/pressly/goose/v3/cmd/goose@$GooseVersion"
+
+if ([string]::IsNullOrWhiteSpace($Dir)) {
+  $Dir = Join-Path $PSScriptRoot '..\migrations'
+}
+
+$Dir = (Resolve-Path $Dir).Path
 
 if ($Command -eq 'create') {
   if ([string]::IsNullOrWhiteSpace($Name)) {
