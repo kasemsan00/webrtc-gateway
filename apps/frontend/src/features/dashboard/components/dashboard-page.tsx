@@ -76,7 +76,8 @@ function formatNumber(value: number) {
   return new Intl.NumberFormat('en-US').format(value)
 }
 
-function formatDuration(seconds: number): string {
+function formatDuration(seconds: number | undefined | null): string {
+  if (seconds == null || !isFinite(seconds)) return '—'
   if (seconds < 60) return `${Math.round(seconds)}s`
   if (seconds < 3600) {
     const m = Math.floor(seconds / 60)
