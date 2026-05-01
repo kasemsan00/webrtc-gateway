@@ -366,6 +366,42 @@ func TestNotifyIncomingCall_TargetsResolvedTrunkID(t *testing.T) {
 	}
 }
 
+func TestNotifyIncomingCancel_SendsOnlyClientsResolvedOnSameTrunk(t *testing.T) {
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, nil, nil, nil, nil, nil)
+	clientA := &WSClient{sessionID: "a", trunkResolved: true, resolvedTrunkID: 1, send: make(chan []byte, 8)}
+	clientB := &WSClient{sessionID: "b", trunkResolved: true, resolvedTrunkID: 1, send: make(chan []byte, 8)}
+	clientC := &WSClient{sessionID: "c", trunkResolved: true, resolvedTrunkID: 2, send: make(chan []byte, 8)}
+	clientD := &WSClient{sessionID: "d", trunkResolved: false, resolvedTrunkID: 1, send: make(chan []byte, 8)}
+
+	srv.mu.Lock()
+	srv.wsConnections[clientA] = struct{}{}
+	srv.wsConnections[clientB] = struct{}{}
+	srv.wsConnections[clientC] = struct{}{}
+	srv.wsConnections[clientD] = struct{}{}
+	srv.mu.Unlock()
+
+	srv.NotifyIncomingCancel("incoming-123", 1, "caller_cancelled")
+
+	msgsA := readWSMessages(t, clientA.send)
+	msgsB := readWSMessages(t, clientB.send)
+	msgsC := readWSMessages(t, clientC.send)
+	msgsD := readWSMessages(t, clientD.send)
+	if len(msgsA) != 1 || len(msgsB) != 1 || len(msgsC) != 0 || len(msgsD) != 0 {
+		t.Fatalf("expected cancel only for same-trunk resolved clients, got A=%d B=%d C=%d D=%d", len(msgsA), len(msgsB), len(msgsC), len(msgsD))
+	}
+
+	msg := msgsA[0]
+	if msg.Type != "cancel" {
+		t.Fatalf("resolved client expected cancel, got %s", msg.Type)
+	}
+	if msg.SessionID != "incoming-123" {
+		t.Fatalf("resolved client expected session incoming-123, got %s", msg.SessionID)
+	}
+	if msg.Reason != "caller_cancelled" {
+		t.Fatalf("resolved client expected reason caller_cancelled, got %s", msg.Reason)
+	}
+}
+
 func TestNotifyIncomingCall_PushLookupUsesDBPath(t *testing.T) {
 	trunkMgr := &incomingNotifyTestTrunkManager{
 		trunkByID: map[int64]*sip.Trunk{

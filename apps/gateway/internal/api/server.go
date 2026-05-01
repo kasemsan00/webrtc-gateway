@@ -1204,6 +1204,41 @@ func (s *Server) NotifyIncomingCall(sessionID, from, to string, trunkID int64) {
 	}()
 }
 
+// NotifyIncomingCancel notifies connected WebSocket clients that an incoming call was cancelled by caller.
+func (s *Server) NotifyIncomingCancel(sessionID string, trunkID int64, reason string) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if trunkID <= 0 {
+		log.Printf("📲 Skipping incoming cancel notification for session %s: missing trunkID", sessionID)
+		return
+	}
+
+	totalConnections := len(s.wsConnections)
+	recipients := 0
+	recipientSessionIDs := make([]string, 0)
+
+	for client := range s.wsConnections {
+		if client == nil || !client.trunkResolved || client.resolvedTrunkID != trunkID {
+			continue
+		}
+		recipients++
+		recipientSessionIDs = append(recipientSessionIDs, client.sessionID)
+		s.sendWSMessage(client, WSMessage{
+			Type:      "cancel",
+			SessionID: sessionID,
+			Reason:    reason,
+		})
+		log.Printf("📲 Sent incoming cancel notification to resolved client (sessionID=%s trunkID=%d)", sessionID, trunkID)
+	}
+
+	if totalConnections == 0 {
+		log.Printf("⚠️ No WebSocket clients connected for incoming cancel notification")
+	} else {
+		log.Printf("📲 Incoming cancel fanout summary: sessionID=%s trunkID=%d recipients=%d recipientSessionIDs=%v filtered=%d total=%d", sessionID, trunkID, recipients, recipientSessionIDs, totalConnections-recipients, totalConnections)
+	}
+}
+
 // handleWSAccept handles WebSocket accept messages for incoming calls
 func (s *Server) handleWSAccept(client *WSClient, msg WSMessage) {
 	if msg.SessionID == "" {

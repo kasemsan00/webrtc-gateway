@@ -3,6 +3,7 @@ package sip
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -21,7 +22,22 @@ func (s *Server) setupHandlers() {
 
 	// Handle BYE requests (call termination)
 	s.sipServer.OnBye(func(req *sip.Request, tx sip.ServerTransaction) {
+		callID := ""
+		if h := req.CallID(); h != nil {
+			callID = h.Value()
+		}
+		log.Printf("[SIP-BYE] OnBye triggered: callID=%s source=%s destination=%s recipient=%s", callID, req.Source(), req.Destination(), req.Recipient.String())
 		s.handleBYE(req, tx)
+	})
+
+	// Handle CANCEL requests (caller hangs up before call is answered)
+	s.sipServer.OnCancel(func(req *sip.Request, tx sip.ServerTransaction) {
+		callID := ""
+		if h := req.CallID(); h != nil {
+			callID = h.Value()
+		}
+		log.Printf("[SIP-CANCEL] OnCancel triggered: callID=%s source=%s destination=%s recipient=%s", callID, req.Source(), req.Destination(), req.Recipient.String())
+		s.handleCANCEL(req, tx)
 	})
 
 	// Handle ACK requests
@@ -319,6 +335,7 @@ func (s *Server) handleINVITE(req *sip.Request, tx sip.ServerTransaction) {
 // handleBYE handles BYE requests (call termination)
 func (s *Server) handleBYE(req *sip.Request, tx sip.ServerTransaction) {
 	ctx := context.Background()
+	log.Printf("[SIP-BYE] handleBYE start: method=%s source=%s destination=%s recipient=%s", req.Method, req.Source(), req.Destination(), req.Recipient.String())
 	fmt.Printf("\n=== Received BYE Request ===\n")
 	fmt.Printf("From: %s\n", req.From().Value())
 	fmt.Printf("To: %s\n", req.To().Value())
@@ -450,6 +467,54 @@ func (s *Server) handleBYE(req *sip.Request, tx sip.ServerTransaction) {
 	}
 
 	fmt.Printf("============================\n\n")
+}
+
+// handleCANCEL handles CANCEL requests (caller terminated before answer)
+func (s *Server) handleCANCEL(req *sip.Request, tx sip.ServerTransaction) {
+	ctx := context.Background()
+
+	log.Printf("[SIP-CANCEL] handleCANCEL start: method=%s source=%s destination=%s recipient=%s", req.Method, req.Source(), req.Destination(), req.Recipient.String())
+
+	callIDValue := ""
+	if callID := req.CallID(); callID != nil {
+		callIDValue = callID.Value()
+	}
+
+	// RFC 3261: UAS should respond 200 OK to CANCEL itself.
+	res := sip.NewResponseFromRequest(req, 200, "OK", nil)
+	if err := tx.Respond(res); err != nil {
+		log.Printf("[SIP-CANCEL] respond error: callID=%s err=%v", callIDValue, err)
+	} else {
+		log.Printf("[SIP-CANCEL] 200 OK sent: callID=%s", callIDValue)
+	}
+
+	// Best-effort observability and cleanup for pending incoming session.
+	if s.sessionMgr != nil && callIDValue != "" {
+		if sess, ok := s.sessionMgr.GetSessionBySIPCallID(callIDValue); ok {
+			log.Printf("[SIP-CANCEL] matched session=%s state=%s", sess.ID, sess.GetState())
+			s.logEvent(&logstore.Event{
+				Timestamp: time.Now(),
+				SessionID: sess.ID,
+				Category:  "sip",
+				Name:      "sip_cancel_received",
+				SIPMethod: string(req.Method),
+				SIPCallID: callIDValue,
+			})
+			if sess.GetState() == session.StateIncoming {
+				authMode, _, trunkID, _, _, _, _ := sess.GetSIPAuthContext()
+				if authMode == "trunk" && trunkID > 0 && s.incomingNotifier != nil {
+					s.incomingNotifier.NotifyIncomingCancel(sess.ID, trunkID, "caller_cancelled")
+				}
+				sess.UpdateState(session.StateEnded)
+				s.notifySessionStateChange(sess, session.StateEnded)
+				s.logSessionSnapshot(ctx, sess, "sip_cancel_received")
+				s.sessionMgr.DeleteSession(sess.ID)
+				log.Printf("[SIP-CANCEL] session ended and cleaned up: session=%s", sess.ID)
+			}
+		} else {
+			log.Printf("[SIP-CANCEL] no session found for callID=%s", callIDValue)
+		}
+	}
 }
 
 // handleACK handles ACK requests
