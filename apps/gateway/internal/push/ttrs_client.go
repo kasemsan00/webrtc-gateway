@@ -5,7 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"net/url"
+	"os"
+	"strconv"
 	"time"
 
 	"golang.org/x/oauth2"
@@ -29,27 +33,35 @@ type NotificationResponse struct {
 
 // TTRSClient fetches push notification tokens from the TTRS Notification API.
 type TTRSClient struct {
-	baseURL    string
-	httpClient *http.Client
+	baseURL     string
+	httpClient  *http.Client
+	tokenSource oauth2.TokenSource
 }
 
 // NewTTRSClient creates a TTRSClient that authenticates via Keycloak client credentials.
-func NewTTRSClient(baseURL, tokenURL, clientID, clientSecret string, timeoutMS int) *TTRSClient {
+func NewTTRSClient(baseURL, tokenURL, grantType, clientID, clientSecret string, timeoutMS int) *TTRSClient {
 	ccConfig := &clientcredentials.Config{
 		ClientID:     clientID,
 		ClientSecret: clientSecret,
 		TokenURL:     tokenURL,
 	}
+	if grantType != "" {
+		ccConfig.EndpointParams = url.Values{
+			"grant_type": []string{grantType},
+		}
+	}
+	ts := oauth2.ReuseTokenSource(nil, ccConfig.TokenSource(context.Background()))
 
 	// The OAuth2 HTTP client handles token fetch, caching, and auto-refresh.
-	oauthClient := ccConfig.Client(context.Background())
+	oauthClient := oauth2.NewClient(context.Background(), ts)
 	oauthClient.Timeout = time.Duration(timeoutMS) * time.Millisecond
 
 	// Wrap the transport so the base transport inherits the OAuth2 token injection
 	// but we can still set a global timeout on the outer client.
 	return &TTRSClient{
-		baseURL:    baseURL,
-		httpClient: oauthClient,
+		baseURL:     baseURL,
+		httpClient:  oauthClient,
+		tokenSource: ts,
 	}
 }
 
@@ -60,6 +72,22 @@ func (c *TTRSClient) FetchNotifications(ctx context.Context, userID string) ([]N
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("ttrs: build request: %w", err)
+	}
+
+	if c.tokenSource != nil {
+		token, err := c.tokenSource.Token()
+		if err != nil {
+			return nil, fmt.Errorf("ttrs: obtain token: %w", err)
+		}
+		token.SetAuthHeader(req)
+
+		if shouldDebugTTRSBearerToken() {
+			log.Printf("🔔 [Push][TTRS] Debug bearer token for user %s: %s", userID, token.AccessToken)
+		}
+	}
+
+	if shouldDebugTTRSBearerToken() {
+		log.Printf("🔔 [Push][TTRS] Debug request: method=%s url=%s", req.Method, req.URL.String())
 	}
 
 	resp, err := c.httpClient.Do(req)
@@ -79,6 +107,15 @@ func (c *TTRSClient) FetchNotifications(ctx context.Context, userID string) ([]N
 	}
 
 	return result.Data, nil
+}
+
+func shouldDebugTTRSBearerToken() bool {
+	raw := os.Getenv("PUSH_DEBUG_TTRS_TOKEN")
+	enabled, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false
+	}
+	return enabled
 }
 
 // FilterByServiceID returns only entries matching the given service ID.

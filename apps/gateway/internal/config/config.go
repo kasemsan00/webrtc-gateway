@@ -174,6 +174,7 @@ type PushNotificationConfig struct {
 	TTRSAPIURL              string // TTRS Notification API base URL (e.g., https://api.ttrs.or.th)
 	TTRSAPITimeoutMS        int    // TTRS API HTTP timeout in milliseconds (default: 5000)
 	TTRSKeycloakTokenURL    string // Keycloak token endpoint for client credentials grant
+	TTRSTokenGrantType      string // OAuth2 grant_type for token endpoint (default: client_credentials)
 	TTRSClientID            string // Keycloak client ID for TTRS API auth
 	TTRSClientSecret        string // Keycloak client secret for TTRS API auth
 	FirebaseCredentialsFile string // Path to Firebase service account JSON file
@@ -293,6 +294,7 @@ func Load() (*Config, error) {
 			TTRSAPIURL:              os.Getenv("PUSH_TTRS_API_URL"),
 			TTRSAPITimeoutMS:        getEnvAsInt("PUSH_TTRS_API_TIMEOUT_MS", 5000),
 			TTRSKeycloakTokenURL:    os.Getenv("AUTH_TTRS_EMPLOYEE_TOKEN_URL"),
+			TTRSTokenGrantType:      getEnvWithDefault("AUTH_TTRS_EMPLOYEE_TOKEN_GRANT_TYPE", "client_credentials"),
 			TTRSClientID:            os.Getenv("AUTH_TTRS_EMPLOYEE_CLIENT_ID"),
 			TTRSClientSecret:        os.Getenv("AUTH_TTRS_EMPLOYEE_CLIENT_SECRET"),
 			FirebaseCredentialsFile: os.Getenv("PUSH_FIREBASE_CREDENTIALS_FILE"),
@@ -449,6 +451,7 @@ func (c *Config) Display() {
 		fmt.Printf("  TTRS API URL: %s\n", c.PushNotification.TTRSAPIURL)
 		fmt.Printf("  TTRS API Timeout: %d ms\n", c.PushNotification.TTRSAPITimeoutMS)
 		fmt.Printf("  TTRS Keycloak Token URL: %s\n", c.PushNotification.TTRSKeycloakTokenURL)
+		fmt.Printf("  TTRS Token Grant Type: %s\n", c.PushNotification.TTRSTokenGrantType)
 		fmt.Printf("  TTRS Client ID: %s\n", c.PushNotification.TTRSClientID)
 		if c.PushNotification.TTRSClientSecret != "" {
 			fmt.Printf("  TTRS Client Secret: %s\n", maskPassword(c.PushNotification.TTRSClientSecret))

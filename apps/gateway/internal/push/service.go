@@ -50,8 +50,9 @@ func (s *Service) NotifyIncomingCall(userID, sessionID, from, to string) {
 	data := map[string]string{
 		"type":      "incoming_call",
 		"sessionId": sessionID,
-		"from":      from,
-		"to":        to,
+		// FCM data payload has reserved keys (e.g. "from"), so use custom names.
+		"caller": from,
+		"callee": to,
 	}
 
 	sent := 0

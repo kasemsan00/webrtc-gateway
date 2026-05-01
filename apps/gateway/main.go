@@ -261,6 +261,7 @@ func runAPIMode(ctx context.Context, cfg *config.Config, unicastAddress string, 
 		ttrsClient := push.NewTTRSClient(
 			cfg.PushNotification.TTRSAPIURL,
 			cfg.PushNotification.TTRSKeycloakTokenURL,
+			cfg.PushNotification.TTRSTokenGrantType,
 			cfg.PushNotification.TTRSClientID,
 			cfg.PushNotification.TTRSClientSecret,
 			cfg.PushNotification.TTRSAPITimeoutMS,
