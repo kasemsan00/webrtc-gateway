@@ -51,18 +51,29 @@ func (s *Service) NotifyIncomingCall(userID, sessionID, from, to string) {
 		"type":      "incoming_call",
 		"sessionId": sessionID,
 		// FCM data payload has reserved keys (e.g. "from"), so use custom names.
-		"caller": from,
-		"callee": to,
+		"caller":  from,
+		"callee":  to,
+		"message": "HelloWorld",
 	}
+
+	title := "SoftPhone Notification"
+	body := "You have an incoming call from " + from
 
 	sent := 0
 	for _, entry := range tokens {
-		if err := s.fcm.SendPush(ctx, entry.Token, data); err != nil {
+		if err := s.fcm.SendPush(ctx, entry.Token, title, body, data); err != nil {
 			log.Printf("🔔 [Push] FCM send failed for user %s device %s: %v", userID, entry.MobileDevice, err)
 			continue
 		}
 		sent++
 		log.Printf("🔔 [Push] FCM sent to user %s device %s (service_id=%s)", userID, entry.MobileDevice, pushServiceID)
+		log.Printf("🔔 [Push] FCM token: %s", entry.Token)
+		log.Printf("🔔 [Push] FCM mobile device: %s", entry.MobileDevice)
+		log.Printf("🔔 [Push] FCM service ID: %s", pushServiceID)
+		log.Printf("🔔 [Push] FCM user ID: %s", userID)
+		log.Printf("🔔 [Push] FCM session ID: %s", sessionID)
+		log.Printf("🔔 [Push] FCM sent: %d", sent)
+		log.Printf("🔔 [Push] FCM tokens: %v", tokens)
 	}
 
 	log.Printf("🔔 [Push] Incoming call push summary: userID=%s sessionID=%s sent=%d/%d", userID, sessionID, sent, len(tokens))

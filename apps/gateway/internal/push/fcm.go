@@ -56,27 +56,42 @@ type fcmRequest struct {
 
 // fcmMessage represents a single FCM message.
 type fcmMessage struct {
-	Token string            `json:"token"`
-	Data  map[string]string `json:"data,omitempty"`
+	Token        string                  `json:"token"`
+	Notification *fcmNotificationPayload `json:"notification,omitempty"`
+	Data         map[string]string       `json:"data,omitempty"`
 }
 
-// SendPush sends a data-only push notification to the given FCM token.
-func (s *FCMSender) SendPush(ctx context.Context, token string, data map[string]string) error {
+type fcmNotificationPayload struct {
+	Title string `json:"title,omitempty"`
+	Body  string `json:"body,omitempty"`
+}
+
+// SendPush sends a push notification with notification + data payload.
+func (s *FCMSender) SendPush(ctx context.Context, token, title, notificationBody string, data map[string]string) error {
 	url := fmt.Sprintf("%s/%s/messages:send", fcmBaseURL, s.projectID)
+
+	var notification *fcmNotificationPayload
+	if title != "" || notificationBody != "" {
+		notification = &fcmNotificationPayload{
+			Title: title,
+			Body:  notificationBody,
+		}
+	}
 
 	payload := fcmRequest{
 		Message: fcmMessage{
-			Token: token,
-			Data:  data,
+			Token:        token,
+			Notification: notification,
+			Data:         data,
 		},
 	}
 
-	body, err := json.Marshal(payload)
+	requestBody, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("fcm: marshal payload: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(requestBody))
 	if err != nil {
 		return fmt.Errorf("fcm: build request: %w", err)
 	}
