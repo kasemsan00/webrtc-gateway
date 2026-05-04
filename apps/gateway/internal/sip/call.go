@@ -909,13 +909,13 @@ func (s *Server) RejectCall(sess *session.Session, reason string) error {
 		return fmt.Errorf("no stored SIP transaction for incoming call")
 	}
 
-	// Send 486 Busy Here (or 603 Decline)
+	// Send 486 Busy Here for user-declined incoming calls.
 	code := 486
 	reasonPhrase := "Busy Here"
-	if reason == "decline" {
-		code = 603
-		reasonPhrase = "Decline"
+	if reason == "" {
+		reason = "busy"
 	}
+	fmt.Printf("📴 [%s] Sending SIP reject to caller (reason=%s status=%d %s)\n", sess.ID, reason, code, reasonPhrase)
 
 	ctx := context.Background()
 	s.logEvent(&logstore.Event{

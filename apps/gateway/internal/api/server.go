@@ -1436,6 +1436,7 @@ func (s *Server) handleWSReject(client *WSClient, msg WSMessage) {
 	if reason == "" {
 		reason = "busy" // Default to busy
 	}
+	log.Printf("📴 [Reject] Received incoming reject via WS (session=%s, reason=%s)", msg.SessionID, reason)
 
 	// Decrement public account refcount if applicable (before deleting session)
 	authMode, accountKey, _, _, _, _, _ := sess.GetSIPAuthContext()
@@ -1478,6 +1479,7 @@ func (s *Server) handleWSReject(client *WSClient, msg WSMessage) {
 				return
 			}
 		} else {
+			log.Printf("✅ [Reject] SIP reject sent successfully (session=%s, reason=%s)", msg.SessionID, reason)
 			s.logEvent(&logstore.Event{
 				Timestamp: time.Now(),
 				SessionID: sess.ID,

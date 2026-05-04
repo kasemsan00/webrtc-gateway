@@ -51,9 +51,8 @@ func (s *Service) NotifyIncomingCall(userID, sessionID, from, to string) {
 		"type":      "incoming_call",
 		"sessionId": sessionID,
 		// FCM data payload has reserved keys (e.g. "from"), so use custom names.
-		"caller":  from,
-		"callee":  to,
-		"message": "HelloWorld",
+		"caller": from,
+		"callee": to,
 	}
 
 	title := "SoftPhone Notification"
@@ -61,7 +60,7 @@ func (s *Service) NotifyIncomingCall(userID, sessionID, from, to string) {
 
 	sent := 0
 	for _, entry := range tokens {
-		if err := s.fcm.SendPush(ctx, entry.Token, title, body, data); err != nil {
+		if err := s.fcm.SendPush(ctx, entry.Token, title, body, data, entry.MobileDevice); err != nil {
 			log.Printf("🔔 [Push] FCM send failed for user %s device %s: %v", userID, entry.MobileDevice, err)
 			continue
 		}

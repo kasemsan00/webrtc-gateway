@@ -59,6 +59,7 @@ type fcmMessage struct {
 	Token        string                  `json:"token"`
 	Notification *fcmNotificationPayload `json:"notification,omitempty"`
 	Data         map[string]string       `json:"data,omitempty"`
+	Android      *fcmAndroidConfig       `json:"android,omitempty"`
 }
 
 type fcmNotificationPayload struct {
@@ -66,15 +67,31 @@ type fcmNotificationPayload struct {
 	Body  string `json:"body,omitempty"`
 }
 
+type fcmAndroidConfig struct {
+	Priority string `json:"priority,omitempty"`
+	TTL      string `json:"ttl,omitempty"`
+}
+
 // SendPush sends a push notification with notification + data payload.
-func (s *FCMSender) SendPush(ctx context.Context, token, title, notificationBody string, data map[string]string) error {
+func (s *FCMSender) SendPush(ctx context.Context, token, title, notificationBody string, data map[string]string, mobileDevice string) error {
 	url := fmt.Sprintf("%s/%s/messages:send", fcmBaseURL, s.projectID)
 
 	var notification *fcmNotificationPayload
-	if title != "" || notificationBody != "" {
+	isAndroid := len(mobileDevice) >= 8 && mobileDevice[:8] == "android_"
+	// Android incoming call push is sent as data-first so background handler can
+	// process it immediately; iOS keeps notification payload behavior.
+	if !isAndroid && (title != "" || notificationBody != "") {
 		notification = &fcmNotificationPayload{
 			Title: title,
 			Body:  notificationBody,
+		}
+	}
+
+	var android *fcmAndroidConfig
+	if isAndroid {
+		android = &fcmAndroidConfig{
+			Priority: "high",
+			TTL:      "30s",
 		}
 	}
 
@@ -83,6 +100,7 @@ func (s *FCMSender) SendPush(ctx context.Context, token, title, notificationBody
 			Token:        token,
 			Notification: notification,
 			Data:         data,
+			Android:      android,
 		},
 	}
 
