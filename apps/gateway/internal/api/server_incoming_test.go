@@ -156,6 +156,10 @@ func (s *incomingNotifyTestTrunkManager) SetTrunkNotifyUserID(ctx context.Contex
 	return nil
 }
 
+func (s *incomingNotifyTestTrunkManager) SetTrunkPushContact(ctx context.Context, trunkID int64, contact sip.TrunkPushContact) error {
+	return nil
+}
+
 func TestHandleWSAccept_FirstAcceptWins(t *testing.T) {
 	mgr := newTestSessionManager()
 	incomingSess, err := mgr.CreateSession(config.TURNConfig{})

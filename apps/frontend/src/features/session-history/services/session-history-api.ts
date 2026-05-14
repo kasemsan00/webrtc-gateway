@@ -16,6 +16,7 @@ export async function fetchSessionHistory(
     search: params.search,
     direction: params.direction,
     state: params.state,
+    endReason: params.endReason,
     sessionId: params.sessionId,
     createdAfter: params.createdAfter,
     createdBefore: params.createdBefore,

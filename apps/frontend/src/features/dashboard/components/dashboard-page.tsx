@@ -34,6 +34,11 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
 import { fetchDashboardSummary } from '@/features/dashboard/services/dashboard-api'
+import {
+  buildTerminalOutcomeChartData,
+  buildTerminalTrunkRows,
+  summarizeTerminalOutcomes,
+} from '@/features/dashboard/terminal-outcomes'
 import { useTheme } from '@/lib/theme'
 
 // ── Constants ──────────────────────────────────────────────────────────────
@@ -271,6 +276,18 @@ export function DashboardPage() {
   const stateChartData = useMemo(() => summary?.states ?? [], [summary?.states])
   const trunkChartData = useMemo(() => summary?.topTrunks ?? [], [summary?.topTrunks])
   const directionData = useMemo(() => summary?.directions ?? [], [summary?.directions])
+  const terminalOutcomeSummary = useMemo(
+    () => summarizeTerminalOutcomes(summary?.terminalOutcomes ?? []),
+    [summary?.terminalOutcomes],
+  )
+  const terminalOutcomeChartData = useMemo(
+    () => buildTerminalOutcomeChartData(summary?.terminalOutcomes ?? []),
+    [summary?.terminalOutcomes],
+  )
+  const terminalTrunkRows = useMemo(
+    () => buildTerminalTrunkRows(summary?.terminalTrunks ?? []),
+    [summary?.terminalTrunks],
+  )
 
   // Success / failure data
   const successFailure = useMemo(() => computeSuccessFailure(stateChartData), [stateChartData])
@@ -503,6 +520,40 @@ export function DashboardPage() {
               </Card>
             </div>
 
+            {/* SIP terminal outcome KPIs */}
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
+              {terminalOutcomeSummary.length === 0 ? (
+                <Card className="border-border/60 xl:col-span-6">
+                  <CardContent className="p-3">
+                    <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                      SIP Terminal Outcomes
+                    </p>
+                    <p className="text-sm text-muted-foreground">
+                      No terminal action data in selected range
+                    </p>
+                  </CardContent>
+                </Card>
+              ) : (
+                terminalOutcomeSummary.slice(0, 6).map((item) => (
+                  <Card key={item.key} className="border-border/60">
+                    <CardContent className="space-y-1 p-3">
+                      <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                        {item.label}
+                      </p>
+                      <p className="text-lg font-semibold">
+                        {formatNumber(item.count)}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {item.sipStatusCode
+                          ? `SIP ${item.sipStatusCode}`
+                          : 'WS/SIP terminal action'}
+                      </p>
+                    </CardContent>
+                  </Card>
+                ))
+              )}
+            </div>
+
             {/* Main chart grid */}
             <div className="grid gap-4 xl:grid-cols-2">
               {/* Sessions Over Time + Previous Period Comparison */}
@@ -626,6 +677,84 @@ export function DashboardPage() {
                           </Bar>
                         </BarChart>
                       </ResponsiveContainer>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* SIP Terminal Outcomes by Direction */}
+              <Card className="border-border/60">
+                <CardHeader className="pb-0">
+                  <CardTitle className="text-sm">
+                    SIP Terminal Outcomes by Direction
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="pt-3">
+                  {terminalOutcomeChartData.length === 0 ? (
+                    <p className="py-12 text-center text-sm text-muted-foreground">
+                      No terminal outcome data in selected range
+                    </p>
+                  ) : (
+                    <div className="h-64 w-full">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={terminalOutcomeChartData}>
+                          <CartesianGrid
+                            strokeDasharray="3 3"
+                            strokeOpacity={0.25}
+                          />
+                          <XAxis
+                            dataKey="outcomeLabel"
+                            tick={{ fontSize: 10 }}
+                          />
+                          <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
+                          <Tooltip content={<BarTooltip />} />
+                          <Bar dataKey="count" name="Count" radius={[4, 4, 0, 0]}>
+                            {terminalOutcomeChartData.map((entry) => (
+                              <Cell
+                                key={`${entry.outcome}-${entry.direction}-${entry.sipStatusCode}`}
+                                fill={entry.color}
+                              />
+                            ))}
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Top Trunks by SIP Terminal Reason */}
+              <Card className="border-border/60">
+                <CardHeader className="pb-0">
+                  <CardTitle className="text-sm">
+                    Top Trunks by Terminal Reason
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="pt-3">
+                  {terminalTrunkRows.length === 0 ? (
+                    <p className="py-12 text-center text-sm text-muted-foreground">
+                      No terminal trunk data in selected range
+                    </p>
+                  ) : (
+                    <div className="space-y-2">
+                      {terminalTrunkRows.slice(0, 8).map((row) => (
+                        <div
+                          key={`${row.trunkKey}-${row.outcome}`}
+                          className="flex items-center justify-between gap-3 rounded-md border border-border/60 px-3 py-2 text-xs"
+                        >
+                          <div className="min-w-0">
+                            <p className="truncate font-medium">
+                              {row.trunkName || row.trunkKey || 'Unknown trunk'}
+                            </p>
+                            <p className="text-muted-foreground">
+                              {row.outcomeLabel}
+                            </p>
+                          </div>
+                          <span className="font-semibold">
+                            {formatNumber(row.count)}
+                          </span>
+                        </div>
+                      ))}
                     </div>
                   )}
                 </CardContent>

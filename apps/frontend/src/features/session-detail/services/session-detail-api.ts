@@ -17,6 +17,7 @@ export async function fetchSessionEvents(
     pageSize?: number
     category?: string
     name?: string
+    sipStatusCode?: number
   } = {},
 ): Promise<SessionEventListResponse> {
   const url = appendQuery(`${API_BASE}/sessions/${sessionId}/events`, {
@@ -24,6 +25,7 @@ export async function fetchSessionEvents(
     pageSize: params.pageSize,
     category: params.category,
     name: params.name,
+    sipStatusCode: params.sipStatusCode,
   })
   return fetchJson<SessionEventListResponse>(url)
 }

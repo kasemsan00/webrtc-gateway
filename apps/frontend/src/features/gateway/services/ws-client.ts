@@ -25,6 +25,7 @@ export function isWebSocketOpen(ws: WebSocket | null) {
 
 export function sendJson(ws: WebSocket | null, payload: unknown) {
   if (!isWebSocketOpen(ws)) return false
+  if (!ws) return false
   ws.send(JSON.stringify(payload))
   return true
 }

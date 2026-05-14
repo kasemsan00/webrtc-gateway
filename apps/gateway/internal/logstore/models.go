@@ -77,6 +77,7 @@ type SessionListParams struct {
 	Direction     string     // Filter by direction: "inbound" or "outbound"
 	Search        string     // Search by from_uri, to_uri, session_id, or sip_call_id (ILIKE)
 	State         string     // Filter by final_state
+	EndReason     string     // Filter by end_reason
 	CreatedAfter  *time.Time // Filter sessions created after this time
 	CreatedBefore *time.Time // Filter sessions created before this time
 }
@@ -166,11 +167,12 @@ type SessionDirectoryRecord struct {
 
 // EventListParams defines query parameters for listing events
 type EventListParams struct {
-	Page      int
-	PageSize  int
-	SessionID string // required
-	Category  string
-	Name      string
+	Page          int
+	PageSize      int
+	SessionID     string // required
+	Category      string
+	Name          string
+	SIPStatusCode int
 }
 
 // EventListResult contains paginated event list results
@@ -291,6 +293,22 @@ type DashboardDirectionCount struct {
 	Count     int    `json:"count"`
 }
 
+// DashboardTerminalOutcomeCount represents terminal SIP/call outcome buckets.
+type DashboardTerminalOutcomeCount struct {
+	Outcome       string `json:"outcome"`
+	Direction     string `json:"direction"`
+	SIPStatusCode int    `json:"sipStatusCode"`
+	Count         int    `json:"count"`
+}
+
+// DashboardTerminalTrunkCount represents top trunk terminal outcome buckets.
+type DashboardTerminalTrunkCount struct {
+	TrunkKey  string `json:"trunkKey"`
+	TrunkName string `json:"trunkName"`
+	Outcome   string `json:"outcome"`
+	Count     int    `json:"count"`
+}
+
 // DashboardSummaryResult contains aggregate metrics for dashboard charts.
 type DashboardSummaryResult struct {
 	TotalSessions         int                       `json:"totalSessions"`
@@ -301,4 +319,6 @@ type DashboardSummaryResult struct {
 	States                []DashboardStateCount     `json:"states"`
 	Directions            []DashboardDirectionCount `json:"directions"`
 	TopTrunks             []DashboardTrunkCount     `json:"topTrunks"`
+	TerminalOutcomes      []DashboardTerminalOutcomeCount
+	TerminalTrunks        []DashboardTerminalTrunkCount
 }

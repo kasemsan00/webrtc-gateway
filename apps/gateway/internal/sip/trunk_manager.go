@@ -60,6 +60,13 @@ type TrunkUpdatePatch struct {
 	UpdatedBy *string
 }
 
+// TrunkPushContact contains Contact header push parameters for a trunk REGISTER.
+type TrunkPushContact struct {
+	PNAppID string
+	PNType  string
+	PNToken string
+}
+
 // CreateTrunkPayload defines required fields for creating a new trunk.
 type CreateTrunkPayload struct {
 	Name      string
@@ -98,6 +105,12 @@ type Trunk struct {
 
 	// Push notification target: Keycloak sub (UUID), persisted across sessions
 	NotifyUserID *string
+
+	// SIP Contact push parameters for Kamailio PN integration.
+	PNAppID     *string
+	PNType      *string
+	PNToken     *string
+	PNUpdatedAt *time.Time
 
 	CreatedAt time.Time
 	UpdatedAt time.Time
@@ -254,7 +267,8 @@ func (tm *TrunkManager) loadTrunks() error {
 
 	rows, err := tm.db.Query(ctx, `
 		SELECT id, public_id, name, domain, port, username, password, transport, enabled, is_default,
-		       lease_owner, lease_until, last_registered_at, last_error, in_use_by, notify_user_id, created_at, updated_at
+		       lease_owner, lease_until, last_registered_at, last_error, in_use_by, notify_user_id,
+		       pn_app_id, pn_type, pn_token, pn_updated_at, created_at, updated_at
 		FROM sip_trunks
 		WHERE enabled = true
 		ORDER BY id
@@ -278,6 +292,7 @@ func (tm *TrunkManager) loadTrunks() error {
 			&trunk.Enabled, &trunk.IsDefault,
 			&trunk.LeaseOwner, &trunk.LeaseUntil,
 			&trunk.LastRegisteredAt, &trunk.LastError, &trunk.InUseBy, &trunk.NotifyUserID,
+			&trunk.PNAppID, &trunk.PNType, &trunk.PNToken, &trunk.PNUpdatedAt,
 			&trunk.CreatedAt, &trunk.UpdatedAt,
 		)
 		if err != nil {
@@ -487,13 +502,7 @@ func (tm *TrunkManager) registerTrunk(trunkID int64) error {
 	req.AppendHeader(sip.NewHeader("CSeq", "1 REGISTER"))
 
 	// Contact
-	req.AppendHeader(&sip.ContactHeader{
-		Address: sip.Uri{
-			User: trunk.Username,
-			Host: tm.publicIP,
-			Port: tm.localPort,
-		},
-	})
+	req.AppendHeader(tm.trunkContactHeader(trunk))
 
 	// Expires
 	expires := tm.cfg.SIPPublic.RegisterExpiresSeconds
@@ -645,13 +654,7 @@ func (tm *TrunkManager) sendUnregister(trunk *Trunk) error {
 	callID := fmt.Sprintf("%s@%s", sip.GenerateTagN(16), tm.publicIP)
 	req.AppendHeader(sip.NewHeader("Call-ID", callID))
 	req.AppendHeader(sip.NewHeader("CSeq", "1 REGISTER"))
-	req.AppendHeader(&sip.ContactHeader{
-		Address: sip.Uri{
-			User: trunk.Username,
-			Host: tm.publicIP,
-			Port: tm.localPort,
-		},
-	})
+	req.AppendHeader(tm.trunkContactHeader(trunk))
 
 	// Expires:0
 	req.AppendHeader(sip.NewHeader("Expires", "0"))
@@ -695,6 +698,31 @@ func (tm *TrunkManager) sendUnregister(trunk *Trunk) error {
 		return fmt.Errorf("unregister failed: %d %s", res.StatusCode, res.Reason)
 	}
 	return nil
+}
+
+func (tm *TrunkManager) trunkContactHeader(trunk *Trunk) *sip.ContactHeader {
+	contact := &sip.ContactHeader{
+		Address: sip.Uri{
+			User: trunk.Username,
+			Host: tm.publicIP,
+			Port: tm.localPort,
+		},
+	}
+
+	if trunk.PNAppID != nil && trunk.PNType != nil && trunk.PNToken != nil {
+		appID := strings.TrimSpace(*trunk.PNAppID)
+		pnType := strings.TrimSpace(*trunk.PNType)
+		pnToken := strings.TrimSpace(*trunk.PNToken)
+		if appID != "" && pnType != "" && pnToken != "" {
+			params := sip.NewParams()
+			params.Add("app-id", appID)
+			params.Add("pn-type", pnType)
+			params.Add("pn-tok", pnToken)
+			contact.Params = params
+		}
+	}
+
+	return contact
 }
 
 // startRefreshWorker starts a goroutine to refresh registration before expiry
@@ -1228,7 +1256,8 @@ func (tm *TrunkManager) ListTrunks(ctx context.Context, params TrunkListParams) 
 	offset := (params.Page - 1) * params.PageSize
 	dataSQL := fmt.Sprintf(`
 		SELECT id, public_id, name, domain, port, username, password, transport, enabled, is_default,
-		       lease_owner, lease_until, last_registered_at, last_error, in_use_by, notify_user_id, created_at, updated_at
+		       lease_owner, lease_until, last_registered_at, last_error, in_use_by, notify_user_id,
+		       pn_app_id, pn_type, pn_token, pn_updated_at, created_at, updated_at
 		FROM sip_trunks
 		%s
 		ORDER BY %s %s
@@ -1251,6 +1280,7 @@ func (tm *TrunkManager) ListTrunks(ctx context.Context, params TrunkListParams) 
 			&trunk.Enabled, &trunk.IsDefault,
 			&trunk.LeaseOwner, &trunk.LeaseUntil,
 			&trunk.LastRegisteredAt, &trunk.LastError, &trunk.InUseBy, &trunk.NotifyUserID,
+			&trunk.PNAppID, &trunk.PNType, &trunk.PNToken, &trunk.PNUpdatedAt,
 			&trunk.CreatedAt, &trunk.UpdatedAt,
 		)
 		if err != nil {
@@ -1433,7 +1463,8 @@ func (tm *TrunkManager) UpdateTrunk(ctx context.Context, trunkID int64, patch Tr
 	current := &Trunk{}
 	err = tx.QueryRow(ctx, `
 		SELECT id, public_id, name, domain, port, username, password, transport, enabled, is_default,
-		       lease_owner, lease_until, last_registered_at, last_error, in_use_by, created_at, updated_at
+		       lease_owner, lease_until, last_registered_at, last_error, in_use_by, notify_user_id,
+		       pn_app_id, pn_type, pn_token, pn_updated_at, created_at, updated_at
 		FROM sip_trunks
 		WHERE id = $1
 		FOR UPDATE
@@ -1442,7 +1473,8 @@ func (tm *TrunkManager) UpdateTrunk(ctx context.Context, trunkID int64, patch Tr
 		&current.Username, &current.Password, &current.Transport,
 		&current.Enabled, &current.IsDefault,
 		&current.LeaseOwner, &current.LeaseUntil,
-		&current.LastRegisteredAt, &current.LastError, &current.InUseBy,
+		&current.LastRegisteredAt, &current.LastError, &current.InUseBy, &current.NotifyUserID,
+		&current.PNAppID, &current.PNType, &current.PNToken, &current.PNUpdatedAt,
 		&current.CreatedAt, &current.UpdatedAt,
 	)
 	if err != nil {
@@ -1524,7 +1556,8 @@ func (tm *TrunkManager) UpdateTrunk(ctx context.Context, trunkID int64, patch Tr
 	updated := &Trunk{}
 	err = tx.QueryRow(ctx, `
 		SELECT id, public_id, name, domain, port, username, password, transport, enabled, is_default,
-		       lease_owner, lease_until, last_registered_at, last_error, in_use_by, created_at, updated_at
+		       lease_owner, lease_until, last_registered_at, last_error, in_use_by, notify_user_id,
+		       pn_app_id, pn_type, pn_token, pn_updated_at, created_at, updated_at
 		FROM sip_trunks
 		WHERE id = $1
 	`, trunkID).Scan(
@@ -1532,7 +1565,8 @@ func (tm *TrunkManager) UpdateTrunk(ctx context.Context, trunkID int64, patch Tr
 		&updated.Username, &updated.Password, &updated.Transport,
 		&updated.Enabled, &updated.IsDefault,
 		&updated.LeaseOwner, &updated.LeaseUntil,
-		&updated.LastRegisteredAt, &updated.LastError, &updated.InUseBy,
+		&updated.LastRegisteredAt, &updated.LastError, &updated.InUseBy, &updated.NotifyUserID,
+		&updated.PNAppID, &updated.PNType, &updated.PNToken, &updated.PNUpdatedAt,
 		&updated.CreatedAt, &updated.UpdatedAt,
 	)
 	if err != nil {
@@ -1755,7 +1789,8 @@ func (tm *TrunkManager) getTrunkByIDFromDB(ctx context.Context, trunkID int64) (
 	trunk := &Trunk{}
 	err := tm.db.QueryRow(ctx, `
 		SELECT id, public_id, name, domain, port, username, password, transport, enabled, is_default,
-		       lease_owner, lease_until, last_registered_at, last_error, in_use_by, notify_user_id, created_at, updated_at
+		       lease_owner, lease_until, last_registered_at, last_error, in_use_by, notify_user_id,
+		       pn_app_id, pn_type, pn_token, pn_updated_at, created_at, updated_at
 		FROM sip_trunks
 		WHERE id = $1
 	`, trunkID).Scan(
@@ -1764,6 +1799,7 @@ func (tm *TrunkManager) getTrunkByIDFromDB(ctx context.Context, trunkID int64) (
 		&trunk.Enabled, &trunk.IsDefault,
 		&trunk.LeaseOwner, &trunk.LeaseUntil,
 		&trunk.LastRegisteredAt, &trunk.LastError, &trunk.InUseBy, &trunk.NotifyUserID,
+		&trunk.PNAppID, &trunk.PNType, &trunk.PNToken, &trunk.PNUpdatedAt,
 		&trunk.CreatedAt, &trunk.UpdatedAt,
 	)
 	if err != nil {
@@ -1887,6 +1923,48 @@ func (tm *TrunkManager) SetTrunkNotifyUserID(ctx context.Context, trunkID int64,
 	return nil
 }
 
+// SetTrunkPushContact stores the latest SIP Contact push parameters for a trunk.
+func (tm *TrunkManager) SetTrunkPushContact(ctx context.Context, trunkID int64, contact TrunkPushContact) error {
+	if tm.db == nil {
+		return fmt.Errorf("database not available for trunk manager")
+	}
+
+	appID := strings.TrimSpace(contact.PNAppID)
+	pnType := strings.TrimSpace(contact.PNType)
+	pnToken := strings.TrimSpace(contact.PNToken)
+	if appID == "" || pnType == "" || pnToken == "" {
+		return fmt.Errorf("%w: push contact requires app-id, pn-type, and pn-token", ErrTrunkValidation)
+	}
+
+	now := time.Now()
+	dbCtx, cancel := context.WithTimeout(ctx, trunkManagerDBTimeout)
+	defer cancel()
+
+	result, err := tm.db.Exec(dbCtx, `
+		UPDATE sip_trunks
+		SET pn_app_id = $1, pn_type = $2, pn_token = $3, pn_updated_at = $4, updated_at = NOW()
+		WHERE id = $5
+		  AND enabled = true
+	`, appID, pnType, pnToken, now, trunkID)
+	if err != nil {
+		return fmt.Errorf("set trunk push contact failed: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("%w: trunk %d", ErrTrunkNotFound, trunkID)
+	}
+
+	tm.mu.Lock()
+	if trunk, ok := tm.trunks[trunkID]; ok {
+		trunk.PNAppID = &appID
+		trunk.PNType = &pnType
+		trunk.PNToken = &pnToken
+		trunk.PNUpdatedAt = &now
+	}
+	tm.mu.Unlock()
+
+	return nil
+}
+
 // FindTrunkByInUseBy finds a trunk currently assigned to the given in_use_by value.
 // Returns (nil, nil) if no trunk is found.
 func (tm *TrunkManager) FindTrunkByInUseBy(ctx context.Context, inUseBy string) (*Trunk, error) {
@@ -1900,7 +1978,8 @@ func (tm *TrunkManager) FindTrunkByInUseBy(ctx context.Context, inUseBy string) 
 	trunk := &Trunk{}
 	err := tm.db.QueryRow(dbCtx, `
 		SELECT id, public_id, name, domain, port, username, password, transport, enabled, is_default,
-		       lease_owner, lease_until, last_registered_at, last_error, in_use_by, notify_user_id, created_at, updated_at
+		       lease_owner, lease_until, last_registered_at, last_error, in_use_by, notify_user_id,
+		       pn_app_id, pn_type, pn_token, pn_updated_at, created_at, updated_at
 		FROM sip_trunks
 		WHERE in_use_by = $1
 		LIMIT 1
@@ -1910,6 +1989,7 @@ func (tm *TrunkManager) FindTrunkByInUseBy(ctx context.Context, inUseBy string) 
 		&trunk.Enabled, &trunk.IsDefault,
 		&trunk.LeaseOwner, &trunk.LeaseUntil,
 		&trunk.LastRegisteredAt, &trunk.LastError, &trunk.InUseBy, &trunk.NotifyUserID,
+		&trunk.PNAppID, &trunk.PNType, &trunk.PNToken, &trunk.PNUpdatedAt,
 		&trunk.CreatedAt, &trunk.UpdatedAt,
 	)
 	if err != nil {

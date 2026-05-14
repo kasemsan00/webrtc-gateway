@@ -1056,7 +1056,7 @@ function bindPeerConnectionEvents(pc: RTCPeerConnection) {
   }
 }
 
-function buildPeerConnectionFromCurrentLocalStream() {
+function buildPeerConnectionFromCurrentLocalStream(): RTCPeerConnection {
   if (!runtime.localStream) {
     throw new Error('Local stream is not available')
   }
@@ -1074,6 +1074,8 @@ function buildPeerConnectionFromCurrentLocalStream() {
     runtime.pc,
     runtime.videoConfig.useConstrainedBaseline,
   )
+
+  return runtime.pc
 }
 
 async function requestLocalMediaForResume() {
@@ -1118,8 +1120,7 @@ async function sendResumeOffer(sessionId: string) {
     }
     runtime.remoteStream = null
 
-    buildPeerConnectionFromCurrentLocalStream()
-    const pc = runtime.pc as RTCPeerConnection
+    const pc = buildPeerConnectionFromCurrentLocalStream()
 
     const offer = await pc.createOffer({
       offerToReceiveAudio: true,
@@ -1768,9 +1769,7 @@ export async function startSession() {
     void refreshMediaInputDevices()
     appendLog('Media Access Granted', 'success')
 
-    buildPeerConnectionFromCurrentLocalStream()
-
-    const pc = runtime.pc as RTCPeerConnection
+    const pc = buildPeerConnectionFromCurrentLocalStream()
 
     const offer = await pc.createOffer({
       offerToReceiveAudio: true,

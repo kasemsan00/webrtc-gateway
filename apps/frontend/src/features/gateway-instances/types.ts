@@ -21,6 +21,12 @@ export interface GatewayDashboard {
 export interface WSClient {
   sessionId: string
   connectedAt: string
+  trunkResolved?: boolean
+  resolvedTrunkId?: number
+  resolvedTrunkPublicId?: string
+  availability?: 'idle' | 'busy' | 'unavailable' | string
+  callState?: string
+  authSubject?: string
 }
 
 export interface GatewayInstanceListResponse {

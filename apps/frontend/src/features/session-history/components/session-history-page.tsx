@@ -113,6 +113,56 @@ function StateBadge({ state }: { state: string }) {
   }
 }
 
+function EndReasonBadge({ reason }: { reason: string }) {
+  switch (reason) {
+    case 'busy':
+    case 'decline':
+      return (
+        <Badge
+          variant="default"
+          className="bg-amber-600/20 text-[10px] text-amber-400"
+        >
+          486 Busy
+        </Badge>
+      )
+    case 'no_answer':
+    case 'offline':
+      return (
+        <Badge variant="destructive" className="text-[10px]">
+          480 No Answer
+        </Badge>
+      )
+    case 'caller_cancelled':
+      return (
+        <Badge variant="secondary" className="text-[10px]">
+          Caller Cancelled
+        </Badge>
+      )
+    case 'outgoing_cancelled':
+      return (
+        <Badge
+          variant="default"
+          className="bg-purple-600/20 text-[10px] text-purple-400"
+        >
+          Outgoing Cancelled
+        </Badge>
+      )
+    case 'hangup':
+    case 'bye':
+      return (
+        <Badge variant="success" className="text-[10px]">
+          BYE / Hangup
+        </Badge>
+      )
+    default:
+      return (
+        <Badge variant="outline" className="text-[10px]">
+          {reason || '-'}
+        </Badge>
+      )
+  }
+}
+
 export function SessionHistoryPage() {
   const { theme, toggleTheme } = useTheme()
   const navigate = useNavigate()
@@ -122,6 +172,8 @@ export function SessionHistoryPage() {
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE)
   const [search, setSearch] = useState('')
   const [directionFilter, setDirectionFilter] = useState('')
+  const [stateFilter, setStateFilter] = useState('')
+  const [endReasonFilter, setEndReasonFilter] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -132,6 +184,12 @@ export function SessionHistoryPage() {
 
   const directionRef = useRef(directionFilter)
   directionRef.current = directionFilter
+
+  const stateRef = useRef(stateFilter)
+  stateRef.current = stateFilter
+
+  const endReasonRef = useRef(endReasonFilter)
+  endReasonRef.current = endReasonFilter
 
   const load = useCallback(
     async (
@@ -148,6 +206,9 @@ export function SessionHistoryPage() {
           pageSize: params?.pageSize ?? pageSize,
           search: (params?.search ?? searchRef.current) || undefined,
           direction: (params?.direction ?? directionRef.current) || undefined,
+          state: (params?.state ?? stateRef.current) || undefined,
+          endReason:
+            (params?.endReason ?? endReasonRef.current) || undefined,
         })
         setSessions(res.items)
         setTotal(res.total)
@@ -197,6 +258,18 @@ export function SessionHistoryPage() {
     setDirectionFilter(dir)
     setPage(1)
     void loadRef.current({ page: 1, direction: dir })
+  }, [])
+
+  const handleStateChange = useCallback((state: string) => {
+    setStateFilter(state)
+    setPage(1)
+    void loadRef.current({ page: 1, state })
+  }, [])
+
+  const handleEndReasonChange = useCallback((endReason: string) => {
+    setEndReasonFilter(endReason)
+    setPage(1)
+    void loadRef.current({ page: 1, endReason })
   }, [])
 
   const handleRefresh = useCallback(async () => {
@@ -263,11 +336,7 @@ export function SessionHistoryPage() {
       {
         accessorKey: 'endReason',
         header: 'End Reason',
-        cell: ({ row }) => (
-          <span className="text-xs text-muted-foreground">
-            {row.original.endReason || '-'}
-          </span>
-        ),
+        cell: ({ row }) => <EndReasonBadge reason={row.original.endReason} />,
       },
       {
         id: 'duration',
@@ -354,6 +423,37 @@ export function SessionHistoryPage() {
               Outbound
             </Button>
           </div>
+          <Separator orientation="vertical" className="h-4" />
+          <div className="flex items-center gap-0.5">
+            {['', 'ended', 'active', 'incoming', 'connecting', 'ringing'].map(
+              (state) => (
+                <Button
+                  key={state || 'all-state'}
+                  size="sm"
+                  variant={stateFilter === state ? 'secondary' : 'ghost'}
+                  className="h-7 px-2 text-xs"
+                  onClick={() => handleStateChange(state)}
+                >
+                  {state ? state : 'Any State'}
+                </Button>
+              ),
+            )}
+          </div>
+          <Separator orientation="vertical" className="h-4" />
+          <select
+            className="h-7 rounded-md border border-border bg-background px-2 text-xs"
+            value={endReasonFilter}
+            onChange={(event) => handleEndReasonChange(event.target.value)}
+            aria-label="End reason filter"
+          >
+            <option value="">Any Reason</option>
+            <option value="busy">486 busy</option>
+            <option value="decline">decline</option>
+            <option value="no_answer">480 no answer</option>
+            <option value="caller_cancelled">caller cancelled</option>
+            <option value="outgoing_cancelled">outgoing cancelled</option>
+            <option value="hangup">hangup / BYE</option>
+          </select>
           <Separator orientation="vertical" className="h-4" />
           {/* Refresh */}
           <Button

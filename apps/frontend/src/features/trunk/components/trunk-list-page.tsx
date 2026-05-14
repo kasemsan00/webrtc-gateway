@@ -93,6 +93,35 @@ function formatInUseBy(trunk: Pick<Trunk, 'in_use_by' | 'inUseBy'>) {
   return <Badge variant="success">{value ? value : 'Not in use'}</Badge>
 }
 
+export function isPushContactReady(trunk: Trunk) {
+  return Boolean(
+    trunk.pushContactReady &&
+      trunk.pnAppId?.trim() &&
+      trunk.pnType?.trim() &&
+      trunk.pnTokenMasked?.trim(),
+  )
+}
+
+function PushContactBadge({ trunk }: { trunk: Trunk }) {
+  const ready = isPushContactReady(trunk)
+  return (
+    <Badge variant={ready ? 'success' : 'secondary'} className="text-[10px]">
+      {ready ? 'Ready' : 'Not Ready'}
+    </Badge>
+  )
+}
+
+function PushContactDetails({ trunk }: { trunk: Trunk }) {
+  if (!isPushContactReady(trunk)) {
+    return <span className="text-muted-foreground">-</span>
+  }
+  return (
+    <span className="font-mono text-[10px] text-muted-foreground">
+      {trunk.pnType}; {trunk.pnTokenMasked}
+    </span>
+  )
+}
+
 function trunkIdentityText(trunk?: Trunk | null) {
   if (!trunk) return '-'
   return `${trunk.name} (#${trunk.id}, uid: ${formatUid(normalizeTrunkUid(trunk))})`
@@ -1200,6 +1229,18 @@ function TrunkTable({
         ),
       },
       {
+        id: 'pushContact',
+        header: 'Push Contact',
+        cell: ({ row }) => (
+          <div className="space-y-0.5">
+            <PushContactBadge trunk={row.original} />
+            <div title={row.original.pnAppId || undefined}>
+              <PushContactDetails trunk={row.original} />
+            </div>
+          </div>
+        ),
+      },
+      {
         id: 'status',
         header: 'Status',
         cell: ({ row }) => (
@@ -1361,6 +1402,17 @@ function TrunkCard({
                 {trunk.isRegistered ? 'Registered' : 'Unregistered'}
               </Badge>
             }
+          />
+          <Detail label="Push Contact" value={<PushContactBadge trunk={trunk} />} />
+          <Detail label="PN App ID" value={trunk.pnAppId || '-'} />
+          <Detail label="PN Type" value={trunk.pnType || '-'} />
+          <Detail
+            label="PN Token"
+            value={trunk.pnTokenMasked ? trunk.pnTokenMasked : '-'}
+          />
+          <Detail
+            label="PN Updated"
+            value={formatThaiDateTime(trunk.pnUpdatedAt || '')}
           />
           <Detail
             label="Last Registered"

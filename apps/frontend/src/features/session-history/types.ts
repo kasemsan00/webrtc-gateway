@@ -24,6 +24,7 @@ export interface SessionHistoryListParams {
   search?: string
   direction?: string
   state?: string
+  endReason?: string
   sessionId?: string
   createdAfter?: string
   createdBefore?: string

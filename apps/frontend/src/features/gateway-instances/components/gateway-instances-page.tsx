@@ -15,6 +15,7 @@ import type {
   WSClient,
 } from '@/features/gateway-instances/types'
 
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { DataTable } from '@/components/ui/data-table'
@@ -37,6 +38,38 @@ function formatUptime(seconds: number) {
   const minutes = Math.floor((total % 3600) / 60)
   const remain = total % 60
   return `${hours}h ${minutes}m ${remain}s`
+}
+
+function ClientAvailabilityBadge({ availability }: { availability?: string }) {
+  switch (availability) {
+    case 'idle':
+      return (
+        <Badge variant="success" className="text-[10px]">
+          Idle
+        </Badge>
+      )
+    case 'busy':
+      return (
+        <Badge
+          variant="default"
+          className="bg-amber-600/20 text-[10px] text-amber-400"
+        >
+          Busy
+        </Badge>
+      )
+    case 'unavailable':
+      return (
+        <Badge variant="destructive" className="text-[10px]">
+          Unavailable
+        </Badge>
+      )
+    default:
+      return (
+        <Badge variant="outline" className="text-[10px]">
+          {availability || 'Unknown'}
+        </Badge>
+      )
+  }
 }
 
 export function GatewayInstancesPage() {
@@ -243,16 +276,43 @@ export function GatewayInstancesPage() {
             <CardContent className="p-3">
               <div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
                 <RiSignalWifiLine className="size-3.5" />
-                Connected WS Clients ({wsClients.length})
+                Live Clients ({wsClients.length})
               </div>
-              <div className="space-y-1">
+              <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
                 {wsClients.slice(0, 8).map((client) => (
-                  <p
+                  <div
                     key={`${client.sessionId}-${client.connectedAt}`}
-                    className="font-mono text-[11px] text-muted-foreground"
+                    className="rounded-md border border-border/60 px-3 py-2"
                   >
-                    {client.sessionId || '-'}
-                  </p>
+                    <div className="mb-1 flex items-center justify-between gap-2">
+                      <span className="truncate font-mono text-[11px] text-muted-foreground">
+                        {client.sessionId || '-'}
+                      </span>
+                      <ClientAvailabilityBadge
+                        availability={client.availability}
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
+                      <span className="text-muted-foreground">Call State</span>
+                      <span className="text-right">
+                        {client.callState || '-'}
+                      </span>
+                      <span className="text-muted-foreground">Trunk</span>
+                      <span className="truncate text-right font-mono">
+                        {client.resolvedTrunkPublicId ||
+                          client.resolvedTrunkId ||
+                          '-'}
+                      </span>
+                      <span className="text-muted-foreground">Auth</span>
+                      <span className="truncate text-right">
+                        {client.authSubject || '-'}
+                      </span>
+                      <span className="text-muted-foreground">Connected</span>
+                      <span className="text-right">
+                        <TimestampCell value={client.connectedAt} />
+                      </span>
+                    </div>
+                  </div>
                 ))}
                 {wsClients.length > 8 ? (
                   <p className="text-[11px] text-muted-foreground">
@@ -262,7 +322,19 @@ export function GatewayInstancesPage() {
               </div>
             </CardContent>
           </Card>
-        ) : null}
+        ) : (
+          <Card className="mb-4 border-border/60">
+            <CardContent className="p-3">
+              <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                <RiSignalWifiLine className="size-3.5" />
+                Live Clients
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">
+                No connected WebSocket clients.
+              </p>
+            </CardContent>
+          </Card>
+        )}
 
         {error ? (
           <div className="mb-3 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400">

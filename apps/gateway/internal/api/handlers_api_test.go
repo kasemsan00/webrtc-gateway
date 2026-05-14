@@ -133,6 +133,10 @@ func (s *apiHandlerTrunkManagerStub) SetTrunkNotifyUserID(_ context.Context, _ i
 	return nil
 }
 
+func (s *apiHandlerTrunkManagerStub) SetTrunkPushContact(_ context.Context, _ int64, _ sip.TrunkPushContact) error {
+	return nil
+}
+
 func (s *apiHandlerTrunkManagerStub) FindTrunkByInUseBy(_ context.Context, inUseBy string) (*sip.Trunk, error) {
 	for _, t := range s.byID {
 		if t.InUseBy != nil && *t.InUseBy == inUseBy {
@@ -553,12 +557,12 @@ func TestHandleListSessionHistory(t *testing.T) {
 		},
 	}
 	srv, _ = newAPIHandlerTestServer(t, nil, nil, store)
-	rr = doRequest(t, srv.handleListSessionHistory, http.MethodGet, "/session-history?page=1&pageSize=10&direction=outbound&search=1001", "", nil)
+	rr = doRequest(t, srv.handleListSessionHistory, http.MethodGet, "/session-history?page=1&pageSize=10&direction=outbound&state=ended&endReason=hangup&search=1001", "", nil)
 	resp := assertJSONDecode[SessionHistoryListResponse](t, rr, http.StatusOK)
 	if len(resp.Items) != 1 || resp.Items[0].SessionID != "s-1" {
 		t.Fatalf("unexpected history response: %+v", resp)
 	}
-	if store.listParams.Direction != "outbound" || store.listParams.Search != "1001" {
+	if store.listParams.Direction != "outbound" || store.listParams.State != "ended" || store.listParams.EndReason != "hangup" || store.listParams.Search != "1001" {
 		t.Fatalf("unexpected list params: %+v", store.listParams)
 	}
 
@@ -926,12 +930,12 @@ func TestHandleSessionDetailHandlers(t *testing.T) {
 	}
 	srv, _ := newAPIHandlerTestServer(t, nil, nil, store)
 
-	rr := doRequest(t, srv.handleListSessionEvents, http.MethodGet, "/sessions/s-1/events?page=2&pageSize=3&category=rest&name=event1", "", map[string]string{"sessionId": "s-1"})
+	rr := doRequest(t, srv.handleListSessionEvents, http.MethodGet, "/sessions/s-1/events?page=2&pageSize=3&category=rest&name=event1&sipStatusCode=486", "", map[string]string{"sessionId": "s-1"})
 	evResp := assertJSONDecode[EventListResponse](t, rr, http.StatusOK)
 	if len(evResp.Items) != 1 || evResp.Items[0].Name != "event1" {
 		t.Fatalf("unexpected events response: %+v", evResp)
 	}
-	if store.eventListParams.SessionID != "s-1" || store.eventListParams.Category != "rest" || store.eventListParams.Page != 2 {
+	if store.eventListParams.SessionID != "s-1" || store.eventListParams.Category != "rest" || store.eventListParams.Page != 2 || store.eventListParams.SIPStatusCode != 486 {
 		t.Fatalf("unexpected events params: %+v", store.eventListParams)
 	}
 
@@ -1115,6 +1119,13 @@ func TestHandleDashboardSummary(t *testing.T) {
 			TopTrunks: []logstore.DashboardTrunkCount{
 				{TrunkKey: "1", TrunkName: "Main trunk", Count: 28},
 			},
+			TerminalOutcomes: []logstore.DashboardTerminalOutcomeCount{
+				{Outcome: "busy", Direction: "inbound", SIPStatusCode: 486, Count: 4},
+				{Outcome: "no_answer", Direction: "inbound", SIPStatusCode: 480, Count: 2},
+			},
+			TerminalTrunks: []logstore.DashboardTerminalTrunkCount{
+				{TrunkKey: "1", TrunkName: "Main trunk", Outcome: "busy", Count: 4},
+			},
 		},
 	}
 
@@ -1151,8 +1162,11 @@ func TestHandleDashboardSummary(t *testing.T) {
 	if resp.Metrics.ActiveSessions != 1 || resp.Metrics.TotalTrunks != 1 || resp.Metrics.PublicAccounts != 1 || resp.Metrics.WSClients != 1 {
 		t.Fatalf("unexpected runtime metrics: %+v", resp.Metrics)
 	}
-	if len(resp.Series) != 2 || len(resp.States) != 2 || len(resp.TopTrunks) != 1 {
+	if len(resp.Series) != 2 || len(resp.States) != 2 || len(resp.TopTrunks) != 1 || len(resp.TerminalOutcomes) != 2 || len(resp.TerminalTrunks) != 1 {
 		t.Fatalf("unexpected chart payload: %+v", resp)
+	}
+	if resp.TerminalOutcomes[0].Outcome != "busy" || resp.TerminalOutcomes[0].SIPStatusCode != 486 {
+		t.Fatalf("unexpected terminal outcomes: %+v", resp.TerminalOutcomes)
 	}
 
 	if store.dashboardParams.Period != "month" || store.dashboardParams.Timezone != "Asia/Bangkok" {
@@ -1183,4 +1197,47 @@ func TestHandleDashboardSummary_NegativePaths(t *testing.T) {
 	srv, _ = newAPIHandlerTestServer(t, nil, nil, store)
 	rr = doRequest(t, srv.handleDashboardSummary, http.MethodGet, "/dashboard/summary?period=invalid", "", nil)
 	assertJSONError(t, rr, http.StatusBadRequest, "period must be day, month, or year")
+}
+
+func TestHandleListWSClients_IncludesResolvedTrunkAndClientState(t *testing.T) {
+	now := time.Now().UTC()
+	trunks := &apiHandlerTrunkManagerStub{
+		byID: map[int64]*sip.Trunk{
+			42: {
+				ID:       42,
+				PublicID: "11111111-1111-4111-8111-111111111111",
+			},
+		},
+	}
+	srv, _ := newAPIHandlerTestServer(t, trunks, nil, nil)
+	srv.mu.Lock()
+	srv.wsClients["ws-1"] = &WSClient{
+		sessionID:       "ws-1",
+		trunkResolved:   true,
+		resolvedTrunkID: 42,
+		availability:    "busy",
+		callState:       "incall",
+		ConnectedAt:     now,
+		authClaims:      &auth.VerifiedClaims{Subject: "user-1"},
+	}
+	srv.mu.Unlock()
+
+	rr := doRequest(t, srv.handleListWSClients, http.MethodGet, "/ws-clients", "", nil)
+	resp := assertJSONDecode[[]WSClientResponse](t, rr, http.StatusOK)
+	if len(resp) != 1 {
+		t.Fatalf("expected 1 ws client, got %+v", resp)
+	}
+	got := resp[0]
+	if got.SessionID != "ws-1" || !got.TrunkResolved || got.ResolvedTrunkID != 42 {
+		t.Fatalf("unexpected ws client identity: %+v", got)
+	}
+	if got.ResolvedTrunkPublicID != "11111111-1111-4111-8111-111111111111" {
+		t.Fatalf("expected resolved trunk public id, got %+v", got)
+	}
+	if got.Availability != "busy" || got.CallState != "incall" || got.AuthSubject != "user-1" {
+		t.Fatalf("unexpected live client state: %+v", got)
+	}
+	if got.ConnectedAt == "" {
+		t.Fatalf("expected connectedAt to be populated")
+	}
 }

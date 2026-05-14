@@ -34,6 +34,20 @@ export interface DashboardSummaryDirectionPoint {
   count: number
 }
 
+export interface DashboardSummaryTerminalOutcomePoint {
+  outcome: string
+  direction: string
+  sipStatusCode: number
+  count: number
+}
+
+export interface DashboardSummaryTerminalTrunkPoint {
+  trunkKey: string
+  trunkName: string
+  outcome: string
+  count: number
+}
+
 export interface DashboardSummaryResponse {
   period: DashboardPeriod
   anchorDate: string
@@ -45,6 +59,8 @@ export interface DashboardSummaryResponse {
   states: Array<DashboardSummaryStatePoint>
   directions: Array<DashboardSummaryDirectionPoint>
   topTrunks: Array<DashboardSummaryTrunkPoint>
+  terminalOutcomes: Array<DashboardSummaryTerminalOutcomePoint>
+  terminalTrunks: Array<DashboardSummaryTerminalTrunkPoint>
 }
 
 export interface DashboardSummaryParams {

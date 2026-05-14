@@ -127,23 +127,45 @@ type DashboardSummaryDirectionResponse struct {
 	Count     int    `json:"count"`
 }
 
+type DashboardSummaryTerminalOutcomeResponse struct {
+	Outcome       string `json:"outcome"`
+	Direction     string `json:"direction"`
+	SIPStatusCode int    `json:"sipStatusCode"`
+	Count         int    `json:"count"`
+}
+
+type DashboardSummaryTerminalTrunkResponse struct {
+	TrunkKey  string `json:"trunkKey"`
+	TrunkName string `json:"trunkName"`
+	Outcome   string `json:"outcome"`
+	Count     int    `json:"count"`
+}
+
 type DashboardSummaryResponse struct {
-	Period     string                                `json:"period"`
-	AnchorDate string                                `json:"anchorDate"`
-	Timezone   string                                `json:"timezone"`
-	RangeStart string                                `json:"rangeStart"`
-	RangeEnd   string                                `json:"rangeEnd"`
-	Metrics    DashboardSummaryMetricsResponse       `json:"metrics"`
-	Series     []DashboardSummarySeriesPointResponse `json:"series"`
-	States     []DashboardSummaryStateResponse       `json:"states"`
-	Directions []DashboardSummaryDirectionResponse   `json:"directions"`
-	TopTrunks  []DashboardSummaryTrunkResponse       `json:"topTrunks"`
+	Period           string                                    `json:"period"`
+	AnchorDate       string                                    `json:"anchorDate"`
+	Timezone         string                                    `json:"timezone"`
+	RangeStart       string                                    `json:"rangeStart"`
+	RangeEnd         string                                    `json:"rangeEnd"`
+	Metrics          DashboardSummaryMetricsResponse           `json:"metrics"`
+	Series           []DashboardSummarySeriesPointResponse     `json:"series"`
+	States           []DashboardSummaryStateResponse           `json:"states"`
+	Directions       []DashboardSummaryDirectionResponse       `json:"directions"`
+	TopTrunks        []DashboardSummaryTrunkResponse           `json:"topTrunks"`
+	TerminalOutcomes []DashboardSummaryTerminalOutcomeResponse `json:"terminalOutcomes"`
+	TerminalTrunks   []DashboardSummaryTerminalTrunkResponse   `json:"terminalTrunks"`
 }
 
 // WSClientResponse represents a connected WebSocket client
 type WSClientResponse struct {
-	SessionID   string `json:"sessionId"`
-	ConnectedAt string `json:"connectedAt"`
+	SessionID             string `json:"sessionId"`
+	ConnectedAt           string `json:"connectedAt"`
+	TrunkResolved         bool   `json:"trunkResolved"`
+	ResolvedTrunkID       int64  `json:"resolvedTrunkId,omitempty"`
+	ResolvedTrunkPublicID string `json:"resolvedTrunkPublicId,omitempty"`
+	Availability          string `json:"availability,omitempty"`
+	CallState             string `json:"callState,omitempty"`
+	AuthSubject           string `json:"authSubject,omitempty"`
 }
 
 // DTMFRequest represents a DTMF request
@@ -187,6 +209,11 @@ type TrunkResponse struct {
 	IsRegistered       bool     `json:"isRegistered"`
 	LastError          string   `json:"lastError,omitempty"`
 	InUseBy            *string  `json:"inUseBy,omitempty"`
+	PNAppID            string   `json:"pnAppId,omitempty"`
+	PNType             string   `json:"pnType,omitempty"`
+	PNTokenMasked      string   `json:"pnTokenMasked,omitempty"`
+	PNUpdatedAt        string   `json:"pnUpdatedAt,omitempty"`
+	PushContactReady   bool     `json:"pushContactReady"`
 	CreatedAt          string   `json:"createdAt"`
 	UpdatedAt          string   `json:"updatedAt"`
 }
@@ -1358,7 +1385,31 @@ func trunkResponseFrom(trunk *sip.Trunk, activeCallCount int, activeDestinations
 	if trunk.InUseBy != nil {
 		response.InUseBy = trunk.InUseBy
 	}
+	if trunk.PNAppID != nil {
+		response.PNAppID = *trunk.PNAppID
+	}
+	if trunk.PNType != nil {
+		response.PNType = *trunk.PNType
+	}
+	if trunk.PNToken != nil {
+		response.PNTokenMasked = maskPushToken(*trunk.PNToken)
+	}
+	if trunk.PNUpdatedAt != nil {
+		response.PNUpdatedAt = trunk.PNUpdatedAt.Format(time.RFC3339)
+	}
+	response.PushContactReady = response.PNAppID != "" && response.PNType != "" && response.PNTokenMasked != ""
 	return response
+}
+
+func maskPushToken(token string) string {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return ""
+	}
+	if len(token) <= 12 {
+		return "****"
+	}
+	return token[:6] + "..." + token[len(token)-6:]
 }
 
 func formatOptionalTime(value *time.Time) string {
@@ -1407,6 +1458,7 @@ func (s *Server) handleListSessionHistory(w http.ResponseWriter, r *http.Request
 	search := q.Get("search")
 	direction := q.Get("direction")
 	state := q.Get("state")
+	endReason := q.Get("endReason")
 	sessionID := q.Get("sessionId")
 
 	var createdAfter, createdBefore *time.Time
@@ -1427,6 +1479,7 @@ func (s *Server) handleListSessionHistory(w http.ResponseWriter, r *http.Request
 		SessionID:     sessionID,
 		Direction:     direction,
 		State:         state,
+		EndReason:     endReason,
 		Search:        search,
 		CreatedAfter:  createdAfter,
 		CreatedBefore: createdBefore,
@@ -1504,13 +1557,15 @@ func (s *Server) handleListSessionEvents(w http.ResponseWriter, r *http.Request)
 	q := r.URL.Query()
 	page, _ := strconv.Atoi(q.Get("page"))
 	pageSize, _ := strconv.Atoi(q.Get("pageSize"))
+	sipStatusCode, _ := strconv.Atoi(q.Get("sipStatusCode"))
 
 	result, err := s.logStore.ListEvents(r.Context(), logstore.EventListParams{
-		Page:      page,
-		PageSize:  pageSize,
-		SessionID: sessionID,
-		Category:  q.Get("category"),
-		Name:      q.Get("name"),
+		Page:          page,
+		PageSize:      pageSize,
+		SessionID:     sessionID,
+		Category:      q.Get("category"),
+		Name:          q.Get("name"),
+		SIPStatusCode: sipStatusCode,
 	})
 	if err != nil {
 		s.respondError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to list events: %v", err))
@@ -1927,12 +1982,33 @@ func (s *Server) handleListWSClients(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	clients := make([]WSClientResponse, 0, len(s.wsClients))
 	for sessionID, client := range s.wsClients {
-		clients = append(clients, WSClientResponse{
-			SessionID:   sessionID,
-			ConnectedAt: client.ConnectedAt.Format(time.RFC3339),
-		})
+		resp := WSClientResponse{
+			SessionID:       sessionID,
+			ConnectedAt:     client.ConnectedAt.Format(time.RFC3339),
+			TrunkResolved:   client.trunkResolved,
+			ResolvedTrunkID: client.resolvedTrunkID,
+			Availability:    client.availability,
+			CallState:       client.callState,
+		}
+		if client.authClaims != nil {
+			resp.AuthSubject = client.authClaims.Subject
+		}
+		clients = append(clients, resp)
 	}
 	s.mu.RUnlock()
+
+	if s.trunkManager != nil {
+		for idx := range clients {
+			if clients[idx].ResolvedTrunkID <= 0 {
+				continue
+			}
+			if trunkRaw, ok := s.trunkManager.GetTrunkByID(clients[idx].ResolvedTrunkID); ok {
+				if trunk, ok := trunkRaw.(*sip.Trunk); ok && trunk.PublicID != "" {
+					clients[idx].ResolvedTrunkPublicID = trunk.PublicID
+				}
+			}
+		}
+	}
 
 	s.respondJSON(w, http.StatusOK, clients)
 }
@@ -2133,6 +2209,26 @@ func (s *Server) handleDashboardSummary(w http.ResponseWriter, r *http.Request) 
 		})
 	}
 
+	terminalOutcomes := make([]DashboardSummaryTerminalOutcomeResponse, 0, len(summary.TerminalOutcomes))
+	for _, outcome := range summary.TerminalOutcomes {
+		terminalOutcomes = append(terminalOutcomes, DashboardSummaryTerminalOutcomeResponse{
+			Outcome:       outcome.Outcome,
+			Direction:     outcome.Direction,
+			SIPStatusCode: outcome.SIPStatusCode,
+			Count:         outcome.Count,
+		})
+	}
+
+	terminalTrunks := make([]DashboardSummaryTerminalTrunkResponse, 0, len(summary.TerminalTrunks))
+	for _, trunk := range summary.TerminalTrunks {
+		terminalTrunks = append(terminalTrunks, DashboardSummaryTerminalTrunkResponse{
+			TrunkKey:  trunk.TrunkKey,
+			TrunkName: trunk.TrunkName,
+			Outcome:   trunk.Outcome,
+			Count:     trunk.Count,
+		})
+	}
+
 	s.respondJSON(w, http.StatusOK, DashboardSummaryResponse{
 		Period:     period,
 		AnchorDate: normalizedAnchor,
@@ -2151,10 +2247,12 @@ func (s *Server) handleDashboardSummary(w http.ResponseWriter, r *http.Request) 
 			AvgDurationSec:      summary.AvgDurationSec,
 			MaxDurationSec:      summary.MaxDurationSec,
 		},
-		Series:     series,
-		States:     states,
-		Directions: directions,
-		TopTrunks:  topTrunks,
+		Series:           series,
+		States:           states,
+		Directions:       directions,
+		TopTrunks:        topTrunks,
+		TerminalOutcomes: terminalOutcomes,
+		TerminalTrunks:   terminalTrunks,
 	})
 }
 

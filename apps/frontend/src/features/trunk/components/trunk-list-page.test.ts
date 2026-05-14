@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   getTrunkLifecycleActionLabel,
   getTrunkStatusLabel,
+  isPushContactReady,
   isRegisterActionDisabled,
 } from './trunk-list-page'
 import type { Trunk } from '@/features/trunk/types'
@@ -65,5 +66,32 @@ describe('trunk soft-delete labels', () => {
 
   it('returns Restore action when trunk is disabled', () => {
     expect(getTrunkLifecycleActionLabel(false)).toBe('Restore')
+  })
+})
+
+describe('isPushContactReady', () => {
+  it('is ready only when masked push contact fields are present', () => {
+    expect(
+      isPushContactReady(
+        makeTrunk({
+          pnAppId: 'th.or.ttrs.video.prod',
+          pnType: 'apple',
+          pnTokenMasked: 'D6F5DF...2A74CCF',
+          pushContactReady: true,
+        }),
+      ),
+    ).toBe(true)
+  })
+
+  it('does not treat raw missing token state as ready', () => {
+    expect(
+      isPushContactReady(
+        makeTrunk({
+          pnAppId: 'th.or.ttrs.video.prod',
+          pnType: 'apple',
+          pushContactReady: true,
+        }),
+      ),
+    ).toBe(false)
   })
 })

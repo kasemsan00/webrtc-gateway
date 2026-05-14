@@ -40,6 +40,7 @@ import {
 } from '@/features/session-detail/services/session-detail-api'
 
 type TabType = 'events' | 'payloads' | 'dialogs' | 'stats'
+type EventQuickFilter = 'all' | 'sip' | 'terminal' | 'busy486' | 'noAnswer480'
 
 const DEFAULT_PAGE_SIZE = 50
 
@@ -47,6 +48,46 @@ const formatTimestamp = (iso: string) =>
   formatThaiDateTime(iso, {
     fractionalSecondDigits: 3,
   })
+
+function eventQuickFilterParams(filter: EventQuickFilter) {
+  switch (filter) {
+    case 'sip':
+      return { category: 'sip' }
+    case 'terminal':
+      return { category: 'sip', name: 'sip_terminal_action' }
+    case 'busy486':
+      return { category: 'sip', sipStatusCode: 486 }
+    case 'noAnswer480':
+      return { category: 'sip', sipStatusCode: 480 }
+    default:
+      return {}
+  }
+}
+
+function SIPStatusBadge({ statusCode }: { statusCode?: number }) {
+  if (!statusCode) {
+    return <span className="text-xs text-muted-foreground">-</span>
+  }
+  if (statusCode >= 200 && statusCode < 300) {
+    return (
+      <Badge variant="success" className="text-[10px]">
+        {statusCode}
+      </Badge>
+    )
+  }
+  if (statusCode === 480 || statusCode === 486 || statusCode >= 500) {
+    return (
+      <Badge variant="destructive" className="text-[10px]">
+        {statusCode}
+      </Badge>
+    )
+  }
+  return (
+    <Badge variant="secondary" className="text-[10px]">
+      {statusCode}
+    </Badge>
+  )
+}
 
 export function SessionDetailPage() {
   const { theme, toggleTheme } = useTheme()
@@ -143,6 +184,7 @@ function EventsTab({ sessionId }: { sessionId: string }) {
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [quickFilter, setQuickFilter] = useState<EventQuickFilter>('all')
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
 
@@ -154,6 +196,7 @@ function EventsTab({ sessionId }: { sessionId: string }) {
         const res = await fetchSessionEvents(sessionId, {
           page: p ?? page,
           pageSize,
+          ...eventQuickFilterParams(quickFilter),
         })
         setEvents(res.items)
         setTotal(res.total)
@@ -163,7 +206,7 @@ function EventsTab({ sessionId }: { sessionId: string }) {
         setLoading(false)
       }
     },
-    [sessionId, page, pageSize],
+    [sessionId, page, pageSize, quickFilter],
   )
 
   useEffect(() => {
@@ -217,9 +260,7 @@ function EventsTab({ sessionId }: { sessionId: string }) {
         accessorKey: 'sipStatusCode',
         header: 'Status',
         cell: ({ row }) => (
-          <span className="text-xs text-muted-foreground">
-            {row.original.sipStatusCode || '-'}
-          </span>
+          <SIPStatusBadge statusCode={row.original.sipStatusCode} />
         ),
       },
       {
@@ -250,6 +291,27 @@ function EventsTab({ sessionId }: { sessionId: string }) {
           <RiRefreshLine className="size-3" />
           Refresh
         </Button>
+        <Separator orientation="vertical" className="h-4" />
+        {[
+          ['all', 'All'],
+          ['sip', 'SIP'],
+          ['terminal', 'Terminal'],
+          ['busy486', '486'],
+          ['noAnswer480', '480'],
+        ].map(([value, label]) => (
+          <Button
+            key={value}
+            size="sm"
+            variant={quickFilter === value ? 'secondary' : 'ghost'}
+            className="h-7 px-2 text-xs"
+            onClick={() => {
+              setQuickFilter(value as EventQuickFilter)
+              setPage(1)
+            }}
+          >
+            {label}
+          </Button>
+        ))}
       </div>
       <DataTable
         columns={columns}

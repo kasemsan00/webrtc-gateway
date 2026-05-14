@@ -141,7 +141,10 @@ func (n *noopStore) GetDashboardSummary(ctx context.Context, params DashboardSum
 		SessionDirectoryCount: 0,
 		Series:                []DashboardSeriesPoint{},
 		States:                []DashboardStateCount{},
+		Directions:            []DashboardDirectionCount{},
 		TopTrunks:             []DashboardTrunkCount{},
+		TerminalOutcomes:      []DashboardTerminalOutcomeCount{},
+		TerminalTrunks:        []DashboardTerminalTrunkCount{},
 	}, nil
 }
 func (n *noopStore) GetDB() *pgxpool.Pool {
@@ -713,6 +716,11 @@ func (s *logStore) ListSessions(ctx context.Context, params SessionListParams) (
 		args = append(args, params.State)
 		argIdx++
 	}
+	if params.EndReason != "" {
+		where += fmt.Sprintf(" AND cs.end_reason = $%d", argIdx)
+		args = append(args, params.EndReason)
+		argIdx++
+	}
 	if params.Search != "" {
 		where += fmt.Sprintf(" AND (cs.session_id ILIKE $%d OR COALESCE(NULLIF(cs.from_uri, ''), st.username, '') ILIKE $%d OR cs.to_uri ILIKE $%d OR cs.sip_call_id ILIKE $%d)", argIdx, argIdx+1, argIdx+2, argIdx+3)
 		like := "%" + params.Search + "%"
@@ -834,6 +842,11 @@ func (s *logStore) ListEvents(ctx context.Context, params EventListParams) (*Eve
 	if params.Name != "" {
 		where += fmt.Sprintf(" AND name ILIKE $%d", argIdx)
 		args = append(args, "%"+params.Name+"%")
+		argIdx++
+	}
+	if params.SIPStatusCode > 0 {
+		where += fmt.Sprintf(" AND sip_status_code = $%d", argIdx)
+		args = append(args, params.SIPStatusCode)
 		argIdx++
 	}
 
@@ -1242,10 +1255,12 @@ func (s *logStore) GetDashboardSummary(ctx context.Context, params DashboardSumm
 	}
 
 	result := &DashboardSummaryResult{
-		Series:     make([]DashboardSeriesPoint, 0),
-		States:     make([]DashboardStateCount, 0),
-		Directions: make([]DashboardDirectionCount, 0),
-		TopTrunks:  make([]DashboardTrunkCount, 0),
+		Series:           make([]DashboardSeriesPoint, 0),
+		States:           make([]DashboardStateCount, 0),
+		Directions:       make([]DashboardDirectionCount, 0),
+		TopTrunks:        make([]DashboardTrunkCount, 0),
+		TerminalOutcomes: make([]DashboardTerminalOutcomeCount, 0),
+		TerminalTrunks:   make([]DashboardTerminalTrunkCount, 0),
 	}
 
 	if err := s.pool.QueryRow(ctx,
@@ -1381,6 +1396,80 @@ func (s *logStore) GetDashboardSummary(ctx context.Context, params DashboardSumm
 	}
 	if err := trunkRows.Err(); err != nil {
 		return nil, fmt.Errorf("dashboard trunk rows failed: %w", err)
+	}
+
+	terminalRows, err := s.pool.Query(ctx, `
+		WITH latest_terminal AS (
+			SELECT DISTINCT ON (session_id)
+				session_id,
+				COALESCE(NULLIF(data->>'reason', ''), NULLIF(data->>'action', ''), '') AS event_reason,
+				COALESCE(sip_status_code, 0) AS sip_status_code
+			FROM call_events
+			WHERE name = 'sip_terminal_action'
+			ORDER BY session_id, ts DESC
+		)
+		SELECT
+			COALESCE(NULLIF(cs.end_reason, ''), NULLIF(latest_terminal.event_reason, ''), NULLIF(cs.final_state, ''), 'unknown') AS outcome,
+			COALESCE(NULLIF(cs.direction, ''), 'unknown') AS direction,
+			COALESCE(latest_terminal.sip_status_code, 0) AS sip_status_code,
+			COUNT(*)
+		FROM call_sessions cs
+		LEFT JOIN latest_terminal ON latest_terminal.session_id = cs.session_id
+		WHERE cs.created_at >= $1 AND cs.created_at < $2
+		GROUP BY 1, 2, 3
+		ORDER BY COUNT(*) DESC, outcome ASC, direction ASC
+	`, params.RangeStartUTC, params.RangeEndUTC)
+	if err != nil {
+		return nil, fmt.Errorf("dashboard terminal outcome query failed: %w", err)
+	}
+	defer terminalRows.Close()
+
+	for terminalRows.Next() {
+		var item DashboardTerminalOutcomeCount
+		if err := terminalRows.Scan(&item.Outcome, &item.Direction, &item.SIPStatusCode, &item.Count); err != nil {
+			return nil, fmt.Errorf("dashboard terminal outcome scan failed: %w", err)
+		}
+		result.TerminalOutcomes = append(result.TerminalOutcomes, item)
+	}
+	if err := terminalRows.Err(); err != nil {
+		return nil, fmt.Errorf("dashboard terminal outcome rows failed: %w", err)
+	}
+
+	terminalTrunkRows, err := s.pool.Query(ctx, `
+		WITH latest_terminal AS (
+			SELECT DISTINCT ON (session_id)
+				session_id,
+				COALESCE(NULLIF(data->>'reason', ''), NULLIF(data->>'action', ''), '') AS event_reason
+			FROM call_events
+			WHERE name = 'sip_terminal_action'
+			ORDER BY session_id, ts DESC
+		)
+		SELECT
+			COALESCE(cs.trunk_id::text, 'unknown') AS trunk_key,
+			COALESCE(NULLIF(cs.trunk_name, ''), CASE WHEN cs.trunk_id IS NOT NULL THEN CONCAT('Trunk #', cs.trunk_id::text) ELSE 'Public/Unknown' END) AS trunk_name,
+			COALESCE(NULLIF(cs.end_reason, ''), NULLIF(latest_terminal.event_reason, ''), NULLIF(cs.final_state, ''), 'unknown') AS outcome,
+			COUNT(*)
+		FROM call_sessions cs
+		LEFT JOIN latest_terminal ON latest_terminal.session_id = cs.session_id
+		WHERE cs.created_at >= $1 AND cs.created_at < $2
+		GROUP BY 1, 2, 3
+		ORDER BY COUNT(*) DESC, trunk_name ASC, outcome ASC
+		LIMIT $3
+	`, params.RangeStartUTC, params.RangeEndUTC, topTrunks)
+	if err != nil {
+		return nil, fmt.Errorf("dashboard terminal trunk query failed: %w", err)
+	}
+	defer terminalTrunkRows.Close()
+
+	for terminalTrunkRows.Next() {
+		var item DashboardTerminalTrunkCount
+		if err := terminalTrunkRows.Scan(&item.TrunkKey, &item.TrunkName, &item.Outcome, &item.Count); err != nil {
+			return nil, fmt.Errorf("dashboard terminal trunk scan failed: %w", err)
+		}
+		result.TerminalTrunks = append(result.TerminalTrunks, item)
+	}
+	if err := terminalTrunkRows.Err(); err != nil {
+		return nil, fmt.Errorf("dashboard terminal trunk rows failed: %w", err)
 	}
 
 	return result, nil

@@ -18,6 +18,11 @@ export interface Trunk {
   lastRegisteredAt: string
   isRegistered: boolean
   lastError: string
+  pnAppId?: string
+  pnType?: string
+  pnTokenMasked?: string
+  pnUpdatedAt?: string
+  pushContactReady?: boolean
   createdAt: string
   updatedAt: string
 }

@@ -10,6 +10,9 @@ import (
 func TestTrunkResponseFrom_IncludesPublicIDBothFields(t *testing.T) {
 	now := time.Now()
 	inUseBy := "alice"
+	pnAppID := "th.or.ttrs.video.prod"
+	pnType := "apple"
+	pnToken := "D6F5DF83B03398129B4AC01DFE5971662B46130F3F5424AF93CF0A8C02A74CCF"
 	trunk := &sip.Trunk{
 		ID:               7,
 		PublicID:         "e1f7d53d-e06d-4b77-9f78-f04ece6d21a7",
@@ -22,6 +25,10 @@ func TestTrunkResponseFrom_IncludesPublicIDBothFields(t *testing.T) {
 		IsDefault:        false,
 		InUseBy:          &inUseBy,
 		LastRegisteredAt: &now,
+		PNAppID:          &pnAppID,
+		PNType:           &pnType,
+		PNToken:          &pnToken,
+		PNUpdatedAt:      &now,
 		CreatedAt:        now,
 		UpdatedAt:        now,
 	}
@@ -44,5 +51,14 @@ func TestTrunkResponseFrom_IncludesPublicIDBothFields(t *testing.T) {
 	}
 	if resp.InUseBy == nil || *resp.InUseBy != inUseBy {
 		t.Fatalf("expected inUseBy=%s, got %v", inUseBy, resp.InUseBy)
+	}
+	if !resp.PushContactReady || resp.PNAppID != pnAppID || resp.PNType != pnType {
+		t.Fatalf("unexpected push contact fields: %+v", resp)
+	}
+	if resp.PNTokenMasked != "D6F5DF...A74CCF" {
+		t.Fatalf("expected masked token, got %q", resp.PNTokenMasked)
+	}
+	if resp.PNTokenMasked == pnToken {
+		t.Fatalf("full pn_token leaked in response")
 	}
 }

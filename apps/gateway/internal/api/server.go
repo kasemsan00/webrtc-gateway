@@ -115,6 +115,7 @@ type TrunkManager interface {
 	SetTrunkInUseBy(ctx context.Context, trunkID int64, username *string) error
 	FindTrunkByInUseBy(ctx context.Context, inUseBy string) (*sip.Trunk, error)
 	SetTrunkNotifyUserID(ctx context.Context, trunkID int64, userID *string) error
+	SetTrunkPushContact(ctx context.Context, trunkID int64, contact sip.TrunkPushContact) error
 }
 
 // SIPCallMaker interface for making SIP calls (implemented by SIP server)
@@ -172,6 +173,9 @@ type WSMessage struct {
 	// For SIP Trunk mode outbound call: include trunkId or trunkPublicId
 	TrunkID       int64  `json:"trunkId,omitempty"`       // Use trunk from DB (0 = not specified)
 	TrunkPublicID string `json:"trunkPublicId,omitempty"` // Stable public trunk reference
+	PNAppID       string `json:"pnAppId,omitempty"`       // SIP Contact push app-id
+	PNType        string `json:"pnType,omitempty"`        // SIP Contact push pn-type
+	PNToken       string `json:"pnToken,omitempty"`       // SIP Contact push pn-tok
 	// S2S Translation fields
 	SourceLang string `json:"sourceLang,omitempty"`
 	TargetLang string `json:"targetLang,omitempty"`
@@ -542,6 +546,8 @@ func (s *Server) handleWSMessage(client *WSClient, message []byte) {
 		s.handleWSRequestKeyframe(client, msg)
 	case "trunk_resolve":
 		s.handleWSTrunkResolve(client, msg)
+	case "trunk_push_token":
+		s.handleWSTrunkPushToken(client, msg)
 	case "client_state":
 		s.handleWSClientState(client, msg)
 	case "translate":
@@ -2122,6 +2128,101 @@ func (s *Server) handleWSResume(client *WSClient, msg WSMessage) {
 	log.Printf("📊 Resume send elapsed: session=%s elapsed=%s", msg.SessionID, time.Since(resumeSendStartedAt).Round(10*time.Millisecond))
 }
 
+const (
+	trunkPNAppID = "th.or.ttrs.video.prod"
+	trunkPNType  = "apple"
+)
+
+func hasTrunkPushContact(msg WSMessage) bool {
+	return strings.TrimSpace(msg.PNAppID) != "" ||
+		strings.TrimSpace(msg.PNType) != "" ||
+		strings.TrimSpace(msg.PNToken) != ""
+}
+
+func validateTrunkPushContact(msg WSMessage) (sip.TrunkPushContact, error) {
+	contact := sip.TrunkPushContact{
+		PNAppID: strings.TrimSpace(msg.PNAppID),
+		PNType:  strings.TrimSpace(msg.PNType),
+		PNToken: strings.TrimSpace(msg.PNToken),
+	}
+	if contact.PNAppID != trunkPNAppID {
+		return contact, fmt.Errorf("pnAppId must be %s", trunkPNAppID)
+	}
+	if contact.PNType != trunkPNType {
+		return contact, fmt.Errorf("pnType must be %s", trunkPNType)
+	}
+	if len(contact.PNToken) < 32 || len(contact.PNToken) > 256 {
+		return contact, fmt.Errorf("pnToken length is invalid")
+	}
+	for _, r := range contact.PNToken {
+		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')) {
+			return contact, fmt.Errorf("pnToken must be hex")
+		}
+	}
+	return contact, nil
+}
+
+func (s *Server) updateTrunkPushContact(ctx context.Context, client *WSClient, trunkID int64, msg WSMessage) error {
+	if s.trunkManager == nil {
+		return fmt.Errorf("trunk manager not available")
+	}
+	if client == nil || client.authClaims == nil || strings.TrimSpace(client.authClaims.Subject) == "" {
+		return fmt.Errorf("authenticated client required for trunk push token update")
+	}
+
+	contact, err := validateTrunkPushContact(msg)
+	if err != nil {
+		return err
+	}
+	if err := s.trunkManager.SetTrunkPushContact(ctx, trunkID, contact); err != nil {
+		return err
+	}
+	if err := s.trunkManager.RegisterTrunk(trunkID, true); err != nil {
+		return fmt.Errorf("trunk push token persisted but re-register failed: %w", err)
+	}
+	log.Printf("📲 Trunk push contact updated: trunkID=%d appID=%s pnType=%s", trunkID, contact.PNAppID, contact.PNType)
+	return nil
+}
+
+func (s *Server) handleWSTrunkPushToken(client *WSClient, msg WSMessage) {
+	ctx := context.Background()
+	if s.trunkManager == nil {
+		s.sendWSError(client, msg.SessionID, "Trunk manager not available")
+		return
+	}
+	if !client.trunkResolved || client.resolvedTrunkID <= 0 {
+		s.sendWSError(client, msg.SessionID, "Trunk must be resolved before updating push token")
+		return
+	}
+
+	targetTrunkID := msg.TrunkID
+	if targetTrunkID == 0 && strings.TrimSpace(msg.TrunkPublicID) != "" {
+		publicID, ok := sip.NormalizeTrunkPublicID(msg.TrunkPublicID)
+		if !ok {
+			s.sendWSError(client, msg.SessionID, "Invalid trunkPublicId")
+			return
+		}
+		resolvedID, ok := s.trunkManager.GetTrunkIDByPublicID(publicID)
+		if !ok {
+			s.sendWSError(client, msg.SessionID, "Trunk not found")
+			return
+		}
+		targetTrunkID = resolvedID
+	}
+	if targetTrunkID == 0 {
+		targetTrunkID = client.resolvedTrunkID
+	}
+	if targetTrunkID != client.resolvedTrunkID {
+		s.sendWSError(client, msg.SessionID, "Push token trunk mismatch")
+		return
+	}
+
+	if err := s.updateTrunkPushContact(ctx, client, targetTrunkID, msg); err != nil {
+		s.sendWSError(client, msg.SessionID, err.Error())
+		return
+	}
+}
+
 // handleWSTrunkResolve resolves trunk ownership/route from either credentials or trunk ID/public ID.
 func (s *Server) handleWSTrunkResolve(client *WSClient, msg WSMessage) {
 	ctx := context.Background()
@@ -2225,6 +2326,12 @@ func (s *Server) handleWSTrunkResolve(client *WSClient, msg WSMessage) {
 				if err := s.trunkManager.SetTrunkNotifyUserID(ctx, trunkID, &sub); err != nil {
 					log.Printf("⚠️ Failed to set notify_user_id for trunk %d: %v", trunkID, err)
 				}
+			}
+		}
+		if hasTrunkPushContact(msg) {
+			if err := s.updateTrunkPushContact(ctx, client, trunkID, msg); err != nil {
+				log.Printf("⚠️ Failed to update push contact for trunk %d: %v", trunkID, err)
+				s.sendWSError(client, msg.SessionID, err.Error())
 			}
 		}
 

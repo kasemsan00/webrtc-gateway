@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"k2-gateway/internal/auth"
 	"k2-gateway/internal/config"
 	"k2-gateway/internal/logstore"
 	"k2-gateway/internal/session"
@@ -29,6 +30,9 @@ type stubResolveTrunkManager struct {
 	byID        map[int64]*sip.Trunk
 	byPublicID  map[string]int64
 	lookupCount int
+	pushContact *sip.TrunkPushContact
+	pushTrunkID int64
+	registerID  int64
 }
 
 func (s *stubResolveTrunkManager) GetTrunkByID(id int64) (interface{}, bool) {
@@ -56,7 +60,8 @@ func (s *stubResolveTrunkManager) UpdateTrunk(ctx context.Context, trunkID int64
 	return nil, errors.New("not implemented")
 }
 func (s *stubResolveTrunkManager) RegisterTrunk(trunkID int64, force bool) error {
-	return errors.New("not implemented")
+	s.registerID = trunkID
+	return nil
 }
 func (s *stubResolveTrunkManager) UnregisterTrunk(trunkID int64, force bool) error {
 	return errors.New("not implemented")
@@ -88,6 +93,12 @@ func (s *stubResolveTrunkManager) FindTrunkByInUseBy(_ context.Context, _ string
 }
 
 func (s *stubResolveTrunkManager) SetTrunkNotifyUserID(_ context.Context, _ int64, _ *string) error {
+	return nil
+}
+
+func (s *stubResolveTrunkManager) SetTrunkPushContact(_ context.Context, trunkID int64, contact sip.TrunkPushContact) error {
+	s.pushTrunkID = trunkID
+	s.pushContact = &contact
 	return nil
 }
 
@@ -406,6 +417,95 @@ func TestHandleWSTrunkResolve_ByTrunkID_ResolvedWhenOwnedByInstance(t *testing.T
 	}
 	if client.resolvedTrunkID != 42 {
 		t.Fatalf("expected client.resolvedTrunkID=42 for trunk_resolved by trunkId, got %d", client.resolvedTrunkID)
+	}
+}
+
+func TestHandleWSTrunkResolve_WithPushContact_PersistsAndReregisters(t *testing.T) {
+	owner := "gw-1"
+	future := time.Now().Add(2 * time.Minute)
+	trunkMgr := &stubResolveTrunkManager{
+		byID: map[int64]*sip.Trunk{
+			42: {
+				ID:         42,
+				PublicID:   "8f6f6d70-2b5a-4fe7-a0d5-9d0af0e90d3a",
+				LeaseOwner: &owner,
+				LeaseUntil: &future,
+			},
+		},
+	}
+
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{InstanceID: "gw-1"}, config.TranslatorConfig{}, nil, nil, nil, trunkMgr, &stubResolveStore{})
+	client := &WSClient{
+		send:       make(chan []byte, 8),
+		authClaims: &auth.VerifiedClaims{Subject: "user-1"},
+	}
+
+	srv.handleWSTrunkResolve(client, WSMessage{
+		Type:      "trunk_resolve",
+		SessionID: "s1",
+		TrunkID:   42,
+		PNAppID:   "th.or.ttrs.video.prod",
+		PNType:    "apple",
+		PNToken:   "D6F5DF83B03398129B4AC01DFE5971662B46130F3F5424AF93CF0A8C02A74CCF",
+	})
+
+	msgs := readWSMessages(t, client.send)
+	if len(msgs) != 1 || msgs[0].Type != "trunk_resolved" {
+		t.Fatalf("expected trunk_resolved only, got %+v", msgs)
+	}
+	if trunkMgr.pushTrunkID != 42 {
+		t.Fatalf("expected push contact for trunk 42, got %d", trunkMgr.pushTrunkID)
+	}
+	if trunkMgr.pushContact == nil || trunkMgr.pushContact.PNAppID != "th.or.ttrs.video.prod" || trunkMgr.pushContact.PNType != "apple" {
+		t.Fatalf("unexpected push contact: %+v", trunkMgr.pushContact)
+	}
+	if trunkMgr.registerID != 42 {
+		t.Fatalf("expected re-register for trunk 42, got %d", trunkMgr.registerID)
+	}
+}
+
+func TestHandleWSTrunkPushToken_RequiresResolvedMatchingTrunk(t *testing.T) {
+	trunkMgr := &stubResolveTrunkManager{
+		byID: map[int64]*sip.Trunk{
+			42: {ID: 42, PublicID: "8f6f6d70-2b5a-4fe7-a0d5-9d0af0e90d3a"},
+		},
+		byPublicID: map[string]int64{
+			"8f6f6d70-2b5a-4fe7-a0d5-9d0af0e90d3a": 42,
+		},
+	}
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{InstanceID: "gw-1"}, config.TranslatorConfig{}, nil, nil, nil, trunkMgr, &stubResolveStore{})
+	client := &WSClient{
+		send:            make(chan []byte, 8),
+		trunkResolved:   true,
+		resolvedTrunkID: 42,
+		authClaims:      &auth.VerifiedClaims{Subject: "user-1"},
+	}
+
+	srv.handleWSTrunkPushToken(client, WSMessage{
+		Type:          "trunk_push_token",
+		TrunkPublicID: "8f6f6d70-2b5a-4fe7-a0d5-9d0af0e90d3a",
+		PNAppID:       "th.or.ttrs.video.prod",
+		PNType:        "apple",
+		PNToken:       "D6F5DF83B03398129B4AC01DFE5971662B46130F3F5424AF93CF0A8C02A74CCF",
+	})
+
+	if msgs := readWSMessages(t, client.send); len(msgs) != 0 {
+		t.Fatalf("expected no error messages, got %+v", msgs)
+	}
+	if trunkMgr.pushTrunkID != 42 || trunkMgr.registerID != 42 {
+		t.Fatalf("expected persist and re-register for trunk 42, push=%d register=%d", trunkMgr.pushTrunkID, trunkMgr.registerID)
+	}
+
+	srv.handleWSTrunkPushToken(client, WSMessage{
+		Type:    "trunk_push_token",
+		TrunkID: 99,
+		PNAppID: "th.or.ttrs.video.prod",
+		PNType:  "apple",
+		PNToken: "D6F5DF83B03398129B4AC01DFE5971662B46130F3F5424AF93CF0A8C02A74CCF",
+	})
+	msgs := readWSMessages(t, client.send)
+	if len(msgs) != 1 || msgs[0].Type != "error" {
+		t.Fatalf("expected mismatch error, got %+v", msgs)
 	}
 }
 
