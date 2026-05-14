@@ -212,6 +212,7 @@ func (s *Server) handleINVITE(req *sip.Request, tx sip.ServerTransaction) {
 
 			// CRITICAL: Update the transaction - old one may have timed out
 			sess.UpdateIncomingInviteTransaction(tx, req, req.Body())
+			s.registerIncomingCancelHandler(sess, tx)
 
 			// If session is still in "incoming" state, resend 180 Ringing
 			if sess.GetState() == session.StateIncoming {
@@ -285,8 +286,27 @@ func (s *Server) handleINVITE(req *sip.Request, tx sip.ServerTransaction) {
 
 		// Store SIP transaction, request, and INVITE body for later response
 		sess.SetIncomingInvite(tx, req, req.Body(), fromURI, toURI)
+		s.registerIncomingCancelHandler(sess, tx)
 
-		// Send 180 Ringing
+		// Let the API admission layer decide whether to fan out, push, or
+		// immediately reject with 486/480 before we emit 180 Ringing.
+		callerID := fromDisplayName
+		if callerID == "" {
+			callerID = fromURI
+		}
+		incomingTrunkID := int64(0)
+		if matchedTrunk != nil {
+			incomingTrunkID = matchedTrunk.ID
+		}
+		s.incomingNotifier.NotifyIncomingCall(sess.ID, callerID, toURI, incomingTrunkID)
+		fmt.Printf("📲 Notified browser about incoming call from: %s\n", callerID)
+
+		if sess.GetState() != session.StateIncoming {
+			fmt.Printf("📲 Incoming admission ended session %s before ringing\n", sess.ID)
+			return
+		}
+
+		// Send 180 Ringing only after admission accepts the call for ringing.
 		ringingRes := sip.NewResponseFromRequest(req, 180, "Ringing", nil)
 		ringingRes.AppendHeader(&sip.ContactHeader{
 			Address: sip.Uri{Host: s.publicAddress, Port: s.sipPort},
@@ -301,18 +321,6 @@ func (s *Server) handleINVITE(req *sip.Request, tx sip.ServerTransaction) {
 			SIPStatusCode: 180,
 			SIPCallID:     callIDValue,
 		})
-
-		// Notify browser about incoming call
-		callerID := fromDisplayName
-		if callerID == "" {
-			callerID = fromURI
-		}
-		incomingTrunkID := int64(0)
-		if matchedTrunk != nil {
-			incomingTrunkID = matchedTrunk.ID
-		}
-		s.incomingNotifier.NotifyIncomingCall(sess.ID, callerID, toURI, incomingTrunkID)
-		fmt.Printf("📲 Notified browser about incoming call from: %s\n", callerID)
 
 		return
 	}
@@ -471,8 +479,6 @@ func (s *Server) handleBYE(req *sip.Request, tx sip.ServerTransaction) {
 
 // handleCANCEL handles CANCEL requests (caller terminated before answer)
 func (s *Server) handleCANCEL(req *sip.Request, tx sip.ServerTransaction) {
-	ctx := context.Background()
-
 	log.Printf("[SIP-CANCEL] handleCANCEL start: method=%s source=%s destination=%s recipient=%s", req.Method, req.Source(), req.Destination(), req.Recipient.String())
 
 	callIDValue := ""
@@ -480,41 +486,58 @@ func (s *Server) handleCANCEL(req *sip.Request, tx sip.ServerTransaction) {
 		callIDValue = callID.Value()
 	}
 
-	// RFC 3261: UAS should respond 200 OK to CANCEL itself.
-	res := sip.NewResponseFromRequest(req, 200, "OK", nil)
+	// Matched CANCEL requests are handled by sipgo's INVITE transaction layer:
+	// it sends 200 OK to CANCEL, 487 to the original INVITE, and invokes the
+	// transaction OnCancel callback registered by handleINVITE. Reaching this
+	// handler means the CANCEL did not match any active INVITE transaction.
+	res := sip.NewResponseFromRequest(req, 481, "Call/Transaction Does Not Exist", nil)
 	if err := tx.Respond(res); err != nil {
 		log.Printf("[SIP-CANCEL] respond error: callID=%s err=%v", callIDValue, err)
 	} else {
-		log.Printf("[SIP-CANCEL] 200 OK sent: callID=%s", callIDValue)
+		log.Printf("[SIP-CANCEL] 481 sent for unmatched CANCEL: callID=%s", callIDValue)
 	}
+}
 
-	// Best-effort observability and cleanup for pending incoming session.
-	if s.sessionMgr != nil && callIDValue != "" {
-		if sess, ok := s.sessionMgr.GetSessionBySIPCallID(callIDValue); ok {
-			log.Printf("[SIP-CANCEL] matched session=%s state=%s", sess.ID, sess.GetState())
-			s.logEvent(&logstore.Event{
-				Timestamp: time.Now(),
-				SessionID: sess.ID,
-				Category:  "sip",
-				Name:      "sip_cancel_received",
-				SIPMethod: string(req.Method),
-				SIPCallID: callIDValue,
-			})
-			if sess.GetState() == session.StateIncoming {
-				authMode, _, trunkID, _, _, _, _ := sess.GetSIPAuthContext()
-				if authMode == "trunk" && trunkID > 0 && s.incomingNotifier != nil {
-					s.incomingNotifier.NotifyIncomingCancel(sess.ID, trunkID, "caller_cancelled")
-				}
-				sess.UpdateState(session.StateEnded)
-				s.notifySessionStateChange(sess, session.StateEnded)
-				s.logSessionSnapshot(ctx, sess, "sip_cancel_received")
-				s.sessionMgr.DeleteSession(sess.ID)
-				log.Printf("[SIP-CANCEL] session ended and cleaned up: session=%s", sess.ID)
-			}
-		} else {
-			log.Printf("[SIP-CANCEL] no session found for callID=%s", callIDValue)
-		}
+func (s *Server) registerIncomingCancelHandler(sess *session.Session, tx sip.ServerTransaction) {
+	if sess == nil || tx == nil {
+		return
 	}
+	tx.OnCancel(func(cancelReq *sip.Request) {
+		callIDValue := ""
+		if callID := cancelReq.CallID(); callID != nil {
+			callIDValue = callID.Value()
+		}
+		log.Printf("[SIP-CANCEL] matched INVITE transaction canceled: session=%s callID=%s", sess.ID, callIDValue)
+		s.logEvent(&logstore.Event{
+			Timestamp: time.Now(),
+			SessionID: sess.ID,
+			Category:  "sip",
+			Name:      "sip_cancel_received",
+			SIPMethod: string(cancelReq.Method),
+			SIPCallID: callIDValue,
+		})
+
+		if sess.GetState() != session.StateIncoming {
+			log.Printf("[SIP-CANCEL] cancel ignored for non-incoming session=%s state=%s", sess.ID, sess.GetState())
+			return
+		}
+		if !sess.TryBeginTerminalAction("caller_cancel") {
+			log.Printf("[SIP-CANCEL] cancel ignored; terminal action already claimed: session=%s winner=%s", sess.ID, sess.GetTerminalAction())
+			return
+		}
+
+		authMode, _, trunkID, _, _, _, _ := sess.GetSIPAuthContext()
+		if authMode == "trunk" && trunkID > 0 && s.incomingNotifier != nil {
+			s.incomingNotifier.NotifyIncomingCancel(sess.ID, trunkID, "caller_cancelled")
+		}
+		sess.UpdateState(session.StateEnded)
+		s.notifySessionStateChange(sess, session.StateEnded)
+		s.logSessionSnapshot(context.Background(), sess, "sip_cancel_received")
+		if s.sessionMgr != nil {
+			s.sessionMgr.DeleteSession(sess.ID)
+		}
+		log.Printf("[SIP-CANCEL] session ended and cleaned up: session=%s", sess.ID)
+	})
 }
 
 // handleACK handles ACK requests

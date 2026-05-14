@@ -42,6 +42,15 @@ const (
 
 	// Timeout for loading trunk notify_user_id from DB before dispatching push.
 	incomingPushTrunkLookupTimeout = 5 * time.Second
+
+	defaultIncomingRingTimeout = 30 * time.Second
+)
+
+const (
+	clientAvailabilityIdle        = "idle"
+	clientAvailabilityBusy        = "busy"
+	clientAvailabilityUnavailable = "unavailable"
+	incomingOfflinePolicyPush480  = "push_then_480"
 )
 
 // Server represents the HTTP/WebSocket API server
@@ -65,6 +74,7 @@ type Server struct {
 	trunkStreamSeq   int
 	sessionStreams   map[int]chan []byte
 	sessionStreamSeq int
+	incomingCounters map[string]int64
 	startTime        time.Time
 	mu               sync.RWMutex
 }
@@ -110,6 +120,7 @@ type TrunkManager interface {
 // SIPCallMaker interface for making SIP calls (implemented by SIP server)
 type SIPCallMaker interface {
 	MakeCall(destination, from string, sess *session.Session) error
+	CancelPendingCall(sess *session.Session) error
 	Hangup(sess *session.Session) error
 	SendDTMF(sess *session.Session, digits string) error
 	AcceptCall(sess *session.Session) error
@@ -126,6 +137,8 @@ type WSClient struct {
 	sessionID       string
 	trunkResolved   bool
 	resolvedTrunkID int64
+	availability    string
+	callState       string
 	send            chan []byte
 	ConnectedAt     time.Time
 	authClaims      *auth.VerifiedClaims // populated when tokenVerifier is set
@@ -133,17 +146,19 @@ type WSClient struct {
 
 // WSMessage represents a WebSocket message
 type WSMessage struct {
-	Type        string          `json:"type"`
-	SessionID   string          `json:"sessionId,omitempty"`
-	SDP         string          `json:"sdp,omitempty"`
-	Candidate   json.RawMessage `json:"candidate,omitempty"`
-	Destination string          `json:"destination,omitempty"`
-	From        string          `json:"from,omitempty"`
-	To          string          `json:"to,omitempty"`
-	Digits      string          `json:"digits,omitempty"`
-	State       string          `json:"state,omitempty"`
-	Reason      string          `json:"reason,omitempty"`
-	Error       string          `json:"error,omitempty"`
+	Type         string          `json:"type"`
+	SessionID    string          `json:"sessionId,omitempty"`
+	SDP          string          `json:"sdp,omitempty"`
+	Candidate    json.RawMessage `json:"candidate,omitempty"`
+	Destination  string          `json:"destination,omitempty"`
+	From         string          `json:"from,omitempty"`
+	To           string          `json:"to,omitempty"`
+	Digits       string          `json:"digits,omitempty"`
+	State        string          `json:"state,omitempty"`
+	Availability string          `json:"availability,omitempty"`
+	CallState    string          `json:"callState,omitempty"`
+	Reason       string          `json:"reason,omitempty"`
+	Error        string          `json:"error,omitempty"`
 	// Trunk resolve fields
 	SIPDomain   string `json:"sipDomain,omitempty"`
 	SIPUsername string `json:"sipUsername,omitempty"`
@@ -242,11 +257,12 @@ func NewServer(cfg config.APIConfig, turnCfg config.TURNConfig, gatewayCfg confi
 				return true
 			},
 		},
-		wsClients:      make(map[string]*WSClient),
-		wsConnections:  make(map[*WSClient]struct{}),
-		trunkStreams:   make(map[int]chan []byte),
-		sessionStreams: make(map[int]chan []byte),
-		startTime:      time.Now(),
+		wsClients:        make(map[string]*WSClient),
+		wsConnections:    make(map[*WSClient]struct{}),
+		trunkStreams:     make(map[int]chan []byte),
+		sessionStreams:   make(map[int]chan []byte),
+		incomingCounters: make(map[string]int64),
+		startTime:        time.Now(),
 	}
 }
 
@@ -394,9 +410,11 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close()
 
 	client := &WSClient{
-		conn:        conn,
-		send:        make(chan []byte, 256),
-		ConnectedAt: time.Now(),
+		conn:         conn,
+		send:         make(chan []byte, 256),
+		availability: clientAvailabilityIdle,
+		callState:    string(session.StateNew),
+		ConnectedAt:  time.Now(),
 	}
 	if claims, ok := AuthClaimsFromContext(req.Context()); ok {
 		client.authClaims = claims
@@ -524,6 +542,8 @@ func (s *Server) handleWSMessage(client *WSClient, message []byte) {
 		s.handleWSRequestKeyframe(client, msg)
 	case "trunk_resolve":
 		s.handleWSTrunkResolve(client, msg)
+	case "client_state":
+		s.handleWSClientState(client, msg)
 	case "translate":
 		s.handleWSTranslate(client, msg)
 	case "translate_stop":
@@ -859,24 +879,10 @@ func (s *Server) handleWSCall(client *WSClient, msg WSMessage) {
 		}
 	}
 
-	// Make SIP call
+	// Make SIP call asynchronously so the read loop can process hangup while
+	// the outbound INVITE is still pending and translate it to SIP CANCEL.
 	if s.sipMaker != nil {
-		if err := s.sipMaker.MakeCall(msg.Destination, msg.From, sess); err != nil {
-			// Cleanup: decrement ref count if public mode
-			if authMode == "public" && accountKey != "" && s.publicRegistry != nil {
-				s.publicRegistry.DecrementRefCount(accountKey)
-			}
-
-			s.logEvent(&logstore.Event{
-				Timestamp: time.Now(),
-				SessionID: sess.ID,
-				Category:  "ws",
-				Name:      "ws_call_failed",
-				Data:      map[string]interface{}{"error": err.Error()},
-			})
-			s.sendWSError(client, msg.SessionID, fmt.Sprintf("Failed to make call: %v", err))
-			return
-		}
+		go s.runWSCall(client, msg, sess, authMode, accountKey)
 	}
 
 	// Send state update
@@ -886,6 +892,34 @@ func (s *Server) handleWSCall(client *WSClient, msg WSMessage) {
 		State:     string(sess.GetState()),
 	}
 	s.sendWSMessage(client, response)
+}
+
+func (s *Server) runWSCall(client *WSClient, msg WSMessage, sess *session.Session, authMode, accountKey string) {
+	if err := s.sipMaker.MakeCall(msg.Destination, msg.From, sess); err != nil {
+		if sess.IsPendingCancelRequested() {
+			log.Printf("[%s] Suppressing MakeCall error after local CANCEL: %v", sess.ID, err)
+			return
+		}
+		if s.sessionMgr != nil {
+			if _, ok := s.sessionMgr.GetSession(sess.ID); !ok {
+				log.Printf("[%s] Suppressing MakeCall error after session cleanup: %v", sess.ID, err)
+				return
+			}
+		}
+
+		if authMode == "public" && accountKey != "" && s.publicRegistry != nil {
+			s.publicRegistry.DecrementRefCount(accountKey)
+		}
+
+		s.logEvent(&logstore.Event{
+			Timestamp: time.Now(),
+			SessionID: sess.ID,
+			Category:  "ws",
+			Name:      "ws_call_failed",
+			Data:      map[string]interface{}{"error": err.Error()},
+		})
+		s.sendWSError(client, msg.SessionID, fmt.Sprintf("Failed to make call: %v", err))
+	}
 }
 
 // handleWSHangup handles WebSocket hangup messages
@@ -900,9 +934,6 @@ func (s *Server) handleWSHangup(client *WSClient, msg WSMessage) {
 		s.sendWSError(client, msg.SessionID, "Session not found")
 		return
 	}
-
-	// Update session state first
-	sess.UpdateState(session.StateEnded)
 
 	ctx := context.Background()
 	s.logEvent(&logstore.Event{
@@ -923,11 +954,46 @@ func (s *Server) handleWSHangup(client *WSClient, msg WSMessage) {
 	}
 	s.sendWSMessage(client, response)
 
-	// Send SIP BYE (this will wait for completion)
+	state := sess.GetState()
+	hasDialog := sess.HasDialogState()
+	action := "end"
+	switch {
+	case state == session.StateIncoming:
+		action = "reject"
+	case hasDialog || state == session.StateActive:
+		action = "bye"
+	case state == session.StateConnecting || state == session.StateRinging:
+		action = "cancel"
+	}
+	if !sess.TryBeginTerminalAction(action) {
+		log.Printf("[%s] Duplicate hangup ignored (requested=%s winner=%s)", msg.SessionID, action, sess.GetTerminalAction())
+		return
+	}
+	s.logTerminalAction(sess, action, 0, msg.Reason, "client")
+
+	// Send the SIP method appropriate for the current signaling state.
 	if s.sipMaker != nil {
-		if err := s.sipMaker.Hangup(sess); err != nil {
-			log.Printf("[%s] Hangup error: %v", msg.SessionID, err)
+		switch {
+		case state == session.StateIncoming:
+			if err := s.sipMaker.RejectCall(sess, "busy"); err != nil {
+				log.Printf("[%s] Reject-on-hangup error: %v", msg.SessionID, err)
+			}
+			s.incrementIncomingCounter("incoming_rejected")
+		case hasDialog || state == session.StateActive:
+			if err := s.sipMaker.Hangup(sess); err != nil {
+				log.Printf("[%s] Hangup error: %v", msg.SessionID, err)
+			}
+			s.incrementIncomingCounter("bye")
+		case state == session.StateConnecting || state == session.StateRinging:
+			if err := s.sipMaker.CancelPendingCall(sess); err != nil {
+				log.Printf("[%s] Cancel pending call error: %v", msg.SessionID, err)
+			}
+			s.incrementIncomingCounter("outgoing_canceled")
+		default:
+			sess.UpdateState(session.StateEnded)
 		}
+	} else {
+		sess.UpdateState(session.StateEnded)
 	}
 
 	// Decrement public account refcount if applicable (before deleting session)
@@ -998,6 +1064,108 @@ func (s *Server) sendWSError(client *WSClient, sessionID, errMsg string) {
 		Error:     errMsg,
 	}
 	s.sendWSMessage(client, msg)
+}
+
+func normalizeClientAvailability(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case clientAvailabilityBusy:
+		return clientAvailabilityBusy
+	case clientAvailabilityUnavailable:
+		return clientAvailabilityUnavailable
+	default:
+		return clientAvailabilityIdle
+	}
+}
+
+func normalizeClientCallState(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return string(session.StateNew)
+	}
+	return value
+}
+
+func isBusyCallState(value string) bool {
+	switch normalizeClientCallState(value) {
+	case string(session.StateConnecting), string(session.StateRinging), string(session.StateActive), string(session.StateIncoming), "calling", "incall":
+		return true
+	default:
+		return false
+	}
+}
+
+func isClientAvailableForIncoming(client *WSClient) bool {
+	if client == nil {
+		return false
+	}
+	if normalizeClientAvailability(client.availability) != clientAvailabilityIdle {
+		return false
+	}
+	return !isBusyCallState(client.callState)
+}
+
+func (s *Server) incomingRingTimeout() time.Duration {
+	if s.config.IncomingRingTimeoutSeconds <= 0 {
+		return defaultIncomingRingTimeout
+	}
+	return time.Duration(s.config.IncomingRingTimeoutSeconds) * time.Second
+}
+
+func (s *Server) handleWSClientState(client *WSClient, msg WSMessage) {
+	availability := normalizeClientAvailability(msg.Availability)
+	callState := normalizeClientCallState(msg.CallState)
+
+	s.mu.Lock()
+	client.availability = availability
+	client.callState = callState
+	s.mu.Unlock()
+
+	s.logEvent(&logstore.Event{
+		Timestamp: time.Now(),
+		SessionID: msg.SessionID,
+		Category:  "ws",
+		Name:      "ws_client_state",
+		Data: map[string]interface{}{
+			"availability": availability,
+			"callState":    callState,
+			"sessionId":    msg.SessionID,
+		},
+	})
+}
+
+func (s *Server) incrementIncomingCounter(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.incomingCounters == nil {
+		s.incomingCounters = make(map[string]int64)
+	}
+	s.incomingCounters[name]++
+}
+
+func (s *Server) logTerminalAction(sess *session.Session, action string, sipStatus int, reason, source string) {
+	if sess == nil {
+		return
+	}
+	_, _, _, sipCallID := sess.GetCallInfo()
+	data := map[string]interface{}{
+		"sessionId": sess.ID,
+		"sipCallId": sipCallID,
+		"action":    action,
+		"reason":    reason,
+		"source":    source,
+	}
+	if sipStatus > 0 {
+		data["sipStatus"] = sipStatus
+	}
+	s.logEvent(&logstore.Event{
+		Timestamp:     time.Now(),
+		SessionID:     sess.ID,
+		Category:      "sip",
+		Name:          "sip_terminal_action",
+		SIPCallID:     sipCallID,
+		SIPStatusCode: sipStatus,
+		Data:          data,
+	})
 }
 
 func (s *Server) logSessionSnapshot(ctx context.Context, sess *session.Session, endReason string) {
@@ -1132,55 +1300,60 @@ func (s *Server) NotifySessionState(sessionID string, state session.SessionState
 	}
 }
 
-// NotifyIncomingCall notifies connected WebSocket clients about an incoming call for a specific trunk.
-func (s *Server) NotifyIncomingCall(sessionID, from, to string, trunkID int64) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	if trunkID <= 0 {
-		log.Printf("📲 Skipping incoming call notification for session %s: missing trunkID", sessionID)
+func (s *Server) rejectIncomingSession(sessionID, statusReason, source string) {
+	if s.sessionMgr == nil {
+		return
+	}
+	sess, ok := s.sessionMgr.GetSession(sessionID)
+	if !ok || sess == nil {
+		return
+	}
+	if sess.GetState() != session.StateIncoming && sess.GetState() != session.StateNew {
+		return
+	}
+	if !sess.TryBeginTerminalAction(source) {
+		log.Printf("📲 Incoming terminal action already claimed: sessionID=%s action=%s winner=%s", sessionID, source, sess.GetTerminalAction())
 		return
 	}
 
-	totalConnections := len(s.wsConnections)
-	recipients := 0
-	recipientSessionIDs := make([]string, 0)
-
-	// Broadcast only to clients resolved on the same trunk.
-	for client := range s.wsConnections {
-		if client == nil || !client.trunkResolved || client.resolvedTrunkID != trunkID {
-			continue
+	statusCode := 486
+	if statusReason == "no_answer" || statusReason == "unavailable" || statusReason == "offline" {
+		statusCode = 480
+	}
+	s.logTerminalAction(sess, source, statusCode, statusReason, "gateway")
+	if s.sipMaker != nil {
+		if err := s.sipMaker.RejectCall(sess, statusReason); err != nil {
+			log.Printf("⚠️ Failed to reject incoming session %s reason=%s: %v", sessionID, statusReason, err)
 		}
-		recipients++
-		recipientSessionIDs = append(recipientSessionIDs, client.sessionID)
-		s.sendWSMessage(client, WSMessage{
-			Type:      "incoming",
-			SessionID: sessionID,
-			From:      from,
-			To:        to,
-		})
-		log.Printf("📲 Sent incoming call notification to resolved client (sessionID=%s trunkID=%d)", sessionID, trunkID)
-	}
-
-	if totalConnections == 0 {
-		log.Printf("⚠️ No WebSocket clients connected for incoming call notification")
 	} else {
-		log.Printf("📲 Incoming fanout summary: sessionID=%s trunkID=%d recipients=%d recipientSessionIDs=%v filtered=%d total=%d", sessionID, trunkID, recipients, recipientSessionIDs, totalConnections-recipients, totalConnections)
+		sess.UpdateState(session.StateEnded)
 	}
+	s.sessionMgr.DeleteSession(sessionID)
+}
 
-	// Send push notification in a separate goroutine (fire-and-forget).
-	// Uses notify_user_id (Keycloak sub UUID) which persists across sessions,
-	// so push works even when the user is offline / app is closed.
-	if s.pushService == nil {
-		log.Printf("🔔 [Push] Skip incoming call push: push service is not configured (sessionID=%s trunkID=%d)", sessionID, trunkID)
+func (s *Server) hasIncomingPushTarget(trunkID int64) bool {
+	if s.config.IncomingOfflinePolicy != "" && s.config.IncomingOfflinePolicy != incomingOfflinePolicyPush480 {
+		return false
+	}
+	if s.pushService == nil || s.trunkManager == nil || trunkID <= 0 {
+		return false
+	}
+	lookupCtx, cancel := context.WithTimeout(context.Background(), incomingPushTrunkLookupTimeout)
+	defer cancel()
+	trunk, err := s.trunkManager.GetTrunkByIDFromDB(lookupCtx, trunkID)
+	return err == nil && trunk != nil && trunk.NotifyUserID != nil && *trunk.NotifyUserID != ""
+}
+
+func (s *Server) dispatchIncomingPush(sessionID, from, to string, trunkID int64) {
+	if s.pushService == nil || s.trunkManager == nil {
 		return
 	}
-	if s.trunkManager == nil {
-		log.Printf("🔔 [Push] Skip incoming call push: trunk manager is not available (sessionID=%s trunkID=%d)", sessionID, trunkID)
-		return
-	}
-
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("🔔 [Push] Incoming call push panic recovered: sessionID=%s trunkID=%d panic=%v", sessionID, trunkID, r)
+			}
+		}()
 		lookupCtx, cancel := context.WithTimeout(context.Background(), incomingPushTrunkLookupTimeout)
 		defer cancel()
 
@@ -1189,19 +1362,125 @@ func (s *Server) NotifyIncomingCall(sessionID, from, to string, trunkID int64) {
 			log.Printf("🔔 [Push] Skip incoming call push: failed to load trunk from DB (sessionID=%s trunkID=%d err=%v)", sessionID, trunkID, err)
 			return
 		}
-		if trunk == nil {
-			log.Printf("🔔 [Push] Skip incoming call push: trunk not found in DB (sessionID=%s trunkID=%d)", sessionID, trunkID)
+		if trunk == nil || trunk.NotifyUserID == nil || *trunk.NotifyUserID == "" {
+			log.Printf("🔔 [Push] Skip incoming call push: missing notify target (sessionID=%s trunkID=%d)", sessionID, trunkID)
 			return
 		}
-
-		if trunk.NotifyUserID == nil || *trunk.NotifyUserID == "" {
-			log.Printf("🔔 [Push] Skip incoming call push: notify_user_id is empty (sessionID=%s trunkID=%d)", sessionID, trunkID)
-			return
-		}
-
 		log.Printf("🔔 [Push] Dispatch incoming call push: userID=%s sessionID=%s trunkID=%d", *trunk.NotifyUserID, sessionID, trunkID)
 		s.pushService.NotifyIncomingCall(*trunk.NotifyUserID, sessionID, from, to)
 	}()
+}
+
+func (s *Server) startIncomingRingTimeout(sessionID string, trunkID int64) {
+	timeout := s.incomingRingTimeout()
+	go func() {
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+		<-timer.C
+
+		if s.sessionMgr == nil {
+			return
+		}
+		sess, ok := s.sessionMgr.GetSession(sessionID)
+		if !ok || sess == nil || sess.GetState() != session.StateIncoming {
+			return
+		}
+		if !sess.TryBeginTerminalAction("timeout") {
+			return
+		}
+		log.Printf("⏱️ Incoming call timed out: sessionID=%s trunkID=%d timeout=%s", sessionID, trunkID, timeout)
+		s.incrementIncomingCounter("incoming_no_answer")
+		s.logTerminalAction(sess, "timeout", 480, "no_answer", "gateway")
+		if trunkID > 0 {
+			s.NotifyIncomingCancel(sessionID, trunkID, "no_answer")
+		}
+		if s.sipMaker != nil {
+			if err := s.sipMaker.RejectCall(sess, "no_answer"); err != nil {
+				log.Printf("⚠️ Failed to reject incoming timeout session %s: %v", sessionID, err)
+			}
+		} else {
+			sess.UpdateState(session.StateEnded)
+		}
+		s.sessionMgr.DeleteSession(sessionID)
+	}()
+}
+
+// NotifyIncomingCall notifies eligible WebSocket clients about an incoming call for a specific trunk.
+func (s *Server) NotifyIncomingCall(sessionID, from, to string, trunkID int64) {
+	if trunkID <= 0 {
+		log.Printf("📲 Skipping incoming call notification for session %s: missing trunkID", sessionID)
+		return
+	}
+
+	s.mu.RLock()
+	totalConnections := len(s.wsConnections)
+	matchingClients := 0
+	busyClients := 0
+	unavailableClients := 0
+	idleClients := make([]*WSClient, 0)
+	recipientSessionIDs := make([]string, 0)
+
+	for client := range s.wsConnections {
+		if client == nil || !client.trunkResolved || client.resolvedTrunkID != trunkID {
+			continue
+		}
+		matchingClients++
+		if isClientAvailableForIncoming(client) {
+			idleClients = append(idleClients, client)
+			continue
+		}
+		if normalizeClientAvailability(client.availability) == clientAvailabilityUnavailable {
+			unavailableClients++
+		} else {
+			busyClients++
+		}
+	}
+	s.mu.RUnlock()
+
+	if len(idleClients) > 0 {
+		for _, client := range idleClients {
+			recipientSessionIDs = append(recipientSessionIDs, client.sessionID)
+			s.sendWSMessage(client, WSMessage{
+				Type:      "incoming",
+				SessionID: sessionID,
+				From:      from,
+				To:        to,
+			})
+			log.Printf("📲 Sent incoming call notification to resolved client (sessionID=%s trunkID=%d)", sessionID, trunkID)
+		}
+		s.incrementIncomingCounter("incoming_presented")
+		s.startIncomingRingTimeout(sessionID, trunkID)
+		log.Printf("📲 Incoming fanout summary: sessionID=%s trunkID=%d recipients=%d recipientSessionIDs=%v filtered=%d total=%d", sessionID, trunkID, len(idleClients), recipientSessionIDs, totalConnections-len(idleClients), totalConnections)
+		return
+	}
+
+	if matchingClients > 0 {
+		reason := "busy"
+		counter := "incoming_busy"
+		if busyClients == 0 && unavailableClients > 0 {
+			reason = "unavailable"
+			counter = "incoming_unavailable"
+		}
+		s.incrementIncomingCounter(counter)
+		log.Printf("📲 Incoming admission rejected: sessionID=%s trunkID=%d reason=%s matching=%d busy=%d unavailable=%d", sessionID, trunkID, reason, matchingClients, busyClients, unavailableClients)
+		s.rejectIncomingSession(sessionID, reason, reason)
+		return
+	}
+
+	if totalConnections == 0 {
+		log.Printf("⚠️ No WebSocket clients connected for incoming call notification")
+	}
+
+	if s.hasIncomingPushTarget(trunkID) {
+		s.incrementIncomingCounter("incoming_push_wait")
+		s.dispatchIncomingPush(sessionID, from, to, trunkID)
+		s.startIncomingRingTimeout(sessionID, trunkID)
+		return
+	}
+
+	s.incrementIncomingCounter("incoming_offline")
+	log.Printf("📲 Incoming admission rejected: sessionID=%s trunkID=%d reason=offline_no_push", sessionID, trunkID)
+	s.rejectIncomingSession(sessionID, "offline", "offline")
 }
 
 // NotifyIncomingCancel notifies connected WebSocket clients that an incoming call was cancelled by caller.
@@ -1252,6 +1531,14 @@ func (s *Server) handleWSAccept(client *WSClient, msg WSMessage) {
 	incomingSess, ok := s.sessionMgr.GetSession(msg.SessionID)
 	if !ok {
 		s.sendWSError(client, msg.SessionID, "Session not found")
+		return
+	}
+	if incomingSess.GetState() != session.StateIncoming {
+		s.sendWSMessage(client, WSMessage{Type: "state", SessionID: msg.SessionID, State: string(incomingSess.GetState())})
+		return
+	}
+	if !incomingSess.TryBeginTerminalAction("accept") {
+		s.sendWSError(client, msg.SessionID, "Call already has a terminal action in progress")
 		return
 	}
 
@@ -1397,6 +1684,8 @@ func (s *Server) handleWSAccept(client *WSClient, msg WSMessage) {
 			},
 		})
 	}
+	callSession.ClearTerminalAction()
+	s.incrementIncomingCounter("incoming_accepted")
 }
 
 func isBenignIncomingRejectError(err error) bool {
@@ -1419,6 +1708,10 @@ func (s *Server) handleWSReject(client *WSClient, msg WSMessage) {
 		s.sendWSError(client, msg.SessionID, "Session not found")
 		return
 	}
+	if sess.GetState() != session.StateIncoming {
+		s.sendWSMessage(client, WSMessage{Type: "state", SessionID: msg.SessionID, State: string(sess.GetState())})
+		return
+	}
 
 	ctx := context.Background()
 	s.logEvent(&logstore.Event{
@@ -1437,6 +1730,16 @@ func (s *Server) handleWSReject(client *WSClient, msg WSMessage) {
 		reason = "busy" // Default to busy
 	}
 	log.Printf("📴 [Reject] Received incoming reject via WS (session=%s, reason=%s)", msg.SessionID, reason)
+	if !sess.TryBeginTerminalAction("reject") {
+		log.Printf("📴 [Reject] Duplicate incoming reject ignored (session=%s winner=%s)", msg.SessionID, sess.GetTerminalAction())
+		s.sendWSMessage(client, WSMessage{Type: "state", SessionID: msg.SessionID, State: string(session.StateEnded)})
+		return
+	}
+	statusCode := 486
+	if reason == "no_answer" || reason == "unavailable" || reason == "offline" {
+		statusCode = 480
+	}
+	s.logTerminalAction(sess, "reject", statusCode, reason, "client")
 
 	// Decrement public account refcount if applicable (before deleting session)
 	authMode, accountKey, _, _, _, _, _ := sess.GetSIPAuthContext()
@@ -1480,6 +1783,7 @@ func (s *Server) handleWSReject(client *WSClient, msg WSMessage) {
 			}
 		} else {
 			log.Printf("✅ [Reject] SIP reject sent successfully (session=%s, reason=%s)", msg.SessionID, reason)
+			s.incrementIncomingCounter("incoming_rejected")
 			s.logEvent(&logstore.Event{
 				Timestamp: time.Now(),
 				SessionID: sess.ID,
@@ -1965,6 +2269,9 @@ func (s *Server) notifyPendingIncomingForClient(client *WSClient, trunkID int64)
 		}
 		authMode, _, sessTrunkID, _, _, _, _ := sess.GetSIPAuthContext()
 		if authMode != "trunk" || sessTrunkID != trunkID {
+			continue
+		}
+		if !isClientAvailableForIncoming(client) {
 			continue
 		}
 		_, from, to, _ := sess.GetCallInfo()

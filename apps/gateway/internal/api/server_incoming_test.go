@@ -18,6 +18,7 @@ type incomingTestSIPCallMaker struct {
 	lastReject  string
 	rejectErr   error
 	hangupCount int
+	cancelCount int
 	lastHangup  *session.Session
 }
 
@@ -27,6 +28,10 @@ func (s *incomingTestSIPCallMaker) MakeCall(destination, from string, sess *sess
 func (s *incomingTestSIPCallMaker) Hangup(sess *session.Session) error {
 	s.hangupCount++
 	s.lastHangup = sess
+	return nil
+}
+func (s *incomingTestSIPCallMaker) CancelPendingCall(sess *session.Session) error {
+	s.cancelCount++
 	return nil
 }
 func (s *incomingTestSIPCallMaker) SendDTMF(sess *session.Session, digits string) error { return nil }
@@ -188,11 +193,8 @@ func TestHandleWSAccept_FirstAcceptWins(t *testing.T) {
 	if len(msgs2) != 1 {
 		t.Fatalf("expected 1 message for second accept, got %d", len(msgs2))
 	}
-	if msgs2[0].Type != "error" {
-		t.Fatalf("expected error for second accept, got %s", msgs2[0].Type)
-	}
-	if msgs2[0].Error != "Call already accepted by another client" {
-		t.Fatalf("unexpected second accept error: %q", msgs2[0].Error)
+	if msgs2[0].Type != "state" || msgs2[0].State != string(session.StateActive) {
+		t.Fatalf("expected benign active state for second accept, got type=%s state=%s", msgs2[0].Type, msgs2[0].State)
 	}
 
 	if sipMaker.acceptCount != 1 {
@@ -302,6 +304,202 @@ func TestHandleWSReject_NonBenignErrorReturnsWSError(t *testing.T) {
 	}
 	if _, ok := mgr.GetSession(incomingSess.ID); !ok {
 		t.Fatalf("expected session %s to remain when reject fails with non-benign error", incomingSess.ID)
+	}
+}
+
+func TestNotifyIncomingCall_AllClientsBusyRejectsBusy(t *testing.T) {
+	mgr := newTestSessionManager()
+	incomingSess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create incoming session: %v", err)
+	}
+	incomingSess.SetState(session.StateIncoming)
+	incomingSess.SetCallInfo("inbound", "1001", "1002", "sip-call-busy")
+	incomingSess.SetSIPAuthContext("trunk", "", 7, "sip.example.com", "1002", "secret", 5060)
+
+	sipMaker := &incomingTestSIPCallMaker{}
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, sipMaker, nil, nil, nil)
+	busyClient := &WSClient{
+		send:            make(chan []byte, 8),
+		trunkResolved:   true,
+		resolvedTrunkID: 7,
+		availability:    clientAvailabilityBusy,
+		callState:       "incall",
+	}
+	srv.wsConnections[busyClient] = struct{}{}
+
+	srv.NotifyIncomingCall(incomingSess.ID, "1001", "1002", 7)
+
+	if sipMaker.rejectCount != 1 || sipMaker.lastReject != "busy" {
+		t.Fatalf("expected busy reject once, got count=%d reason=%q", sipMaker.rejectCount, sipMaker.lastReject)
+	}
+	if msgs := readWSMessages(t, busyClient.send); len(msgs) != 0 {
+		t.Fatalf("expected no incoming sent to busy client, got %d messages", len(msgs))
+	}
+	if _, ok := mgr.GetSession(incomingSess.ID); ok {
+		t.Fatalf("expected busy incoming session deleted")
+	}
+}
+
+func TestNotifyIncomingCall_NoOnlineNoPushRejectsOffline480Reason(t *testing.T) {
+	mgr := newTestSessionManager()
+	incomingSess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create incoming session: %v", err)
+	}
+	incomingSess.SetState(session.StateIncoming)
+	incomingSess.SetCallInfo("inbound", "1001", "1002", "sip-call-offline")
+	incomingSess.SetSIPAuthContext("trunk", "", 8, "sip.example.com", "1002", "secret", 5060)
+
+	sipMaker := &incomingTestSIPCallMaker{}
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, sipMaker, nil, nil, nil)
+
+	srv.NotifyIncomingCall(incomingSess.ID, "1001", "1002", 8)
+
+	if sipMaker.rejectCount != 1 || sipMaker.lastReject != "offline" {
+		t.Fatalf("expected offline reject once, got count=%d reason=%q", sipMaker.rejectCount, sipMaker.lastReject)
+	}
+	if _, ok := mgr.GetSession(incomingSess.ID); ok {
+		t.Fatalf("expected offline incoming session deleted")
+	}
+}
+
+func TestNotifyIncomingCall_PushPathTimesOutNoAnswer(t *testing.T) {
+	mgr := newTestSessionManager()
+	incomingSess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create incoming session: %v", err)
+	}
+	incomingSess.SetState(session.StateIncoming)
+	incomingSess.SetCallInfo("inbound", "1001", "1002", "sip-call-timeout")
+	incomingSess.SetSIPAuthContext("trunk", "", 9, "sip.example.com", "1002", "secret", 5060)
+
+	notifyUserID := "user-1"
+	trunkMgr := &incomingNotifyTestTrunkManager{
+		trunkByID: map[int64]*sip.Trunk{
+			9: {ID: 9, NotifyUserID: &notifyUserID},
+		},
+	}
+	sipMaker := &incomingTestSIPCallMaker{}
+	srv := NewServer(
+		config.APIConfig{IncomingRingTimeoutSeconds: 1},
+		config.TURNConfig{},
+		config.GatewayConfig{},
+		config.TranslatorConfig{},
+		mgr,
+		sipMaker,
+		nil,
+		trunkMgr,
+		nil,
+	)
+	srv.pushService = push.NewService(nil, nil)
+
+	srv.NotifyIncomingCall(incomingSess.ID, "1001", "1002", 9)
+
+	deadline := time.Now().Add(1500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if sipMaker.rejectCount == 1 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if sipMaker.rejectCount != 1 || sipMaker.lastReject != "no_answer" {
+		t.Fatalf("expected no_answer timeout reject once, got count=%d reason=%q", sipMaker.rejectCount, sipMaker.lastReject)
+	}
+	if _, ok := mgr.GetSession(incomingSess.ID); ok {
+		t.Fatalf("expected timed out incoming session deleted")
+	}
+}
+
+func TestHandleWSAcceptThenRejectSendsExactlyOneFinalResponse(t *testing.T) {
+	mgr := newTestSessionManager()
+	incomingSess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create incoming session: %v", err)
+	}
+	incomingSess.SetState(session.StateIncoming)
+	incomingSess.SetCallInfo("inbound", "1001", "1002", "sip-call-race")
+
+	sipMaker := &incomingTestSIPCallMaker{}
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, sipMaker, nil, nil, nil)
+	client := &WSClient{send: make(chan []byte, 8)}
+
+	srv.handleWSAccept(client, WSMessage{Type: "accept", SessionID: incomingSess.ID})
+	srv.handleWSReject(client, WSMessage{Type: "reject", SessionID: incomingSess.ID, Reason: "busy"})
+
+	if sipMaker.acceptCount != 1 {
+		t.Fatalf("expected AcceptCall once, got %d", sipMaker.acceptCount)
+	}
+	if sipMaker.rejectCount != 0 {
+		t.Fatalf("expected RejectCall not to run after accept, got %d", sipMaker.rejectCount)
+	}
+}
+
+func TestHandleWSHangup_CancelsOutboundBeforeDialog(t *testing.T) {
+	mgr := newTestSessionManager()
+	sess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+	sess.SetState(session.StateRinging)
+
+	sipMaker := &incomingTestSIPCallMaker{}
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, sipMaker, nil, nil, nil)
+	client := &WSClient{send: make(chan []byte, 8)}
+
+	srv.handleWSHangup(client, WSMessage{Type: "hangup", SessionID: sess.ID})
+	srv.handleWSHangup(client, WSMessage{Type: "hangup", SessionID: sess.ID})
+
+	if sipMaker.cancelCount != 1 {
+		t.Fatalf("expected CancelPendingCall once, got %d", sipMaker.cancelCount)
+	}
+	if sipMaker.hangupCount != 0 || sipMaker.rejectCount != 0 {
+		t.Fatalf("expected no BYE/reject for pending outbound, got hangup=%d reject=%d", sipMaker.hangupCount, sipMaker.rejectCount)
+	}
+}
+
+func TestHandleWSHangup_UsesByeForActiveDialog(t *testing.T) {
+	mgr := newTestSessionManager()
+	sess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+	sess.SetState(session.StateActive)
+	sess.SetSIPDialogState("from-tag", "to-tag", "<sip:1002@example.com>", "example.com", 5060, 1, nil)
+
+	sipMaker := &incomingTestSIPCallMaker{}
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, sipMaker, nil, nil, nil)
+	client := &WSClient{send: make(chan []byte, 8)}
+
+	srv.handleWSHangup(client, WSMessage{Type: "hangup", SessionID: sess.ID})
+
+	if sipMaker.hangupCount != 1 {
+		t.Fatalf("expected Hangup/BYE once, got %d", sipMaker.hangupCount)
+	}
+	if sipMaker.cancelCount != 0 || sipMaker.rejectCount != 0 {
+		t.Fatalf("expected no CANCEL/reject for active dialog, got cancel=%d reject=%d", sipMaker.cancelCount, sipMaker.rejectCount)
+	}
+}
+
+func TestHandleWSHangup_RejectsIncomingBeforeAccept(t *testing.T) {
+	mgr := newTestSessionManager()
+	sess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+	sess.SetState(session.StateIncoming)
+
+	sipMaker := &incomingTestSIPCallMaker{}
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, sipMaker, nil, nil, nil)
+	client := &WSClient{send: make(chan []byte, 8)}
+
+	srv.handleWSHangup(client, WSMessage{Type: "hangup", SessionID: sess.ID})
+
+	if sipMaker.rejectCount != 1 || sipMaker.lastReject != "busy" {
+		t.Fatalf("expected incoming hangup to reject busy once, got count=%d reason=%q", sipMaker.rejectCount, sipMaker.lastReject)
+	}
+	if sipMaker.cancelCount != 0 || sipMaker.hangupCount != 0 {
+		t.Fatalf("expected no CANCEL/BYE for incoming reject, got cancel=%d hangup=%d", sipMaker.cancelCount, sipMaker.hangupCount)
 	}
 }
 

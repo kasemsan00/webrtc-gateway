@@ -27,6 +27,7 @@ func (s *stubSIPCallMaker) MakeCall(destination, from string, sess *session.Sess
 	return nil
 }
 
+func (s *stubSIPCallMaker) CancelPendingCall(sess *session.Session) error         { return nil }
 func (s *stubSIPCallMaker) Hangup(sess *session.Session) error                    { return nil }
 func (s *stubSIPCallMaker) SendDTMF(sess *session.Session, digits string) error   { return nil }
 func (s *stubSIPCallMaker) AcceptCall(sess *session.Session) error                { return nil }
@@ -39,6 +40,18 @@ func (s *stubSIPCallMaker) SendMessageToSession(sess *session.Session, body, con
 }
 func (s *stubSIPCallMaker) TriggerSwitchMessage(body, callerURI string) error {
 	return nil
+}
+
+func waitForMakeCallCount(t *testing.T, maker *stubSIPCallMaker, want int) {
+	t.Helper()
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if maker.makeCallCount == want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("expected MakeCall count %d, got %d", want, maker.makeCallCount)
 }
 
 func TestHandleWSCallRejectsPublicIdentityChange(t *testing.T) {
@@ -103,9 +116,7 @@ func TestHandleWSCallAllowsSamePublicIdentity(t *testing.T) {
 		SIPPort:     5060,
 	})
 
-	if sipMaker.makeCallCount != 1 {
-		t.Fatalf("expected MakeCall to be called once, got %d", sipMaker.makeCallCount)
-	}
+	waitForMakeCallCount(t, sipMaker, 1)
 	if sipMaker.lastSessionID != sess.ID {
 		t.Fatalf("expected MakeCall session %s, got %s", sess.ID, sipMaker.lastSessionID)
 	}
@@ -142,9 +153,7 @@ func TestHandleWSCall_AllowsIdentityChangeForNonPublicMode(t *testing.T) {
 		SIPPort:     5060,
 	})
 
-	if sipMaker.makeCallCount != 1 {
-		t.Fatalf("expected MakeCall to be called once, got %d", sipMaker.makeCallCount)
-	}
+	waitForMakeCallCount(t, sipMaker, 1)
 }
 
 func TestHandleWSCallRejectsTrunkCallWhenNotResolved(t *testing.T) {

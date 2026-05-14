@@ -88,6 +88,13 @@ func (s *Server) MakeCall(destination, from string, sess *session.Session) error
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
+	go func() {
+		select {
+		case <-sess.Done():
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
 
 	s.logEvent(&logstore.Event{
 		Timestamp: time.Now(),
@@ -133,6 +140,11 @@ func (s *Server) MakeCall(destination, from string, sess *session.Session) error
 	// This allows us to include sprop-parameter-sets in SDP for Linphone compatibility
 	fmt.Printf("[%s] 📹 Waiting for video SPS/PPS before sending INVITE...\n", sess.ID)
 	sess.WaitForSPSPPS(5 * time.Second)
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
 
 	// Create SDP offer for the outbound call (with ICE-lite)
 	// If SPS/PPS are available, they will be included in sprop-parameter-sets
@@ -183,6 +195,8 @@ func (s *Server) MakeCall(destination, from string, sess *session.Session) error
 		s.notifySessionStateChange(sess, session.StateEnded)
 		return fmt.Errorf("failed to send INVITE: %w", err)
 	}
+	sess.SetOutboundInvite(tx, inviteReq)
+	defer sess.ClearOutboundInvite()
 	defer tx.Terminate()
 
 	// Handle responses from the transaction
@@ -367,8 +381,11 @@ func (s *Server) MakeCall(destination, from string, sess *session.Session) error
 			return nil
 
 		case <-ctx.Done():
-			// Best-effort CANCEL to terminate the pending INVITE on the SIP peer
-			s.trySendCancel(inviteReq, sess)
+			// Best-effort CANCEL to terminate the pending INVITE on the SIP peer.
+			// If a user-initiated cancel already cleared the metadata, skip a duplicate.
+			if _, req := sess.GetOutboundInvite(); req != nil {
+				s.trySendCancel(inviteReq, sess)
+			}
 
 			sess.UpdateState(session.StateEnded)
 			s.notifySessionStateChange(sess, session.StateEnded)
@@ -695,6 +712,98 @@ func (s *Server) Hangup(sess *session.Session) error {
 	return nil
 }
 
+// CancelPendingCall cancels an outbound INVITE before a SIP dialog is established.
+func (s *Server) CancelPendingCall(sess *session.Session) error {
+	fmt.Printf("\n=== [%s] Cancel Pending Outbound Call ===\n", sess.ID)
+	sess.MarkPendingCancelRequested()
+
+	storedTx, storedReq := sess.GetOutboundInvite()
+	tx, _ := storedTx.(sip.ClientTransaction)
+	inviteReq, ok := storedReq.(*sip.Request)
+	if !ok || inviteReq == nil {
+		fmt.Printf("[%s] No pending outbound INVITE to CANCEL\n", sess.ID)
+		sess.ClearOutboundInvite()
+		sess.UpdateState(session.StateEnded)
+		s.notifySessionStateChange(sess, session.StateEnded)
+		sess.CloseMediaTransports()
+		return nil
+	}
+	if s.sipClient == nil {
+		return fmt.Errorf("SIP client not initialized")
+	}
+
+	cancelReq, err := createCancelRequestFromInvite(inviteReq)
+	if err != nil {
+		return err
+	}
+
+	cancelCtx, cancelFn := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelFn()
+
+	cancelTx, err := s.sipClient.TransactionRequest(cancelCtx, cancelReq, func(_ *sipgo.Client, _ *sip.Request) error {
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("failed to send CANCEL: %w", err)
+	}
+	defer cancelTx.Terminate()
+
+	s.logEvent(&logstore.Event{
+		Timestamp: time.Now(),
+		SessionID: sess.ID,
+		Category:  "sip",
+		Name:      "sip_cancel_sent",
+		SIPMethod: string(sip.CANCEL),
+		SIPCallID: inviteReq.CallID().Value(),
+	})
+
+	select {
+	case res := <-cancelTx.Responses():
+		if res != nil {
+			fmt.Printf("[%s] CANCEL response: %d %s\n", sess.ID, res.StatusCode, res.Reason)
+			s.logEvent(&logstore.Event{
+				Timestamp:     time.Now(),
+				SessionID:     sess.ID,
+				Category:      "sip",
+				Name:          "sip_cancel_response",
+				SIPMethod:     string(sip.CANCEL),
+				SIPStatusCode: res.StatusCode,
+				SIPCallID:     inviteReq.CallID().Value(),
+			})
+		}
+	case <-cancelTx.Done():
+	case <-cancelCtx.Done():
+		fmt.Printf("[%s] CANCEL timed out\n", sess.ID)
+	}
+
+	if tx != nil {
+		select {
+		case res := <-tx.Responses():
+			if res != nil && !res.IsProvisional() {
+				fmt.Printf("[%s] Original INVITE final response after CANCEL: %d %s\n", sess.ID, res.StatusCode, res.Reason)
+				s.logEvent(&logstore.Event{
+					Timestamp:     time.Now(),
+					SessionID:     sess.ID,
+					Category:      "sip",
+					Name:          "sip_invite_cancel_final_response",
+					SIPMethod:     string(sip.INVITE),
+					SIPStatusCode: res.StatusCode,
+					SIPCallID:     inviteReq.CallID().Value(),
+				})
+			}
+		case <-tx.Done():
+		case <-time.After(2 * time.Second):
+		}
+	}
+
+	sess.ClearOutboundInvite()
+	sess.UpdateState(session.StateEnded)
+	s.notifySessionStateChange(sess, session.StateEnded)
+	sess.CloseMediaTransports()
+	s.logSessionSnapshot(context.Background(), sess, "sip_cancel_sent")
+	return nil
+}
+
 // AcceptCall accepts an incoming SIP call by sending 200 OK
 func (s *Server) AcceptCall(sess *session.Session) error {
 	fmt.Printf("\n=== [%s] Accept Incoming Call ===\n", sess.ID)
@@ -903,17 +1012,23 @@ func (s *Server) RejectCall(sess *session.Session, reason string) error {
 	fmt.Printf("\n=== [%s] Reject Incoming Call ===\n", sess.ID)
 
 	// Get stored SIP transaction
-	storedTx, _, _, _, _ := sess.GetIncomingInvite()
+	storedTx, storedReq, _, _, _ := sess.GetIncomingInvite()
 	tx, ok := storedTx.(sip.ServerTransaction)
 	if !ok || tx == nil {
 		return fmt.Errorf("no stored SIP transaction for incoming call")
 	}
 
-	// Send 486 Busy Here for user-declined incoming calls.
+	// Send 486 for user-declined/busy incoming calls, and 480 for no-answer
+	// or unavailable/offline admission outcomes.
 	code := 486
 	reasonPhrase := "Busy Here"
 	if reason == "" {
 		reason = "busy"
+	}
+	switch reason {
+	case "no_answer", "unavailable", "offline":
+		code = 480
+		reasonPhrase = "Temporarily Unavailable"
 	}
 	fmt.Printf("📴 [%s] Sending SIP reject to caller (reason=%s status=%d %s)\n", sess.ID, reason, code, reasonPhrase)
 
@@ -926,7 +1041,12 @@ func (s *Server) RejectCall(sess *session.Session, reason string) error {
 		Data:      map[string]interface{}{"reason": reason, "status": code},
 	})
 
-	rejectRes := sip.NewResponse(code, reasonPhrase)
+	var rejectRes *sip.Response
+	if req, ok := storedReq.(*sip.Request); ok && req != nil {
+		rejectRes = sip.NewResponseFromRequest(req, code, reasonPhrase, nil)
+	} else {
+		rejectRes = sip.NewResponse(code, reasonPhrase)
+	}
 	if err := tx.Respond(rejectRes); err != nil {
 		if isBenignIncomingRejectRespondError(err) {
 			fmt.Printf("⚠️ [%s] Reject response warning: %v\n", sess.ID, err)
@@ -1473,29 +1593,18 @@ func (s *Server) trySendCancel(inviteReq *sip.Request, sess *session.Session) {
 		return
 	}
 
-	cancelReq := sip.NewRequest(sip.CANCEL, inviteReq.Recipient)
-
-	// RFC 3261 §9.1: CANCEL must carry same Call-ID, From, To, CSeq number
-	if h := inviteReq.CallID(); h != nil {
-		cancelReq.AppendHeader(sip.NewHeader("Call-ID", h.Value()))
-	}
-	if h := inviteReq.From(); h != nil {
-		cancelReq.AppendHeader(sip.NewHeader("From", h.Value()))
-	}
-	if h := inviteReq.To(); h != nil {
-		cancelReq.AppendHeader(sip.NewHeader("To", h.Value()))
-	}
-	cancelReq.AppendHeader(sip.NewHeader("CSeq", "1 CANCEL"))
-	cancelReq.AppendHeader(sip.NewHeader("Max-Forwards", "70"))
-
-	if dest := inviteReq.Destination(); dest != "" {
-		cancelReq.SetDestination(dest)
+	cancelReq, err := createCancelRequestFromInvite(inviteReq)
+	if err != nil {
+		fmt.Printf("[%s] Failed to build CANCEL: %v\n", sess.ID, err)
+		return
 	}
 
 	cancelCtx, cancelFn := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelFn()
 
-	tx, err := s.sipClient.TransactionRequest(cancelCtx, cancelReq)
+	tx, err := s.sipClient.TransactionRequest(cancelCtx, cancelReq, func(_ *sipgo.Client, _ *sip.Request) error {
+		return nil
+	})
 	if err != nil {
 		fmt.Printf("[%s] Failed to send CANCEL: %v\n", sess.ID, err)
 		return
@@ -1519,4 +1628,43 @@ func (s *Server) trySendCancel(inviteReq *sip.Request, sess *session.Session) {
 	case <-cancelCtx.Done():
 		fmt.Printf("[%s] CANCEL timed out\n", sess.ID)
 	}
+}
+
+func createCancelRequestFromInvite(inviteReq *sip.Request) (*sip.Request, error) {
+	if inviteReq == nil {
+		return nil, fmt.Errorf("missing INVITE request")
+	}
+	via := inviteReq.Via()
+	if via == nil {
+		return nil, fmt.Errorf("missing INVITE Via header")
+	}
+	if inviteReq.CSeq() == nil {
+		return nil, fmt.Errorf("missing INVITE CSeq header")
+	}
+
+	cancelReq := sip.NewRequest(sip.CANCEL, inviteReq.Recipient)
+	cancelReq.SipVersion = inviteReq.SipVersion
+	cancelReq.AppendHeader(via.Clone())
+	sip.CopyHeaders("Route", inviteReq, cancelReq)
+	maxForwardsHeader := sip.MaxForwardsHeader(70)
+	cancelReq.AppendHeader(&maxForwardsHeader)
+
+	if h := inviteReq.From(); h != nil {
+		cancelReq.AppendHeader(sip.HeaderClone(h))
+	}
+	if h := inviteReq.To(); h != nil {
+		cancelReq.AppendHeader(sip.HeaderClone(h))
+	}
+	if h := inviteReq.CallID(); h != nil {
+		cancelReq.AppendHeader(sip.HeaderClone(h))
+	}
+	if h := inviteReq.CSeq(); h != nil {
+		cancelReq.AppendHeader(sip.HeaderClone(h))
+	}
+	cancelReq.CSeq().MethodName = sip.CANCEL
+	cancelReq.SetTransport(inviteReq.Transport())
+	cancelReq.SetSource(inviteReq.Source())
+	cancelReq.SetDestination(inviteReq.Destination())
+	cancelReq.Laddr = inviteReq.Laddr
+	return cancelReq, nil
 }

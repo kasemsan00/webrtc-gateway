@@ -3,12 +3,13 @@
 FROM node:22-alpine AS base
 ENV PNPM_HOME="/pnpm"
 ENV PATH="$PNPM_HOME:$PATH"
-RUN corepack enable
+RUN corepack enable && corepack prepare pnpm@10.32.1 --activate
 
 FROM base AS deps
 WORKDIR /app
-# Copy lockfile from root and frontend package.json
+# Copy lockfile, workspace config, and frontend package.json
 COPY pnpm-lock.yaml ./
+COPY pnpm-workspace.yaml ./
 COPY apps/frontend/package.json ./
 RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
     pnpm install --no-frozen-lockfile

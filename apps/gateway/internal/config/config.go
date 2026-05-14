@@ -29,12 +29,12 @@ type Config struct {
 
 // TranslatorConfig holds S2S speech translation configuration
 type TranslatorConfig struct {
-	Enable     bool   // Enable translation client (default: false)
-	Addr       string // gRPC server address (default: "localhost:5000")
-	SourceLang string // Source language code (default: "en")
-	TargetLang string // Target language code (default: "th")
-	TTSVoice   string // TTS voice name (default: "th-TH-Sarawut")
-	OpusBitrate int   // Opus encoding bitrate (default: 24000)
+	Enable      bool   // Enable translation client (default: false)
+	Addr        string // gRPC server address (default: "localhost:5000")
+	SourceLang  string // Source language code (default: "en")
+	TargetLang  string // Target language code (default: "th")
+	TTSVoice    string // TTS voice name (default: "th-TH-Sarawut")
+	OpusBitrate int    // Opus encoding bitrate (default: 24000)
 }
 
 // RTPConfig holds RTP UDP port range configuration
@@ -46,12 +46,14 @@ type RTPConfig struct {
 
 // APIConfig holds HTTP API server configuration
 type APIConfig struct {
-	Port           int    // HTTP server port (default: 8080)
-	EnableWS       bool   // Enable WebSocket endpoint
-	EnableREST     bool   // Enable REST API
-	CORSOrigins    string // CORS allowed origins (comma-separated)
-	DebugWebSocket bool   // Enable WebSocket debug logging (ping/pong, messages)
-	DebugTURN      bool   // Enable TURN/ICE debug logging (candidates, selected pair)
+	Port                       int    // HTTP server port (default: 8080)
+	EnableWS                   bool   // Enable WebSocket endpoint
+	EnableREST                 bool   // Enable REST API
+	CORSOrigins                string // CORS allowed origins (comma-separated)
+	DebugWebSocket             bool   // Enable WebSocket debug logging (ping/pong, messages)
+	DebugTURN                  bool   // Enable TURN/ICE debug logging (candidates, selected pair)
+	IncomingRingTimeoutSeconds int    // Incoming SIP ring timeout before 480 (default: 30)
+	IncomingOfflinePolicy      string // Offline incoming policy (default: push_then_480)
 }
 
 // AuthConfig holds JWT/JWKS authentication settings.
@@ -229,12 +231,14 @@ func Load() (*Config, error) {
 			VideoRecoveryBurstFIRStaleMS:    getEnvAsInt("SIP_VIDEO_RECOVERY_BURST_FIR_STALE_MS", 2500),
 		},
 		API: APIConfig{
-			Port:           apiPort,
-			EnableWS:       getEnvAsBool("API_ENABLE_WS", true),
-			EnableREST:     getEnvAsBool("API_ENABLE_REST", true),
-			CORSOrigins:    getEnvWithDefault("API_CORS_ORIGINS", "*"),
-			DebugWebSocket: getEnvAsBool("DEBUG_WEBSOCKET", false),
-			DebugTURN:      getEnvAsBool("DEBUG_TURN", false),
+			Port:                       apiPort,
+			EnableWS:                   getEnvAsBool("API_ENABLE_WS", true),
+			EnableREST:                 getEnvAsBool("API_ENABLE_REST", true),
+			CORSOrigins:                getEnvWithDefault("API_CORS_ORIGINS", "*"),
+			DebugWebSocket:             getEnvAsBool("DEBUG_WEBSOCKET", false),
+			DebugTURN:                  getEnvAsBool("DEBUG_TURN", false),
+			IncomingRingTimeoutSeconds: getEnvAsInt("SIP_INCOMING_RING_TIMEOUT_SECONDS", 30),
+			IncomingOfflinePolicy:      getEnvWithDefault("SIP_INCOMING_OFFLINE_POLICY", "push_then_480"),
 		},
 		Auth: AuthConfig{
 			Enable:    getEnvAsBool("AUTH_ENABLE", false),

@@ -183,6 +183,10 @@ func (s *apiHandlerSIPMakerStub) MakeCall(_ string, _ string, sess *session.Sess
 	return s.makeCallErr
 }
 
+func (s *apiHandlerSIPMakerStub) CancelPendingCall(_ *session.Session) error {
+	return nil
+}
+
 func (s *apiHandlerSIPMakerStub) Hangup(_ *session.Session) error {
 	s.hangupCount++
 	return s.hangupErr

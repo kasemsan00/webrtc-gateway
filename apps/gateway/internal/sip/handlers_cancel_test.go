@@ -26,11 +26,19 @@ func (n *cancelNotifierStub) NotifyIncomingCancel(sessionID string, trunkID int6
 }
 
 type cancelServerTxStub struct {
-	responded bool
+	responded  bool
+	statusCode int
+	onCancel   sip.FnTxCancel
 }
 
-func (tx *cancelServerTxStub) Respond(_ *sip.Response) error { tx.responded = true; return nil }
-func (tx *cancelServerTxStub) Terminate()                    {}
+func (tx *cancelServerTxStub) Respond(res *sip.Response) error {
+	tx.responded = true
+	if res != nil {
+		tx.statusCode = res.StatusCode
+	}
+	return nil
+}
+func (tx *cancelServerTxStub) Terminate() {}
 func (tx *cancelServerTxStub) OnTerminate(_ sip.FnTxTerminate) bool {
 	return false
 }
@@ -39,9 +47,12 @@ func (tx *cancelServerTxStub) Err() error            { return nil }
 func (tx *cancelServerTxStub) Acks() <-chan *sip.Request {
 	return make(chan *sip.Request)
 }
-func (tx *cancelServerTxStub) OnCancel(_ sip.FnTxCancel) bool { return false }
+func (tx *cancelServerTxStub) OnCancel(fn sip.FnTxCancel) bool {
+	tx.onCancel = fn
+	return true
+}
 
-func TestHandleCANCEL_NotifiesIncomingCancelAndCleansUpIncomingSession(t *testing.T) {
+func TestIncomingInviteOnCancel_NotifiesIncomingCancelAndCleansUpIncomingSession(t *testing.T) {
 	cfg := &config.Config{}
 	mgr := session.NewManager(cfg)
 
@@ -53,9 +64,6 @@ func TestHandleCANCEL_NotifiesIncomingCancelAndCleansUpIncomingSession(t *testin
 	sess.SetSIPAuthContext("trunk", "", 2, "sip.example.com", "1002", "secret", 5060)
 	sess.SetState(session.StateIncoming)
 
-	req := sip.NewRequest(sip.CANCEL, sip.Uri{User: "1002", Host: "sip.example.com", Port: 5060})
-	req.AppendHeader(sip.NewHeader("Call-ID", "call-cancel-1"))
-
 	notifier := &cancelNotifierStub{}
 	tx := &cancelServerTxStub{}
 
@@ -64,11 +72,14 @@ func TestHandleCANCEL_NotifiesIncomingCancelAndCleansUpIncomingSession(t *testin
 		incomingNotifier: notifier,
 	}
 
-	srv.handleCANCEL(req, tx)
-
-	if !tx.responded {
-		t.Fatalf("expected CANCEL to be responded with 200 OK")
+	srv.registerIncomingCancelHandler(sess, tx)
+	if tx.onCancel == nil {
+		t.Fatalf("expected OnCancel callback to be registered")
 	}
+	req := sip.NewRequest(sip.CANCEL, sip.Uri{User: "1002", Host: "sip.example.com", Port: 5060})
+	req.AppendHeader(sip.NewHeader("Call-ID", "call-cancel-1"))
+	tx.onCancel(req)
+
 	if notifier.calls != 1 {
 		t.Fatalf("expected NotifyIncomingCancel once, got %d", notifier.calls)
 	}
@@ -77,5 +88,22 @@ func TestHandleCANCEL_NotifiesIncomingCancelAndCleansUpIncomingSession(t *testin
 	}
 	if _, ok := mgr.GetSession(sess.ID); ok {
 		t.Fatalf("expected incoming session %s to be deleted after CANCEL", sess.ID)
+	}
+}
+
+func TestHandleCANCEL_UnmatchedResponds481(t *testing.T) {
+	req := sip.NewRequest(sip.CANCEL, sip.Uri{User: "1002", Host: "sip.example.com", Port: 5060})
+	req.AppendHeader(sip.NewHeader("Call-ID", "call-cancel-unmatched"))
+
+	tx := &cancelServerTxStub{}
+	srv := &Server{}
+
+	srv.handleCANCEL(req, tx)
+
+	if !tx.responded {
+		t.Fatalf("expected unmatched CANCEL to be responded")
+	}
+	if tx.statusCode != 481 {
+		t.Fatalf("expected 481 for unmatched CANCEL, got %d", tx.statusCode)
 	}
 }

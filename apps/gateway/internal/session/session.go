@@ -14,8 +14,8 @@ import (
 	"github.com/pion/webrtc/v4"
 
 	"k2-gateway/internal/config"
-	"k2-gateway/internal/translator"
 	pkg_webrtc "k2-gateway/internal/pkg/webrtc"
+	"k2-gateway/internal/translator"
 )
 
 const (
@@ -132,6 +132,10 @@ type Session struct {
 	IncomingINVITE  []byte      `json:"-"` // Store incoming INVITE body (SDP offer)
 	IncomingFromURI string      `json:"-"` // Caller URI
 	IncomingToURI   string      `json:"-"` // Callee URI
+	// Outbound call state for CANCEL before a dialog is established.
+	OutboundSIPTx          interface{} `json:"-"`
+	OutboundSIPReq         interface{} `json:"-"`
+	PendingCancelRequested bool        `json:"-"`
 	// SIP Authentication Context (independent of WS connection)
 	SIPAuthMode   string `json:"-"` // "public" | "trunk" | ""
 	SIPAccountKey string `json:"-"` // For public mode: "username@domain:port"
@@ -141,6 +145,9 @@ type Session struct {
 	// Incoming call claim (first-accept-wins)
 	IncomingClaimed   bool   `json:"-"` // True if this incoming call has been claimed
 	IncomingClaimedBy string `json:"-"` // WS client ID that claimed this call
+	// Terminal signaling action guard for accept/reject/cancel/timeout/bye races.
+	TerminalAction   string    `json:"-"`
+	TerminalActionAt time.Time `json:"-"`
 	// PLI (Picture Loss Indication) tracking
 	PLISent       int       `json:"pliSent"`     // Number of PLIs sent to SIP
 	PLIResponse   int       `json:"pliResponse"` // Number of keyframes received after PLI
@@ -158,7 +165,7 @@ type Session struct {
 	LastNACKHandledLogSig string    `json:"-"`
 	LastNACKHandledLogAt  time.Time `json:"-"`
 	// Video optimization flags
-	PreserveSTAPA     bool               `json:"-"` // If true, preserve STAP-A packets (don't de-aggregate) when they contain SPS+PPS+IDR
+	PreserveSTAPA bool `json:"-"` // If true, preserve STAP-A packets (don't de-aggregate) when they contain SPS+PPS+IDR
 	// Speech-to-Speech translation pipeline
 	Translator         *translator.S2SPipeline `json:"-"`
 	TranslatorClient   *translator.Client      `json:"-"`
@@ -168,28 +175,28 @@ type Session struct {
 	TranslatorTTSVoice string                  `json:"-"`
 	ctx                context.Context         `json:"-"`
 	cancel             context.CancelFunc      `json:"-"`
-	videoRTPHistoryMu sync.Mutex
-	mu                sync.RWMutex
+	videoRTPHistoryMu  sync.Mutex
+	mu                 sync.RWMutex
 }
 
 // Snapshot provides a thread-safe view of session metadata for logging.
 type Snapshot struct {
-	ID                string
-	State             SessionState
-	Direction         string
-	From              string
-	To                string
-	SIPCallID         string
-	RTPPort           int
-	VideoRTPPort      int
-	AudioRTCPPort     int
-	VideoRTCPPort     int
-	SIPOpusPT         uint8
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
-	TranslatorEnabled bool
-	TranslatorSrcLang string
-	TranslatorTgtLang string
+	ID                 string
+	State              SessionState
+	Direction          string
+	From               string
+	To                 string
+	SIPCallID          string
+	RTPPort            int
+	VideoRTPPort       int
+	AudioRTCPPort      int
+	VideoRTCPPort      int
+	SIPOpusPT          uint8
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+	TranslatorEnabled  bool
+	TranslatorSrcLang  string
+	TranslatorTgtLang  string
 	TranslatorTTSVoice string
 }
 
@@ -738,6 +745,58 @@ func (s *Session) ClearIncomingInvite() {
 	s.UpdatedAt = time.Now()
 }
 
+// SetOutboundInvite stores outbound INVITE metadata used to CANCEL a pending call.
+func (s *Session) SetOutboundInvite(tx interface{}, req interface{}) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.OutboundSIPTx = tx
+	s.OutboundSIPReq = req
+	s.UpdatedAt = time.Now()
+}
+
+// GetOutboundInvite returns stored outbound INVITE metadata.
+func (s *Session) GetOutboundInvite() (interface{}, interface{}) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.OutboundSIPTx, s.OutboundSIPReq
+}
+
+// ClearOutboundInvite clears outbound INVITE metadata.
+func (s *Session) ClearOutboundInvite() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.OutboundSIPTx = nil
+	s.OutboundSIPReq = nil
+	s.UpdatedAt = time.Now()
+}
+
+// MarkPendingCancelRequested marks an outbound pending INVITE as locally canceled.
+func (s *Session) MarkPendingCancelRequested() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.PendingCancelRequested = true
+	s.UpdatedAt = time.Now()
+}
+
+// IsPendingCancelRequested reports whether the local client canceled a pending outbound INVITE.
+func (s *Session) IsPendingCancelRequested() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.PendingCancelRequested
+}
+
+// Done is closed when the session ends.
+func (s *Session) Done() <-chan struct{} {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.ctx == nil {
+		ch := make(chan struct{})
+		close(ch)
+		return ch
+	}
+	return s.ctx.Done()
+}
+
 // TryClaimIncoming attempts to claim an incoming call (first-accept-wins).
 // Returns true if successfully claimed, false if already claimed by another client.
 // Thread-safe atomic operation.
@@ -755,6 +814,38 @@ func (s *Session) TryClaimIncoming(clientID string) bool {
 	s.IncomingClaimedBy = clientID
 	s.UpdatedAt = time.Now()
 	return true
+}
+
+// TryBeginTerminalAction atomically claims the signaling path that ends or
+// consumes the pending SIP transaction. It returns false when another action won.
+func (s *Session) TryBeginTerminalAction(action string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.TerminalAction != "" {
+		return false
+	}
+	now := time.Now()
+	s.TerminalAction = action
+	s.TerminalActionAt = now
+	s.UpdatedAt = now
+	return true
+}
+
+// ClearTerminalAction releases the guard after a non-terminal transition such
+// as a successful accept into an active dialog.
+func (s *Session) ClearTerminalAction() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.TerminalAction = ""
+	s.TerminalActionAt = time.Time{}
+	s.UpdatedAt = time.Now()
+}
+
+// GetTerminalAction returns the action that currently owns the terminal guard.
+func (s *Session) GetTerminalAction() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.TerminalAction
 }
 
 // SetSIPAuthContext sets the SIP authentication context for this session (thread-safe).
