@@ -2,7 +2,7 @@ package push
 
 import "testing"
 
-func TestBuildFCMPayloadAndroidIncludesNotificationAndDataHighPriority(t *testing.T) {
+func TestBuildFCMPayloadAndroidIsDataOnlyHighPriority(t *testing.T) {
 	payload := buildFCMPayload(
 		"token-1",
 		"Incoming",
@@ -11,11 +11,8 @@ func TestBuildFCMPayloadAndroidIncludesNotificationAndDataHighPriority(t *testin
 		"android_abc",
 	)
 
-	if payload.Message.Notification == nil {
-		t.Fatal("expected android payload to include notification body")
-	}
-	if payload.Message.Notification.Title != "Incoming" || payload.Message.Notification.Body != "Call from 1001" {
-		t.Fatalf("unexpected notification payload: %#v", payload.Message.Notification)
+	if payload.Message.Notification != nil {
+		t.Fatal("expected android payload to omit notification body")
 	}
 	if payload.Message.Data["type"] != "incoming_call" {
 		t.Fatalf("expected android payload to keep data payload, got %#v", payload.Message.Data)
