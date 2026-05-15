@@ -160,6 +160,17 @@ func (s *incomingNotifyTestTrunkManager) SetTrunkPushContact(ctx context.Context
 	return nil
 }
 
+func waitForDBLookups(t *testing.T, trunkMgr *incomingNotifyTestTrunkManager, want int) {
+	t.Helper()
+	for i := 0; i < want; i++ {
+		select {
+		case <-trunkMgr.getTrunkByDBCompleted:
+		case <-time.After(500 * time.Millisecond):
+			t.Fatalf("expected DB lookup %d/%d to complete", i+1, want)
+		}
+	}
+}
+
 func TestHandleWSAccept_FirstAcceptWins(t *testing.T) {
 	mgr := newTestSessionManager()
 	incomingSess, err := mgr.CreateSession(config.TURNConfig{})
@@ -342,6 +353,51 @@ func TestNotifyIncomingCall_AllClientsBusyRejectsBusy(t *testing.T) {
 	}
 	if _, ok := mgr.GetSession(incomingSess.ID); ok {
 		t.Fatalf("expected busy incoming session deleted")
+	}
+}
+
+func TestNotifyIncomingCall_BusyClientWithPushTargetDoesNotDispatchPush(t *testing.T) {
+	notifyUserID := "user-1"
+	trunkMgr := &incomingNotifyTestTrunkManager{
+		trunkByID: map[int64]*sip.Trunk{
+			7: {ID: 7, NotifyUserID: &notifyUserID},
+		},
+		getTrunkByDBCompleted: make(chan struct{}, 1),
+	}
+
+	mgr := newTestSessionManager()
+	incomingSess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create incoming session: %v", err)
+	}
+	incomingSess.SetState(session.StateIncoming)
+	incomingSess.SetCallInfo("inbound", "1001", "1002", "sip-call-busy-push")
+	incomingSess.SetSIPAuthContext("trunk", "", 7, "sip.example.com", "1002", "secret", 5060)
+
+	sipMaker := &incomingTestSIPCallMaker{}
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, sipMaker, nil, trunkMgr, nil)
+	srv.SetPushService(&push.Service{})
+	busyClient := &WSClient{
+		send:            make(chan []byte, 8),
+		trunkResolved:   true,
+		resolvedTrunkID: 7,
+		availability:    clientAvailabilityBusy,
+		callState:       "incall",
+	}
+	srv.wsConnections[busyClient] = struct{}{}
+
+	srv.NotifyIncomingCall(incomingSess.ID, "1001", "1002", 7)
+
+	if sipMaker.rejectCount != 1 || sipMaker.lastReject != "busy" {
+		t.Fatalf("expected busy reject once, got count=%d reason=%q", sipMaker.rejectCount, sipMaker.lastReject)
+	}
+	select {
+	case <-trunkMgr.getTrunkByDBCompleted:
+		t.Fatal("did not expect push DB lookup for busy matching client")
+	case <-time.After(100 * time.Millisecond):
+	}
+	if trunkMgr.getTrunkByDBCalls != 0 {
+		t.Fatalf("expected no push DB lookup, got %d", trunkMgr.getTrunkByDBCalls)
 	}
 }
 
@@ -565,6 +621,76 @@ func TestNotifyIncomingCall_TargetsResolvedTrunkID(t *testing.T) {
 	}
 	if msgs2[0].Type != "incoming" || msgs2[0].SessionID != "incoming-trunk-2" {
 		t.Fatalf("unexpected message for trunk-2 client: %+v", msgs2[0])
+	}
+}
+
+func TestNotifyIncomingCall_IdleClientAlsoDispatchesPushWhenTargetExists(t *testing.T) {
+	notifyUserID := "user-1"
+	trunkMgr := &incomingNotifyTestTrunkManager{
+		trunkByID: map[int64]*sip.Trunk{
+			1: {ID: 1, NotifyUserID: &notifyUserID},
+		},
+		getTrunkByDBCompleted: make(chan struct{}, 2),
+	}
+
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, nil, nil, nil, trunkMgr, nil)
+	srv.SetPushService(&push.Service{})
+	client := &WSClient{
+		sessionID:       "mobile-client",
+		trunkResolved:   true,
+		resolvedTrunkID: 1,
+		availability:    clientAvailabilityIdle,
+		callState:       string(session.StateNew),
+		send:            make(chan []byte, 8),
+	}
+	srv.wsConnections[client] = struct{}{}
+
+	srv.NotifyIncomingCall("incoming-ws-push", "sip:alice@example.com", "sip:bob@example.com", 1)
+
+	msgs := readWSMessages(t, client.send)
+	if len(msgs) != 1 || msgs[0].Type != "incoming" || msgs[0].SessionID != "incoming-ws-push" {
+		t.Fatalf("expected one WS incoming message, got %+v", msgs)
+	}
+	waitForDBLookups(t, trunkMgr, 2)
+	if trunkMgr.getTrunkByDBCalls != 2 {
+		t.Fatalf("expected push target check and dispatch DB lookups, got %d", trunkMgr.getTrunkByDBCalls)
+	}
+}
+
+func TestNotifyIncomingCall_IdleClientWithoutPushTargetSendsWSOnly(t *testing.T) {
+	trunkMgr := &incomingNotifyTestTrunkManager{
+		trunkByID: map[int64]*sip.Trunk{
+			1: {ID: 1, NotifyUserID: nil},
+		},
+		getTrunkByDBCompleted: make(chan struct{}, 2),
+	}
+
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, nil, nil, nil, trunkMgr, nil)
+	srv.SetPushService(&push.Service{})
+	client := &WSClient{
+		sessionID:       "mobile-client",
+		trunkResolved:   true,
+		resolvedTrunkID: 1,
+		availability:    clientAvailabilityIdle,
+		callState:       string(session.StateNew),
+		send:            make(chan []byte, 8),
+	}
+	srv.wsConnections[client] = struct{}{}
+
+	srv.NotifyIncomingCall("incoming-ws-only", "sip:alice@example.com", "sip:bob@example.com", 1)
+
+	msgs := readWSMessages(t, client.send)
+	if len(msgs) != 1 || msgs[0].Type != "incoming" || msgs[0].SessionID != "incoming-ws-only" {
+		t.Fatalf("expected one WS incoming message, got %+v", msgs)
+	}
+	waitForDBLookups(t, trunkMgr, 1)
+	select {
+	case <-trunkMgr.getTrunkByDBCompleted:
+		t.Fatal("did not expect dispatch DB lookup when push target is missing")
+	case <-time.After(100 * time.Millisecond):
+	}
+	if trunkMgr.getTrunkByDBCalls != 1 {
+		t.Fatalf("expected only push target check DB lookup, got %d", trunkMgr.getTrunkByDBCalls)
 	}
 }
 

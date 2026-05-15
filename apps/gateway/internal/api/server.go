@@ -1455,6 +1455,10 @@ func (s *Server) NotifyIncomingCall(sessionID, from, to string, trunkID int64) {
 			log.Printf("📲 Sent incoming call notification to resolved client (sessionID=%s trunkID=%d)", sessionID, trunkID)
 		}
 		s.incrementIncomingCounter("incoming_presented")
+		if s.hasIncomingPushTarget(trunkID) {
+			s.incrementIncomingCounter("incoming_push_wait")
+			s.dispatchIncomingPush(sessionID, from, to, trunkID)
+		}
 		s.startIncomingRingTimeout(sessionID, trunkID)
 		log.Printf("📲 Incoming fanout summary: sessionID=%s trunkID=%d recipients=%d recipientSessionIDs=%v filtered=%d total=%d", sessionID, trunkID, len(idleClients), recipientSessionIDs, totalConnections-len(idleClients), totalConnections)
 		return
