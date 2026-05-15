@@ -230,6 +230,12 @@ When `AUTH_ENABLE=true`:
 - `DB_RETENTION_STATS_DAYS` (default `730`)
 - `DB_RETENTION_SESSIONS_DAYS` (default `730`)
 
+Direct database access for agent work:
+
+- When work on `apps/gateway` needs live database data or schema verification, read from the MCP/database connection named `database-dev-k2-gateway`.
+- Treat direct database queries as read-only unless the user explicitly asks for a write or migration.
+- Prefer source-controlled schema files (`init.sql`, `migrations/`) for expected structure, then use `database-dev-k2-gateway` only to verify the live dev state.
+
 ### SIP public mode
 
 - `SIP_PUBLIC_REGISTER_EXPIRES_SECONDS` (default `3600`)
@@ -375,15 +381,3 @@ When modifying this codebase:
 If a change touches media forwarding, SDP, or session lifecycle, perform an extra careful review for race and regression risk before finalizing.
 
 ---
-
-## 13. LLM Context File (`llm.txt`)
-
-- `llm.txt` is a compact, implementation-focused context file for external AI tools (Cursor, Windsurf, etc.).
-- Use it as the first-read summary, then verify behavior in source files before editing hot paths.
-- Keep `llm.txt` in sync when changing:
-  - WebSocket/REST contracts
-  - Session lifecycle/resume logic
-  - SIP trunk/public auth flows
-  - Media invariants (Opus passthrough, H.264 handling, SPS/PPS/keyframe logic)
-  - Database schema or operational behavior
-- Source of truth remains code + this `AGENTS.md`; `llm.txt` is a fast onboarding layer.

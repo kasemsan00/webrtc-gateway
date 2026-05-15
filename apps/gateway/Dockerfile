@@ -16,6 +16,9 @@ COPY apps/gateway/go.mod apps/gateway/go.sum ./
 # Download dependencies
 RUN go mod download
 
+# Install migration runner for one-shot deploy migration jobs.
+RUN go install github.com/pressly/goose/v3/cmd/goose@v3.24.1
+
 # Copy source code
 COPY apps/gateway/ .
 
@@ -34,6 +37,9 @@ WORKDIR /app
 
 # Copy binary from builder
 COPY --from=builder /build/k2-gateway .
+COPY --from=builder /go/bin/goose .
+COPY --from=builder /build/migrations ./migrations
+COPY --from=builder /build/scripts/docker-entrypoint.sh .
 
 # Copy .env file (optional - can be provided via volume mount)
 # COPY .env .
@@ -59,7 +65,8 @@ EXPOSE 5060/udp
 EXPOSE ${RTP_PORT_MIN}-${RTP_PORT_MAX}/udp
 
 # Create non-root user for security
-RUN addgroup -g 1000 k2 && \
+RUN chmod +x /app/docker-entrypoint.sh && \
+    addgroup -g 1000 k2 && \
     adduser -D -u 1000 -G k2 k2 && \
     chown -R k2:k2 /app
 
@@ -70,5 +77,6 @@ USER k2
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
     CMD pgrep k2-gateway || exit 1
 
-# Run the application
+# Run optional migrations, then the application
+ENTRYPOINT ["./docker-entrypoint.sh"]
 CMD ["./k2-gateway"]

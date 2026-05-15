@@ -55,6 +55,7 @@ export function KeycloakAuthProvider({
   const [error, setError] = useState<string | null>(null)
 
   const keycloakRef = useRef<KeycloakClientLike | null>(null)
+  const bootstrappingRef = useRef(false)
 
   useEffect(() => {
     if (!browser) return
@@ -64,12 +65,14 @@ export function KeycloakAuthProvider({
 
   useEffect(() => {
     if (!mounted) return
+    if (bootstrappingRef.current || keycloakRef.current) return
 
     let cleanup: (() => void) | undefined
     let unmounted = false
 
     const bootstrap = async () => {
       try {
+        bootstrappingRef.current = true
         const keycloak = await createKeycloakClient()
         if (unmounted) return
 
@@ -78,10 +81,12 @@ export function KeycloakAuthProvider({
         cleanup = await initializeKeycloakRuntime({
           client: keycloak,
           onStateChange: (nextState) => {
+            if (unmounted) return
             setAccessToken(nextState.token)
             setState(nextState)
           },
           onError: (runtimeError) => {
+            if (unmounted) return
             setError(runtimeError.message)
           },
         })
@@ -101,6 +106,7 @@ export function KeycloakAuthProvider({
       unmounted = true
       cleanup?.()
       keycloakRef.current = null
+      bootstrappingRef.current = false
       clearAccessToken()
     }
   }, [mounted])

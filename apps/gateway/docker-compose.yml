@@ -31,8 +31,8 @@ services:
 
   k2-gateway:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ../..
+      dockerfile: apps/gateway/Dockerfile
     image: k2-gateway:latest
     container_name: k2-gateway
     restart: unless-stopped
@@ -76,6 +76,7 @@ services:
       # Database Configuration
       - DB_ENABLE=${DB_ENABLE:-true}
       - DB_DSN=postgres://k2user:k2pass@postgres:5432/k2_gateway?sslmode=disable
+      - DB_AUTO_MIGRATE=${DB_AUTO_MIGRATE:-true}
       - DB_STATS_INTERVAL_MS=${DB_STATS_INTERVAL_MS:-5000}
       - DB_LOG_FULL_SIP=${DB_LOG_FULL_SIP:-true}
       - DB_BATCH_SIZE=${DB_BATCH_SIZE:-100}
