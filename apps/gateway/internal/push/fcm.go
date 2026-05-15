@@ -113,9 +113,7 @@ func (s *FCMSender) SendPush(ctx context.Context, token, title, notificationBody
 func buildFCMPayload(token, title, notificationBody string, data map[string]string, mobileDevice string) fcmRequest {
 	var notification *fcmNotificationPayload
 	isAndroid := len(mobileDevice) >= 8 && mobileDevice[:8] == "android_"
-	// Android incoming call push is sent as data-first so background handler can
-	// process it immediately; iOS keeps notification payload behavior.
-	if !isAndroid && (title != "" || notificationBody != "") {
+	if title != "" || notificationBody != "" {
 		notification = &fcmNotificationPayload{
 			Title: title,
 			Body:  notificationBody,
