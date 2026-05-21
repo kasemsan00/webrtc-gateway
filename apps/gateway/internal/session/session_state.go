@@ -39,3 +39,15 @@ func (s *Session) GetState() SessionState {
 	defer s.mu.RUnlock()
 	return s.State
 }
+
+func isTerminalCleanupState(state SessionState, terminalAction string) bool {
+	if state == StateEnded {
+		return true
+	}
+	switch terminalAction {
+	case "bye", "reject", "cancel", "end":
+		return true
+	default:
+		return false
+	}
+}

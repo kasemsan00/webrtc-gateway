@@ -183,8 +183,16 @@ func TestHandleWSAccept_FirstAcceptWins(t *testing.T) {
 	sipMaker := &incomingTestSIPCallMaker{}
 	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, sipMaker, nil, nil, nil)
 
-	client1 := &WSClient{send: make(chan []byte, 8)}
-	client2 := &WSClient{send: make(chan []byte, 8)}
+	webrtcSess1, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create first webrtc session: %v", err)
+	}
+	webrtcSess2, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create second webrtc session: %v", err)
+	}
+	client1 := &WSClient{sessionID: webrtcSess1.ID, send: make(chan []byte, 8)}
+	client2 := &WSClient{sessionID: webrtcSess2.ID, send: make(chan []byte, 8)}
 
 	srv.handleWSAccept(client1, WSMessage{
 		Type:      "accept",
@@ -208,8 +216,8 @@ func TestHandleWSAccept_FirstAcceptWins(t *testing.T) {
 	if len(msgs2) != 1 {
 		t.Fatalf("expected 1 message for second accept, got %d", len(msgs2))
 	}
-	if msgs2[0].Type != "state" || msgs2[0].State != string(session.StateActive) {
-		t.Fatalf("expected benign active state for second accept, got type=%s state=%s", msgs2[0].Type, msgs2[0].State)
+	if msgs2[0].Type != "error" {
+		t.Fatalf("expected stale second accept to receive error, got type=%s state=%s", msgs2[0].Type, msgs2[0].State)
 	}
 
 	if sipMaker.acceptCount != 1 {
@@ -253,6 +261,75 @@ func TestHandleWSReject_DefaultReasonAndDeletesSession(t *testing.T) {
 	}
 	if _, ok := mgr.GetSession(incomingSess.ID); ok {
 		t.Fatalf("expected session %s to be deleted after reject", incomingSess.ID)
+	}
+}
+
+func TestHandleWSReject_WithReasonSourceUnavailableEndsSessionOnce(t *testing.T) {
+	mgr := newTestSessionManager()
+	incomingSess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create incoming session: %v", err)
+	}
+	incomingSess.SetState(session.StateIncoming)
+	incomingSess.SetCallInfo("inbound", "1001", "1002", "sip-call-2-source")
+
+	sipMaker := &incomingTestSIPCallMaker{}
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, sipMaker, nil, nil, nil)
+	client := &WSClient{send: make(chan []byte, 8)}
+
+	srv.handleWSReject(client, WSMessage{
+		Type:         "reject",
+		SessionID:    incomingSess.ID,
+		Reason:       "unavailable",
+		ReasonSource: "callkeep_create_incoming_connection_failed",
+	})
+
+	msgs := readWSMessages(t, client.send)
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message for source-aware reject, got %d", len(msgs))
+	}
+	if msgs[0].Type != "state" || msgs[0].State != string(session.StateEnded) {
+		t.Fatalf("expected ended state, got type=%s state=%s", msgs[0].Type, msgs[0].State)
+	}
+	if sipMaker.rejectCount != 1 {
+		t.Fatalf("expected RejectCall once, got %d", sipMaker.rejectCount)
+	}
+	if sipMaker.lastReject != "unavailable" {
+		t.Fatalf("expected unavailable reject reason, got %q", sipMaker.lastReject)
+	}
+}
+
+func TestHandleWSReject_DuplicateRejectSendsSingleTerminalResponse(t *testing.T) {
+	mgr := newTestSessionManager()
+	incomingSess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create incoming session: %v", err)
+	}
+	incomingSess.SetState(session.StateIncoming)
+	incomingSess.SetCallInfo("inbound", "1001", "1002", "sip-call-reject-race")
+
+	sipMaker := &incomingTestSIPCallMaker{}
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, sipMaker, nil, nil, nil)
+	client1 := &WSClient{send: make(chan []byte, 8)}
+	client2 := &WSClient{send: make(chan []byte, 8)}
+
+	srv.handleWSReject(client1, WSMessage{Type: "reject", SessionID: incomingSess.ID, Reason: "busy", ReasonSource: "in_app_decline"})
+	srv.handleWSReject(client2, WSMessage{Type: "reject", SessionID: incomingSess.ID, Reason: "unavailable", ReasonSource: "callkeep_create_incoming_connection_failed"})
+
+	if sipMaker.rejectCount != 1 {
+		t.Fatalf("expected only one RejectCall for duplicate rejects, got %d", sipMaker.rejectCount)
+	}
+	if sipMaker.lastReject != "busy" {
+		t.Fatalf("expected first reject reason to win, got %q", sipMaker.lastReject)
+	}
+
+	msgs1 := readWSMessages(t, client1.send)
+	if len(msgs1) != 1 || msgs1[0].Type != "state" || msgs1[0].State != string(session.StateEnded) {
+		t.Fatalf("expected first client ended state, got %+v", msgs1)
+	}
+	msgs2 := readWSMessages(t, client2.send)
+	if len(msgs2) != 1 || msgs2[0].Type != "error" {
+		t.Fatalf("expected second client to see error for missing session after winner cleanup, got %+v", msgs2)
 	}
 }
 
@@ -479,10 +556,14 @@ func TestHandleWSAcceptThenRejectSendsExactlyOneFinalResponse(t *testing.T) {
 	}
 	incomingSess.SetState(session.StateIncoming)
 	incomingSess.SetCallInfo("inbound", "1001", "1002", "sip-call-race")
+	webrtcSess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create webrtc session: %v", err)
+	}
 
 	sipMaker := &incomingTestSIPCallMaker{}
 	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, sipMaker, nil, nil, nil)
-	client := &WSClient{send: make(chan []byte, 8)}
+	client := &WSClient{sessionID: webrtcSess.ID, send: make(chan []byte, 8)}
 
 	srv.handleWSAccept(client, WSMessage{Type: "accept", SessionID: incomingSess.ID})
 	srv.handleWSReject(client, WSMessage{Type: "reject", SessionID: incomingSess.ID, Reason: "busy"})
@@ -492,6 +573,30 @@ func TestHandleWSAcceptThenRejectSendsExactlyOneFinalResponse(t *testing.T) {
 	}
 	if sipMaker.rejectCount != 0 {
 		t.Fatalf("expected RejectCall not to run after accept, got %d", sipMaker.rejectCount)
+	}
+}
+
+func TestHandleWSAcceptRejectsWithoutWebRTCSession(t *testing.T) {
+	mgr := newTestSessionManager()
+	incomingSess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create incoming session: %v", err)
+	}
+	incomingSess.SetState(session.StateIncoming)
+	incomingSess.SetCallInfo("inbound", "1001", "1002", "sip-call-no-webrtc")
+
+	sipMaker := &incomingTestSIPCallMaker{}
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, sipMaker, nil, nil, nil)
+	client := &WSClient{send: make(chan []byte, 8)}
+
+	srv.handleWSAccept(client, WSMessage{Type: "accept", SessionID: incomingSess.ID})
+
+	if sipMaker.acceptCount != 0 {
+		t.Fatalf("expected AcceptCall not to run without WebRTC session, got %d", sipMaker.acceptCount)
+	}
+	msgs := readWSMessages(t, client.send)
+	if len(msgs) != 1 || msgs[0].Type != "error" {
+		t.Fatalf("expected one error message, got %+v", msgs)
 	}
 }
 
@@ -797,7 +902,11 @@ func TestIncomingAcceptThenHangup_UsesSessionWithDialogState(t *testing.T) {
 
 	sipMaker := &incomingTestSIPCallMaker{}
 	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, sipMaker, nil, nil, nil)
-	client := &WSClient{send: make(chan []byte, 16)}
+	webrtcSess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create webrtc session: %v", err)
+	}
+	client := &WSClient{sessionID: webrtcSess.ID, send: make(chan []byte, 16)}
 
 	srv.handleWSAccept(client, WSMessage{
 		Type:      "accept",
@@ -805,7 +914,7 @@ func TestIncomingAcceptThenHangup_UsesSessionWithDialogState(t *testing.T) {
 	})
 	srv.handleWSHangup(client, WSMessage{
 		Type:      "hangup",
-		SessionID: incomingSess.ID,
+		SessionID: webrtcSess.ID,
 	})
 
 	if sipMaker.hangupCount != 1 {

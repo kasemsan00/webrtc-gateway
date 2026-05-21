@@ -269,6 +269,7 @@ func TestHandleWSTrunkResolve_ResolvedReplaysPendingIncoming(t *testing.T) {
 	incomingSess.SetState(session.StateIncoming)
 	incomingSess.SetCallInfo("inbound", "sip:linphone@example.com", "sip:agent@example.com", "sip-call-99")
 	incomingSess.SetSIPAuthContext("trunk", "", 42, "sip.example.com", "1001", "secret", 5060)
+	incomingSess.SetIncomingInvite(nil, nil, []byte("v=0\r\nm=audio 4000 RTP/AVP 111\r\nm=video 4002 RTP/AVP 96\r\na=sendrecv\r\n"), "sip:linphone@example.com", "sip:agent@example.com")
 
 	otherIncoming, err := mgr.CreateSession(config.TURNConfig{})
 	if err != nil {
@@ -305,6 +306,9 @@ func TestHandleWSTrunkResolve_ResolvedReplaysPendingIncoming(t *testing.T) {
 	}
 	if msgs[1].From != "sip:linphone@example.com" || msgs[1].To != "sip:agent@example.com" {
 		t.Fatalf("unexpected incoming from/to: from=%s to=%s", msgs[1].From, msgs[1].To)
+	}
+	if msgs[1].HasVideo != "true" {
+		t.Fatalf("expected replayed incoming hasVideo=true, got %q", msgs[1].HasVideo)
 	}
 	if !client.trunkResolved {
 		t.Fatalf("expected client.trunkResolved=true after successful trunk_resolve")

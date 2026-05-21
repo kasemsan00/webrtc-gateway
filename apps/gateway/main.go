@@ -256,26 +256,55 @@ func runAPIMode(ctx context.Context, cfg *config.Config, unicastAddress string, 
 		}
 	}
 
-	// Initialize push notification service (FCM via TTRS Notification API)
+	// Initialize push notification service (FCM fallback + APNs PushKit where configured)
 	if cfg.PushNotification.Enable {
-		ttrsClient := push.NewTTRSClient(
-			cfg.PushNotification.TTRSAPIURL,
-			cfg.PushNotification.TTRSKeycloakTokenURL,
-			cfg.PushNotification.TTRSTokenGrantType,
-			cfg.PushNotification.TTRSClientID,
-			cfg.PushNotification.TTRSClientSecret,
-			cfg.PushNotification.TTRSAPITimeoutMS,
-		)
-		fcmSender, err := push.NewFCMSender(
-			cfg.PushNotification.FirebaseCredentialsFile,
-			cfg.PushNotification.FirebaseProjectID,
-		)
-		if err != nil {
-			log.Printf("⚠️ Warning: Push notification disabled — FCM init failed: %v", err)
+		var ttrsClient *push.TTRSClient
+		var fcmSender *push.FCMSender
+		if cfg.PushNotification.FirebaseCredentialsFile != "" && cfg.PushNotification.FirebaseProjectID != "" {
+			ttrsClient = push.NewTTRSClient(
+				cfg.PushNotification.TTRSAPIURL,
+				cfg.PushNotification.TTRSKeycloakTokenURL,
+				cfg.PushNotification.TTRSTokenGrantType,
+				cfg.PushNotification.TTRSClientID,
+				cfg.PushNotification.TTRSClientSecret,
+				cfg.PushNotification.TTRSAPITimeoutMS,
+			)
+			var err error
+			fcmSender, err = push.NewFCMSender(
+				cfg.PushNotification.FirebaseCredentialsFile,
+				cfg.PushNotification.FirebaseProjectID,
+			)
+			if err != nil {
+				log.Printf("⚠️ Warning: FCM fallback disabled — init failed: %v", err)
+				fcmSender = nil
+				ttrsClient = nil
+			}
 		} else {
-			pushService := push.NewService(ttrsClient, fcmSender)
+			log.Printf("⚠️ Warning: FCM fallback disabled — PUSH_FIREBASE_CREDENTIALS_FILE or PUSH_FIREBASE_PROJECT_ID missing")
+		}
+
+		var apnsSender *push.APNSSender
+		if cfg.PushNotification.APNSEnable {
+			var err error
+			apnsSender, err = push.NewAPNSSender(push.APNSConfig{
+				Environment: cfg.PushNotification.APNSEnvironment,
+				KeyFile:     cfg.PushNotification.APNSKeyFile,
+				KeyID:       cfg.PushNotification.APNSKeyID,
+				TeamID:      cfg.PushNotification.APNSTeamID,
+				BundleID:    cfg.PushNotification.APNSBundleID,
+				Topic:       cfg.PushNotification.APNSTopic,
+			})
+			if err != nil {
+				log.Printf("⚠️ Warning: APNs PushKit disabled — init failed: %v", err)
+			}
+		}
+
+		if fcmSender != nil || apnsSender != nil {
+			pushService := push.NewService(ttrsClient, fcmSender, apnsSender)
 			apiServer.SetPushService(pushService)
-			log.Printf("🔔 Push notifications enabled (project=%s)", cfg.PushNotification.FirebaseProjectID)
+			log.Printf("🔔 Push notifications enabled (fcm=%v apns=%v)", fcmSender != nil, apnsSender != nil)
+		} else {
+			log.Printf("⚠️ Warning: PUSH_ENABLE=true but no push channel initialized")
 		}
 	}
 

@@ -159,7 +159,9 @@ type WSMessage struct {
 	Availability string          `json:"availability,omitempty"`
 	CallState    string          `json:"callState,omitempty"`
 	Reason       string          `json:"reason,omitempty"`
+	ReasonSource string          `json:"reasonSource,omitempty"`
 	Error        string          `json:"error,omitempty"`
+	HasVideo     string          `json:"hasVideo,omitempty"`
 	// Trunk resolve fields
 	SIPDomain   string `json:"sipDomain,omitempty"`
 	SIPUsername string `json:"sipUsername,omitempty"`
@@ -239,6 +241,11 @@ func analyzeResumeOfferVideoSDP(sdp string) resumeVideoOfferDiagnostics {
 	}
 
 	return diag
+}
+
+func hasActiveVideoMedia(sdp string) bool {
+	diag := analyzeResumeOfferVideoSDP(sdp)
+	return diag.HasVideoMLine && diag.VideoPort > 0 && diag.VideoDirection != "inactive"
 }
 
 // NewServer creates a new API server
@@ -1347,10 +1354,35 @@ func (s *Server) hasIncomingPushTarget(trunkID int64) bool {
 	lookupCtx, cancel := context.WithTimeout(context.Background(), incomingPushTrunkLookupTimeout)
 	defer cancel()
 	trunk, err := s.trunkManager.GetTrunkByIDFromDB(lookupCtx, trunkID)
-	return err == nil && trunk != nil && trunk.NotifyUserID != nil && *trunk.NotifyUserID != ""
+	return err == nil && trunk != nil && (trunkHasFCMPushTarget(trunk) || (s.pushService.CanSendAPNS() && trunkHasApplePushKitTarget(trunk)))
 }
 
-func (s *Server) dispatchIncomingPush(sessionID, from, to string, trunkID int64) {
+func trunkHasFCMPushTarget(trunk *sip.Trunk) bool {
+	return trunk != nil && trunk.NotifyUserID != nil && strings.TrimSpace(*trunk.NotifyUserID) != ""
+}
+
+func trunkHasApplePushKitTarget(trunk *sip.Trunk) bool {
+	if trunk == nil || trunk.PNAppID == nil || trunk.PNType == nil || trunk.PNToken == nil {
+		return false
+	}
+	return strings.TrimSpace(*trunk.PNAppID) == trunkPNAppID &&
+		strings.EqualFold(strings.TrimSpace(*trunk.PNType), trunkPNType) &&
+		strings.TrimSpace(*trunk.PNToken) != ""
+}
+
+func (s *Server) incomingSessionHasVideo(sessionID string) bool {
+	if s.sessionMgr == nil {
+		return false
+	}
+	sess, ok := s.sessionMgr.GetSession(sessionID)
+	if !ok || sess == nil {
+		return false
+	}
+	_, _, inviteBody, _, _ := sess.GetIncomingInvite()
+	return hasActiveVideoMedia(string(inviteBody))
+}
+
+func (s *Server) dispatchIncomingPush(sessionID, from, to string, trunkID int64, hasVideo bool) {
 	if s.pushService == nil || s.trunkManager == nil {
 		return
 	}
@@ -1368,12 +1400,19 @@ func (s *Server) dispatchIncomingPush(sessionID, from, to string, trunkID int64)
 			log.Printf("🔔 [Push] Skip incoming call push: failed to load trunk from DB (sessionID=%s trunkID=%d err=%v)", sessionID, trunkID, err)
 			return
 		}
-		if trunk == nil || trunk.NotifyUserID == nil || *trunk.NotifyUserID == "" {
-			log.Printf("🔔 [Push] Skip incoming call push: missing notify target (sessionID=%s trunkID=%d)", sessionID, trunkID)
-			return
+		dispatched := false
+		if trunkHasApplePushKitTarget(trunk) && s.pushService.CanSendAPNS() {
+			s.pushService.NotifyIncomingCallAPNS(*trunk.PNToken, sessionID, from, to, hasVideo)
+			dispatched = true
 		}
-		log.Printf("🔔 [Push] Dispatch incoming call push: userID=%s sessionID=%s trunkID=%d", *trunk.NotifyUserID, sessionID, trunkID)
-		s.pushService.NotifyIncomingCall(*trunk.NotifyUserID, sessionID, from, to)
+		if trunkHasFCMPushTarget(trunk) {
+			log.Printf("🔔 [Push] Dispatch incoming call FCM fallback: userID=%s sessionID=%s trunkID=%d", *trunk.NotifyUserID, sessionID, trunkID)
+			s.pushService.NotifyIncomingCall(*trunk.NotifyUserID, sessionID, from, to, hasVideo)
+			dispatched = true
+		}
+		if !dispatched {
+			log.Printf("🔔 [Push] Skip incoming call push: missing APNs/FCM target (sessionID=%s trunkID=%d)", sessionID, trunkID)
+		}
 	}()
 }
 
@@ -1417,6 +1456,8 @@ func (s *Server) NotifyIncomingCall(sessionID, from, to string, trunkID int64) {
 		log.Printf("📲 Skipping incoming call notification for session %s: missing trunkID", sessionID)
 		return
 	}
+	hasVideo := s.incomingSessionHasVideo(sessionID)
+	hasVideoValue := strconv.FormatBool(hasVideo)
 
 	s.mu.RLock()
 	totalConnections := len(s.wsConnections)
@@ -1451,13 +1492,14 @@ func (s *Server) NotifyIncomingCall(sessionID, from, to string, trunkID int64) {
 				SessionID: sessionID,
 				From:      from,
 				To:        to,
+				HasVideo:  hasVideoValue,
 			})
 			log.Printf("📲 Sent incoming call notification to resolved client (sessionID=%s trunkID=%d)", sessionID, trunkID)
 		}
 		s.incrementIncomingCounter("incoming_presented")
 		if s.hasIncomingPushTarget(trunkID) {
 			s.incrementIncomingCounter("incoming_push_wait")
-			s.dispatchIncomingPush(sessionID, from, to, trunkID)
+			s.dispatchIncomingPush(sessionID, from, to, trunkID, hasVideo)
 		}
 		s.startIncomingRingTimeout(sessionID, trunkID)
 		log.Printf("📲 Incoming fanout summary: sessionID=%s trunkID=%d recipients=%d recipientSessionIDs=%v filtered=%d total=%d", sessionID, trunkID, len(idleClients), recipientSessionIDs, totalConnections-len(idleClients), totalConnections)
@@ -1483,7 +1525,7 @@ func (s *Server) NotifyIncomingCall(sessionID, from, to string, trunkID int64) {
 
 	if s.hasIncomingPushTarget(trunkID) {
 		s.incrementIncomingCounter("incoming_push_wait")
-		s.dispatchIncomingPush(sessionID, from, to, trunkID)
+		s.dispatchIncomingPush(sessionID, from, to, trunkID, hasVideo)
 		s.startIncomingRingTimeout(sessionID, trunkID)
 		return
 	}
@@ -1547,6 +1589,50 @@ func (s *Server) handleWSAccept(client *WSClient, msg WSMessage) {
 		s.sendWSMessage(client, WSMessage{Type: "state", SessionID: msg.SessionID, State: string(incomingSess.GetState())})
 		return
 	}
+
+	// Find the client's existing WebRTC session (this has WebRTC but no SIP)
+	var webrtcSess *session.Session
+	webrtcSessionFound := false
+	webrtcPeerConnectionReady := false
+	if client.sessionID != "" && client.sessionID != msg.SessionID {
+		if sess, ok := s.sessionMgr.GetSession(client.sessionID); ok {
+			webrtcSessionFound = true
+			if sess.PeerConnection != nil {
+				webrtcSess = sess
+				webrtcPeerConnectionReady = true
+				log.Printf("📞 Found client's WebRTC session: %s", webrtcSess.ID)
+			} else {
+				log.Printf("⚠️ Client session %s has no PeerConnection", client.sessionID)
+			}
+		} else {
+			log.Printf("⚠️ Client session %s not found in sessionMgr", client.sessionID)
+		}
+	} else {
+		log.Printf("⚠️ No valid client.sessionID (empty=%v, same=%v)", client.sessionID == "", client.sessionID == msg.SessionID)
+	}
+
+	log.Printf("📈 [Accept] decision incomingSessionID=%s clientSessionID=%s webrtcSessionFound=%v webrtcPeerConnectionReady=%v willTransferSIP=%v",
+		msg.SessionID, client.sessionID, webrtcSessionFound, webrtcPeerConnectionReady, webrtcSess != nil)
+
+	if webrtcSess == nil {
+		log.Printf("⚠️ [Accept] Rejecting accept without ready WebRTC session: incomingSessionID=%s clientSessionID=%s", msg.SessionID, client.sessionID)
+		s.logEvent(&logstore.Event{
+			Timestamp: time.Now(),
+			SessionID: incomingSess.ID,
+			Category:  "ws",
+			Name:      "ws_accept_without_webrtc_session",
+			Data: map[string]interface{}{
+				"incomingSessionId":         msg.SessionID,
+				"clientSessionId":           client.sessionID,
+				"webrtcSessionFound":        webrtcSessionFound,
+				"webrtcPeerConnectionReady": webrtcPeerConnectionReady,
+				"result":                    "rejected",
+			},
+		})
+		s.sendWSError(client, msg.SessionID, "WebRTC session required before accepting incoming call")
+		return
+	}
+
 	if !incomingSess.TryBeginTerminalAction("accept") {
 		s.sendWSError(client, msg.SessionID, "Call already has a terminal action in progress")
 		return
@@ -1557,6 +1643,7 @@ func (s *Server) handleWSAccept(client *WSClient, msg WSMessage) {
 	if !incomingSess.TryClaimIncoming(clientID) {
 		// Already claimed by another client
 		log.Printf("⚠️ [Accept] Session %s already claimed by another client", msg.SessionID)
+		incomingSess.ClearTerminalAction()
 		s.logEvent(&logstore.Event{
 			Timestamp: time.Now(),
 			SessionID: incomingSess.ID,
@@ -1582,53 +1669,18 @@ func (s *Server) handleWSAccept(client *WSClient, msg WSMessage) {
 		Name:      "ws_accept_request",
 	})
 
-	// Find the client's existing WebRTC session (this has WebRTC but no SIP)
-	var webrtcSess *session.Session
-	if client.sessionID != "" && client.sessionID != msg.SessionID {
-		if sess, ok := s.sessionMgr.GetSession(client.sessionID); ok {
-			if sess.PeerConnection != nil {
-				webrtcSess = sess
-				log.Printf("📞 Found client's WebRTC session: %s", webrtcSess.ID)
-			} else {
-				log.Printf("⚠️ Client session %s has no PeerConnection", client.sessionID)
-			}
-		} else {
-			log.Printf("⚠️ Client session %s not found in sessionMgr", client.sessionID)
-		}
-	} else {
-		log.Printf("⚠️ No valid client.sessionID (empty=%v, same=%v)", client.sessionID == "", client.sessionID == msg.SessionID)
-	}
-
 	// If we have a WebRTC session, transfer SIP data to it
-	if webrtcSess != nil {
-		log.Printf("📞 Transferring SIP data from session %s to WebRTC session %s", incomingSess.ID, webrtcSess.ID)
+	log.Printf("📞 Transferring SIP data from session %s to WebRTC session %s", incomingSess.ID, webrtcSess.ID)
 
-		// Transfer SIP transaction and request to WebRTC session (thread-safe)
-		webrtcSess.CopyIncomingInviteFrom(incomingSess)
-		_, from, to, sipCallID := incomingSess.GetCallInfo()
-		webrtcSess.SetCallInfo("inbound", from, to, sipCallID)
-
-		// DON'T delete yet - only delete after AcceptCall succeeds
-	} else {
-		log.Printf("⚠️ [Accept] No dedicated WebRTC session ready for incoming session %s (client.sessionID=%s). Proceeding with incoming session may result in one-way media until browser offer/answer completes.", msg.SessionID, client.sessionID)
-		s.logEvent(&logstore.Event{
-			Timestamp: time.Now(),
-			SessionID: incomingSess.ID,
-			Category:  "ws",
-			Name:      "ws_accept_without_webrtc_session",
-			Data: map[string]interface{}{
-				"incomingSessionId": msg.SessionID,
-				"clientSessionId":   client.sessionID,
-			},
-		})
-	}
+	// Transfer SIP transaction and request to WebRTC session (thread-safe)
+	webrtcSess.CopyIncomingInviteFrom(incomingSess)
+	_, from, to, sipCallID := incomingSess.GetCallInfo()
+	webrtcSess.SetCallInfo("inbound", from, to, sipCallID)
 
 	// Determine which session to use for the call
-	callSession := incomingSess
+	callSession := webrtcSess
 	incomingSessionID := msg.SessionID // Remember for later deletion
-	if webrtcSess != nil {
-		callSession = webrtcSess
-	}
+	log.Printf("📈 [Accept] selected_call_session incomingSessionID=%s callSessionID=%s transferredSIP=true", incomingSessionID, callSession.ID)
 
 	// Associate client with the call session
 	if client.sessionID == "" || client.sessionID != callSession.ID {
@@ -1732,6 +1784,7 @@ func (s *Server) handleWSReject(client *WSClient, msg WSMessage) {
 		Data: map[string]interface{}{
 			"incomingAction": "sending_reject",
 			"reason":         msg.Reason,
+			"reasonSource":   msg.ReasonSource,
 		},
 	})
 
@@ -1739,7 +1792,11 @@ func (s *Server) handleWSReject(client *WSClient, msg WSMessage) {
 	if reason == "" {
 		reason = "busy" // Default to busy
 	}
-	log.Printf("📴 [Reject] Received incoming reject via WS (session=%s, reason=%s)", msg.SessionID, reason)
+	reasonSource := strings.TrimSpace(msg.ReasonSource)
+	if reasonSource == "" {
+		reasonSource = "client_unspecified"
+	}
+	log.Printf("📴 [Reject] Received incoming reject via WS (session=%s, reason=%s, source=%s)", msg.SessionID, reason, reasonSource)
 	if !sess.TryBeginTerminalAction("reject") {
 		log.Printf("📴 [Reject] Duplicate incoming reject ignored (session=%s winner=%s)", msg.SessionID, sess.GetTerminalAction())
 		s.sendWSMessage(client, WSMessage{Type: "state", SessionID: msg.SessionID, State: string(session.StateEnded)})
@@ -1749,7 +1806,7 @@ func (s *Server) handleWSReject(client *WSClient, msg WSMessage) {
 	if reason == "no_answer" || reason == "unavailable" || reason == "offline" {
 		statusCode = 480
 	}
-	s.logTerminalAction(sess, "reject", statusCode, reason, "client")
+	s.logTerminalAction(sess, "reject", statusCode, reason, "client:"+reasonSource)
 
 	// Decrement public account refcount if applicable (before deleting session)
 	authMode, accountKey, _, _, _, _, _ := sess.GetSIPAuthContext()
@@ -1770,6 +1827,7 @@ func (s *Server) handleWSReject(client *WSClient, msg WSMessage) {
 					Data: map[string]interface{}{
 						"incomingAction": "sending_reject",
 						"reason":         reason,
+						"reasonSource":   reasonSource,
 						"result":         "already_terminated",
 						"sessionId":      msg.SessionID,
 					},
@@ -1783,6 +1841,7 @@ func (s *Server) handleWSReject(client *WSClient, msg WSMessage) {
 					Data: map[string]interface{}{
 						"incomingAction": "sending_reject",
 						"reason":         reason,
+						"reasonSource":   reasonSource,
 						"result":         "failed",
 						"sessionId":      msg.SessionID,
 						"error":          err.Error(),
@@ -1792,7 +1851,7 @@ func (s *Server) handleWSReject(client *WSClient, msg WSMessage) {
 				return
 			}
 		} else {
-			log.Printf("✅ [Reject] SIP reject sent successfully (session=%s, reason=%s)", msg.SessionID, reason)
+			log.Printf("✅ [Reject] SIP reject sent successfully (session=%s, reason=%s, source=%s)", msg.SessionID, reason, reasonSource)
 			s.incrementIncomingCounter("incoming_rejected")
 			s.logEvent(&logstore.Event{
 				Timestamp: time.Now(),
@@ -1802,6 +1861,7 @@ func (s *Server) handleWSReject(client *WSClient, msg WSMessage) {
 				Data: map[string]interface{}{
 					"incomingAction": "sending_reject",
 					"reason":         reason,
+					"reasonSource":   reasonSource,
 					"result":         "rejected",
 					"sessionId":      msg.SessionID,
 				},
@@ -2386,11 +2446,14 @@ func (s *Server) notifyPendingIncomingForClient(client *WSClient, trunkID int64)
 			continue
 		}
 		_, from, to, _ := sess.GetCallInfo()
+		_, _, inviteBody, _, _ := sess.GetIncomingInvite()
+		hasVideoValue := strconv.FormatBool(hasActiveVideoMedia(string(inviteBody)))
 		s.sendWSMessage(client, WSMessage{
 			Type:      "incoming",
 			SessionID: sess.ID,
 			From:      from,
 			To:        to,
+			HasVideo:  hasVideoValue,
 		})
 	}
 }

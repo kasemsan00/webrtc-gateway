@@ -64,6 +64,12 @@ func (s *Session) SendBrowserRecoveryToAsterisk(trigger string) string {
 	s.mu.Lock()
 	lastKeyframe := s.LastKeyframe
 	lastFIRReq := s.LastSipFIRSent
+	remoteVideoSSRC := s.RemoteVideoSSRC
+	destAddr := s.AsteriskVideoAddr
+	conn := s.VideoRTCPConn
+	if conn == nil {
+		conn = s.VideoRTPConn
+	}
 	_, pliStale, firStale, burstActive := s.getVideoRecoveryPolicy(now, browserFIRInterval, browserPLIStale, browserFIRStale)
 	s.mu.Unlock()
 
@@ -72,6 +78,20 @@ func (s *Session) SendBrowserRecoveryToAsterisk(trigger string) string {
 		keyframeAge = now.Sub(lastKeyframe)
 	}
 
+	if destAddr == nil {
+		s.deferBrowserRecoveryToWebRTC(trigger, "missing-sip-video-addr", burstActive, keyframeAge, remoteVideoSSRC)
+		return "webrtc"
+	}
+	if conn == nil {
+		s.deferBrowserRecoveryToWebRTC(trigger, "missing-sip-rtcp-conn", burstActive, keyframeAge, remoteVideoSSRC)
+		return "webrtc"
+	}
+	if remoteVideoSSRC == 0 {
+		s.deferBrowserRecoveryToWebRTC(trigger, "missing-sip-ssrc", burstActive, keyframeAge, remoteVideoSSRC)
+		return "webrtc"
+	}
+
+	forceStartupRecovery := burstActive && isBrowserRecoveryTrigger(trigger)
 	shouldSendFIR := false
 	if !lastKeyframe.IsZero() {
 		age := now.Sub(lastKeyframe)
@@ -81,33 +101,92 @@ func (s *Session) SendBrowserRecoveryToAsterisk(trigger string) string {
 	} else if burstActive {
 		shouldSendFIR = true
 	}
+	if forceStartupRecovery && (lastFIRReq.IsZero() || now.Sub(lastFIRReq) >= browserFIRInterval) {
+		shouldSendFIR = true
+	}
 
 	if shouldSendFIR && (lastFIRReq.IsZero() || now.Sub(lastFIRReq) >= browserFIRInterval) {
-		if trigger == "ws-request_keyframe" {
+		if trigger == "ws-request_keyframe" || forceStartupRecovery {
 			s.SendFIRToAsterisk()
 			s.SendPLIToAsteriskForced(trigger)
-			fmt.Printf("[%s] 📈 request_keyframe_handled action=both burst=%v keyframeAge=%s\n", s.ID, burstActive, keyframeAge)
+			s.logBrowserRecoveryDecision(trigger, "both", burstActive, keyframeAge, remoteVideoSSRC, "forced-startup-or-fir-stale")
 			return "both"
 		}
 		s.SendFIRToAsterisk()
+		s.logBrowserRecoveryDecision(trigger, "fir", burstActive, keyframeAge, remoteVideoSSRC, "fir-stale")
 		return "fir"
 	}
 
 	if !lastKeyframe.IsZero() {
 		age := now.Sub(lastKeyframe)
-		if age < pliStale {
-			if trigger == "ws-request_keyframe" {
-				fmt.Printf("[%s] 📈 request_keyframe_handled action=none burst=%v keyframeAge=%s\n", s.ID, burstActive, age)
+		if age < pliStale && !forceStartupRecovery {
+			if trigger == "ws-request_keyframe" || isBrowserRecoveryTrigger(trigger) {
+				s.logBrowserRecoveryDecision(trigger, "none", burstActive, age, remoteVideoSSRC, "fresh-keyframe")
 			}
 			return "none"
 		}
 	}
 
 	s.SendPLIToAsteriskForced(trigger)
-	if trigger == "ws-request_keyframe" {
-		fmt.Printf("[%s] 📈 request_keyframe_handled action=pli burst=%v keyframeAge=%s\n", s.ID, burstActive, keyframeAge)
+	if trigger == "ws-request_keyframe" || isBrowserRecoveryTrigger(trigger) {
+		reason := "pli-stale"
+		if forceStartupRecovery {
+			reason = "forced-startup"
+		}
+		s.logBrowserRecoveryDecision(trigger, "pli", burstActive, keyframeAge, remoteVideoSSRC, reason)
 	}
 	return "pli"
+}
+
+func (s *Session) deferBrowserRecoveryToWebRTC(trigger, reason string, burstActive bool, keyframeAge time.Duration, remoteVideoSSRC uint32) {
+	if trigger == "browser-fir" {
+		s.SendFIRToWebRTC()
+	} else {
+		s.SendPLItoWebRTC()
+	}
+
+	if trigger == "ws-request_keyframe" {
+		fmt.Printf("[%s] 📈 request_keyframe_deferred target=webrtc reason=%s burst=%v keyframeAge=%s remoteVideoSSRC=%d\n",
+			s.ID, reason, burstActive, keyframeAge, remoteVideoSSRC)
+		return
+	}
+
+	fmt.Printf("[%s] 📈 browser_recovery_deferred trigger=%s target=webrtc reason=%s burst=%v keyframeAge=%s remoteVideoSSRC=%d\n",
+		s.ID, trigger, reason, burstActive, keyframeAge, remoteVideoSSRC)
+}
+
+func isBrowserRecoveryTrigger(trigger string) bool {
+	switch trigger {
+	case "browser-pli", "browser-fir", "ws-request_keyframe":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Session) logBrowserRecoveryDecision(trigger, action string, burstActive bool, keyframeAge time.Duration, remoteVideoSSRC uint32, reason string) {
+	learnedAddr, learnedSource := s.GetLearnedVideoRTCPAddr()
+	target := "none"
+	if remoteVideoSSRC == 0 {
+		target = "missing-ssrc"
+	} else if learnedAddr != nil {
+		target = fmt.Sprintf("%s/%s", learnedSource, learnedAddr.String())
+	} else {
+		s.mu.RLock()
+		if s.AsteriskVideoAddr != nil {
+			target = fmt.Sprintf("negotiated/%s", s.AsteriskVideoAddr.String())
+		}
+		s.mu.RUnlock()
+	}
+
+	if trigger == "ws-request_keyframe" {
+		fmt.Printf("[%s] 📈 request_keyframe_handled action=%s burst=%v keyframeAge=%s remoteVideoSSRC=%d target=%s reason=%s\n",
+			s.ID, action, burstActive, keyframeAge, remoteVideoSSRC, target, reason)
+		return
+	}
+
+	fmt.Printf("[%s] 📈 browser_recovery_handled trigger=%s action=%s burst=%v keyframeAge=%s remoteVideoSSRC=%d target=%s reason=%s\n",
+		s.ID, trigger, action, burstActive, keyframeAge, remoteVideoSSRC, target, reason)
 }
 
 func (s *Session) sendPLIToAsterisk(force bool, trigger string) {
@@ -120,6 +199,10 @@ func (s *Session) sendPLIToAsterisk(force bool, trigger string) {
 			if trigger == "" {
 				trigger = "manual"
 			}
+			s.mu.RLock()
+			remoteVideoSSRC := s.RemoteVideoSSRC
+			s.mu.RUnlock()
+			s.logBrowserRecoveryDecision(trigger, "skip", s.IsVideoRecoveryBurstActive(), -1, remoteVideoSSRC, "rate-limited")
 			fmt.Printf("[%s] ⏱️ Skipping forced PLI to Asterisk - too frequent (trigger=%s)\n", s.ID, trigger)
 		} else {
 			fmt.Printf("[%s] ⏱️ Skipping PLI to Asterisk - keyframe is recent or PLI too frequent\n", s.ID)

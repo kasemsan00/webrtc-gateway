@@ -136,10 +136,9 @@ func (s *Server) MakeCall(destination, from string, sess *session.Session) error
 		}
 	}()
 
-	// Wait for SPS/PPS to be cached from WebRTC video stream (up to 5s)
-	// This allows us to include sprop-parameter-sets in SDP for Linphone compatibility
-	fmt.Printf("[%s] 📹 Waiting for video SPS/PPS before sending INVITE...\n", sess.ID)
-	sess.WaitForSPSPPS(5 * time.Second)
+	// Actively prime the WebRTC encoder before SIP INVITE so the outbound SDP
+	// can include H.264 sprop-parameter-sets on cold first calls.
+	sess.PrimeWebRTCVideoForSIPOffer(ctx, 5*time.Second)
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -683,6 +682,15 @@ func (s *Server) Hangup(sess *session.Session) error {
 		}
 	}
 
+	preCleanupState := sess.GetState()
+	fmt.Printf("[%s] 📈 hangup_cleanup_start preState=%s\n", sess.ID, preCleanupState)
+
+	// Mark ended before closing transports/PeerConnection. PeerConnection.Close()
+	// synchronously emits ICE closed callbacks; the callbacks must see terminal
+	// state so they do not enter reconnect recovery during a local hangup.
+	sess.UpdateState(session.StateEnded)
+	s.notifySessionStateChange(sess, session.StateEnded)
+
 	// Close media transports (RTP/RTCP UDP sockets) for this session.
 	sess.CloseMediaTransports()
 
@@ -697,8 +705,7 @@ func (s *Server) Hangup(sess *session.Session) error {
 		}
 	}
 
-	sess.UpdateState(session.StateEnded)
-	s.notifySessionStateChange(sess, session.StateEnded)
+	fmt.Printf("[%s] 📈 hangup_cleanup_end postState=%s\n", sess.ID, sess.GetState())
 
 	s.logEvent(&logstore.Event{
 		Timestamp: time.Now(),

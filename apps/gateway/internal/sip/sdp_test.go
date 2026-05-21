@@ -47,3 +47,23 @@ func TestCreateSDPOffer_AVPFStillIncludesRTCPMux(t *testing.T) {
 	}
 }
 
+func TestCreateSDPOffer_IncludesCachedSpropParameterSets(t *testing.T) {
+	s := &Server{
+		config:        config.SIPConfig{},
+		publicAddress: "203.0.113.10",
+	}
+	sess := &session.Session{
+		ID:        "test-sprop",
+		CachedSPS: []byte{0x67, 0x42, 0xe0, 0x1f},
+		CachedPPS: []byte{0x68, 0xce, 0x06, 0xe2},
+	}
+
+	offer := string(s.createSDPOffer(12000, sess))
+
+	if !strings.Contains(offer, "sprop-parameter-sets=Z0LgHw==,aM4G4g==") {
+		t.Fatalf("expected cached SPS/PPS in SDP fmtp\nSDP:\n%s", offer)
+	}
+	if !strings.Contains(offer, "profile-level-id=42E01F") {
+		t.Fatalf("expected profile-level-id derived from cached SPS\nSDP:\n%s", offer)
+	}
+}

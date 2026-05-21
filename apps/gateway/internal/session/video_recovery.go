@@ -97,3 +97,12 @@ func (s *Session) GetVideoRecoveryPolicy(interval, stale, firStale time.Duration
 	defer s.mu.Unlock()
 	return s.getVideoRecoveryPolicy(now, interval, stale, firStale)
 }
+
+// IsVideoRecoveryBurstActive reports whether the temporary startup/recovery window is active.
+func (s *Session) IsVideoRecoveryBurstActive() bool {
+	now := time.Now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, _, _, active := s.getVideoRecoveryPolicy(now, s.VideoRecoveryBurstInterval, s.VideoRecoveryBurstStale, s.VideoRecoveryBurstFIRStale)
+	return active
+}

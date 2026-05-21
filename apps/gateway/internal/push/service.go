@@ -3,6 +3,7 @@ package push
 import (
 	"context"
 	"log"
+	"strconv"
 	"time"
 )
 
@@ -21,16 +22,30 @@ const (
 type Service struct {
 	ttrs *TTRSClient
 	fcm  *FCMSender
+	apns *APNSSender
 }
 
 // NewService creates a push notification Service.
-func NewService(ttrs *TTRSClient, fcm *FCMSender) *Service {
-	return &Service{ttrs: ttrs, fcm: fcm}
+func NewService(ttrs *TTRSClient, fcm *FCMSender, apns ...*APNSSender) *Service {
+	var apnsSender *APNSSender
+	if len(apns) > 0 {
+		apnsSender = apns[0]
+	}
+	return &Service{ttrs: ttrs, fcm: fcm, apns: apnsSender}
+}
+
+// CanSendAPNS reports whether APNs VoIP pushes are configured.
+func (s *Service) CanSendAPNS() bool {
+	return s != nil && s.apns != nil
 }
 
 // NotifyIncomingCall fetches the user's FCM tokens from TTRS and sends a push for each.
 // Errors are logged but never returned — push is best-effort and must not block the call flow.
-func (s *Service) NotifyIncomingCall(userID, sessionID, from, to string) {
+func (s *Service) NotifyIncomingCall(userID, sessionID, from, to string, hasVideo bool) {
+	if s == nil || s.ttrs == nil || s.fcm == nil {
+		log.Printf("🔔 [Push] FCM fallback skipped: sender not configured (userID=%s sessionID=%s)", userID, sessionID)
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), pushTimeout)
 	defer cancel()
 
@@ -54,7 +69,7 @@ func (s *Service) NotifyIncomingCall(userID, sessionID, from, to string) {
 
 	sent := 0
 	for _, entry := range tokens {
-		data := buildIncomingCallPushData(sessionID, from, to, entry.MobileDevice, time.Now().UTC())
+		data := buildIncomingCallPushData(sessionID, from, to, entry.MobileDevice, time.Now().UTC(), hasVideo)
 		if err := s.fcm.SendPush(ctx, entry.Token, title, body, data, entry.MobileDevice); err != nil {
 			log.Printf("🔔 [Push] FCM send failed for user %s device %s: %v", userID, entry.MobileDevice, err)
 			continue
@@ -73,7 +88,23 @@ func (s *Service) NotifyIncomingCall(userID, sessionID, from, to string) {
 	log.Printf("🔔 [Push] Incoming call push summary: userID=%s sessionID=%s sent=%d/%d", userID, sessionID, sent, len(tokens))
 }
 
-func buildIncomingCallPushData(sessionID, from, to, mobileDevice string, now time.Time) map[string]string {
+// NotifyIncomingCallAPNS sends a PushKit VoIP push to the stored iOS token.
+func (s *Service) NotifyIncomingCallAPNS(token, sessionID, from, to string, hasVideo bool) {
+	if s == nil || s.apns == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), pushTimeout)
+	defer cancel()
+
+	data := buildIncomingCallPushData(sessionID, from, to, "ios_pushkit", time.Now().UTC(), hasVideo)
+	if err := s.apns.SendVoIPPush(ctx, token, data); err != nil {
+		log.Printf("🔔 [PushKit] APNs send failed: sessionID=%s err=%v", sessionID, err)
+		return
+	}
+	log.Printf("🔔 [PushKit] APNs VoIP push sent: sessionID=%s", sessionID)
+}
+
+func buildIncomingCallPushData(sessionID, from, to, mobileDevice string, now time.Time, hasVideo bool) map[string]string {
 	return map[string]string{
 		"type":      "incoming_call",
 		"sessionId": sessionID,
@@ -83,6 +114,7 @@ func buildIncomingCallPushData(sessionID, from, to, mobileDevice string, now tim
 		"expiresAt":          now.Add(time.Duration(incomingRingTimeoutSeconds) * time.Second).Format(time.RFC3339),
 		"ringTimeoutSeconds": "30",
 		"platform":           pushPlatformFromMobileDevice(mobileDevice),
+		"hasVideo":           strconv.FormatBool(hasVideo),
 	}
 }
 

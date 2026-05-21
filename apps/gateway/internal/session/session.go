@@ -434,6 +434,7 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 		session.mu.Lock()
 		session.UpdatedAt = time.Now()
 		startRecoveryBurstReason := ""
+		isTerminalCleanup := isTerminalCleanupState(session.State, session.TerminalAction)
 
 		switch connectionState {
 		case webrtc.ICEConnectionStateConnected:
@@ -513,7 +514,8 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 			}()
 
 		case webrtc.ICEConnectionStateDisconnected, webrtc.ICEConnectionStateClosed:
-			if session.State == StateEnded {
+			if isTerminalCleanup {
+				fmt.Printf("[%s] 🧊 ICE %s ignored during terminal cleanup (state=%s action=%s)\n", id, connectionState.String(), session.State, session.TerminalAction)
 				break
 			}
 
@@ -561,6 +563,10 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 			}
 
 		case webrtc.ICEConnectionStateFailed:
+			if isTerminalCleanup {
+				fmt.Printf("[%s] 🧊 ICE failed ignored during terminal cleanup (state=%s action=%s)\n", id, session.State, session.TerminalAction)
+				break
+			}
 			// ICE failed is truly terminal - end immediately
 			session.State = StateEnded
 			if session.cancel != nil {
@@ -1015,6 +1021,53 @@ func (s *Session) WaitForSPSPPS(timeout time.Duration) bool {
 			}
 		case <-timeoutChan:
 			fmt.Printf("[%s] ⚠️ SPS/PPS not ready after %v; proceeding without sprop-parameter-sets\n", s.ID, timeout)
+			return false
+		}
+	}
+}
+
+// PrimeWebRTCVideoForSIPOffer actively requests an early WebRTC keyframe while
+// waiting for SPS/PPS so the SIP offer can advertise sprop-parameter-sets.
+func (s *Session) PrimeWebRTCVideoForSIPOffer(ctx context.Context, timeout time.Duration) bool {
+	if s.HasCachedSPSPPS() {
+		fmt.Printf("[%s] 📈 video_prime_spspps_ready source=cache phase=immediate\n", s.ID)
+		return true
+	}
+
+	fmt.Printf("[%s] 📈 video_prime_start timeout=%s\n", s.ID, timeout)
+	s.SendFIRToWebRTC()
+	s.SendPLItoWebRTC()
+
+	pollTicker := time.NewTicker(50 * time.Millisecond)
+	defer pollTicker.Stop()
+	kickTicker := time.NewTicker(250 * time.Millisecond)
+	defer kickTicker.Stop()
+	timeoutTimer := time.NewTimer(timeout)
+	defer timeoutTimer.Stop()
+
+	kicks := 1
+	for {
+		select {
+		case <-ctx.Done():
+			fmt.Printf("[%s] 📈 video_prime_timeout reason=context-canceled kicks=%d\n", s.ID, kicks)
+			return false
+		case <-pollTicker.C:
+			if s.HasCachedSPSPPS() {
+				s.mu.RLock()
+				spsLen := len(s.CachedSPS)
+				ppsLen := len(s.CachedPPS)
+				s.mu.RUnlock()
+				fmt.Printf("[%s] 📈 video_prime_spspps_ready source=webrtc kicks=%d sps=%d pps=%d\n", s.ID, kicks, spsLen, ppsLen)
+				return true
+			}
+		case <-kickTicker.C:
+			kicks++
+			if kicks%4 == 0 {
+				s.SendFIRToWebRTC()
+			}
+			s.SendPLItoWebRTC()
+		case <-timeoutTimer.C:
+			fmt.Printf("[%s] 📈 video_prime_timeout reason=spspps-not-ready timeout=%s kicks=%d\n", s.ID, timeout, kicks)
 			return false
 		}
 	}

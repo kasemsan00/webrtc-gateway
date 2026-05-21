@@ -411,6 +411,7 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 			if previousSSRC == 0 || previousSSRC != ssrc {
 				sess.SetRemoteVideoSSRC(ssrc)
 				fmt.Printf("[%s] Learned Remote Video SSRC: %d (previous: %d)\n", sess.ID, ssrc, previousSSRC)
+				fmt.Printf("[%s] 📈 sip_video_ssrc_learned ssrc=%d previous=%d\n", sess.ID, ssrc, previousSSRC)
 				sess.StartVideoRTCPFallbackWindow(4*time.Second, "ssrc-learn")
 
 				// Send FIR first, then a short guarded PLI burst.

@@ -181,6 +181,13 @@ type PushNotificationConfig struct {
 	TTRSClientSecret        string // Keycloak client secret for TTRS API auth
 	FirebaseCredentialsFile string // Path to Firebase service account JSON file
 	FirebaseProjectID       string // Firebase project ID for FCM v1 API
+	APNSEnable              bool   // Enable APNs VoIP pushes for iOS PushKit
+	APNSEnvironment         string // APNs environment: sandbox or production
+	APNSKeyFile             string // Path to APNs .p8 auth key
+	APNSKeyID               string // APNs key ID
+	APNSTeamID              string // Apple developer team ID
+	APNSBundleID            string // iOS app bundle ID
+	APNSTopic               string // APNs VoIP topic, defaults to <bundle>.voip
 }
 
 // Load loads configuration from .env file and environment variables
@@ -303,6 +310,13 @@ func Load() (*Config, error) {
 			TTRSClientSecret:        os.Getenv("AUTH_TTRS_EMPLOYEE_CLIENT_SECRET"),
 			FirebaseCredentialsFile: os.Getenv("PUSH_FIREBASE_CREDENTIALS_FILE"),
 			FirebaseProjectID:       os.Getenv("PUSH_FIREBASE_PROJECT_ID"),
+			APNSEnable:              getEnvAsBool("PUSH_APNS_ENABLE", false),
+			APNSEnvironment:         getEnvWithDefault("PUSH_APNS_ENV", "production"),
+			APNSKeyFile:             os.Getenv("PUSH_APNS_KEY_FILE"),
+			APNSKeyID:               os.Getenv("PUSH_APNS_KEY_ID"),
+			APNSTeamID:              os.Getenv("PUSH_APNS_TEAM_ID"),
+			APNSBundleID:            os.Getenv("PUSH_APNS_BUNDLE_ID"),
+			APNSTopic:               os.Getenv("PUSH_APNS_TOPIC"),
 		},
 		Translator: TranslatorConfig{
 			Enable:      getEnvAsBool("TRANSLATOR_ENABLE", false),
@@ -462,6 +476,15 @@ func (c *Config) Display() {
 		}
 		fmt.Printf("  Firebase Credentials File: %s\n", c.PushNotification.FirebaseCredentialsFile)
 		fmt.Printf("  Firebase Project ID: %s\n", c.PushNotification.FirebaseProjectID)
+		fmt.Printf("  APNs Enabled: %v\n", c.PushNotification.APNSEnable)
+		if c.PushNotification.APNSEnable {
+			fmt.Printf("  APNs Environment: %s\n", c.PushNotification.APNSEnvironment)
+			fmt.Printf("  APNs Key File: %s\n", c.PushNotification.APNSKeyFile)
+			fmt.Printf("  APNs Key ID: %s\n", c.PushNotification.APNSKeyID)
+			fmt.Printf("  APNs Team ID: %s\n", c.PushNotification.APNSTeamID)
+			fmt.Printf("  APNs Bundle ID: %s\n", c.PushNotification.APNSBundleID)
+			fmt.Printf("  APNs Topic: %s\n", c.PushNotification.APNSTopic)
+		}
 	}
 
 	// Display Translator Configuration
