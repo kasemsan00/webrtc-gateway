@@ -40,6 +40,10 @@ func (s *Session) StartVideoRecoveryBurst(reason string) {
 
 func (s *Session) endVideoRecoveryBurst(now time.Time, reason string) {
 	startedAt := s.VideoRecoveryBurstStartedAt
+	lastReason := s.VideoRecoveryBurstLastReason
+	if lastReason == "switch" && reason == "timeout" && s.SwitchVideoRecoveryUnstableCount > 0 {
+		reason = "timeout-rtp-unstable"
+	}
 	s.VideoRecoveryBurstUntil = time.Time{}
 	s.VideoRecoveryBurstStartedAt = time.Time{}
 	s.VideoRecoveryBurstLastReason = ""
@@ -50,6 +54,9 @@ func (s *Session) endVideoRecoveryBurst(now time.Time, reason string) {
 		recoveryMS = now.Sub(startedAt).Milliseconds()
 	}
 	fmt.Printf("[%s] 📈 video_recovery_window_end reason=%s keyframe_recovery_ms=%d\n", s.ID, reason, recoveryMS)
+	if lastReason == "switch" {
+		s.finishSwitchVideoRecoveryLocked(now, reason)
+	}
 }
 
 // StopVideoRecoveryBurstIfActive ends the burst window when media recovery is complete.

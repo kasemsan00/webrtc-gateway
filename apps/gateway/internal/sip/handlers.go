@@ -896,6 +896,24 @@ func (s *Server) handleSwitchMessage(body string, callerURI string) {
 
 	fmt.Printf("📍 Found session %s for caller %s (queue: %s, agent: %s)\n", sess.ID, callerUsername, queueNumber, agentUsername)
 
+	if queueNumber != "force send PLI" {
+		debounce := time.Duration(s.config.SwitchDuplicateDebounceMS) * time.Millisecond
+		decision := sess.PrepareSwitchVideoTarget(queueNumber, agentUsername, time.Now(), debounce, s.config.SwitchDuplicateDebounceEnabled)
+		if decision.Ignore {
+			fmt.Printf("[%s] switch_duplicate_ignored %s\n", sess.ID, decision.LogFields())
+			return
+		}
+		if decision.Reason == "media-generation-changed" {
+			fmt.Printf("[%s] switch_duplicate_honored %s mediaGeneration=%s\n", sess.ID, decision.LogFields(), decision.MediaGeneration)
+		} else {
+			fmt.Printf("[%s] switch_target_honored %s mediaGeneration=%s\n", sess.ID, decision.LogFields(), decision.MediaGeneration)
+		}
+	}
+
+	recoveryWindow := time.Duration(s.config.SwitchVideoRecoveryWindowMS) * time.Millisecond
+	stableWindow := time.Duration(s.config.SwitchVideoRecoveryStableMS) * time.Millisecond
+	sess.StartSwitchVideoRecovery(recoveryWindow, stableWindow)
+
 	// 3. Immediate fast-start kick before any optional delay.
 	// Send FIR + PLI once to both endpoints to reduce first-keyframe latency.
 	fmt.Printf("[%s] 🔀 Sending @switch: immediate FIR + PLI kick to both endpoints\n", sess.ID)
@@ -910,7 +928,7 @@ func (s *Server) handleSwitchMessage(body string, callerURI string) {
 	if s.config.SwitchVideoBlackoutEnabled {
 		blackout := time.Duration(s.config.SwitchVideoBlackoutMS) * time.Millisecond
 		if blackout <= 0 {
-			blackout = 700 * time.Millisecond
+			blackout = 300 * time.Millisecond
 		}
 		maxWait := time.Duration(s.config.SwitchVideoBlackoutMaxWaitMS) * time.Millisecond
 		if maxWait < blackout {
@@ -918,9 +936,6 @@ func (s *Server) handleSwitchMessage(body string, callerURI string) {
 		}
 		sess.StartSwitchVideoBlackout(blackout, maxWait, "switch")
 	}
-
-	// Enable the same temporary aggressive recovery policy used by reconnect/resume.
-	sess.StartVideoRecoveryBurst("switch")
 
 	if queueNumber != "force send PLI" {
 		// 3.2 Optional delay (configurable via SWITCH_PLI_DELAY_MS)

@@ -84,10 +84,18 @@ func (s *Session) ShouldHoldSwitchVideoPacket(now time.Time, isKeyframe bool) bo
 	}
 
 	if isKeyframe {
+		startedAt := s.SwitchVideoBlackoutStarted
+		if startedAt.IsZero() {
+			startedAt = now
+		}
+		heldMs := now.Sub(startedAt).Milliseconds()
+		if heldMs < 0 {
+			heldMs = 0
+		}
 		s.SwitchVideoBlackoutUntil = time.Time{}
 		s.SwitchVideoBlackoutMaxWait = time.Time{}
 		s.SwitchVideoBlackoutStarted = time.Time{}
-		fmt.Printf("[%s] ⬛ switch_blackout_end reason=keyframe_recovered\n", s.ID)
+		fmt.Printf("[%s] ⬛ switch_blackout_end reason=keyframe_recovered heldMs=%d\n", s.ID, heldMs)
 		return false
 	}
 
@@ -98,9 +106,17 @@ func (s *Session) ShouldHoldSwitchVideoPacket(now time.Time, isKeyframe bool) bo
 	}
 
 	// Timeout safety: release automatically.
+	startedAt := s.SwitchVideoBlackoutStarted
+	if startedAt.IsZero() {
+		startedAt = now
+	}
+	heldMs := now.Sub(startedAt).Milliseconds()
+	if heldMs < 0 {
+		heldMs = 0
+	}
 	s.SwitchVideoBlackoutUntil = time.Time{}
 	s.SwitchVideoBlackoutMaxWait = time.Time{}
 	s.SwitchVideoBlackoutStarted = time.Time{}
-	fmt.Printf("[%s] ⬛ switch_blackout_end reason=timeout\n", s.ID)
+	fmt.Printf("[%s] ⬛ switch_blackout_end reason=timeout heldMs=%d\n", s.ID, heldMs)
 	return false
 }

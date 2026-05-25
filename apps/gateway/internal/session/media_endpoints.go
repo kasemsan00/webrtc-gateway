@@ -180,6 +180,27 @@ func (s *Session) UpdateAsteriskVideoEndpointFromRTP(remoteAddr *net.UDPAddr) {
 	}
 }
 
+// UpdateSIPVideoRTPSource records the observed SIP video RTP source for
+// switch generation and sustained disorder diagnostics.
+func (s *Session) UpdateSIPVideoRTPSource(remoteAddr *net.UDPAddr) bool {
+	if remoteAddr == nil {
+		return false
+	}
+	source := remoteAddr.String()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.SIPVideoRTPSource == source {
+		return false
+	}
+	previous := s.SIPVideoRTPSource
+	s.SIPVideoRTPSource = source
+	fmt.Printf("[%s] 📈 sip_video_rtp_source_changed source=%s previous=%s switchGeneration=%d\n",
+		s.ID, source, previous, s.SwitchGeneration)
+	return true
+}
+
 // UpdateAsteriskVideoRTCPFromRTCP learns the RTCP address based on real RTCP traffic.
 func (s *Session) UpdateAsteriskVideoRTCPFromRTCP(remoteAddr *net.UDPAddr, source string) {
 	s.mu.Lock()
@@ -365,6 +386,31 @@ func (s *Session) ResetMediaState() {
 	s.VideoRTCPLearnedAt = time.Time{}
 	s.VideoRTCPSource = "unknown"
 	s.VideoRTCPFallbackUntil = time.Time{}
+	s.SwitchVideoRecoveryStartedAt = time.Time{}
+	s.SwitchVideoRecoveryUntil = time.Time{}
+	s.SwitchVideoRecoveryFirstKeyframeAt = time.Time{}
+	s.SwitchVideoRecoveryOneShotPLI = false
+	s.SwitchVideoRecoverySummary = VideoRecoverySummary{}
+	s.SwitchVideoRecoveryRTPBaseline = VideoRecoverySummary{}
+	s.SwitchVideoRecoveryRTPBaselineAt = time.Time{}
+	s.SwitchVideoRecoveryLastUnstableLog = time.Time{}
+	s.SwitchVideoRecoveryUnstableCount = 0
+	s.SwitchTargetQueue = ""
+	s.SwitchTargetAgent = ""
+	s.SwitchTargetReceivedAt = time.Time{}
+	s.SwitchGeneration = 0
+	s.SwitchMediaSSRC = 0
+	s.SwitchMediaSource = ""
+	s.SwitchDuplicateCount = 0
+	s.SIPVideoRTPSource = ""
+	s.VideoRTPDisorderLastSummary = VideoRecoverySummary{}
+	s.VideoRTPDisorderLastSummaryAt = time.Time{}
+	s.VideoRTPDisorderConsecutiveBad = 0
+	s.VideoRTPDisorderLastLogAt = time.Time{}
+	s.VideoRTPDisorderContainmentUntil = time.Time{}
+	s.VideoRTPDisorderContainmentStartedAt = time.Time{}
+	s.VideoRTPDisorderContainmentReason = ""
+	s.VideoRTPDisorderContainmentSummary = VideoRecoverySummary{}
 	s.SwitchVideoBlackoutStarted = time.Time{}
 	s.SwitchVideoBlackoutUntil = time.Time{}
 	s.SwitchVideoBlackoutMaxWait = time.Time{}

@@ -157,7 +157,7 @@ func (s *Session) deferBrowserRecoveryToWebRTC(trigger, reason string, burstActi
 
 func isBrowserRecoveryTrigger(trigger string) bool {
 	switch trigger {
-	case "browser-pli", "browser-fir", "ws-request_keyframe":
+	case "browser-pli", "browser-fir", "ws-request_keyframe", "switch":
 		return true
 	default:
 		return false
@@ -191,25 +191,6 @@ func (s *Session) logBrowserRecoveryDecision(trigger, action string, burstActive
 
 func (s *Session) sendPLIToAsterisk(force bool, trigger string) {
 	now := time.Now()
-	// watchdog-fir path should immediately follow FIR with a PLI burst hint,
-	// so allow one bypass of interval throttling.
-	allowBypass := force && trigger == "watchdog-fir"
-	if !allowBypass && !s.shouldSendPLIToAsterisk(now, force) {
-		if force {
-			if trigger == "" {
-				trigger = "manual"
-			}
-			s.mu.RLock()
-			remoteVideoSSRC := s.RemoteVideoSSRC
-			s.mu.RUnlock()
-			s.logBrowserRecoveryDecision(trigger, "skip", s.IsVideoRecoveryBurstActive(), -1, remoteVideoSSRC, "rate-limited")
-			fmt.Printf("[%s] ⏱️ Skipping forced PLI to Asterisk - too frequent (trigger=%s)\n", s.ID, trigger)
-		} else {
-			fmt.Printf("[%s] ⏱️ Skipping PLI to Asterisk - keyframe is recent or PLI too frequent\n", s.ID)
-		}
-		return
-	}
-
 	s.mu.RLock()
 	destAddr := s.AsteriskVideoAddr
 	conn := s.VideoRTCPConn
@@ -234,6 +215,22 @@ func (s *Session) sendPLIToAsterisk(force bool, trigger string) {
 	}
 	if mediaSSRC == 0 {
 		fmt.Printf("[%s] ⚠️ Cannot send PLI: RemoteVideoSSRC is 0 (not learned yet)\n", s.ID)
+		return
+	}
+
+	// watchdog-fir path should immediately follow FIR with a PLI burst hint.
+	// switch recovery gets exactly one PLI bypass after SIP video is routable.
+	allowBypass := force && (trigger == "watchdog-fir" || (trigger == "switch" && s.ConsumeSwitchPLIBypass()))
+	if !allowBypass && !s.shouldSendPLIToAsterisk(now, force) {
+		if force {
+			if trigger == "" {
+				trigger = "manual"
+			}
+			s.logBrowserRecoveryDecision(trigger, "skip", s.IsVideoRecoveryBurstActive(), -1, mediaSSRC, "rate-limited")
+			fmt.Printf("[%s] ⏱️ Skipping forced PLI to Asterisk - too frequent (trigger=%s)\n", s.ID, trigger)
+		} else {
+			fmt.Printf("[%s] ⏱️ Skipping PLI to Asterisk - keyframe is recent or PLI too frequent\n", s.ID)
+		}
 		return
 	}
 

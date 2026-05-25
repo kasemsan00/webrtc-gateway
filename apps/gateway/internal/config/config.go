@@ -94,11 +94,32 @@ type SIPConfig struct {
 	SwitchPLIDelayMS int    // Delay in milliseconds before sending PLI on @switch message (default: 0)
 	// @switch video transition hold (SIP->WebRTC): temporarily drop remote video packets
 	// to intentionally keep screen black before showing target video.
-	SwitchVideoBlackoutEnabled   bool // Enable @switch blackout hold policy (default: true)
-	SwitchVideoBlackoutMS        int  // Minimum blackout duration in ms (default: 700)
-	SwitchVideoBlackoutMaxWaitMS int  // Max wait for keyframe after blackout in ms (default: 2000)
-	AudioUseAVPF                 bool // Use RTP/AVPF profile for audio with RTCP feedback (default: false)
-	VideoUseAVPF                 bool // Use RTP/AVPF profile for video with RTCP feedback (PLI/FIR/NACK) (default: true)
+	SwitchVideoBlackoutEnabled           bool // Enable @switch blackout hold policy (default: true)
+	SwitchVideoBlackoutMS                int  // Minimum blackout duration in ms (default: 300)
+	SwitchVideoBlackoutMaxWaitMS         int  // Max wait for keyframe after blackout in ms (default: 1200)
+	SwitchVideoRecoveryWindowMS          int  // Max @switch recovery burst duration in ms (default: 5000)
+	SwitchVideoRecoveryStableMS          int  // Stable media window after switch keyframe in ms (default: 750)
+	SwitchVideoRTPStabilityEnabled       bool // Require RTP metrics to be stable before ending @switch recovery (default: true)
+	SwitchVideoRTPMinPacketDelta         int  // Minimum SIP->WebRTC video packets in the stable window (default: 30)
+	SwitchVideoRTPMaxGapDelta            int  // Max RTP sequence gap events allowed in the stable window (default: 12)
+	SwitchVideoRTPMaxMissingDelta        int  // Max missing RTP packets allowed in the stable window (default: 20)
+	SwitchVideoRTPMaxOutOfOrderDelta     int  // Max out-of-order RTP packets allowed in the stable window (default: 20)
+	SwitchVideoRTPMaxReorderDropDelta    int  // Max reorder drops allowed in the stable window (default: 0)
+	SwitchVideoRTPMaxReorderTimeoutDelta int  // Max reorder timeouts allowed in the stable window (default: 5)
+	SwitchDuplicateDebounceEnabled       bool // Ignore duplicate @switch target inside debounce window (default: true)
+	SwitchDuplicateDebounceMS            int  // Duplicate @switch debounce window in ms (default: 60000)
+	VideoRTPDisorderMonitorEnabled       bool // Monitor sustained SIP->WebRTC video RTP disorder (default: true)
+	VideoRTPDisorderMinPacketDelta       int  // Minimum packet delta per disorder window (default: 300)
+	VideoRTPDisorderMaxGapDelta          int  // Max gap events per disorder window before bad window (default: 45)
+	VideoRTPDisorderMaxMissingDelta      int  // Max missing packets per disorder window before bad window (default: 80)
+	VideoRTPDisorderMaxOutOfOrderDelta   int  // Max out-of-order packets per disorder window before bad window (default: 80)
+	VideoRTPDisorderMaxReorderTimeout    int  // Max reorder timeouts per disorder window before bad window (default: 20)
+	VideoRTPDisorderConsecutiveWindows   int  // Consecutive bad windows before sustained log (default: 3)
+	VideoRTPDisorderLogIntervalMS        int  // Minimum sustained disorder log interval in ms (default: 5000)
+	VideoRTPDisorderContainmentEnabled   bool // Enable bounded session-scoped disorder containment diagnostics (default: false)
+	VideoRTPDisorderContainmentMS        int  // Bounded containment duration in ms (default: 10000)
+	AudioUseAVPF                         bool // Use RTP/AVPF profile for audio with RTCP feedback (default: false)
+	VideoUseAVPF                         bool // Use RTP/AVPF profile for video with RTCP feedback (PLI/FIR/NACK) (default: true)
 	// SIP-side transport target for outbound video feedback packets (PLI/FIR/NACK): auto|rtp|rtcp|dual
 	// - auto: legacy learned-RTCP + fallback-window behavior
 	// - rtp:  always send to SIP video RTP port (rtcp-mux style)
@@ -211,31 +232,52 @@ func Load() (*Config, error) {
 			Password: os.Getenv("TURN_PASSWORD"),
 		},
 		SIP: SIPConfig{
-			Port:                            sipPortNum,
-			LocalPort:                       sipLocalPortNum,
-			LocalIP:                         getEnvWithDefault("SIP_LOCAL_IP", "0.0.0.0"),
-			PublicIP:                        os.Getenv("SIP_PUBLIC_IP"),
-			ListenTCP:                       getEnvAsBool("SIP_LISTEN_TCP", true),
-			ListenUDP:                       getEnvAsBool("SIP_LISTEN_UDP", false),
-			DebugSIPMessage:                 getEnvAsBool("DEBUG_SIP_MESSAGE", false),
-			DebugSIPInvite:                  getEnvAsBool("DEBUG_SIP_INVITE", false),
-			SwitchPLIDelayMS:                getEnvAsInt("SWITCH_PLI_DELAY_MS", 0),
-			SwitchVideoBlackoutEnabled:      getEnvAsBool("SIP_SWITCH_VIDEO_BLACKOUT_ENABLED", true),
-			SwitchVideoBlackoutMS:           getEnvAsInt("SIP_SWITCH_VIDEO_BLACKOUT_MS", 700),
-			SwitchVideoBlackoutMaxWaitMS:    getEnvAsInt("SIP_SWITCH_VIDEO_BLACKOUT_MAX_WAIT_MS", 2000),
-			AudioUseAVPF:                    getEnvAsBool("SIP_AUDIO_USE_AVPF", false),
-			VideoUseAVPF:                    getEnvAsBool("SIP_VIDEO_USE_AVPF", true),
-			VideoFeedbackTransport:          getSIPVideoFeedbackTransport(),
-			VideoPreserveSTAPA:              getEnvAsBool("SIP_VIDEO_PRESERVE_STAPA", false),
-			VideoKeyframeWatchdogEnabled:    getEnvAsBool("SIP_VIDEO_KEYFRAME_WATCHDOG", true),
-			VideoKeyframeWatchdogIntervalMS: getEnvAsInt("SIP_VIDEO_KEYFRAME_WATCHDOG_INTERVAL_MS", 1500),
-			VideoKeyframeStaleMS:            getEnvAsInt("SIP_VIDEO_KEYFRAME_STALE_MS", 2000),
-			VideoKeyframeFIRStaleMS:         getEnvAsInt("SIP_VIDEO_KEYFRAME_FIR_STALE_MS", 5000),
-			VideoRecoveryBurstEnabled:       getEnvAsBool("SIP_VIDEO_RECOVERY_BURST_ENABLED", true),
-			VideoRecoveryBurstWindowMS:      getEnvAsInt("SIP_VIDEO_RECOVERY_BURST_WINDOW_MS", 12000),
-			VideoRecoveryBurstIntervalMS:    getEnvAsInt("SIP_VIDEO_RECOVERY_BURST_INTERVAL_MS", 800),
-			VideoRecoveryBurstStaleMS:       getEnvAsInt("SIP_VIDEO_RECOVERY_BURST_STALE_MS", 1200),
-			VideoRecoveryBurstFIRStaleMS:    getEnvAsInt("SIP_VIDEO_RECOVERY_BURST_FIR_STALE_MS", 2500),
+			Port:                                 sipPortNum,
+			LocalPort:                            sipLocalPortNum,
+			LocalIP:                              getEnvWithDefault("SIP_LOCAL_IP", "0.0.0.0"),
+			PublicIP:                             os.Getenv("SIP_PUBLIC_IP"),
+			ListenTCP:                            getEnvAsBool("SIP_LISTEN_TCP", true),
+			ListenUDP:                            getEnvAsBool("SIP_LISTEN_UDP", false),
+			DebugSIPMessage:                      getEnvAsBool("DEBUG_SIP_MESSAGE", false),
+			DebugSIPInvite:                       getEnvAsBool("DEBUG_SIP_INVITE", false),
+			SwitchPLIDelayMS:                     getEnvAsInt("SWITCH_PLI_DELAY_MS", 0),
+			SwitchVideoBlackoutEnabled:           getEnvAsBool("SIP_SWITCH_VIDEO_BLACKOUT_ENABLED", true),
+			SwitchVideoBlackoutMS:                getEnvAsInt("SIP_SWITCH_VIDEO_BLACKOUT_MS", 300),
+			SwitchVideoBlackoutMaxWaitMS:         getEnvAsInt("SIP_SWITCH_VIDEO_BLACKOUT_MAX_WAIT_MS", 1200),
+			SwitchVideoRecoveryWindowMS:          getEnvAsInt("SIP_SWITCH_VIDEO_RECOVERY_WINDOW_MS", 5000),
+			SwitchVideoRecoveryStableMS:          getEnvAsInt("SIP_SWITCH_VIDEO_RECOVERY_STABLE_MS", 750),
+			SwitchVideoRTPStabilityEnabled:       getEnvAsBool("SIP_SWITCH_VIDEO_RTP_STABILITY_ENABLED", true),
+			SwitchVideoRTPMinPacketDelta:         getEnvAsInt("SIP_SWITCH_VIDEO_RTP_MIN_PACKET_DELTA", 30),
+			SwitchVideoRTPMaxGapDelta:            getEnvAsInt("SIP_SWITCH_VIDEO_RTP_MAX_GAP_DELTA", 12),
+			SwitchVideoRTPMaxMissingDelta:        getEnvAsInt("SIP_SWITCH_VIDEO_RTP_MAX_MISSING_DELTA", 20),
+			SwitchVideoRTPMaxOutOfOrderDelta:     getEnvAsInt("SIP_SWITCH_VIDEO_RTP_MAX_OOO_DELTA", 20),
+			SwitchVideoRTPMaxReorderDropDelta:    getEnvAsInt("SIP_SWITCH_VIDEO_RTP_MAX_REORDER_DROP_DELTA", 0),
+			SwitchVideoRTPMaxReorderTimeoutDelta: getEnvAsInt("SIP_SWITCH_VIDEO_RTP_MAX_REORDER_TIMEOUT_DELTA", 5),
+			SwitchDuplicateDebounceEnabled:       getEnvAsBool("SIP_SWITCH_DUPLICATE_DEBOUNCE_ENABLED", true),
+			SwitchDuplicateDebounceMS:            getEnvAsInt("SIP_SWITCH_DUPLICATE_DEBOUNCE_MS", 60000),
+			VideoRTPDisorderMonitorEnabled:       getEnvAsBool("SIP_VIDEO_RTP_DISORDER_MONITOR_ENABLED", true),
+			VideoRTPDisorderMinPacketDelta:       getEnvAsInt("SIP_VIDEO_RTP_DISORDER_MIN_PACKET_DELTA", 300),
+			VideoRTPDisorderMaxGapDelta:          getEnvAsInt("SIP_VIDEO_RTP_DISORDER_MAX_GAP_DELTA", 45),
+			VideoRTPDisorderMaxMissingDelta:      getEnvAsInt("SIP_VIDEO_RTP_DISORDER_MAX_MISSING_DELTA", 80),
+			VideoRTPDisorderMaxOutOfOrderDelta:   getEnvAsInt("SIP_VIDEO_RTP_DISORDER_MAX_OOO_DELTA", 80),
+			VideoRTPDisorderMaxReorderTimeout:    getEnvAsInt("SIP_VIDEO_RTP_DISORDER_MAX_REORDER_TIMEOUT_DELTA", 20),
+			VideoRTPDisorderConsecutiveWindows:   getEnvAsInt("SIP_VIDEO_RTP_DISORDER_CONSECUTIVE_WINDOWS", 3),
+			VideoRTPDisorderLogIntervalMS:        getEnvAsInt("SIP_VIDEO_RTP_DISORDER_LOG_INTERVAL_MS", 5000),
+			VideoRTPDisorderContainmentEnabled:   getEnvAsBool("SIP_VIDEO_RTP_DISORDER_CONTAINMENT_ENABLED", false),
+			VideoRTPDisorderContainmentMS:        getEnvAsInt("SIP_VIDEO_RTP_DISORDER_CONTAINMENT_MS", 10000),
+			AudioUseAVPF:                         getEnvAsBool("SIP_AUDIO_USE_AVPF", false),
+			VideoUseAVPF:                         getEnvAsBool("SIP_VIDEO_USE_AVPF", true),
+			VideoFeedbackTransport:               getSIPVideoFeedbackTransport(),
+			VideoPreserveSTAPA:                   getEnvAsBool("SIP_VIDEO_PRESERVE_STAPA", false),
+			VideoKeyframeWatchdogEnabled:         getEnvAsBool("SIP_VIDEO_KEYFRAME_WATCHDOG", true),
+			VideoKeyframeWatchdogIntervalMS:      getEnvAsInt("SIP_VIDEO_KEYFRAME_WATCHDOG_INTERVAL_MS", 1500),
+			VideoKeyframeStaleMS:                 getEnvAsInt("SIP_VIDEO_KEYFRAME_STALE_MS", 2000),
+			VideoKeyframeFIRStaleMS:              getEnvAsInt("SIP_VIDEO_KEYFRAME_FIR_STALE_MS", 5000),
+			VideoRecoveryBurstEnabled:            getEnvAsBool("SIP_VIDEO_RECOVERY_BURST_ENABLED", true),
+			VideoRecoveryBurstWindowMS:           getEnvAsInt("SIP_VIDEO_RECOVERY_BURST_WINDOW_MS", 12000),
+			VideoRecoveryBurstIntervalMS:         getEnvAsInt("SIP_VIDEO_RECOVERY_BURST_INTERVAL_MS", 800),
+			VideoRecoveryBurstStaleMS:            getEnvAsInt("SIP_VIDEO_RECOVERY_BURST_STALE_MS", 1200),
+			VideoRecoveryBurstFIRStaleMS:         getEnvAsInt("SIP_VIDEO_RECOVERY_BURST_FIR_STALE_MS", 2500),
 		},
 		API: APIConfig{
 			Port:                       apiPort,
@@ -382,10 +424,37 @@ func (c *Config) Display() {
 		c.SIP.VideoRecoveryBurstStaleMS,
 		c.SIP.VideoRecoveryBurstFIRStaleMS,
 	)
-	fmt.Printf("  @switch Video Blackout: %v (blackout=%dms, maxWait=%dms)\n",
+	fmt.Printf("  @switch Video Blackout: %v (blackout=%dms, maxWait=%dms, recoveryWindow=%dms, stable=%dms)\n",
 		c.SIP.SwitchVideoBlackoutEnabled,
 		c.SIP.SwitchVideoBlackoutMS,
 		c.SIP.SwitchVideoBlackoutMaxWaitMS,
+		c.SIP.SwitchVideoRecoveryWindowMS,
+		c.SIP.SwitchVideoRecoveryStableMS,
+	)
+	fmt.Printf("  @switch RTP Stability: %v (minPackets=%d, maxGap=%d, maxMissing=%d, maxOOO=%d, maxDrop=%d, maxTimeout=%d)\n",
+		c.SIP.SwitchVideoRTPStabilityEnabled,
+		c.SIP.SwitchVideoRTPMinPacketDelta,
+		c.SIP.SwitchVideoRTPMaxGapDelta,
+		c.SIP.SwitchVideoRTPMaxMissingDelta,
+		c.SIP.SwitchVideoRTPMaxOutOfOrderDelta,
+		c.SIP.SwitchVideoRTPMaxReorderDropDelta,
+		c.SIP.SwitchVideoRTPMaxReorderTimeoutDelta,
+	)
+	fmt.Printf("  @switch Duplicate Debounce: %v (window=%dms)\n",
+		c.SIP.SwitchDuplicateDebounceEnabled,
+		c.SIP.SwitchDuplicateDebounceMS,
+	)
+	fmt.Printf("  SIP Video RTP Disorder Monitor: %v (minPackets=%d, maxGap=%d, maxMissing=%d, maxOOO=%d, maxTimeout=%d, consecutive=%d, logInterval=%dms, containment=%v/%dms)\n",
+		c.SIP.VideoRTPDisorderMonitorEnabled,
+		c.SIP.VideoRTPDisorderMinPacketDelta,
+		c.SIP.VideoRTPDisorderMaxGapDelta,
+		c.SIP.VideoRTPDisorderMaxMissingDelta,
+		c.SIP.VideoRTPDisorderMaxOutOfOrderDelta,
+		c.SIP.VideoRTPDisorderMaxReorderTimeout,
+		c.SIP.VideoRTPDisorderConsecutiveWindows,
+		c.SIP.VideoRTPDisorderLogIntervalMS,
+		c.SIP.VideoRTPDisorderContainmentEnabled,
+		c.SIP.VideoRTPDisorderContainmentMS,
 	)
 
 	// Display API Configuration

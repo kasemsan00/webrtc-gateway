@@ -93,6 +93,50 @@ type Session struct {
 	VideoRecoveryBurstUntil      time.Time     `json:"-"`
 	VideoRecoveryBurstStartedAt  time.Time     `json:"-"`
 	VideoRecoveryBurstLastReason string        `json:"-"`
+	// @switch recovery state (SIP->WebRTC): bounded keyframe recovery after agent switch.
+	SwitchVideoRecoveryStartedAt         time.Time            `json:"-"`
+	SwitchVideoRecoveryUntil             time.Time            `json:"-"`
+	SwitchVideoRecoveryFirstKeyframeAt   time.Time            `json:"-"`
+	SwitchVideoRecoveryStableWindow      time.Duration        `json:"-"`
+	SwitchVideoRecoveryOneShotPLI        bool                 `json:"-"`
+	SwitchVideoRecoverySummary           VideoRecoverySummary `json:"-"`
+	SwitchVideoRecoveryRTPBaseline       VideoRecoverySummary `json:"-"`
+	SwitchVideoRecoveryRTPBaselineAt     time.Time            `json:"-"`
+	SwitchVideoRecoveryLastUnstableLog   time.Time            `json:"-"`
+	SwitchVideoRecoveryUnstableCount     int                  `json:"-"`
+	SwitchVideoRTPStabilityEnabled       bool                 `json:"-"`
+	SwitchVideoRTPMinPacketDelta         int                  `json:"-"`
+	SwitchVideoRTPMaxGapDelta            int                  `json:"-"`
+	SwitchVideoRTPMaxMissingDelta        int                  `json:"-"`
+	SwitchVideoRTPMaxOutOfOrderDelta     int                  `json:"-"`
+	SwitchVideoRTPMaxReorderDropDelta    int                  `json:"-"`
+	SwitchVideoRTPMaxReorderTimeoutDelta int                  `json:"-"`
+	SwitchTargetQueue                    string               `json:"-"`
+	SwitchTargetAgent                    string               `json:"-"`
+	SwitchTargetReceivedAt               time.Time            `json:"-"`
+	SwitchGeneration                     int                  `json:"-"`
+	SwitchMediaSSRC                      uint32               `json:"-"`
+	SwitchMediaSource                    string               `json:"-"`
+	SwitchDuplicateCount                 int                  `json:"-"`
+	SIPVideoRTPSource                    string               `json:"-"`
+	VideoRTPDisorderMonitorEnabled       bool                 `json:"-"`
+	VideoRTPDisorderMinPacketDelta       int                  `json:"-"`
+	VideoRTPDisorderMaxGapDelta          int                  `json:"-"`
+	VideoRTPDisorderMaxMissingDelta      int                  `json:"-"`
+	VideoRTPDisorderMaxOutOfOrderDelta   int                  `json:"-"`
+	VideoRTPDisorderMaxReorderTimeout    int                  `json:"-"`
+	VideoRTPDisorderConsecutiveWindows   int                  `json:"-"`
+	VideoRTPDisorderLogInterval          time.Duration        `json:"-"`
+	VideoRTPDisorderContainmentEnabled   bool                 `json:"-"`
+	VideoRTPDisorderContainmentDuration  time.Duration        `json:"-"`
+	VideoRTPDisorderLastSummary          VideoRecoverySummary `json:"-"`
+	VideoRTPDisorderLastSummaryAt        time.Time            `json:"-"`
+	VideoRTPDisorderConsecutiveBad       int                  `json:"-"`
+	VideoRTPDisorderLastLogAt            time.Time            `json:"-"`
+	VideoRTPDisorderContainmentUntil     time.Time            `json:"-"`
+	VideoRTPDisorderContainmentStartedAt time.Time            `json:"-"`
+	VideoRTPDisorderContainmentReason    string               `json:"-"`
+	VideoRTPDisorderContainmentSummary   VideoRecoverySummary `json:"-"`
 	// @switch blackout hold (SIP->WebRTC): keep screen black briefly by dropping video RTP
 	SwitchVideoBlackoutEnabled bool      `json:"-"`
 	SwitchVideoBlackoutStarted time.Time `json:"-"`
@@ -311,25 +355,42 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 	}
 
 	session := &Session{
-		ID:                          id,
-		PeerConnection:              peerConnection,
-		AudioTrack:                  audioTrack,
-		VideoTrack:                  videoTrack,
-		State:                       StateNew,
-		CreatedAt:                   time.Now(),
-		UpdatedAt:                   time.Now(),
-		RTPBufferSize:               rtpBufferSize,
-		SwitchSPSPPSInjectRemaining: 0, // 0 = disabled, will be set to 3 when @switch message is received
-		VideoRTCPSource:             "unknown",
-		VideoFeedbackTransport:      cfg.SIP.VideoFeedbackTransport,
-		SymmetricRTPTrustUntil:      time.Now().Add(symmetricRTPTrustWindow),
-		PreserveSTAPA:               cfg.SIP.VideoPreserveSTAPA, // Phase 2: preserve STAP-A if enabled
-		VideoRecoveryBurstEnabled:   cfg.SIP.VideoRecoveryBurstEnabled,
-		VideoRecoveryBurstWindow:    burstWindow,
-		VideoRecoveryBurstInterval:  burstInterval,
-		VideoRecoveryBurstStale:     burstStale,
-		VideoRecoveryBurstFIRStale:  burstFIRStale,
-		SwitchVideoBlackoutEnabled:  cfg.SIP.SwitchVideoBlackoutEnabled,
+		ID:                                   id,
+		PeerConnection:                       peerConnection,
+		AudioTrack:                           audioTrack,
+		VideoTrack:                           videoTrack,
+		State:                                StateNew,
+		CreatedAt:                            time.Now(),
+		UpdatedAt:                            time.Now(),
+		RTPBufferSize:                        rtpBufferSize,
+		SwitchSPSPPSInjectRemaining:          0, // 0 = disabled, will be set to 3 when @switch message is received
+		VideoRTCPSource:                      "unknown",
+		VideoFeedbackTransport:               cfg.SIP.VideoFeedbackTransport,
+		SymmetricRTPTrustUntil:               time.Now().Add(symmetricRTPTrustWindow),
+		PreserveSTAPA:                        cfg.SIP.VideoPreserveSTAPA, // Phase 2: preserve STAP-A if enabled
+		VideoRecoveryBurstEnabled:            cfg.SIP.VideoRecoveryBurstEnabled,
+		VideoRecoveryBurstWindow:             burstWindow,
+		VideoRecoveryBurstInterval:           burstInterval,
+		VideoRecoveryBurstStale:              burstStale,
+		VideoRecoveryBurstFIRStale:           burstFIRStale,
+		SwitchVideoBlackoutEnabled:           cfg.SIP.SwitchVideoBlackoutEnabled,
+		SwitchVideoRTPStabilityEnabled:       cfg.SIP.SwitchVideoRTPStabilityEnabled,
+		SwitchVideoRTPMinPacketDelta:         cfg.SIP.SwitchVideoRTPMinPacketDelta,
+		SwitchVideoRTPMaxGapDelta:            cfg.SIP.SwitchVideoRTPMaxGapDelta,
+		SwitchVideoRTPMaxMissingDelta:        cfg.SIP.SwitchVideoRTPMaxMissingDelta,
+		SwitchVideoRTPMaxOutOfOrderDelta:     cfg.SIP.SwitchVideoRTPMaxOutOfOrderDelta,
+		SwitchVideoRTPMaxReorderDropDelta:    cfg.SIP.SwitchVideoRTPMaxReorderDropDelta,
+		SwitchVideoRTPMaxReorderTimeoutDelta: cfg.SIP.SwitchVideoRTPMaxReorderTimeoutDelta,
+		VideoRTPDisorderMonitorEnabled:       cfg.SIP.VideoRTPDisorderMonitorEnabled,
+		VideoRTPDisorderMinPacketDelta:       cfg.SIP.VideoRTPDisorderMinPacketDelta,
+		VideoRTPDisorderMaxGapDelta:          cfg.SIP.VideoRTPDisorderMaxGapDelta,
+		VideoRTPDisorderMaxMissingDelta:      cfg.SIP.VideoRTPDisorderMaxMissingDelta,
+		VideoRTPDisorderMaxOutOfOrderDelta:   cfg.SIP.VideoRTPDisorderMaxOutOfOrderDelta,
+		VideoRTPDisorderMaxReorderTimeout:    cfg.SIP.VideoRTPDisorderMaxReorderTimeout,
+		VideoRTPDisorderConsecutiveWindows:   cfg.SIP.VideoRTPDisorderConsecutiveWindows,
+		VideoRTPDisorderLogInterval:          time.Duration(cfg.SIP.VideoRTPDisorderLogIntervalMS) * time.Millisecond,
+		VideoRTPDisorderContainmentEnabled:   cfg.SIP.VideoRTPDisorderContainmentEnabled,
+		VideoRTPDisorderContainmentDuration:  time.Duration(cfg.SIP.VideoRTPDisorderContainmentMS) * time.Millisecond,
 	}
 	session.initVideoRTPHistory()
 	session.ctx, session.cancel = context.WithCancel(context.Background())

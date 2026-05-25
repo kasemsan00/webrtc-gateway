@@ -336,6 +336,27 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 		sess.VideoTrack.Write(data)
 	})
 	defer reorderBuf.Drain()
+	buildVideoSummary := func(keyframeAge time.Duration) session.VideoRecoverySummary {
+		rBuf, rRel, rDrop, rTO := reorderBuf.GetStats()
+		return session.VideoRecoverySummary{
+			Packets:         packetCount,
+			Gaps:            seqGapEvents,
+			Missing:         seqGapPackets,
+			OutOfOrder:      seqOutOfOrder,
+			Duplicates:      seqDuplicates,
+			ReorderBuffered: rBuf,
+			ReorderReleased: rRel,
+			ReorderDropped:  rDrop,
+			ReorderTimedOut: rTO,
+			ReorderPending:  reorderBuf.Pending(),
+			LastKeyframeAge: keyframeAge,
+		}
+	}
+	updateSwitchSummary := func(keyframeAge time.Duration) session.VideoRecoverySummary {
+		summary := buildVideoSummary(keyframeAge)
+		sess.UpdateSwitchVideoRecoverySummary(summary)
+		return summary
+	}
 
 	for {
 		n, remoteAddr, err := conn.ReadFromUDP(buffer)
@@ -394,6 +415,7 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 		if packetCount == 1 || packetCount <= 5 {
 			sess.UpdateAsteriskVideoEndpointFromRTP(remoteAddr)
 		}
+		sess.UpdateSIPVideoRTPSource(remoteAddr)
 
 		// Debug: Log small RTP packets
 		if n < 50 && packetCount <= 20 {
@@ -419,6 +441,10 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 				go func() {
 					fmt.Printf("[%s] 🚀 Sending startup FIR + guarded PLI burst\n", sess.ID)
 					sess.SendFIRToAsterisk()
+					if sess.IsSwitchVideoRecoveryActive() {
+						fmt.Printf("[%s] switch_recovery_ssrc_ready sending immediate SIP keyframe request\n", sess.ID)
+						sess.SendPLIToAsteriskForced("switch")
+					}
 					time.Sleep(startupPLIInterval)
 					for i := 0; i < startupPLIAttempts; i++ {
 						if sess.GetState() == session.StateEnded {
@@ -474,14 +500,18 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 			if packetCount%300 == 0 {
 				lastKeyframe, _ := sess.GetKeyframeTimes()
 				keyframeAge := "none"
+				keyframeAgeDuration := time.Duration(-1)
 				if !lastKeyframe.IsZero() {
-					keyframeAge = time.Since(lastKeyframe).Round(100 * time.Millisecond).String()
+					keyframeAgeDuration = time.Since(lastKeyframe)
+					keyframeAge = keyframeAgeDuration.Round(100 * time.Millisecond).String()
 				}
 				rBuf, rRel, rDrop, rTO := reorderBuf.GetStats()
 				rPend := reorderBuf.Pending()
 				fmt.Printf("[%s] 📊 SIP→WebRTC video stats: packets=%d gaps=%d missing=%d ooo=%d dup=%d reorder(buf=%d rel=%d drop=%d to=%d pend=%d) keyframeAge=%s\n",
 					sess.ID, packetCount, seqGapEvents, seqGapPackets, seqOutOfOrder, seqDuplicates,
 					rBuf, rRel, rDrop, rTO, rPend, keyframeAge)
+				summary := updateSwitchSummary(keyframeAgeDuration)
+				sess.ObserveSIPVideoRTPDisorder(summary, time.Now())
 			}
 
 			// Cache RTP packet for possible retransmission to WebRTC (NACK handling)
@@ -494,6 +524,7 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 					// Keyframe (IDR) detected - Use exported method
 					isKeyframe = true
 					isPLIResponse, responseTime, pliSent, pliResponse := sess.RecordKeyframe()
+					sess.MarkSwitchVideoKeyframe(time.Now())
 					if isPLIResponse {
 						fmt.Printf("[%s] ✅ Keyframe received! PLI response time: %v (Sent: %d, Response: %d)\n",
 							sess.ID, responseTime, pliSent, pliResponse)
@@ -521,6 +552,7 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 							// Keyframe fragment start detected - Use exported method
 							isKeyframe = true
 							isPLIResponse, responseTime, pliSent, pliResponse := sess.RecordKeyframe()
+							sess.MarkSwitchVideoKeyframe(time.Now())
 							if isPLIResponse {
 								fmt.Printf("[%s] ✅ Keyframe fragment start! PLI response time: %v (Sent: %d, Response: %d)\n",
 									sess.ID, responseTime, pliSent, pliResponse)
@@ -535,6 +567,13 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 			if sess.ShouldHoldSwitchVideoPacket(time.Now(), isKeyframe) {
 				continue
 			}
+			lastKeyframe, _ := sess.GetKeyframeTimes()
+			keyframeAgeDuration := time.Duration(-1)
+			if !lastKeyframe.IsZero() {
+				keyframeAgeDuration = time.Since(lastKeyframe)
+			}
+			updateSwitchSummary(keyframeAgeDuration)
+			sess.MarkSwitchVideoProgress(time.Now(), isKeyframe)
 
 			// Push into reorder buffer (handles sequencing + SPS/PPS injection at flush time)
 			if sess.VideoTrack != nil {

@@ -8,12 +8,19 @@ import (
 
 func newBurstTestSession(id string) *Session {
 	return &Session{
-		ID:                         id,
-		VideoRecoveryBurstEnabled:  true,
-		VideoRecoveryBurstWindow:   12 * time.Second,
-		VideoRecoveryBurstInterval: 800 * time.Millisecond,
-		VideoRecoveryBurstStale:    1200 * time.Millisecond,
-		VideoRecoveryBurstFIRStale: 2500 * time.Millisecond,
+		ID:                                   id,
+		VideoRecoveryBurstEnabled:            true,
+		VideoRecoveryBurstWindow:             12 * time.Second,
+		VideoRecoveryBurstInterval:           800 * time.Millisecond,
+		VideoRecoveryBurstStale:              1200 * time.Millisecond,
+		VideoRecoveryBurstFIRStale:           2500 * time.Millisecond,
+		SwitchVideoRTPStabilityEnabled:       true,
+		SwitchVideoRTPMinPacketDelta:         30,
+		SwitchVideoRTPMaxGapDelta:            12,
+		SwitchVideoRTPMaxMissingDelta:        20,
+		SwitchVideoRTPMaxOutOfOrderDelta:     20,
+		SwitchVideoRTPMaxReorderDropDelta:    0,
+		SwitchVideoRTPMaxReorderTimeoutDelta: 5,
 	}
 }
 
@@ -131,6 +138,188 @@ func TestRecordKeyframe_KeepsVideoRecoveryBurstOverrideActive(t *testing.T) {
 	_, _, _, active := sess.GetVideoRecoveryPolicy(3*time.Second, 5*time.Second, 10*time.Second)
 	if !active {
 		t.Fatalf("expected burst policy to remain active after first keyframe")
+	}
+}
+
+func TestSwitchVideoRecoveryLifecycleEndsAfterStableProgress(t *testing.T) {
+	sess := newBurstTestSession("switch-stable")
+	sess.StartSwitchVideoRecovery(2*time.Second, 20*time.Millisecond)
+
+	_, _, _, active := sess.GetVideoRecoveryPolicy(3*time.Second, 5*time.Second, 10*time.Second)
+	if !active {
+		t.Fatalf("expected switch recovery burst to be active")
+	}
+	if !sess.IsSwitchVideoRecoveryActive() {
+		t.Fatalf("expected switch recovery state to be active")
+	}
+
+	sess.MarkSwitchVideoKeyframe(time.Now())
+	sess.UpdateSwitchVideoRecoverySummary(VideoRecoverySummary{
+		Packets:         100,
+		Gaps:            10,
+		Missing:         15,
+		OutOfOrder:      15,
+		LastKeyframeAge: 5 * time.Millisecond,
+	})
+	time.Sleep(25 * time.Millisecond)
+	sess.UpdateSwitchVideoRecoverySummary(VideoRecoverySummary{
+		Packets:         160,
+		Gaps:            12,
+		Missing:         18,
+		OutOfOrder:      18,
+		LastKeyframeAge: 30 * time.Millisecond,
+	})
+	sess.MarkSwitchVideoProgress(time.Now(), false)
+
+	_, _, _, active = sess.GetVideoRecoveryPolicy(3*time.Second, 5*time.Second, 10*time.Second)
+	if active {
+		t.Fatalf("expected switch recovery burst to stop after stable progress")
+	}
+	if sess.IsSwitchVideoRecoveryActive() {
+		t.Fatalf("expected switch recovery state to stop after stable progress")
+	}
+}
+
+func TestSwitchVideoRecoveryStaysActiveWhenRTPDeltaUnstable(t *testing.T) {
+	sess := newBurstTestSession("switch-unstable-rtp")
+	sess.StartSwitchVideoRecovery(2*time.Second, 20*time.Millisecond)
+
+	sess.UpdateSwitchVideoRecoverySummary(VideoRecoverySummary{
+		Packets:         100,
+		Gaps:            10,
+		Missing:         20,
+		OutOfOrder:      20,
+		LastKeyframeAge: 5 * time.Millisecond,
+	})
+	sess.MarkSwitchVideoKeyframe(time.Now())
+	time.Sleep(25 * time.Millisecond)
+	sess.UpdateSwitchVideoRecoverySummary(VideoRecoverySummary{
+		Packets:         200,
+		Gaps:            50,
+		Missing:         100,
+		OutOfOrder:      100,
+		LastKeyframeAge: 30 * time.Millisecond,
+	})
+	sess.MarkSwitchVideoProgress(time.Now(), false)
+
+	if !sess.IsSwitchVideoRecoveryActive() {
+		t.Fatalf("expected switch recovery to remain active while RTP disorder delta is high")
+	}
+	_, _, _, active := sess.GetVideoRecoveryPolicy(3*time.Second, 5*time.Second, 10*time.Second)
+	if !active {
+		t.Fatalf("expected recovery burst to remain active while RTP disorder delta is high")
+	}
+}
+
+func TestSwitchVideoRecoveryEndsAfterRTPDeltaStabilizes(t *testing.T) {
+	sess := newBurstTestSession("switch-rtp-stabilizes")
+	sess.StartSwitchVideoRecovery(2*time.Second, 20*time.Millisecond)
+
+	sess.UpdateSwitchVideoRecoverySummary(VideoRecoverySummary{
+		Packets:         100,
+		Gaps:            10,
+		Missing:         20,
+		OutOfOrder:      20,
+		LastKeyframeAge: 5 * time.Millisecond,
+	})
+	sess.MarkSwitchVideoKeyframe(time.Now())
+	time.Sleep(25 * time.Millisecond)
+	sess.UpdateSwitchVideoRecoverySummary(VideoRecoverySummary{
+		Packets:         200,
+		Gaps:            50,
+		Missing:         100,
+		OutOfOrder:      100,
+		LastKeyframeAge: 30 * time.Millisecond,
+	})
+	sess.MarkSwitchVideoProgress(time.Now(), false)
+
+	if !sess.IsSwitchVideoRecoveryActive() {
+		t.Fatalf("expected first unstable window to keep recovery active")
+	}
+
+	time.Sleep(25 * time.Millisecond)
+	sess.UpdateSwitchVideoRecoverySummary(VideoRecoverySummary{
+		Packets:         260,
+		Gaps:            52,
+		Missing:         108,
+		OutOfOrder:      108,
+		LastKeyframeAge: 55 * time.Millisecond,
+	})
+	sess.MarkSwitchVideoProgress(time.Now(), false)
+
+	if sess.IsSwitchVideoRecoveryActive() {
+		t.Fatalf("expected recovery to end after RTP disorder delta stabilizes")
+	}
+}
+
+func TestSwitchVideoRecoveryTimesOut(t *testing.T) {
+	sess := newBurstTestSession("switch-timeout")
+	sess.StartSwitchVideoRecovery(30*time.Millisecond, 10*time.Millisecond)
+
+	time.Sleep(40 * time.Millisecond)
+	_, _, _, active := sess.GetVideoRecoveryPolicy(3*time.Second, 5*time.Second, 10*time.Second)
+	if active {
+		t.Fatalf("expected switch recovery burst to time out")
+	}
+	if sess.IsSwitchVideoRecoveryActive() {
+		t.Fatalf("expected switch recovery state to time out")
+	}
+}
+
+func TestSwitchVideoRecoveryRestartIsIdempotent(t *testing.T) {
+	sess := newBurstTestSession("switch-restart")
+	sess.StartSwitchVideoRecovery(2*time.Second, 500*time.Millisecond)
+	firstUntil := sess.VideoRecoveryBurstUntil
+	time.Sleep(time.Millisecond)
+	sess.StartSwitchVideoRecovery(2*time.Second, 500*time.Millisecond)
+
+	if !sess.VideoRecoveryBurstUntil.After(firstUntil) {
+		t.Fatalf("expected repeated switch to refresh recovery window")
+	}
+	if !sess.ConsumeSwitchPLIBypass() {
+		t.Fatalf("expected switch PLI bypass to be available after restart")
+	}
+	if sess.ConsumeSwitchPLIBypass() {
+		t.Fatalf("expected switch PLI bypass to be one-shot")
+	}
+}
+
+func TestSwitchPLIBypassDoesNotAffectWSKeyframeThrottle(t *testing.T) {
+	sess := newBurstTestSession("switch-bypass-isolated")
+	now := time.Now()
+	sess.LastSipPLISent = now
+	sess.StartSwitchVideoRecovery(2*time.Second, 500*time.Millisecond)
+
+	if !sess.ConsumeSwitchPLIBypass() {
+		t.Fatalf("expected switch bypass to be available")
+	}
+	if sess.shouldSendPLIToAsterisk(now.Add(pliForceMinInterval/2), true) {
+		t.Fatalf("expected normal forced PLI throttle to remain active")
+	}
+}
+
+func TestSwitchPLIBypassSendsFirstPLIInsideThrottle(t *testing.T) {
+	sess := newBurstTestSession("switch-bypass-send")
+	makeSIPVideoRecoveryReady(t, sess)
+	now := time.Now()
+	sess.LastSipPLISent = now
+	sess.LastPLISent = now
+	sess.PLISent = 1
+	sess.StartSwitchVideoRecovery(2*time.Second, 500*time.Millisecond)
+
+	sess.SendPLIToAsteriskForced("switch")
+	firstSent := sess.LastSipPLISent
+	firstCount := sess.PLISent
+	if firstCount != 2 {
+		t.Fatalf("expected first switch PLI to bypass throttle and increment count, got %d", firstCount)
+	}
+
+	sess.SendPLIToAsteriskForced("switch")
+	if !sess.LastSipPLISent.Equal(firstSent) {
+		t.Fatalf("expected repeated switch PLI inside throttle to be skipped")
+	}
+	if sess.PLISent != firstCount {
+		t.Fatalf("expected repeated switch PLI inside throttle not to increment count")
 	}
 }
 
