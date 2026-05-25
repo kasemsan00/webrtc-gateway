@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -14,6 +15,8 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+var ErrDisabled = errors.New("database logging disabled")
 
 // LogStore interface for database logging
 type LogStore interface {
@@ -29,6 +32,10 @@ type LogStore interface {
 
 	// Payload storage (sync - returns payloadID)
 	StorePayload(ctx context.Context, payload *PayloadRecord) (int64, error)
+
+	// Client diagnostics that are not tied to a call session.
+	StoreClientDiagnostic(ctx context.Context, diagnostic *ClientDiagnosticRecord) error
+	ListClientDiagnostics(ctx context.Context, params ClientDiagnosticListParams) (*ClientDiagnosticListResult, error)
 
 	// Stats recording (async via queue)
 	RecordStats(stats *StatsRecord)
@@ -87,6 +94,12 @@ func (n *noopStore) UpsertSession(ctx context.Context, sess *SessionRecord) erro
 func (n *noopStore) LogEvent(event *Event)                                        {}
 func (n *noopStore) StorePayload(ctx context.Context, payload *PayloadRecord) (int64, error) {
 	return 0, nil
+}
+func (n *noopStore) StoreClientDiagnostic(ctx context.Context, diagnostic *ClientDiagnosticRecord) error {
+	return ErrDisabled
+}
+func (n *noopStore) ListClientDiagnostics(ctx context.Context, params ClientDiagnosticListParams) (*ClientDiagnosticListResult, error) {
+	return &ClientDiagnosticListResult{Items: []*ClientDiagnosticRecord{}, Total: 0, Page: 1, PageSize: 20}, nil
 }
 func (n *noopStore) RecordStats(stats *StatsRecord)                               {}
 func (n *noopStore) UpsertDialog(ctx context.Context, dialog *DialogRecord) error { return nil }
@@ -390,6 +403,128 @@ func (s *logStore) StorePayload(ctx context.Context, payload *PayloadRecord) (in
 	).Scan(&payloadID)
 
 	return payloadID, err
+}
+
+// StoreClientDiagnostic stores a non-session client diagnostics event.
+func (s *logStore) StoreClientDiagnostic(ctx context.Context, diagnostic *ClientDiagnosticRecord) error {
+	if s.pool == nil {
+		return fmt.Errorf("database pool not initialized")
+	}
+	if diagnostic == nil {
+		return nil
+	}
+
+	dataJSON, err := json.Marshal(diagnostic.Data)
+	if err != nil {
+		dataJSON = []byte("{}")
+	}
+
+	query := `
+		INSERT INTO client_diagnostic_events (
+			ts, client_trace_id, auth_subject, auth_realm, preferred_username,
+			source, level, name, app_version, platform, device_id_hash, data
+		) VALUES (
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
+		)
+	`
+	_, err = s.pool.Exec(ctx, query,
+		diagnostic.Timestamp,
+		diagnostic.ClientTraceID,
+		diagnostic.AuthSubject,
+		diagnostic.AuthRealm,
+		diagnostic.PreferredUsername,
+		diagnostic.Source,
+		diagnostic.Level,
+		diagnostic.Name,
+		diagnostic.AppVersion,
+		diagnostic.Platform,
+		diagnostic.DeviceIDHash,
+		dataJSON,
+	)
+	return err
+}
+
+// ListClientDiagnostics returns non-session client diagnostics with pagination and filtering.
+func (s *logStore) ListClientDiagnostics(ctx context.Context, params ClientDiagnosticListParams) (*ClientDiagnosticListResult, error) {
+	if s.pool == nil {
+		return nil, fmt.Errorf("database pool not initialized")
+	}
+
+	params.Page, params.PageSize = normalisePagination(params.Page, params.PageSize)
+	where := "WHERE 1=1"
+	args := []interface{}{}
+	argIdx := 1
+
+	addFilter := func(column, value string) {
+		if strings.TrimSpace(value) == "" {
+			return
+		}
+		where += fmt.Sprintf(" AND %s = $%d", column, argIdx)
+		args = append(args, strings.TrimSpace(value))
+		argIdx++
+	}
+	addFilter("client_trace_id", params.ClientTraceID)
+	addFilter("auth_subject", params.AuthSubject)
+	addFilter("source", params.Source)
+	addFilter("level", params.Level)
+	addFilter("name", params.Name)
+
+	countSQL := "SELECT COUNT(*) FROM client_diagnostic_events " + where
+	var total int
+	if err := s.pool.QueryRow(ctx, countSQL, args...).Scan(&total); err != nil {
+		return nil, fmt.Errorf("count query failed: %w", err)
+	}
+
+	offset := (params.Page - 1) * params.PageSize
+	dataSQL := fmt.Sprintf(`
+		SELECT id, ts, COALESCE(client_trace_id,''), COALESCE(auth_subject,''),
+		       COALESCE(auth_realm,''), COALESCE(preferred_username,''),
+		       source, level, name, COALESCE(app_version,''), COALESCE(platform,''),
+		       COALESCE(device_id_hash,''), data
+		FROM client_diagnostic_events
+		%s
+		ORDER BY ts DESC
+		LIMIT $%d OFFSET $%d
+	`, where, argIdx, argIdx+1)
+	args = append(args, params.PageSize, offset)
+
+	rows, err := s.pool.Query(ctx, dataSQL, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query failed: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]*ClientDiagnosticRecord, 0)
+	for rows.Next() {
+		record := &ClientDiagnosticRecord{Data: make(map[string]interface{})}
+		var dataJSON []byte
+		if err := rows.Scan(
+			&record.ID,
+			&record.Timestamp,
+			&record.ClientTraceID,
+			&record.AuthSubject,
+			&record.AuthRealm,
+			&record.PreferredUsername,
+			&record.Source,
+			&record.Level,
+			&record.Name,
+			&record.AppVersion,
+			&record.Platform,
+			&record.DeviceIDHash,
+			&dataJSON,
+		); err != nil {
+			return nil, fmt.Errorf("scan failed: %w", err)
+		}
+		if len(dataJSON) > 0 {
+			_ = json.Unmarshal(dataJSON, &record.Data)
+		}
+		items = append(items, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows iteration failed: %w", err)
+	}
+
+	return &ClientDiagnosticListResult{Items: items, Total: total, Page: params.Page, PageSize: params.PageSize}, nil
 }
 
 // RecordStats queues stats for async batch insert

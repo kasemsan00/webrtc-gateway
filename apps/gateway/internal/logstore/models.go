@@ -69,6 +69,42 @@ type StatsRecord struct {
 	Data           map[string]interface{}
 }
 
+// ClientDiagnosticRecord represents a diagnostics event that is not tied to a call session.
+type ClientDiagnosticRecord struct {
+	ID                int64
+	Timestamp         time.Time
+	ClientTraceID     string
+	AuthSubject       string
+	AuthRealm         string
+	PreferredUsername string
+	Source            string
+	Level             string
+	Name              string
+	AppVersion        string
+	Platform          string
+	DeviceIDHash      string
+	Data              map[string]interface{}
+}
+
+// ClientDiagnosticListParams defines query parameters for listing non-session client diagnostics.
+type ClientDiagnosticListParams struct {
+	Page          int
+	PageSize      int
+	ClientTraceID string
+	AuthSubject   string
+	Source        string
+	Level         string
+	Name          string
+}
+
+// ClientDiagnosticListResult contains paginated non-session client diagnostics.
+type ClientDiagnosticListResult struct {
+	Items    []*ClientDiagnosticRecord `json:"items"`
+	Total    int                       `json:"total"`
+	Page     int                       `json:"page"`
+	PageSize int                       `json:"pageSize"`
+}
+
 // SessionListParams defines query parameters for listing call sessions with pagination, search, and filtering.
 type SessionListParams struct {
 	Page          int        // 1-based page number (default 1)

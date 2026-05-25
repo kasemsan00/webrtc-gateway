@@ -236,6 +236,44 @@ Direct database access for agent work:
 - Treat direct database queries as read-only unless the user explicitly asks for a write or migration.
 - Prefer source-controlled schema files (`init.sql`, `migrations/`) for expected structure, then use `database-dev-k2-gateway` only to verify the live dev state.
 
+### Operational log access for agents
+
+Default public gateway base URL:
+
+- `https://k2-gateway.kasemsan.com`
+
+Use the HTTP API before asking the user for host or database access.
+
+Gateway process logs:
+
+- `GET /api/logs` lists gateway-managed `k2-gateway-*.log` files.
+- `GET /api/logs/current?tail=500` reads the current gateway log tail.
+- `GET /api/logs/{name}?tail=500` reads a selected gateway log file tail.
+- These read endpoints are intentionally available without a bearer token, even when API auth is enabled.
+
+Softphone mobile diagnostics uploaded to gateway:
+
+- `POST /api/client-diagnostics` accepts authenticated mobile uploads, max 100 events/request.
+- `GET /api/client-diagnostics?page=1&pageSize=100` reads non-session mobile diagnostics from all clients.
+- Optional list filters: `clientTraceId`, `authSubject`, `source`, `level`, `name`.
+- `GET /api/client-diagnostics/sessions/{sessionId}/events?page=1&pageSize=100` reads mobile diagnostics stored as `call_events` category `client`.
+- `GET /api/client-diagnostics/sessions/{sessionId}/payloads?page=1&pageSize=100` lists large session diagnostics payloads.
+- `GET /api/client-diagnostics/payloads/{payloadId}` reads one stored diagnostics payload.
+- The `GET /api/client-diagnostics*` read endpoints are intentionally available without a bearer token.
+
+PowerShell examples:
+
+```powershell
+$base = "https://k2-gateway.kasemsan.com"
+Invoke-RestMethod "$base/api/logs/current?tail=500" | ConvertTo-Json -Depth 8
+Invoke-RestMethod "$base/api/client-diagnostics?page=1&pageSize=100" | ConvertTo-Json -Depth 12
+Invoke-RestMethod "$base/api/client-diagnostics?level=error&page=1&pageSize=100" | ConvertTo-Json -Depth 12
+Invoke-RestMethod "$base/api/client-diagnostics/sessions/<sessionId>/events?page=1&pageSize=100" | ConvertTo-Json -Depth 12
+```
+
+Use a real session ID in session URLs. The placeholder `<sessionId>` or encoded
+`%3CsessionId%3E` is not meaningful and should return no matching events.
+
 ### SIP public mode
 
 - `SIP_PUBLIC_REGISTER_EXPIRES_SECONDS` (default `3600`)
@@ -299,6 +337,11 @@ Direct database access for agent work:
 - LogStore uses async queues for events/stats to avoid RTP hot-path DB writes.
 - Schema is in `init.sql` (sessions, events, payloads, stats, dialogs, trunks, session directory, gateway instances).
 - When DB is disabled, `noopStore` keeps runtime behavior without persistence.
+- For operational gateway process logs, prefer the REST log API over direct host/file access:
+  - `GET https://k2-gateway.kasemsan.com/api/logs`
+  - `GET https://k2-gateway.kasemsan.com/api/logs/current?tail=500`
+  - `GET https://k2-gateway.kasemsan.com/api/logs/{name}?tail=500`
+- `/api/logs` endpoints are intentionally unauthenticated and only expose gateway-managed `k2-gateway-*.log` files.
 
 Operational checks after DB-related changes:
 
@@ -348,7 +391,7 @@ Checkpoints:
 
 ### Video rejected (`m=video ... 0`)
 
-- inspect full SDP answer logs from `internal/sip/sdp.go`
+- inspect full SDP answer logs through `https://k2-gateway.kasemsan.com/api/logs/current?tail=500`
 - validate AVPF compatibility (`SIP_VIDEO_USE_AVPF` and endpoint support)
 - temporarily force AVP with `SIP_FORCE_AVP=true` for interoperability testing
 

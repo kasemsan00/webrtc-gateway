@@ -52,15 +52,12 @@ func NewTTRSClient(baseURL, tokenURL, grantType, clientID, clientSecret string, 
 	}
 	ts := oauth2.ReuseTokenSource(nil, ccConfig.TokenSource(context.Background()))
 
-	// The OAuth2 HTTP client handles token fetch, caching, and auto-refresh.
-	oauthClient := oauth2.NewClient(context.Background(), ts)
-	oauthClient.Timeout = time.Duration(timeoutMS) * time.Millisecond
-
-	// Wrap the transport so the base transport inherits the OAuth2 token injection
-	// but we can still set a global timeout on the outer client.
+	// FetchNotifications injects the bearer token explicitly. Keep the HTTP client
+	// on the standard transport so timeout cancellation uses request contexts
+	// instead of oauth2.Transport.CancelRequest.
 	return &TTRSClient{
 		baseURL:     baseURL,
-		httpClient:  oauthClient,
+		httpClient:  &http.Client{Timeout: time.Duration(timeoutMS) * time.Millisecond},
 		tokenSource: ts,
 	}
 }

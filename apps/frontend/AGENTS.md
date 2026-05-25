@@ -1,8 +1,8 @@
-# AGENTS.md - webrtc-gateway-react
+# AGENTS.md - webrtc-gateway frontend
 
 ## Overview
 
-React + TypeScript + Vite frontend for gateway operations UI.
+React + TypeScript + TanStack Start frontend for gateway operations UI inside the `webrtc-gateway` pnpm monorepo.
 
 ## Project Structure
 
@@ -14,22 +14,22 @@ React + TypeScript + Vite frontend for gateway operations UI.
 
 ## Commands
 
-Run in `E:\dev\webrtc\webrtc-gateway-react`.
+Run from `E:\dev\webrtc-gateway` unless a command explicitly says it is frontend-local.
 
-- Install: `npm install`
-- Dev: `npm run dev` (port `3150`)
-- Build: `npm run build`
-- Preview: `npm run preview`
-- Lint: `npm run lint`
-- Format: `npm run format -- --write .`
-- Fix format + lint: `npm run check`
-- Tests: `npm run test`
+- Install: `pnpm install`
+- Dev: `pnpm dev:frontend` (port `3150`)
+- Build: `pnpm --filter frontend run build`
+- Preview: `pnpm --filter frontend run preview`
+- Lint: `pnpm --filter frontend run lint`
+- Format all workspace TS/TSX/MD: `pnpm format`
+- Fix frontend format + lint: `pnpm --filter frontend run check`
+- Tests: `pnpm --filter frontend run test`
 
 Single-test examples:
 
-- `npm run test -- src/features/trunk/types.test.ts`
-- `npm run test -- -t "isRegisterActionDisabled" src/features/trunk/components/trunk-list-page.test.ts`
-- `npx vitest run src/features/gateway/config.test.ts -t "normalizes gateway URL"`
+- `pnpm --filter frontend run test -- src/features/trunk/types.test.ts`
+- `pnpm --filter frontend run test -- -t "isRegisterActionDisabled" src/features/trunk/components/trunk-list-page.test.ts`
+- `pnpm --filter frontend exec vitest run src/features/gateway/config.test.ts -t "normalizes gateway URL"`
 
 ## Conventions
 

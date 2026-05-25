@@ -1,9 +1,12 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,12 +30,16 @@ type stubResolveStore struct {
 }
 
 type stubResolveTrunkManager struct {
-	byID        map[int64]*sip.Trunk
-	byPublicID  map[string]int64
-	lookupCount int
-	pushContact *sip.TrunkPushContact
-	pushTrunkID int64
-	registerID  int64
+	byID            map[int64]*sip.Trunk
+	byPublicID      map[string]int64
+	lookupCount     int
+	pushContact     *sip.TrunkPushContact
+	pushTrunkID     int64
+	registerID      int64
+	notifyTrunkID   int64
+	notifyUserID    *string
+	notifyCallCount int
+	notifyErr       error
 }
 
 func (s *stubResolveTrunkManager) GetTrunkByID(id int64) (interface{}, bool) {
@@ -92,8 +99,16 @@ func (s *stubResolveTrunkManager) FindTrunkByInUseBy(_ context.Context, _ string
 	return nil, nil
 }
 
-func (s *stubResolveTrunkManager) SetTrunkNotifyUserID(_ context.Context, _ int64, _ *string) error {
-	return nil
+func (s *stubResolveTrunkManager) SetTrunkNotifyUserID(_ context.Context, trunkID int64, userID *string) error {
+	s.notifyTrunkID = trunkID
+	if userID == nil {
+		s.notifyUserID = nil
+	} else {
+		copied := *userID
+		s.notifyUserID = &copied
+	}
+	s.notifyCallCount++
+	return s.notifyErr
 }
 
 func (s *stubResolveTrunkManager) SetTrunkPushContact(_ context.Context, trunkID int64, contact sip.TrunkPushContact) error {
@@ -126,6 +141,27 @@ func readWSMessages(t *testing.T, ch <-chan []byte) []WSMessage {
 			return msgs
 		}
 	}
+}
+
+func captureStandardLogs(t *testing.T, fn func()) string {
+	t.Helper()
+
+	var buf bytes.Buffer
+	prevWriter := log.Writer()
+	prevFlags := log.Flags()
+	prevPrefix := log.Prefix()
+	defer func() {
+		log.SetOutput(prevWriter)
+		log.SetFlags(prevFlags)
+		log.SetPrefix(prevPrefix)
+	}()
+
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	log.SetPrefix("")
+
+	fn()
+	return buf.String()
 }
 
 func TestHandleWSTrunkResolve_InvalidPayload(t *testing.T) {
@@ -248,6 +284,56 @@ func TestHandleWSTrunkResolve_ResolvedWhenOwnedByInstance(t *testing.T) {
 	}
 	if client.resolvedTrunkID != 42 {
 		t.Fatalf("expected client.resolvedTrunkID=42 for trunk_resolved, got %d", client.resolvedTrunkID)
+	}
+}
+
+func TestHandleWSTrunkResolve_ByCredentials_PersistsNotifyUserID(t *testing.T) {
+	owner := "gw-1"
+	future := time.Now().Add(2 * time.Minute)
+	store := &stubResolveStore{
+		resolveTrunkID:    42,
+		resolveLeaseOwner: &owner,
+		resolveLeaseUntil: &future,
+		resolveFound:      true,
+	}
+	trunkMgr := &stubResolveTrunkManager{
+		byID: map[int64]*sip.Trunk{
+			42: {
+				ID:         42,
+				PublicID:   "8f6f6d70-2b5a-4fe7-a0d5-9d0af0e90d3a",
+				LeaseOwner: &owner,
+				LeaseUntil: &future,
+			},
+		},
+	}
+
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{InstanceID: "gw-1"}, config.TranslatorConfig{}, nil, nil, nil, trunkMgr, store)
+	client := &WSClient{
+		send:       make(chan []byte, 8),
+		authClaims: &auth.VerifiedClaims{Subject: "user-1"},
+	}
+
+	srv.handleWSTrunkResolve(client, WSMessage{
+		Type:        "trunk_resolve",
+		SessionID:   "s1",
+		SIPDomain:   "sip.example.com",
+		SIPUsername: "1001",
+		SIPPassword: "secret",
+		SIPPort:     5060,
+	})
+
+	msgs := readWSMessages(t, client.send)
+	if len(msgs) != 1 || msgs[0].Type != "trunk_resolved" {
+		t.Fatalf("expected trunk_resolved, got %+v", msgs)
+	}
+	if trunkMgr.notifyCallCount != 1 {
+		t.Fatalf("expected notify_user_id update once, got %d", trunkMgr.notifyCallCount)
+	}
+	if trunkMgr.notifyTrunkID != 42 {
+		t.Fatalf("expected notify_user_id update for resolved trunk 42, got %d", trunkMgr.notifyTrunkID)
+	}
+	if trunkMgr.notifyUserID == nil || *trunkMgr.notifyUserID != "user-1" {
+		t.Fatalf("expected notify_user_id user-1, got %#v", trunkMgr.notifyUserID)
 	}
 }
 
@@ -404,7 +490,10 @@ func TestHandleWSTrunkResolve_ByTrunkID_ResolvedWhenOwnedByInstance(t *testing.T
 	}
 
 	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{InstanceID: "gw-1"}, config.TranslatorConfig{}, nil, nil, nil, trunkMgr, &stubResolveStore{})
-	client := &WSClient{send: make(chan []byte, 8)}
+	client := &WSClient{
+		send:       make(chan []byte, 8),
+		authClaims: &auth.VerifiedClaims{Subject: "user-1"},
+	}
 
 	srv.handleWSTrunkResolve(client, WSMessage{
 		Type:      "trunk_resolve",
@@ -421,6 +510,47 @@ func TestHandleWSTrunkResolve_ByTrunkID_ResolvedWhenOwnedByInstance(t *testing.T
 	}
 	if client.resolvedTrunkID != 42 {
 		t.Fatalf("expected client.resolvedTrunkID=42 for trunk_resolved by trunkId, got %d", client.resolvedTrunkID)
+	}
+	if trunkMgr.notifyCallCount != 1 {
+		t.Fatalf("expected notify_user_id update once, got %d", trunkMgr.notifyCallCount)
+	}
+	if trunkMgr.notifyTrunkID != 42 {
+		t.Fatalf("expected notify_user_id update for trunk 42, got %d", trunkMgr.notifyTrunkID)
+	}
+	if trunkMgr.notifyUserID == nil || *trunkMgr.notifyUserID != "user-1" {
+		t.Fatalf("expected notify_user_id user-1, got %#v", trunkMgr.notifyUserID)
+	}
+}
+
+func TestHandleWSTrunkResolve_ByTrunkID_DoesNotPersistNotifyUserIDWithoutAuthClaims(t *testing.T) {
+	owner := "gw-1"
+	future := time.Now().Add(2 * time.Minute)
+	trunkMgr := &stubResolveTrunkManager{
+		byID: map[int64]*sip.Trunk{
+			42: {
+				ID:         42,
+				PublicID:   "8f6f6d70-2b5a-4fe7-a0d5-9d0af0e90d3a",
+				LeaseOwner: &owner,
+				LeaseUntil: &future,
+			},
+		},
+	}
+
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{InstanceID: "gw-1"}, config.TranslatorConfig{}, nil, nil, nil, trunkMgr, &stubResolveStore{})
+	client := &WSClient{send: make(chan []byte, 8)}
+
+	srv.handleWSTrunkResolve(client, WSMessage{
+		Type:      "trunk_resolve",
+		SessionID: "s1",
+		TrunkID:   42,
+	})
+
+	msgs := readWSMessages(t, client.send)
+	if len(msgs) != 1 || msgs[0].Type != "trunk_resolved" {
+		t.Fatalf("expected trunk_resolved, got %+v", msgs)
+	}
+	if trunkMgr.notifyCallCount != 0 {
+		t.Fatalf("expected no notify_user_id update without auth claims, got %d", trunkMgr.notifyCallCount)
 	}
 }
 
@@ -531,7 +661,10 @@ func TestHandleWSTrunkResolve_ByTrunkPublicID_ResolvedWhenOwnedByInstance(t *tes
 	}
 
 	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{InstanceID: "gw-1"}, config.TranslatorConfig{}, nil, nil, nil, trunkMgr, &stubResolveStore{})
-	client := &WSClient{send: make(chan []byte, 8)}
+	client := &WSClient{
+		send:       make(chan []byte, 8),
+		authClaims: &auth.VerifiedClaims{Subject: "user-1"},
+	}
 
 	srv.handleWSTrunkResolve(client, WSMessage{
 		Type:          "trunk_resolve",
@@ -551,6 +684,15 @@ func TestHandleWSTrunkResolve_ByTrunkPublicID_ResolvedWhenOwnedByInstance(t *tes
 	}
 	if trunkMgr.lookupCount == 0 {
 		t.Fatalf("expected GetTrunkIDByPublicID to be used")
+	}
+	if trunkMgr.notifyCallCount != 1 {
+		t.Fatalf("expected notify_user_id update once, got %d", trunkMgr.notifyCallCount)
+	}
+	if trunkMgr.notifyTrunkID != 42 {
+		t.Fatalf("expected notify_user_id update for resolved trunk 42, got %d", trunkMgr.notifyTrunkID)
+	}
+	if trunkMgr.notifyUserID == nil || *trunkMgr.notifyUserID != "user-1" {
+		t.Fatalf("expected notify_user_id user-1, got %#v", trunkMgr.notifyUserID)
 	}
 }
 
@@ -593,6 +735,224 @@ func TestHandleWSTrunkResolve_ByTrunkPublicID_NormalizesUppercaseValue(t *testin
 	if client.resolvedTrunkID != 42 {
 		t.Fatalf("expected client.resolvedTrunkID=42 for normalized trunkPublicId, got %d", client.resolvedTrunkID)
 	}
+}
+
+func TestHandleWSTrunkResolve_LogsMobileResolvedSuccessByTrunkID(t *testing.T) {
+	owner := "gw-1"
+	future := time.Now().Add(2 * time.Minute)
+	trunkMgr := &stubResolveTrunkManager{
+		byID: map[int64]*sip.Trunk{
+			42: {
+				ID:         42,
+				PublicID:   "8f6f6d70-2b5a-4fe7-a0d5-9d0af0e90d3a",
+				LeaseOwner: &owner,
+				LeaseUntil: &future,
+			},
+		},
+	}
+
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{InstanceID: "gw-1"}, config.TranslatorConfig{}, nil, nil, nil, trunkMgr, &stubResolveStore{})
+	client := &WSClient{
+		send: make(chan []byte, 8),
+		authClaims: &auth.VerifiedClaims{
+			Subject: "user-1",
+			Realm:   auth.TokenRealmUser,
+		},
+	}
+
+	logs := captureStandardLogs(t, func() {
+		srv.handleWSTrunkResolve(client, WSMessage{
+			Type:      "trunk_resolve",
+			SessionID: "s1",
+			TrunkID:   42,
+		})
+	})
+
+	msgs := readWSMessages(t, client.send)
+	if len(msgs) != 1 || msgs[0].Type != "trunk_resolved" {
+		t.Fatalf("expected trunk_resolved, got %+v", msgs)
+	}
+	if !strings.Contains(logs, "[WS Trunk Resolve] mobile_resolved") {
+		t.Fatalf("expected mobile resolved log, got %q", logs)
+	}
+	if !strings.Contains(logs, "sessionID=s1") || !strings.Contains(logs, "trunkID=42") {
+		t.Fatalf("expected sessionID/trunkID fields in log, got %q", logs)
+	}
+	if !strings.Contains(logs, "authSub=user-1") || !strings.Contains(logs, "resolveBy=trunkId") {
+		t.Fatalf("expected authSub/resolveBy in log, got %q", logs)
+	}
+}
+
+func TestHandleWSTrunkResolve_LogsMobileResolvedSuccessByTrunkPublicID(t *testing.T) {
+	owner := "gw-1"
+	future := time.Now().Add(2 * time.Minute)
+	trunkMgr := &stubResolveTrunkManager{
+		byID: map[int64]*sip.Trunk{
+			42: {
+				ID:         42,
+				PublicID:   "8f6f6d70-2b5a-4fe7-a0d5-9d0af0e90d3a",
+				LeaseOwner: &owner,
+				LeaseUntil: &future,
+			},
+		},
+		byPublicID: map[string]int64{
+			"8f6f6d70-2b5a-4fe7-a0d5-9d0af0e90d3a": 42,
+		},
+	}
+
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{InstanceID: "gw-1"}, config.TranslatorConfig{}, nil, nil, nil, trunkMgr, &stubResolveStore{})
+	client := &WSClient{
+		send: make(chan []byte, 8),
+		authClaims: &auth.VerifiedClaims{
+			Subject: "user-1",
+			Realm:   auth.TokenRealmUser,
+		},
+	}
+
+	logs := captureStandardLogs(t, func() {
+		srv.handleWSTrunkResolve(client, WSMessage{
+			Type:          "trunk_resolve",
+			SessionID:     "s1",
+			TrunkPublicID: "8f6f6d70-2b5a-4fe7-a0d5-9d0af0e90d3a",
+		})
+	})
+
+	msgs := readWSMessages(t, client.send)
+	if len(msgs) != 1 || msgs[0].Type != "trunk_resolved" {
+		t.Fatalf("expected trunk_resolved, got %+v", msgs)
+	}
+	if !strings.Contains(logs, "resolveBy=trunkPublicId") {
+		t.Fatalf("expected trunkPublicId resolveBy in log, got %q", logs)
+	}
+}
+
+func TestHandleWSTrunkResolve_DoesNotLogMobileResolvedForNonUserRealm(t *testing.T) {
+	owner := "gw-1"
+	future := time.Now().Add(2 * time.Minute)
+	trunkMgr := &stubResolveTrunkManager{
+		byID: map[int64]*sip.Trunk{
+			42: {
+				ID:         42,
+				PublicID:   "8f6f6d70-2b5a-4fe7-a0d5-9d0af0e90d3a",
+				LeaseOwner: &owner,
+				LeaseUntil: &future,
+			},
+		},
+	}
+
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{InstanceID: "gw-1"}, config.TranslatorConfig{}, nil, nil, nil, trunkMgr, &stubResolveStore{})
+	client := &WSClient{
+		send: make(chan []byte, 8),
+		authClaims: &auth.VerifiedClaims{
+			Subject: "employee-1",
+			Realm:   auth.TokenRealmEmployee,
+		},
+	}
+
+	logs := captureStandardLogs(t, func() {
+		srv.handleWSTrunkResolve(client, WSMessage{
+			Type:      "trunk_resolve",
+			SessionID: "s1",
+			TrunkID:   42,
+		})
+	})
+
+	msgs := readWSMessages(t, client.send)
+	if len(msgs) != 1 || msgs[0].Type != "trunk_resolved" {
+		t.Fatalf("expected trunk_resolved, got %+v", msgs)
+	}
+	if strings.Contains(logs, "mobile_resolved") {
+		t.Fatalf("did not expect mobile resolved log for non-user realm, got %q", logs)
+	}
+}
+
+func TestHandleWSTrunkResolve_DoesNotLogMobileResolvedForNonSuccessOutcomes(t *testing.T) {
+	t.Run("trunk_not_found", func(t *testing.T) {
+		trunkMgr := &stubResolveTrunkManager{
+			byID: map[int64]*sip.Trunk{},
+		}
+		srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{InstanceID: "gw-1"}, config.TranslatorConfig{}, nil, nil, nil, trunkMgr, &stubResolveStore{})
+		client := &WSClient{
+			send: make(chan []byte, 8),
+			authClaims: &auth.VerifiedClaims{
+				Subject: "user-1",
+				Realm:   auth.TokenRealmUser,
+			},
+		}
+
+		logs := captureStandardLogs(t, func() {
+			srv.handleWSTrunkResolve(client, WSMessage{
+				Type:      "trunk_resolve",
+				SessionID: "s1",
+				TrunkID:   999,
+			})
+		})
+		if strings.Contains(logs, "mobile_resolved") {
+			t.Fatalf("did not expect mobile resolved log for trunk_not_found, got %q", logs)
+		}
+	})
+
+	t.Run("trunk_not_ready", func(t *testing.T) {
+		owner := "gw-1"
+		past := time.Now().Add(-1 * time.Minute)
+		trunkMgr := &stubResolveTrunkManager{
+			byID: map[int64]*sip.Trunk{
+				42: {ID: 42, LeaseOwner: &owner, LeaseUntil: &past},
+			},
+		}
+		srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{InstanceID: "gw-1"}, config.TranslatorConfig{}, nil, nil, nil, trunkMgr, &stubResolveStore{})
+		client := &WSClient{
+			send: make(chan []byte, 8),
+			authClaims: &auth.VerifiedClaims{
+				Subject: "user-1",
+				Realm:   auth.TokenRealmUser,
+			},
+		}
+
+		logs := captureStandardLogs(t, func() {
+			srv.handleWSTrunkResolve(client, WSMessage{
+				Type:      "trunk_resolve",
+				SessionID: "s1",
+				TrunkID:   42,
+			})
+		})
+		if strings.Contains(logs, "mobile_resolved") {
+			t.Fatalf("did not expect mobile resolved log for trunk_not_ready, got %q", logs)
+		}
+	})
+
+	t.Run("trunk_redirect", func(t *testing.T) {
+		owner := "gw-2"
+		future := time.Now().Add(2 * time.Minute)
+		trunkMgr := &stubResolveTrunkManager{
+			byID: map[int64]*sip.Trunk{
+				42: {ID: 42, LeaseOwner: &owner, LeaseUntil: &future},
+			},
+		}
+		store := &stubResolveStore{
+			lookupWSURL: "wss://gw-2.example.com/ws",
+			lookupFound: true,
+		}
+		srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{InstanceID: "gw-1"}, config.TranslatorConfig{}, nil, nil, nil, trunkMgr, store)
+		client := &WSClient{
+			send: make(chan []byte, 8),
+			authClaims: &auth.VerifiedClaims{
+				Subject: "user-1",
+				Realm:   auth.TokenRealmUser,
+			},
+		}
+
+		logs := captureStandardLogs(t, func() {
+			srv.handleWSTrunkResolve(client, WSMessage{
+				Type:      "trunk_resolve",
+				SessionID: "s1",
+				TrunkID:   42,
+			})
+		})
+		if strings.Contains(logs, "mobile_resolved") {
+			t.Fatalf("did not expect mobile resolved log for trunk_redirect, got %q", logs)
+		}
+	})
 }
 
 func TestHandleWSTrunkResolve_ByTrunkID_NotReadyWhenLeaseExpired(t *testing.T) {
@@ -666,5 +1026,149 @@ func TestHandleWSTrunkResolve_ByTrunkID_RedirectWhenOwnedByOtherInstance(t *test
 	}
 	if client.resolvedTrunkID != 0 {
 		t.Fatalf("expected client.resolvedTrunkID=0 for trunk_redirect by trunkId, got %d", client.resolvedTrunkID)
+	}
+}
+
+func TestHandleWSTrunkResolve_NotifyUserIDAuditLog_SuccessByTrunkID(t *testing.T) {
+	owner := "gw-1"
+	future := time.Now().Add(2 * time.Minute)
+	trunkMgr := &stubResolveTrunkManager{
+		byID: map[int64]*sip.Trunk{
+			42: {ID: 42, PublicID: "8f6f6d70-2b5a-4fe7-a0d5-9d0af0e90d3a", Username: "1001", LeaseOwner: &owner, LeaseUntil: &future},
+		},
+	}
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{InstanceID: "gw-1"}, config.TranslatorConfig{}, nil, nil, nil, trunkMgr, &stubResolveStore{})
+	client := &WSClient{
+		send: make(chan []byte, 8),
+		authClaims: &auth.VerifiedClaims{
+			Subject:           "user-sub-1",
+			PreferredUsername: "alice",
+		},
+	}
+
+	logs := captureStandardLogs(t, func() {
+		srv.handleWSTrunkResolve(client, WSMessage{Type: "trunk_resolve", SessionID: "s1", TrunkID: 42})
+	})
+	if !strings.Contains(logs, "[Trunk NotifyUserID] updated") {
+		t.Fatalf("expected notify_user_id updated log, got %q", logs)
+	}
+	if !strings.Contains(logs, "preferredUsername=alice") || !strings.Contains(logs, "sipUsername=1001") || !strings.Contains(logs, "authSub=user-sub-1") {
+		t.Fatalf("expected preferredUsername/sipUsername/authSub in log, got %q", logs)
+	}
+}
+
+func TestHandleWSTrunkResolve_NotifyUserIDAuditLog_SuccessByTrunkPublicID(t *testing.T) {
+	owner := "gw-1"
+	future := time.Now().Add(2 * time.Minute)
+	trunkMgr := &stubResolveTrunkManager{
+		byID: map[int64]*sip.Trunk{
+			42: {ID: 42, PublicID: "8f6f6d70-2b5a-4fe7-a0d5-9d0af0e90d3a", Username: "1002", LeaseOwner: &owner, LeaseUntil: &future},
+		},
+		byPublicID: map[string]int64{"8f6f6d70-2b5a-4fe7-a0d5-9d0af0e90d3a": 42},
+	}
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{InstanceID: "gw-1"}, config.TranslatorConfig{}, nil, nil, nil, trunkMgr, &stubResolveStore{})
+	client := &WSClient{
+		send: make(chan []byte, 8),
+		authClaims: &auth.VerifiedClaims{
+			Subject:           "user-sub-2",
+			PreferredUsername: "bob",
+		},
+	}
+
+	logs := captureStandardLogs(t, func() {
+		srv.handleWSTrunkResolve(client, WSMessage{
+			Type:          "trunk_resolve",
+			SessionID:     "s2",
+			TrunkPublicID: "8f6f6d70-2b5a-4fe7-a0d5-9d0af0e90d3a",
+		})
+	})
+	if !strings.Contains(logs, "preferredUsername=bob") || !strings.Contains(logs, "sipUsername=1002") || !strings.Contains(logs, "authSub=user-sub-2") {
+		t.Fatalf("expected preferredUsername/sipUsername/authSub in log, got %q", logs)
+	}
+}
+
+func TestHandleWSTrunkResolve_NotifyUserIDAuditLog_SuccessByCredentialsUsesDBUsername(t *testing.T) {
+	owner := "gw-1"
+	future := time.Now().Add(2 * time.Minute)
+	store := &stubResolveStore{
+		resolveTrunkID:    42,
+		resolveLeaseOwner: &owner,
+		resolveLeaseUntil: &future,
+		resolveFound:      true,
+	}
+	trunkMgr := &stubResolveTrunkManager{
+		byID: map[int64]*sip.Trunk{
+			42: {ID: 42, PublicID: "8f6f6d70-2b5a-4fe7-a0d5-9d0af0e90d3a", Username: "canonical-1003", LeaseOwner: &owner, LeaseUntil: &future},
+		},
+	}
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{InstanceID: "gw-1"}, config.TranslatorConfig{}, nil, nil, nil, trunkMgr, store)
+	client := &WSClient{
+		send: make(chan []byte, 8),
+		authClaims: &auth.VerifiedClaims{
+			Subject:           "user-sub-3",
+			PreferredUsername: "charlie",
+		},
+	}
+
+	logs := captureStandardLogs(t, func() {
+		srv.handleWSTrunkResolve(client, WSMessage{
+			Type:        "trunk_resolve",
+			SessionID:   "s3",
+			SIPDomain:   "sip.example.com",
+			SIPUsername: "payload-1003",
+			SIPPassword: "secret",
+			SIPPort:     5060,
+		})
+	})
+	if !strings.Contains(logs, "preferredUsername=charlie") || !strings.Contains(logs, "sipUsername=canonical-1003") || !strings.Contains(logs, "authSub=user-sub-3") {
+		t.Fatalf("expected preferredUsername/sipUsername/authSub in log, got %q", logs)
+	}
+}
+
+func TestHandleWSTrunkResolve_NotifyUserIDAuditLog_NoClaimsNoLog(t *testing.T) {
+	owner := "gw-1"
+	future := time.Now().Add(2 * time.Minute)
+	trunkMgr := &stubResolveTrunkManager{
+		byID: map[int64]*sip.Trunk{
+			42: {ID: 42, Username: "1001", LeaseOwner: &owner, LeaseUntil: &future},
+		},
+	}
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{InstanceID: "gw-1"}, config.TranslatorConfig{}, nil, nil, nil, trunkMgr, &stubResolveStore{})
+	client := &WSClient{send: make(chan []byte, 8)}
+
+	logs := captureStandardLogs(t, func() {
+		srv.handleWSTrunkResolve(client, WSMessage{Type: "trunk_resolve", SessionID: "s4", TrunkID: 42})
+	})
+	if strings.Contains(logs, "[Trunk NotifyUserID]") {
+		t.Fatalf("did not expect notify_user_id audit log without auth claims, got %q", logs)
+	}
+}
+
+func TestHandleWSTrunkResolve_NotifyUserIDAuditLog_ErrorIncludesContext(t *testing.T) {
+	owner := "gw-1"
+	future := time.Now().Add(2 * time.Minute)
+	trunkMgr := &stubResolveTrunkManager{
+		byID: map[int64]*sip.Trunk{
+			42: {ID: 42, PublicID: "8f6f6d70-2b5a-4fe7-a0d5-9d0af0e90d3a", Username: "1004", LeaseOwner: &owner, LeaseUntil: &future},
+		},
+		notifyErr: errors.New("write failed"),
+	}
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{InstanceID: "gw-1"}, config.TranslatorConfig{}, nil, nil, nil, trunkMgr, &stubResolveStore{})
+	client := &WSClient{
+		send: make(chan []byte, 8),
+		authClaims: &auth.VerifiedClaims{
+			Subject:           "user-sub-4",
+			PreferredUsername: "dave",
+		},
+	}
+
+	logs := captureStandardLogs(t, func() {
+		srv.handleWSTrunkResolve(client, WSMessage{Type: "trunk_resolve", SessionID: "s5", TrunkID: 42})
+	})
+	if !strings.Contains(logs, "[Trunk NotifyUserID] update_failed") {
+		t.Fatalf("expected update_failed log, got %q", logs)
+	}
+	if !strings.Contains(logs, "preferredUsername=dave") || !strings.Contains(logs, "sipUsername=1004") || !strings.Contains(logs, "authSub=user-sub-4") || !strings.Contains(logs, "error=write failed") {
+		t.Fatalf("expected failure context in log, got %q", logs)
 	}
 }

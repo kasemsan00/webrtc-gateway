@@ -309,6 +309,49 @@ go test ./...
 - `apps/gateway/AGENTS.md`
 - `docs/dual-flow.md`
 
+## Operational Logs
+
+เมื่อต้องการตรวจสอบ gateway process logs ให้เรียกผ่าน REST API ของ gateway แทนการเข้าไปอ่านไฟล์บนเครื่องโดยตรง:
+
+```bash
+curl https://k2-gateway.kasemsan.com/api/logs
+curl "https://k2-gateway.kasemsan.com/api/logs/current?tail=500"
+curl "https://k2-gateway.kasemsan.com/api/logs/<log-file-name>?tail=500"
+```
+
+`/api/logs` endpoints ไม่ต้องใช้ bearer token และคืนเฉพาะไฟล์ log ที่ gateway จัดการ (`k2-gateway-*.log`).
+
+## Client Diagnostics
+
+Softphone clients can upload sanitized diagnostics batches for bug analysis:
+
+```bash
+curl -X POST https://k2-gateway.kasemsan.com/api/client-diagnostics \
+  -H "Authorization: Bearer <access-token>" \
+  -H "Content-Type: application/json" \
+  -d '{"clientTraceId":"trace-1","events":[{"source":"app","level":"info","name":"app.boot"}]}'
+```
+
+Diagnostics with `sessionId` are attached to the call timeline as `call_events` category `client`; larger batches may also be linked through `call_payloads` kind `client_diagnostics_batch`. Diagnostics without `sessionId` are stored in `client_diagnostic_events`.
+
+Read-only mobile diagnostics endpoints do not require bearer tokens:
+
+```bash
+# No-session mobile diagnostics such as app.boot, login, notification handoff
+curl "https://k2-gateway.kasemsan.com/api/client-diagnostics?clientTraceId=<trace-id>&page=1&pageSize=100"
+
+# Mobile diagnostics attached to a call session
+curl "https://k2-gateway.kasemsan.com/api/client-diagnostics/sessions/<sessionId>/events?page=1&pageSize=100"
+
+# Large mobile diagnostics batches for a call session
+curl "https://k2-gateway.kasemsan.com/api/client-diagnostics/sessions/<sessionId>/payloads?page=1&pageSize=100"
+
+# Read one diagnostics payload; only client_diagnostics_batch payloads are returned
+curl "https://k2-gateway.kasemsan.com/api/client-diagnostics/payloads/<payloadId>"
+```
+
+Privacy constraints: clients and gateway both redact token/password/secret/credential/authorization fields. Do not upload raw access tokens, refresh tokens, SIP passwords, PushKit/FCM tokens, full SDP, SIP messages, or raw device logs.
+
 ## Development Notes
 
 - แก้โค้ดให้ scope อยู่ในแอป/แพ็กเกจที่เกี่ยวข้องเท่านั้น

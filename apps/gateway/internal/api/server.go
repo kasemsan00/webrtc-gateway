@@ -75,6 +75,7 @@ type Server struct {
 	sessionStreams   map[int]chan []byte
 	sessionStreamSeq int
 	incomingCounters map[string]int64
+	diagnosticLimits map[string]*diagnosticRateState
 	startTime        time.Time
 	mu               sync.RWMutex
 }
@@ -273,6 +274,7 @@ func NewServer(cfg config.APIConfig, turnCfg config.TURNConfig, gatewayCfg confi
 		trunkStreams:     make(map[int]chan []byte),
 		sessionStreams:   make(map[int]chan []byte),
 		incomingCounters: make(map[string]int64),
+		diagnosticLimits: make(map[string]*diagnosticRateState),
 		startTime:        time.Now(),
 	}
 }
@@ -312,6 +314,14 @@ func (s *Server) Start(ctx context.Context) error {
 
 	// REST API endpoints
 	if s.config.EnableREST {
+		router.HandleFunc("/api/logs", s.handleListLogFiles).Methods("GET", "OPTIONS")
+		router.HandleFunc("/api/logs/current", s.handleGetCurrentLog).Methods("GET", "OPTIONS")
+		router.HandleFunc("/api/logs/{name}", s.handleGetLogFile).Methods("GET", "OPTIONS")
+		router.HandleFunc("/api/client-diagnostics", s.handleListClientDiagnostics).Methods("GET", "OPTIONS")
+		router.HandleFunc("/api/client-diagnostics/sessions/{sessionId}/events", s.handleListClientDiagnosticSessionEvents).Methods("GET", "OPTIONS")
+		router.HandleFunc("/api/client-diagnostics/sessions/{sessionId}/payloads", s.handleListClientDiagnosticSessionPayloads).Methods("GET", "OPTIONS")
+		router.HandleFunc("/api/client-diagnostics/payloads/{payloadId}", s.handleGetClientDiagnosticPayload).Methods("GET", "OPTIONS")
+
 		api := router.PathPrefix("/api").Subrouter()
 		if s.tokenVerifier != nil {
 			api.Use(s.authMiddleware)
@@ -336,6 +346,7 @@ func (s *Server) Start(ctx context.Context) error {
 		api.HandleFunc("/ws-clients", s.handleListWSClients).Methods("GET", "OPTIONS")
 		api.HandleFunc("/dashboard", s.handleDashboard).Methods("GET", "OPTIONS")
 		api.HandleFunc("/dashboard/summary", s.handleDashboardSummary).Methods("GET", "OPTIONS")
+		api.HandleFunc("/client-diagnostics", s.handleClientDiagnostics).Methods("POST", "OPTIONS")
 		api.HandleFunc("/trunks", s.handleListTrunks).Methods("GET", "OPTIONS")
 		api.HandleFunc("/trunks/stream", s.handleTrunkStream).Methods("GET", "OPTIONS")
 		api.HandleFunc("/trunks", s.handleCreateTrunk).Methods("POST", "OPTIONS")
@@ -533,6 +544,8 @@ func (s *Server) handleWSMessage(client *WSClient, message []byte) {
 	switch msg.Type {
 	case "offer":
 		s.handleWSoffer(client, msg)
+	case "ice":
+		s.handleWSIce(client, msg)
 	case "call":
 		s.handleWSCall(client, msg)
 	case "hangup":
@@ -688,6 +701,57 @@ func (s *Server) handleWSoffer(client *WSClient, msg WSMessage) {
 		State:     string(session.StateConnecting),
 	})
 	s.logSessionSnapshot(ctx, sess, "")
+}
+
+// handleWSIce handles trickle ICE candidates from WebRTC clients.
+func (s *Server) handleWSIce(client *WSClient, msg WSMessage) {
+	if len(msg.Candidate) == 0 || string(msg.Candidate) == "null" {
+		return
+	}
+
+	sessionID := msg.SessionID
+	if sessionID == "" {
+		sessionID = client.sessionID
+	}
+	if sessionID == "" {
+		s.sendWSError(client, "", "Session ID required for ICE candidate")
+		return
+	}
+
+	sess, ok := s.sessionMgr.GetSession(sessionID)
+	if !ok {
+		s.sendWSError(client, sessionID, "Session not found")
+		return
+	}
+	if sess.PeerConnection == nil {
+		s.sendWSError(client, sessionID, "PeerConnection not available")
+		return
+	}
+
+	var candidate webrtc.ICECandidateInit
+	if err := json.Unmarshal(msg.Candidate, &candidate); err != nil {
+		s.sendWSError(client, sessionID, fmt.Sprintf("Invalid ICE candidate: %v", err))
+		return
+	}
+	if strings.TrimSpace(candidate.Candidate) == "" {
+		return
+	}
+	if sess.PeerConnection.RemoteDescription() == nil {
+		s.sendWSError(client, sessionID, "Remote description not set for ICE candidate")
+		return
+	}
+
+	if err := sess.PeerConnection.AddICECandidate(candidate); err != nil {
+		s.sendWSError(client, sessionID, fmt.Sprintf("Failed to add ICE candidate: %v", err))
+		return
+	}
+
+	s.logEvent(&logstore.Event{
+		Timestamp: time.Now(),
+		SessionID: sessionID,
+		Category:  "ice",
+		Name:      "ws_ice_candidate_added",
+	})
 }
 
 func (s *Server) validateTrunkReadyForOutboundCall(ctx context.Context, trunkID int64) trunkOutboundValidation {
@@ -1197,6 +1261,13 @@ func (s *Server) logSessionSnapshot(ctx context.Context, sess *session.Session, 
 		endReason = "ended"
 	}
 
+	if snap.Direction != "inbound" && snap.Direction != "outbound" {
+		if s.config.DebugWebSocket {
+			log.Printf("Skipping session snapshot for %s: direction not set", snap.ID)
+		}
+		return
+	}
+
 	// Extract auth context
 	authMode, _, trunkID, _, sipUsername, _, _ := sess.GetSIPAuthContext()
 	var trunkIDPtr *int64
@@ -1210,7 +1281,7 @@ func (s *Server) logSessionSnapshot(ctx context.Context, sess *session.Session, 
 		}
 	}
 
-	_ = s.logStore.UpsertSession(ctx, &logstore.SessionRecord{
+	if err := s.logStore.UpsertSession(ctx, &logstore.SessionRecord{
 		SessionID:     snap.ID,
 		CreatedAt:     snap.CreatedAt,
 		UpdatedAt:     time.Now(),
@@ -1231,7 +1302,9 @@ func (s *Server) logSessionSnapshot(ctx context.Context, sess *session.Session, 
 		TrunkName:     trunkName,
 		SIPUsername:   sipUsername,
 		Meta:          s.buildSessionMeta(sess, "api"),
-	})
+	}); err != nil {
+		log.Printf("⚠️ Failed to upsert session snapshot for %s: %v", snap.ID, err)
+	}
 }
 
 func (s *Server) buildSessionMeta(sess *session.Session, source string) map[string]interface{} {
@@ -2292,6 +2365,8 @@ func (s *Server) handleWSTrunkResolve(client *WSClient, msg WSMessage) {
 	ctx := context.Background()
 	trunkID := int64(0)
 	trunkPublicID := ""
+	sipUsername := strings.TrimSpace(msg.SIPUsername)
+	resolveBy := "credentials"
 	var leaseOwner *string
 	var leaseUntil *time.Time
 	found := false
@@ -2304,7 +2379,9 @@ func (s *Server) handleWSTrunkResolve(client *WSClient, msg WSMessage) {
 
 		if msg.TrunkID > 0 {
 			trunkID = msg.TrunkID
+			resolveBy = "trunkId"
 		} else {
+			resolveBy = "trunkPublicId"
 			publicID, ok := sip.NormalizeTrunkPublicID(msg.TrunkPublicID)
 			if !ok {
 				reason := "Invalid trunkPublicId"
@@ -2334,6 +2411,7 @@ func (s *Server) handleWSTrunkResolve(client *WSClient, msg WSMessage) {
 		leaseOwner = trunk.LeaseOwner
 		leaseUntil = trunk.LeaseUntil
 		trunkPublicID = trunk.PublicID
+		sipUsername = strings.TrimSpace(trunk.Username)
 	} else {
 		if msg.SIPDomain == "" || msg.SIPUsername == "" || msg.SIPPassword == "" {
 			s.sendWSError(client, msg.SessionID, "sipDomain, sipUsername, and sipPassword are required")
@@ -2364,6 +2442,7 @@ func (s *Server) handleWSTrunkResolve(client *WSClient, msg WSMessage) {
 		if s.trunkManager != nil {
 			if trunk, getErr := s.trunkManager.GetTrunkByIDFromDB(ctx, trunkID); getErr == nil && trunk != nil {
 				trunkPublicID = trunk.PublicID
+				sipUsername = strings.TrimSpace(trunk.Username)
 			}
 		}
 	}
@@ -2387,8 +2466,28 @@ func (s *Server) handleWSTrunkResolve(client *WSClient, msg WSMessage) {
 		// Persist Keycloak sub (UUID) for offline push notifications.
 		if client.authClaims != nil && s.trunkManager != nil {
 			if sub := client.authClaims.Subject; sub != "" {
+				preferredUsername := strings.TrimSpace(client.authClaims.PreferredUsername)
 				if err := s.trunkManager.SetTrunkNotifyUserID(ctx, trunkID, &sub); err != nil {
-					log.Printf("⚠️ Failed to set notify_user_id for trunk %d: %v", trunkID, err)
+					log.Printf(
+						"⚠️ [Trunk NotifyUserID] update_failed sessionID=%s trunkID=%d trunkPublicID=%s preferredUsername=%s sipUsername=%s authSub=%s error=%v",
+						msg.SessionID,
+						trunkID,
+						trunkPublicID,
+						preferredUsername,
+						sipUsername,
+						sub,
+						err,
+					)
+				} else {
+					log.Printf(
+						"📝 [Trunk NotifyUserID] updated sessionID=%s trunkID=%d trunkPublicID=%s preferredUsername=%s sipUsername=%s authSub=%s",
+						msg.SessionID,
+						trunkID,
+						trunkPublicID,
+						preferredUsername,
+						sipUsername,
+						sub,
+					)
 				}
 			}
 		}
@@ -2397,6 +2496,18 @@ func (s *Server) handleWSTrunkResolve(client *WSClient, msg WSMessage) {
 				log.Printf("⚠️ Failed to update push contact for trunk %d: %v", trunkID, err)
 				s.sendWSError(client, msg.SessionID, err.Error())
 			}
+		}
+		if client.authClaims != nil &&
+			client.authClaims.Realm == auth.TokenRealmUser &&
+			strings.TrimSpace(client.authClaims.Subject) != "" {
+			log.Printf(
+				"📱 [WS Trunk Resolve] mobile_resolved sessionID=%s trunkID=%d trunkPublicID=%s authSub=%s resolveBy=%s",
+				msg.SessionID,
+				trunkID,
+				trunkPublicID,
+				client.authClaims.Subject,
+				resolveBy,
+			)
 		}
 
 		s.sendWSMessage(client, WSMessage{
