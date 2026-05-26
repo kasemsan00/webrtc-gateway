@@ -922,9 +922,9 @@ func (s *Server) handleSwitchMessage(body string, callerURI string) {
 	sess.SendPLItoWebRTC()   // PLI to browser
 	sess.SendPLIToAsteriskForced("switch")
 
-	// 3.1 Enable temporary @switch blackout on SIP->WebRTC video path (if enabled).
-	// Keep remote screen intentionally black until target video stabilizes
-	// (keyframe received) or max wait timeout is reached.
+	// 3.1 Enable temporary @switch transition hold on SIP->WebRTC video path (if enabled).
+	// Preserve mode avoids forcing a black screen by gating only unsafe packets
+	// until the target keyframe arrives; blackout mode keeps legacy rollback behavior.
 	if s.config.SwitchVideoBlackoutEnabled {
 		blackout := time.Duration(s.config.SwitchVideoBlackoutMS) * time.Millisecond
 		if blackout <= 0 {
@@ -934,7 +934,7 @@ func (s *Server) handleSwitchMessage(body string, callerURI string) {
 		if maxWait < blackout {
 			maxWait = blackout
 		}
-		sess.StartSwitchVideoBlackout(blackout, maxWait, "switch")
+		sess.StartSwitchVideoTransitionHold(s.config.SwitchVideoTransitionMode, blackout, maxWait, "switch")
 	}
 
 	if queueNumber != "force send PLI" {

@@ -3,7 +3,50 @@ package session
 import (
 	"testing"
 	"time"
+
+	"k2-gateway/internal/config"
 )
+
+func TestSwitchTransitionPreserve_HoldsNonKeyframesButReleasesImmediateKeyframe(t *testing.T) {
+	sess := &Session{
+		ID:                         "switch-preserve-1",
+		SwitchVideoBlackoutEnabled: true,
+		SwitchVideoTransitionMode:  config.SIPSwitchVideoTransitionPreserve,
+	}
+
+	sess.StartSwitchVideoTransitionHold(config.SIPSwitchVideoTransitionPreserve, 200*time.Millisecond, time.Second, "unit-test")
+
+	if !sess.ShouldHoldSwitchVideoPacket(time.Now(), false) {
+		t.Fatalf("expected preserve mode to hold non-keyframe before first keyframe")
+	}
+
+	sess.StartSwitchVideoTransitionHold(config.SIPSwitchVideoTransitionPreserve, 200*time.Millisecond, time.Second, "unit-test")
+	if sess.ShouldHoldSwitchVideoPacket(time.Now(), true) {
+		t.Fatalf("expected preserve mode to release immediate keyframe without minimum blackout")
+	}
+
+	if sess.ShouldHoldSwitchVideoPacket(time.Now(), false) {
+		t.Fatalf("expected hold disabled after keyframe release")
+	}
+}
+
+func TestSwitchTransitionPreserve_ReleasesOnMaxWaitTimeout(t *testing.T) {
+	sess := &Session{
+		ID:                         "switch-preserve-2",
+		SwitchVideoBlackoutEnabled: true,
+	}
+
+	sess.StartSwitchVideoTransitionHold(config.SIPSwitchVideoTransitionPreserve, 20*time.Millisecond, 50*time.Millisecond, "unit-test")
+
+	if !sess.ShouldHoldSwitchVideoPacket(time.Now(), false) {
+		t.Fatalf("expected preserve mode hold active initially")
+	}
+
+	time.Sleep(70 * time.Millisecond)
+	if sess.ShouldHoldSwitchVideoPacket(time.Now(), false) {
+		t.Fatalf("expected preserve mode hold released after max wait timeout")
+	}
+}
 
 func TestSwitchBlackout_HoldsUntilKeyframeThenReleases(t *testing.T) {
 	sess := &Session{ID: "switch-blackout-1", SwitchVideoBlackoutEnabled: true}

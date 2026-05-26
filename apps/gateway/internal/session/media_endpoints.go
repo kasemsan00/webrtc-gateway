@@ -414,6 +414,7 @@ func (s *Session) ResetMediaState() {
 	s.SwitchVideoBlackoutStarted = time.Time{}
 	s.SwitchVideoBlackoutUntil = time.Time{}
 	s.SwitchVideoBlackoutMaxWait = time.Time{}
+	s.SwitchVideoFirstKeyframeAt = time.Time{}
 	s.SymmetricRTPTrustUntil = time.Now().Add(symmetricRTPTrustWindow)
 	s.PLIBurstUntil = time.Time{}
 

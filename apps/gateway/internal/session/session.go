@@ -137,11 +137,14 @@ type Session struct {
 	VideoRTPDisorderContainmentStartedAt time.Time            `json:"-"`
 	VideoRTPDisorderContainmentReason    string               `json:"-"`
 	VideoRTPDisorderContainmentSummary   VideoRecoverySummary `json:"-"`
-	// @switch blackout hold (SIP->WebRTC): keep screen black briefly by dropping video RTP
+	// @switch transition hold (SIP->WebRTC): preserve holds unsafe packets until keyframe;
+	// blackout is legacy and intentionally keeps the screen black briefly.
+	SwitchVideoTransitionMode  string    `json:"-"`
 	SwitchVideoBlackoutEnabled bool      `json:"-"`
 	SwitchVideoBlackoutStarted time.Time `json:"-"`
 	SwitchVideoBlackoutUntil   time.Time `json:"-"`
 	SwitchVideoBlackoutMaxWait time.Time `json:"-"`
+	SwitchVideoFirstKeyframeAt time.Time `json:"-"`
 	// RTP State for re-packetization
 	AudioSeq        uint16 `json:"-"`
 	AudioSSRC       uint32 `json:"-"`
@@ -373,6 +376,7 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 		VideoRecoveryBurstInterval:           burstInterval,
 		VideoRecoveryBurstStale:              burstStale,
 		VideoRecoveryBurstFIRStale:           burstFIRStale,
+		SwitchVideoTransitionMode:            cfg.SIP.SwitchVideoTransitionMode,
 		SwitchVideoBlackoutEnabled:           cfg.SIP.SwitchVideoBlackoutEnabled,
 		SwitchVideoRTPStabilityEnabled:       cfg.SIP.SwitchVideoRTPStabilityEnabled,
 		SwitchVideoRTPMinPacketDelta:         cfg.SIP.SwitchVideoRTPMinPacketDelta,

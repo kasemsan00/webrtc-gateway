@@ -835,6 +835,87 @@ func TestNotifyIncomingCancel_SendsOnlyClientsResolvedOnSameTrunk(t *testing.T) 
 	}
 }
 
+func TestNotifySIPMessage_TargetsMatchingSessionOnly(t *testing.T) {
+	mgr := newTestSessionManager()
+	targetSession, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create target session: %v", err)
+	}
+	targetSession.SetCallInfo("outbound", "1100200372057", "14131", "call-target")
+	targetSession.SetState(session.StateActive)
+
+	otherSession, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create other session: %v", err)
+	}
+	otherSession.SetCallInfo("outbound", "1100200999999", "14132", "call-other")
+	otherSession.SetState(session.StateActive)
+
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, nil, nil, nil, nil)
+	targetClient := &WSClient{sessionID: targetSession.ID, send: make(chan []byte, 8), ConnectedAt: time.Now()}
+	otherClient := &WSClient{sessionID: otherSession.ID, send: make(chan []byte, 8), ConnectedAt: time.Now()}
+
+	srv.mu.Lock()
+	srv.wsClients[targetSession.ID] = targetClient
+	srv.wsClients[otherSession.ID] = otherClient
+	srv.wsConnections[targetClient] = struct{}{}
+	srv.wsConnections[otherClient] = struct{}{}
+	srv.mu.Unlock()
+
+	srv.NotifySIPMessage("sip:1100200372057@203.151.21.121:5060", "00025", "hello", "text/plain")
+
+	targetMsgs := readWSMessages(t, targetClient.send)
+	otherMsgs := readWSMessages(t, otherClient.send)
+	if len(targetMsgs) != 1 {
+		t.Fatalf("expected target client to receive one message, got %d", len(targetMsgs))
+	}
+	if len(otherMsgs) != 0 {
+		t.Fatalf("expected other client to receive no message, got %d", len(otherMsgs))
+	}
+	if targetMsgs[0].Type != "message" || targetMsgs[0].SessionID != targetSession.ID {
+		t.Fatalf("unexpected target message: %+v", targetMsgs[0])
+	}
+	if targetMsgs[0].From != "00025" || targetMsgs[0].To != "sip:1100200372057@203.151.21.121:5060" || targetMsgs[0].Body != "hello" {
+		t.Fatalf("unexpected message payload: %+v", targetMsgs[0])
+	}
+}
+
+func TestNotifySIPMessage_DedupesStaleWSClientMapEntries(t *testing.T) {
+	mgr := newTestSessionManager()
+	targetSession, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create target session: %v", err)
+	}
+	targetSession.SetCallInfo("outbound", "1100200372057", "14131", "call-target")
+	targetSession.SetState(session.StateActive)
+
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, nil, nil, nil, nil)
+	client := &WSClient{sessionID: targetSession.ID, send: make(chan []byte, 8), ConnectedAt: time.Now()}
+	staleClient := &WSClient{sessionID: targetSession.ID, send: make(chan []byte, 8), ConnectedAt: time.Now().Add(-time.Minute)}
+
+	srv.mu.Lock()
+	srv.wsClients[targetSession.ID] = client
+	srv.wsClients["old-offer-session"] = client
+	srv.wsClients["older-offer-session"] = staleClient
+	srv.wsConnections[client] = struct{}{}
+	srv.wsConnections[staleClient] = struct{}{}
+	srv.mu.Unlock()
+
+	srv.NotifySIPMessage("sip:1100200372057@203.151.21.121:5060", "00025", "hello", "text/plain")
+
+	msgs := readWSMessages(t, client.send)
+	staleMsgs := readWSMessages(t, staleClient.send)
+	if len(msgs) != 1 {
+		t.Fatalf("expected canonical client to receive one message, got %d", len(msgs))
+	}
+	if len(staleMsgs) != 0 {
+		t.Fatalf("expected stale client to receive no message, got %d", len(staleMsgs))
+	}
+	if msgs[0].SessionID != targetSession.ID {
+		t.Fatalf("expected message session %s, got %s", targetSession.ID, msgs[0].SessionID)
+	}
+}
+
 func TestNotifyIncomingCall_PushLookupUsesDBPath(t *testing.T) {
 	trunkMgr := &incomingNotifyTestTrunkManager{
 		trunkByID: map[int64]*sip.Trunk{

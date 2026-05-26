@@ -2569,40 +2569,140 @@ func (s *Server) notifyPendingIncomingForClient(client *WSClient, trunkID int64)
 	}
 }
 
-// NotifySIPMessage notifies all WebSocket clients about an incoming SIP message
-func (s *Server) NotifySIPMessage(to, from, body, contentType string) {
+func sipURIUsername(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if start := strings.Index(value, "<"); start >= 0 {
+		if end := strings.Index(value[start+1:], ">"); end >= 0 {
+			value = value[start+1 : start+1+end]
+		}
+	}
+	value = strings.TrimPrefix(strings.TrimPrefix(value, "sip:"), "sips:")
+	if at := strings.Index(value, "@"); at >= 0 {
+		value = value[:at]
+	}
+	if colon := strings.Index(value, ":"); colon >= 0 {
+		value = value[:colon]
+	}
+	return strings.TrimSpace(value)
+}
+
+func sipAddressMatches(target, targetUser, candidate string) bool {
+	candidate = strings.TrimSpace(candidate)
+	if candidate == "" {
+		return false
+	}
+	if target != "" && candidate == target {
+		return true
+	}
+	candidateUser := sipURIUsername(candidate)
+	return targetUser != "" && candidateUser == targetUser
+}
+
+func (s *Server) findSIPMessageSessionID(to string) string {
+	if s.sessionMgr == nil {
+		return ""
+	}
+
+	targetUser := sipURIUsername(to)
+	for _, sess := range s.sessionMgr.ListSessions() {
+		if sess == nil || sess.GetState() == session.StateEnded {
+			continue
+		}
+		_, fromField, toField, _ := sess.GetCallInfo()
+		_, _, _, _, sipUsername, _, _ := sess.GetSIPAuthContext()
+		if sipAddressMatches(to, targetUser, fromField) ||
+			sipAddressMatches(to, targetUser, toField) ||
+			sipAddressMatches(to, targetUser, sipUsername) {
+			return sess.ID
+		}
+	}
+
+	return ""
+}
+
+func (s *Server) selectSIPMessageTargets(sessionID string) (targets []*WSClient, totalConnections int, droppedDuplicate int) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	log.Printf("💬 Incoming SIP message from: %s to: %s", from, to)
+	totalConnections = len(s.wsConnections)
+	seen := make(map[*WSClient]struct{})
+	addTarget := func(client *WSClient) {
+		if client == nil {
+			return
+		}
+		if _, ok := seen[client]; ok {
+			droppedDuplicate++
+			return
+		}
+		seen[client] = struct{}{}
+		targets = append(targets, client)
+	}
+
+	if sessionID == "" {
+		return targets, totalConnections, droppedDuplicate
+	}
+
+	if client := s.wsClients[sessionID]; client != nil {
+		addTarget(client)
+		for key, mapped := range s.wsClients {
+			if key == sessionID {
+				continue
+			}
+			if mapped == client || (mapped != nil && mapped.sessionID == sessionID) {
+				droppedDuplicate++
+			}
+		}
+		return targets, totalConnections, droppedDuplicate
+	}
+
+	var newest *WSClient
+	for client := range s.wsConnections {
+		if client == nil || client.sessionID != sessionID {
+			continue
+		}
+		if newest == nil || client.ConnectedAt.After(newest.ConnectedAt) {
+			newest = client
+		}
+	}
+	addTarget(newest)
+	return targets, totalConnections, droppedDuplicate
+}
+
+// NotifySIPMessage notifies the WebSocket client associated with an incoming SIP message.
+func (s *Server) NotifySIPMessage(to, from, body, contentType string) {
+	sessionID := s.findSIPMessageSessionID(to)
+	targets, totalConnections, droppedDuplicate := s.selectSIPMessageTargets(sessionID)
 
 	msg := WSMessage{
 		Type:        "message",
+		SessionID:   sessionID,
 		From:        from,
 		To:          to,
 		Body:        body,
 		ContentType: contentType,
 	}
 
-	data, err := json.Marshal(msg)
-	if err != nil {
-		log.Printf("Failed to marshal message notification: %v", err)
-		return
+	for _, client := range targets {
+		s.sendWSMessage(client, msg)
+		log.Printf("💬 Sent message notification to client (sessionID=%s targetSessionID=%s)", client.sessionID, sessionID)
 	}
 
-	// Broadcast to all connected clients
-	for _, client := range s.wsClients {
-		select {
-		case client.send <- data:
-			log.Printf("💬 Sent message notification to client (sessionID=%s)", client.sessionID)
-		default:
-			log.Printf("Failed to send message notification - client channel full")
+	if len(targets) == 0 {
+		if sessionID == "" {
+			log.Printf("⚠️ SIP message has no matching active session: from=%s to=%s totalConnections=%d", from, to, totalConnections)
+		} else {
+			log.Printf("⚠️ No WebSocket client connected for SIP message: from=%s to=%s targetSessionID=%s totalConnections=%d", from, to, sessionID, totalConnections)
 		}
 	}
 
-	if len(s.wsClients) == 0 {
-		log.Printf("⚠️ No WebSocket clients connected for message notification")
+	filtered := totalConnections - len(targets)
+	if filtered < 0 {
+		filtered = 0
 	}
+	log.Printf("💬 SIP message fanout summary: from=%s to=%s targetSessionID=%s recipients=%d filtered=%d duplicates=%d total=%d bodyBytes=%d", from, to, sessionID, len(targets), filtered, droppedDuplicate, totalConnections, len(body))
 }
 
 // NotifyDTMF notifies the WebSocket client about a received DTMF digit from SIP side

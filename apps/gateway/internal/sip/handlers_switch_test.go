@@ -12,6 +12,7 @@ func TestHandleSwitchMessage_StartsVideoRecoveryBurst(t *testing.T) {
 	cfg := &config.Config{
 		SIP: config.SIPConfig{
 			SwitchPLIDelayMS:               0,
+			SwitchVideoTransitionMode:      config.SIPSwitchVideoTransitionPreserve,
 			SwitchVideoBlackoutEnabled:     true,
 			SwitchVideoBlackoutMS:          300,
 			SwitchVideoBlackoutMaxWaitMS:   1200,
@@ -76,11 +77,14 @@ func TestHandleSwitchMessage_StartsVideoRecoveryBurst(t *testing.T) {
 	if sess.SwitchVideoRecoveryStableWindow != 750*time.Millisecond {
 		t.Fatalf("expected switch stable window from config, got %s", sess.SwitchVideoRecoveryStableWindow)
 	}
+	if sess.SwitchVideoTransitionMode != config.SIPSwitchVideoTransitionPreserve {
+		t.Fatalf("expected @switch preserve transition mode, got %q", sess.SwitchVideoTransitionMode)
+	}
 	if sess.SwitchVideoBlackoutUntil.IsZero() {
-		t.Fatalf("expected @switch blackout window to be set")
+		t.Fatalf("expected @switch transition window to be set")
 	}
 	if sess.SwitchVideoBlackoutMaxWait.IsZero() {
-		t.Fatalf("expected @switch blackout max-wait window to be set")
+		t.Fatalf("expected @switch transition max-wait window to be set")
 	}
 }
 
@@ -88,6 +92,7 @@ func TestHandleSwitchMessage_IgnoresDuplicateTargetInsideDebounce(t *testing.T) 
 	cfg := &config.Config{
 		SIP: config.SIPConfig{
 			SwitchPLIDelayMS:               0,
+			SwitchVideoTransitionMode:      config.SIPSwitchVideoTransitionPreserve,
 			SwitchVideoBlackoutEnabled:     true,
 			SwitchVideoBlackoutMS:          300,
 			SwitchVideoBlackoutMaxWaitMS:   1200,

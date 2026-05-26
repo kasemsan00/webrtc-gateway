@@ -92,34 +92,35 @@ type SIPConfig struct {
 	DebugSIPMessage  bool   // Enable verbose SIP MESSAGE logging
 	DebugSIPInvite   bool   // Enable verbose SIP INVITE logging (header dump)
 	SwitchPLIDelayMS int    // Delay in milliseconds before sending PLI on @switch message (default: 0)
-	// @switch video transition hold (SIP->WebRTC): temporarily drop remote video packets
-	// to intentionally keep screen black before showing target video.
-	SwitchVideoBlackoutEnabled           bool // Enable @switch blackout hold policy (default: true)
-	SwitchVideoBlackoutMS                int  // Minimum blackout duration in ms (default: 300)
-	SwitchVideoBlackoutMaxWaitMS         int  // Max wait for keyframe after blackout in ms (default: 1200)
-	SwitchVideoRecoveryWindowMS          int  // Max @switch recovery burst duration in ms (default: 5000)
-	SwitchVideoRecoveryStableMS          int  // Stable media window after switch keyframe in ms (default: 750)
-	SwitchVideoRTPStabilityEnabled       bool // Require RTP metrics to be stable before ending @switch recovery (default: true)
-	SwitchVideoRTPMinPacketDelta         int  // Minimum SIP->WebRTC video packets in the stable window (default: 30)
-	SwitchVideoRTPMaxGapDelta            int  // Max RTP sequence gap events allowed in the stable window (default: 12)
-	SwitchVideoRTPMaxMissingDelta        int  // Max missing RTP packets allowed in the stable window (default: 20)
-	SwitchVideoRTPMaxOutOfOrderDelta     int  // Max out-of-order RTP packets allowed in the stable window (default: 20)
-	SwitchVideoRTPMaxReorderDropDelta    int  // Max reorder drops allowed in the stable window (default: 0)
-	SwitchVideoRTPMaxReorderTimeoutDelta int  // Max reorder timeouts allowed in the stable window (default: 5)
-	SwitchDuplicateDebounceEnabled       bool // Ignore duplicate @switch target inside debounce window (default: true)
-	SwitchDuplicateDebounceMS            int  // Duplicate @switch debounce window in ms (default: 60000)
-	VideoRTPDisorderMonitorEnabled       bool // Monitor sustained SIP->WebRTC video RTP disorder (default: true)
-	VideoRTPDisorderMinPacketDelta       int  // Minimum packet delta per disorder window (default: 300)
-	VideoRTPDisorderMaxGapDelta          int  // Max gap events per disorder window before bad window (default: 45)
-	VideoRTPDisorderMaxMissingDelta      int  // Max missing packets per disorder window before bad window (default: 80)
-	VideoRTPDisorderMaxOutOfOrderDelta   int  // Max out-of-order packets per disorder window before bad window (default: 80)
-	VideoRTPDisorderMaxReorderTimeout    int  // Max reorder timeouts per disorder window before bad window (default: 20)
-	VideoRTPDisorderConsecutiveWindows   int  // Consecutive bad windows before sustained log (default: 3)
-	VideoRTPDisorderLogIntervalMS        int  // Minimum sustained disorder log interval in ms (default: 5000)
-	VideoRTPDisorderContainmentEnabled   bool // Enable bounded session-scoped disorder containment diagnostics (default: false)
-	VideoRTPDisorderContainmentMS        int  // Bounded containment duration in ms (default: 10000)
-	AudioUseAVPF                         bool // Use RTP/AVPF profile for audio with RTCP feedback (default: false)
-	VideoUseAVPF                         bool // Use RTP/AVPF profile for video with RTCP feedback (PLI/FIR/NACK) (default: true)
+	// @switch video transition hold (SIP->WebRTC): preserve keeps the previous
+	// rendered frame by holding unsafe non-keyframe packets; blackout is legacy.
+	SwitchVideoTransitionMode            string // @switch transition mode: preserve|blackout (default: preserve)
+	SwitchVideoBlackoutEnabled           bool   // Enable @switch transition hold policy (default: true)
+	SwitchVideoBlackoutMS                int    // Minimum blackout duration in ms (default: 300)
+	SwitchVideoBlackoutMaxWaitMS         int    // Max wait for keyframe after blackout in ms (default: 1200)
+	SwitchVideoRecoveryWindowMS          int    // Max @switch recovery burst duration in ms (default: 5000)
+	SwitchVideoRecoveryStableMS          int    // Stable media window after switch keyframe in ms (default: 750)
+	SwitchVideoRTPStabilityEnabled       bool   // Require RTP metrics to be stable before ending @switch recovery (default: true)
+	SwitchVideoRTPMinPacketDelta         int    // Minimum SIP->WebRTC video packets in the stable window (default: 30)
+	SwitchVideoRTPMaxGapDelta            int    // Max RTP sequence gap events allowed in the stable window (default: 12)
+	SwitchVideoRTPMaxMissingDelta        int    // Max missing RTP packets allowed in the stable window (default: 20)
+	SwitchVideoRTPMaxOutOfOrderDelta     int    // Max out-of-order RTP packets allowed in the stable window (default: 20)
+	SwitchVideoRTPMaxReorderDropDelta    int    // Max reorder drops allowed in the stable window (default: 0)
+	SwitchVideoRTPMaxReorderTimeoutDelta int    // Max reorder timeouts allowed in the stable window (default: 5)
+	SwitchDuplicateDebounceEnabled       bool   // Ignore duplicate @switch target inside debounce window (default: true)
+	SwitchDuplicateDebounceMS            int    // Duplicate @switch debounce window in ms (default: 60000)
+	VideoRTPDisorderMonitorEnabled       bool   // Monitor sustained SIP->WebRTC video RTP disorder (default: true)
+	VideoRTPDisorderMinPacketDelta       int    // Minimum packet delta per disorder window (default: 300)
+	VideoRTPDisorderMaxGapDelta          int    // Max gap events per disorder window before bad window (default: 45)
+	VideoRTPDisorderMaxMissingDelta      int    // Max missing packets per disorder window before bad window (default: 80)
+	VideoRTPDisorderMaxOutOfOrderDelta   int    // Max out-of-order packets per disorder window before bad window (default: 80)
+	VideoRTPDisorderMaxReorderTimeout    int    // Max reorder timeouts per disorder window before bad window (default: 20)
+	VideoRTPDisorderConsecutiveWindows   int    // Consecutive bad windows before sustained log (default: 3)
+	VideoRTPDisorderLogIntervalMS        int    // Minimum sustained disorder log interval in ms (default: 5000)
+	VideoRTPDisorderContainmentEnabled   bool   // Enable bounded session-scoped disorder containment diagnostics (default: false)
+	VideoRTPDisorderContainmentMS        int    // Bounded containment duration in ms (default: 10000)
+	AudioUseAVPF                         bool   // Use RTP/AVPF profile for audio with RTCP feedback (default: false)
+	VideoUseAVPF                         bool   // Use RTP/AVPF profile for video with RTCP feedback (PLI/FIR/NACK) (default: true)
 	// SIP-side transport target for outbound video feedback packets (PLI/FIR/NACK): auto|rtp|rtcp|dual
 	// - auto: legacy learned-RTCP + fallback-window behavior
 	// - rtp:  always send to SIP video RTP port (rtcp-mux style)
@@ -145,6 +146,9 @@ const (
 	SIPVideoFeedbackTransportRTP  = "rtp"
 	SIPVideoFeedbackTransportRTCP = "rtcp"
 	SIPVideoFeedbackTransportDual = "dual"
+
+	SIPSwitchVideoTransitionPreserve = "preserve"
+	SIPSwitchVideoTransitionBlackout = "blackout"
 )
 
 // DBConfig holds PostgreSQL database configuration
@@ -241,6 +245,7 @@ func Load() (*Config, error) {
 			DebugSIPMessage:                      getEnvAsBool("DEBUG_SIP_MESSAGE", false),
 			DebugSIPInvite:                       getEnvAsBool("DEBUG_SIP_INVITE", false),
 			SwitchPLIDelayMS:                     getEnvAsInt("SWITCH_PLI_DELAY_MS", 0),
+			SwitchVideoTransitionMode:            normalizeSwitchVideoTransitionMode(getEnvWithDefault("SIP_SWITCH_VIDEO_TRANSITION_MODE", SIPSwitchVideoTransitionPreserve)),
 			SwitchVideoBlackoutEnabled:           getEnvAsBool("SIP_SWITCH_VIDEO_BLACKOUT_ENABLED", true),
 			SwitchVideoBlackoutMS:                getEnvAsInt("SIP_SWITCH_VIDEO_BLACKOUT_MS", 300),
 			SwitchVideoBlackoutMaxWaitMS:         getEnvAsInt("SIP_SWITCH_VIDEO_BLACKOUT_MAX_WAIT_MS", 1200),
@@ -424,7 +429,8 @@ func (c *Config) Display() {
 		c.SIP.VideoRecoveryBurstStaleMS,
 		c.SIP.VideoRecoveryBurstFIRStaleMS,
 	)
-	fmt.Printf("  @switch Video Blackout: %v (blackout=%dms, maxWait=%dms, recoveryWindow=%dms, stable=%dms)\n",
+	fmt.Printf("  @switch Video Transition: mode=%s enabled=%v (blackout=%dms, maxWait=%dms, recoveryWindow=%dms, stable=%dms)\n",
+		c.SIP.SwitchVideoTransitionMode,
 		c.SIP.SwitchVideoBlackoutEnabled,
 		c.SIP.SwitchVideoBlackoutMS,
 		c.SIP.SwitchVideoBlackoutMaxWaitMS,
@@ -579,6 +585,17 @@ func getSIPVideoFeedbackTransport() string {
 	default:
 		fmt.Printf("Warning: invalid SIP_VIDEO_FEEDBACK_TRANSPORT=%q, using %q\n", value, SIPVideoFeedbackTransportAuto)
 		return SIPVideoFeedbackTransportAuto
+	}
+}
+
+func normalizeSwitchVideoTransitionMode(value string) string {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	switch normalized {
+	case SIPSwitchVideoTransitionPreserve, SIPSwitchVideoTransitionBlackout:
+		return normalized
+	default:
+		fmt.Printf("Warning: invalid SIP_SWITCH_VIDEO_TRANSITION_MODE=%q, using %q\n", value, SIPSwitchVideoTransitionPreserve)
+		return SIPSwitchVideoTransitionPreserve
 	}
 }
 
