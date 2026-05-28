@@ -24,6 +24,8 @@ type diagnosticsLogStoreStub struct {
 	diagnostics []*logstore.ClientDiagnosticRecord
 	listResult  *logstore.ClientDiagnosticListResult
 	listParams  logstore.ClientDiagnosticListParams
+	eventResult *logstore.EventListResult
+	eventParams logstore.EventListParams
 	getPayload  *logstore.PayloadReadRecord
 	disabled    bool
 }
@@ -54,6 +56,10 @@ func (s *diagnosticsLogStoreStub) ListClientDiagnostics(_ context.Context, param
 }
 
 func (s *diagnosticsLogStoreStub) ListEvents(_ context.Context, params logstore.EventListParams) (*logstore.EventListResult, error) {
+	s.eventParams = params
+	if s.eventResult != nil {
+		return s.eventResult, nil
+	}
 	return &logstore.EventListResult{Items: []*logstore.EventRecord{}, Total: 0, Page: 1, PageSize: 20}, nil
 }
 
@@ -116,8 +122,8 @@ func TestHandleClientDiagnosticsPersistsSessionAndNonSessionEvents(t *testing.T)
 		"platform":"ios",
 		"deviceIdHash":"device-hash",
 		"events":[
-			{"timestamp":"2026-05-25T10:00:00Z","sessionId":"sess-1","source":"gateway","level":"info","name":"ws.connected","message":"connected","context":{"token":"secret","state":"ok"}},
-			{"timestamp":"2026-05-25T10:00:01Z","source":"app","level":"warn","name":"app.boot","message":"booted","context":{"safe":"yes"}}
+			{"id":"evt-session-1","timestamp":"2026-05-25T10:00:00Z","sessionId":"sess-1","source":"gateway","level":"info","name":"ws.connected","message":"connected","context":{"token":"secret","state":"ok"}},
+			{"id":"evt-global-1","timestamp":"2026-05-25T10:00:01Z","source":"app","level":"warn","name":"app.boot","message":"booted","context":{"safe":"yes"}}
 		]
 	}`
 	req := httptest.NewRequest(http.MethodPost, "/api/client-diagnostics", strings.NewReader(body))
@@ -138,6 +144,9 @@ func TestHandleClientDiagnosticsPersistsSessionAndNonSessionEvents(t *testing.T)
 	if rr.Code != http.StatusAccepted || resp.AcceptedEvents != 2 || resp.SessionEvents != 1 || resp.NonSessionEvents != 1 {
 		t.Fatalf("unexpected response status=%d resp=%+v body=%s", rr.Code, resp, rr.Body.String())
 	}
+	if resp.ClientTraceID != "trace-1" || resp.StoredSessionEvents != 1 || resp.StoredNonSessionEvents != 1 || resp.DroppedEvents != 0 {
+		t.Fatalf("expected additive response fields populated, got %+v", resp)
+	}
 	if len(store.events) != 1 {
 		t.Fatalf("expected one call event, got %d", len(store.events))
 	}
@@ -147,11 +156,17 @@ func TestHandleClientDiagnosticsPersistsSessionAndNonSessionEvents(t *testing.T)
 	if got := store.events[0].Data["context"].(map[string]interface{})["token"]; got != "[redacted]" {
 		t.Fatalf("expected session context redacted, got %#v", got)
 	}
+	if got := store.events[0].Data["eventId"]; got != "evt-session-1" {
+		t.Fatalf("expected session event id stored, got %#v", got)
+	}
 	if len(store.diagnostics) != 1 {
 		t.Fatalf("expected one non-session diagnostic, got %d", len(store.diagnostics))
 	}
 	if store.diagnostics[0].AuthSubject != "user-1" || store.diagnostics[0].PreferredUsername != "alice" {
 		t.Fatalf("expected auth metadata persisted, got %+v", store.diagnostics[0])
+	}
+	if got := store.diagnostics[0].Data["eventId"]; got != "evt-global-1" {
+		t.Fatalf("expected non-session event id stored, got %#v", got)
 	}
 }
 
@@ -167,6 +182,31 @@ func TestHandleClientDiagnosticsRejectsInvalidPayloads(t *testing.T) {
 
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestHandleClientDiagnosticsRateLimitRejectsClearly(t *testing.T) {
+	t.Parallel()
+
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, nil, nil, nil, nil, &diagnosticsLogStoreStub{})
+	body := `{"clientTraceId":"trace-rate","events":[{"source":"app","level":"info","name":"app.boot"}]}`
+	for i := 0; i < clientDiagnosticsRateLimitPerWindow; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/api/client-diagnostics", strings.NewReader(body))
+		req = withAuthClaims(req, &auth.VerifiedClaims{Subject: "rate-user"})
+		rr := httptest.NewRecorder()
+		srv.handleClientDiagnostics(rr, req)
+		if rr.Code != http.StatusAccepted {
+			t.Fatalf("expected warmup request %d accepted, got %d body=%s", i, rr.Code, rr.Body.String())
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/client-diagnostics", strings.NewReader(body))
+	req = withAuthClaims(req, &auth.VerifiedClaims{Subject: "rate-user"})
+	rr := httptest.NewRecorder()
+	srv.handleClientDiagnostics(rr, req)
+
+	if rr.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected 429, got %d body=%s", rr.Code, rr.Body.String())
 	}
 }
 
@@ -261,6 +301,44 @@ func TestListClientDiagnosticsDoesNotRequireAuth(t *testing.T) {
 		t.Fatalf("decode response: %v", err)
 	}
 	if len(resp.Items) != 1 || resp.Items[0].Name != "app.boot" {
+		t.Fatalf("unexpected response: %+v", resp)
+	}
+}
+
+func TestListClientDiagnosticSessionEventsReturnsClientCategory(t *testing.T) {
+	t.Parallel()
+
+	store := &diagnosticsLogStoreStub{
+		eventResult: &logstore.EventListResult{
+			Items: []*logstore.EventRecord{
+				{
+					ID:        9,
+					Timestamp: time.Date(2026, 5, 25, 10, 0, 0, 0, time.UTC),
+					SessionID: "sess-1",
+					Category:  "client",
+					Name:      "incoming.received",
+					Data:      map[string]interface{}{"clientTraceId": "trace-1"},
+				},
+			},
+			Total:    1,
+			Page:     1,
+			PageSize: 20,
+		},
+	}
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, nil, nil, nil, nil, store)
+	rr := doRequest(t, srv.handleListClientDiagnosticSessionEvents, http.MethodGet, "/api/client-diagnostics/sessions/sess-1/events?page=1&pageSize=20", "", map[string]string{"sessionId": "sess-1"})
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if store.eventParams.SessionID != "sess-1" || store.eventParams.Category != "client" {
+		t.Fatalf("expected client event query params, got %+v", store.eventParams)
+	}
+	var resp EventListResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(resp.Items) != 1 || resp.Items[0].Name != "incoming.received" {
 		t.Fatalf("unexpected response: %+v", resp)
 	}
 }

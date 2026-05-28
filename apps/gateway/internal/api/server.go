@@ -116,6 +116,7 @@ type TrunkManager interface {
 	SetTrunkInUseBy(ctx context.Context, trunkID int64, username *string) error
 	FindTrunkByInUseBy(ctx context.Context, inUseBy string) (*sip.Trunk, error)
 	SetTrunkNotifyUserID(ctx context.Context, trunkID int64, userID *string) error
+	SetTrunkNotifyUserIDAndPlatform(ctx context.Context, trunkID int64, userID *string, platform *string) error
 	SetTrunkPushContact(ctx context.Context, trunkID int64, contact sip.TrunkPushContact) error
 }
 
@@ -174,11 +175,12 @@ type WSMessage struct {
 	// SIP Public/Trunk fields (new for multi-user registration)
 	// For SIP Public mode outbound call: include sipDomain, sipUsername, sipPassword, sipPort
 	// For SIP Trunk mode outbound call: include trunkId or trunkPublicId
-	TrunkID       int64  `json:"trunkId,omitempty"`       // Use trunk from DB (0 = not specified)
-	TrunkPublicID string `json:"trunkPublicId,omitempty"` // Stable public trunk reference
-	PNAppID       string `json:"pnAppId,omitempty"`       // SIP Contact push app-id
-	PNType        string `json:"pnType,omitempty"`        // SIP Contact push pn-type
-	PNToken       string `json:"pnToken,omitempty"`       // SIP Contact push pn-tok
+	TrunkID        int64  `json:"trunkId,omitempty"`       // Use trunk from DB (0 = not specified)
+	TrunkPublicID  string `json:"trunkPublicId,omitempty"` // Stable public trunk reference
+	DevicePlatform string `json:"devicePlatform,omitempty"`
+	PNAppID        string `json:"pnAppId,omitempty"` // SIP Contact push app-id
+	PNType         string `json:"pnType,omitempty"`  // SIP Contact push pn-type
+	PNToken        string `json:"pnToken,omitempty"` // SIP Contact push pn-tok
 	// S2S Translation fields
 	SourceLang string `json:"sourceLang,omitempty"`
 	TargetLang string `json:"targetLang,omitempty"`
@@ -1427,7 +1429,11 @@ func (s *Server) hasIncomingPushTarget(trunkID int64) bool {
 	lookupCtx, cancel := context.WithTimeout(context.Background(), incomingPushTrunkLookupTimeout)
 	defer cancel()
 	trunk, err := s.trunkManager.GetTrunkByIDFromDB(lookupCtx, trunkID)
-	return err == nil && trunk != nil && (trunkHasFCMPushTarget(trunk) || (s.pushService.CanSendAPNS() && trunkHasApplePushKitTarget(trunk)))
+	if err != nil || trunk == nil {
+		return false
+	}
+	route := selectIncomingPushRoute(trunk, s.pushService.CanSendAPNS())
+	return route.SendFCM || route.SendAPNS
 }
 
 func trunkHasFCMPushTarget(trunk *sip.Trunk) bool {
@@ -1441,6 +1447,59 @@ func trunkHasApplePushKitTarget(trunk *sip.Trunk) bool {
 	return strings.TrimSpace(*trunk.PNAppID) == trunkPNAppID &&
 		strings.EqualFold(strings.TrimSpace(*trunk.PNType), trunkPNType) &&
 		strings.TrimSpace(*trunk.PNToken) != ""
+}
+
+const (
+	devicePlatformAndroid = "android"
+	devicePlatformIOS     = "ios"
+)
+
+func normalizeDevicePlatform(platform string) (string, bool) {
+	value := strings.ToLower(strings.TrimSpace(platform))
+	if value == "" || value == devicePlatformAndroid || value == devicePlatformIOS {
+		return value, true
+	}
+	return "", false
+}
+
+type incomingPushRoute struct {
+	SendFCM                 bool
+	SendAPNS                bool
+	UnknownPlatformFallback bool
+	Reason                  string
+}
+
+func selectIncomingPushRoute(trunk *sip.Trunk, canSendAPNS bool) incomingPushRoute {
+	hasFCM := trunkHasFCMPushTarget(trunk)
+	hasAPNS := canSendAPNS && trunkHasApplePushKitTarget(trunk)
+	if trunk == nil || (!hasFCM && !hasAPNS) {
+		return incomingPushRoute{Reason: "missing_push_target"}
+	}
+
+	platform := ""
+	if trunk.LastOnlinePlatform != nil {
+		platform, _ = normalizeDevicePlatform(*trunk.LastOnlinePlatform)
+	}
+
+	switch platform {
+	case devicePlatformAndroid:
+		if hasFCM {
+			return incomingPushRoute{SendFCM: true, Reason: "android_fcm"}
+		}
+		return incomingPushRoute{Reason: "android_missing_fcm_target"}
+	case devicePlatformIOS:
+		if hasAPNS {
+			return incomingPushRoute{SendAPNS: true, Reason: "ios_apns"}
+		}
+		return incomingPushRoute{Reason: "ios_missing_apns_target"}
+	default:
+		return incomingPushRoute{
+			SendFCM:                 hasFCM,
+			SendAPNS:                hasAPNS,
+			UnknownPlatformFallback: true,
+			Reason:                  "unknown_platform_fallback",
+		}
+	}
 }
 
 func (s *Server) incomingSessionHasVideo(sessionID string) bool {
@@ -1474,17 +1533,21 @@ func (s *Server) dispatchIncomingPush(sessionID, from, to string, trunkID int64,
 			return
 		}
 		dispatched := false
-		if trunkHasApplePushKitTarget(trunk) && s.pushService.CanSendAPNS() {
+		route := selectIncomingPushRoute(trunk, s.pushService.CanSendAPNS())
+		if route.UnknownPlatformFallback {
+			log.Printf("🔔 [Push] Incoming push using unknown platform fallback: sessionID=%s trunkID=%d", sessionID, trunkID)
+		}
+		if route.SendAPNS {
 			s.pushService.NotifyIncomingCallAPNS(*trunk.PNToken, sessionID, from, to, hasVideo)
 			dispatched = true
 		}
-		if trunkHasFCMPushTarget(trunk) {
+		if route.SendFCM {
 			log.Printf("🔔 [Push] Dispatch incoming call FCM fallback: userID=%s sessionID=%s trunkID=%d", *trunk.NotifyUserID, sessionID, trunkID)
 			s.pushService.NotifyIncomingCall(*trunk.NotifyUserID, sessionID, from, to, hasVideo)
 			dispatched = true
 		}
 		if !dispatched {
-			log.Printf("🔔 [Push] Skip incoming call push: missing APNs/FCM target (sessionID=%s trunkID=%d)", sessionID, trunkID)
+			log.Printf("🔔 [Push] Skip incoming call push: route=%s sessionID=%s trunkID=%d", route.Reason, sessionID, trunkID)
 		}
 	}()
 }
@@ -2323,6 +2386,10 @@ func (s *Server) updateTrunkPushContact(ctx context.Context, client *WSClient, t
 
 func (s *Server) handleWSTrunkPushToken(client *WSClient, msg WSMessage) {
 	ctx := context.Background()
+	if _, ok := normalizeDevicePlatform(msg.DevicePlatform); !ok {
+		s.sendWSError(client, msg.SessionID, "Invalid devicePlatform")
+		return
+	}
 	if s.trunkManager == nil {
 		s.sendWSError(client, msg.SessionID, "Trunk manager not available")
 		return
@@ -2363,6 +2430,11 @@ func (s *Server) handleWSTrunkPushToken(client *WSClient, msg WSMessage) {
 // handleWSTrunkResolve resolves trunk ownership/route from either credentials or trunk ID/public ID.
 func (s *Server) handleWSTrunkResolve(client *WSClient, msg WSMessage) {
 	ctx := context.Background()
+	devicePlatform, ok := normalizeDevicePlatform(msg.DevicePlatform)
+	if !ok {
+		s.sendWSError(client, msg.SessionID, "Invalid devicePlatform")
+		return
+	}
 	trunkID := int64(0)
 	trunkPublicID := ""
 	sipUsername := strings.TrimSpace(msg.SIPUsername)
@@ -2467,7 +2539,11 @@ func (s *Server) handleWSTrunkResolve(client *WSClient, msg WSMessage) {
 		if client.authClaims != nil && s.trunkManager != nil {
 			if sub := client.authClaims.Subject; sub != "" {
 				preferredUsername := strings.TrimSpace(client.authClaims.PreferredUsername)
-				if err := s.trunkManager.SetTrunkNotifyUserID(ctx, trunkID, &sub); err != nil {
+				var platformPtr *string
+				if devicePlatform != "" {
+					platformPtr = &devicePlatform
+				}
+				if err := s.trunkManager.SetTrunkNotifyUserIDAndPlatform(ctx, trunkID, &sub, platformPtr); err != nil {
 					log.Printf(
 						"⚠️ [Trunk NotifyUserID] update_failed sessionID=%s trunkID=%d trunkPublicID=%s preferredUsername=%s sipUsername=%s authSub=%s error=%v",
 						msg.SessionID,

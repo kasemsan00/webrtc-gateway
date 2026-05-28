@@ -165,6 +165,10 @@ CREATE TABLE IF NOT EXISTS sip_trunks (
   -- Push notification target: Keycloak sub (UUID), persisted across sessions
   notify_user_id     TEXT,
 
+  -- Latest authenticated mobile platform that resolved this trunk
+  last_online_platform TEXT,
+  last_online_at       TIMESTAMPTZ,
+
   -- SIP Contact push params passed through to Kamailio REGISTER
   pn_app_id          TEXT,
   pn_type            TEXT,
@@ -184,6 +188,7 @@ CREATE INDEX IF NOT EXISTS idx_sip_trunks_username ON sip_trunks (username);
 CREATE INDEX IF NOT EXISTS idx_sip_trunks_enabled_default ON sip_trunks (enabled, is_default);
 CREATE INDEX IF NOT EXISTS idx_sip_trunks_in_use_by ON sip_trunks (in_use_by) WHERE in_use_by IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_sip_trunks_notify_user_id ON sip_trunks (notify_user_id) WHERE notify_user_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_sip_trunks_last_online_platform ON sip_trunks (last_online_platform) WHERE last_online_platform IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_sip_trunks_pn_token ON sip_trunks (pn_token) WHERE pn_token IS NOT NULL;
 
 

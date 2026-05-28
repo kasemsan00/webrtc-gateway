@@ -124,6 +124,7 @@ Auth behavior:
 - `send_message` -> requires `body`; use in-dialog if session exists, otherwise requires `destination`
 - `resume` -> requires `sessionId`, optional `sdp`
 - `trunk_resolve` -> requires `sipDomain`, `sipUsername`, `sipPassword`, optional `sipPort` (resolve-only; no auto-create)
+  - Mobile clients may include `devicePlatform` (`ios` or `android`) so the gateway can persist the latest online platform for incoming push routing.
 - `ping` -> keepalive
 
 ### Server -> Client message types

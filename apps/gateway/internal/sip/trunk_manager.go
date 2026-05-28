@@ -107,6 +107,10 @@ type Trunk struct {
 	// Push notification target: Keycloak sub (UUID), persisted across sessions
 	NotifyUserID *string
 
+	// Latest authenticated mobile platform that resolved this trunk.
+	LastOnlinePlatform *string
+	LastOnlineAt       *time.Time
+
 	// SIP Contact push parameters for Kamailio PN integration.
 	PNAppID     *string
 	PNType      *string
@@ -276,6 +280,7 @@ func (tm *TrunkManager) loadTrunks() error {
 	rows, err := tm.db.Query(ctx, `
 		SELECT id, public_id, name, domain, port, username, password, transport, enabled, is_default,
 		       lease_owner, lease_until, last_registered_at, last_error, in_use_by, notify_user_id,
+		       last_online_platform, last_online_at,
 		       pn_app_id, pn_type, pn_token, pn_updated_at, created_at, updated_at
 		FROM sip_trunks
 		WHERE enabled = true
@@ -300,6 +305,7 @@ func (tm *TrunkManager) loadTrunks() error {
 			&trunk.Enabled, &trunk.IsDefault,
 			&trunk.LeaseOwner, &trunk.LeaseUntil,
 			&trunk.LastRegisteredAt, &trunk.LastError, &trunk.InUseBy, &trunk.NotifyUserID,
+			&trunk.LastOnlinePlatform, &trunk.LastOnlineAt,
 			&trunk.PNAppID, &trunk.PNType, &trunk.PNToken, &trunk.PNUpdatedAt,
 			&trunk.CreatedAt, &trunk.UpdatedAt,
 		)
@@ -1265,6 +1271,7 @@ func (tm *TrunkManager) ListTrunks(ctx context.Context, params TrunkListParams) 
 	dataSQL := fmt.Sprintf(`
 		SELECT id, public_id, name, domain, port, username, password, transport, enabled, is_default,
 		       lease_owner, lease_until, last_registered_at, last_error, in_use_by, notify_user_id,
+		       last_online_platform, last_online_at,
 		       pn_app_id, pn_type, pn_token, pn_updated_at, created_at, updated_at
 		FROM sip_trunks
 		%s
@@ -1288,6 +1295,7 @@ func (tm *TrunkManager) ListTrunks(ctx context.Context, params TrunkListParams) 
 			&trunk.Enabled, &trunk.IsDefault,
 			&trunk.LeaseOwner, &trunk.LeaseUntil,
 			&trunk.LastRegisteredAt, &trunk.LastError, &trunk.InUseBy, &trunk.NotifyUserID,
+			&trunk.LastOnlinePlatform, &trunk.LastOnlineAt,
 			&trunk.PNAppID, &trunk.PNType, &trunk.PNToken, &trunk.PNUpdatedAt,
 			&trunk.CreatedAt, &trunk.UpdatedAt,
 		)
@@ -1472,6 +1480,7 @@ func (tm *TrunkManager) UpdateTrunk(ctx context.Context, trunkID int64, patch Tr
 	err = tx.QueryRow(ctx, `
 		SELECT id, public_id, name, domain, port, username, password, transport, enabled, is_default,
 		       lease_owner, lease_until, last_registered_at, last_error, in_use_by, notify_user_id,
+		       last_online_platform, last_online_at,
 		       pn_app_id, pn_type, pn_token, pn_updated_at, created_at, updated_at
 		FROM sip_trunks
 		WHERE id = $1
@@ -1482,6 +1491,7 @@ func (tm *TrunkManager) UpdateTrunk(ctx context.Context, trunkID int64, patch Tr
 		&current.Enabled, &current.IsDefault,
 		&current.LeaseOwner, &current.LeaseUntil,
 		&current.LastRegisteredAt, &current.LastError, &current.InUseBy, &current.NotifyUserID,
+		&current.LastOnlinePlatform, &current.LastOnlineAt,
 		&current.PNAppID, &current.PNType, &current.PNToken, &current.PNUpdatedAt,
 		&current.CreatedAt, &current.UpdatedAt,
 	)
@@ -1565,6 +1575,7 @@ func (tm *TrunkManager) UpdateTrunk(ctx context.Context, trunkID int64, patch Tr
 	err = tx.QueryRow(ctx, `
 		SELECT id, public_id, name, domain, port, username, password, transport, enabled, is_default,
 		       lease_owner, lease_until, last_registered_at, last_error, in_use_by, notify_user_id,
+		       last_online_platform, last_online_at,
 		       pn_app_id, pn_type, pn_token, pn_updated_at, created_at, updated_at
 		FROM sip_trunks
 		WHERE id = $1
@@ -1574,6 +1585,7 @@ func (tm *TrunkManager) UpdateTrunk(ctx context.Context, trunkID int64, patch Tr
 		&updated.Enabled, &updated.IsDefault,
 		&updated.LeaseOwner, &updated.LeaseUntil,
 		&updated.LastRegisteredAt, &updated.LastError, &updated.InUseBy, &updated.NotifyUserID,
+		&updated.LastOnlinePlatform, &updated.LastOnlineAt,
 		&updated.PNAppID, &updated.PNType, &updated.PNToken, &updated.PNUpdatedAt,
 		&updated.CreatedAt, &updated.UpdatedAt,
 	)
@@ -1798,6 +1810,7 @@ func (tm *TrunkManager) getTrunkByIDFromDB(ctx context.Context, trunkID int64) (
 	err := tm.db.QueryRow(ctx, `
 		SELECT id, public_id, name, domain, port, username, password, transport, enabled, is_default,
 		       lease_owner, lease_until, last_registered_at, last_error, in_use_by, notify_user_id,
+		       last_online_platform, last_online_at,
 		       pn_app_id, pn_type, pn_token, pn_updated_at, created_at, updated_at
 		FROM sip_trunks
 		WHERE id = $1
@@ -1807,6 +1820,7 @@ func (tm *TrunkManager) getTrunkByIDFromDB(ctx context.Context, trunkID int64) (
 		&trunk.Enabled, &trunk.IsDefault,
 		&trunk.LeaseOwner, &trunk.LeaseUntil,
 		&trunk.LastRegisteredAt, &trunk.LastError, &trunk.InUseBy, &trunk.NotifyUserID,
+		&trunk.LastOnlinePlatform, &trunk.LastOnlineAt,
 		&trunk.PNAppID, &trunk.PNType, &trunk.PNToken, &trunk.PNUpdatedAt,
 		&trunk.CreatedAt, &trunk.UpdatedAt,
 	)
@@ -1850,6 +1864,15 @@ func (tm *TrunkManager) SetTrunkInUseBy(ctx context.Context, trunkID int64, user
 // This stores the Keycloak sub (UUID) used for push notifications.
 // Unlike InUseBy, this is NOT cleared on hangup — it persists so push works when offline.
 func (tm *TrunkManager) SetTrunkNotifyUserID(ctx context.Context, trunkID int64, userID *string) error {
+	return tm.setTrunkNotifyUserIDAndPlatform(ctx, trunkID, userID, nil)
+}
+
+// SetTrunkNotifyUserIDAndPlatform sets notify_user_id and, when provided, the latest mobile platform atomically.
+func (tm *TrunkManager) SetTrunkNotifyUserIDAndPlatform(ctx context.Context, trunkID int64, userID *string, platform *string) error {
+	return tm.setTrunkNotifyUserIDAndPlatform(ctx, trunkID, userID, platform)
+}
+
+func (tm *TrunkManager) setTrunkNotifyUserIDAndPlatform(ctx context.Context, trunkID int64, userID *string, platform *string) error {
 	if tm.db == nil {
 		return fmt.Errorf("database not available for trunk manager")
 	}
@@ -1859,6 +1882,14 @@ func (tm *TrunkManager) SetTrunkNotifyUserID(ctx context.Context, trunkID int64,
 		trimmed := strings.TrimSpace(*userID)
 		if trimmed != "" {
 			normalizedUserID = &trimmed
+		}
+	}
+
+	var normalizedPlatform *string
+	if platform != nil {
+		trimmed := strings.ToLower(strings.TrimSpace(*platform))
+		if trimmed != "" {
+			normalizedPlatform = &trimmed
 		}
 	}
 
@@ -1901,11 +1932,25 @@ func (tm *TrunkManager) SetTrunkNotifyUserID(ctx context.Context, trunkID int64,
 		}
 	}
 
-	_, err = tx.Exec(dbCtx, `
-		UPDATE sip_trunks SET notify_user_id = $1, updated_at = NOW() WHERE id = $2
-	`, normalizedUserID, trunkID)
-	if err != nil {
-		return fmt.Errorf("set notify_user_id failed: %w", err)
+	if normalizedPlatform != nil {
+		_, err = tx.Exec(dbCtx, `
+			UPDATE sip_trunks
+			SET notify_user_id = $1,
+			    last_online_platform = $2,
+			    last_online_at = NOW(),
+			    updated_at = NOW()
+			WHERE id = $3
+		`, normalizedUserID, *normalizedPlatform, trunkID)
+		if err != nil {
+			return fmt.Errorf("set notify_user_id and platform failed: %w", err)
+		}
+	} else {
+		_, err = tx.Exec(dbCtx, `
+			UPDATE sip_trunks SET notify_user_id = $1, updated_at = NOW() WHERE id = $2
+		`, normalizedUserID, trunkID)
+		if err != nil {
+			return fmt.Errorf("set notify_user_id failed: %w", err)
+		}
 	}
 
 	if err := tx.Commit(dbCtx); err != nil {
@@ -1915,6 +1960,11 @@ func (tm *TrunkManager) SetTrunkNotifyUserID(ctx context.Context, trunkID int64,
 	tm.mu.Lock()
 	if trunk, ok := tm.trunks[trunkID]; ok {
 		trunk.NotifyUserID = normalizedUserID
+		if normalizedPlatform != nil {
+			now := time.Now()
+			trunk.LastOnlinePlatform = normalizedPlatform
+			trunk.LastOnlineAt = &now
+		}
 	}
 	if normalizedUserID != nil {
 		for id, trunk := range tm.trunks {
@@ -1987,6 +2037,7 @@ func (tm *TrunkManager) FindTrunkByInUseBy(ctx context.Context, inUseBy string) 
 	err := tm.db.QueryRow(dbCtx, `
 		SELECT id, public_id, name, domain, port, username, password, transport, enabled, is_default,
 		       lease_owner, lease_until, last_registered_at, last_error, in_use_by, notify_user_id,
+		       last_online_platform, last_online_at,
 		       pn_app_id, pn_type, pn_token, pn_updated_at, created_at, updated_at
 		FROM sip_trunks
 		WHERE in_use_by = $1
@@ -1997,6 +2048,7 @@ func (tm *TrunkManager) FindTrunkByInUseBy(ctx context.Context, inUseBy string) 
 		&trunk.Enabled, &trunk.IsDefault,
 		&trunk.LeaseOwner, &trunk.LeaseUntil,
 		&trunk.LastRegisteredAt, &trunk.LastError, &trunk.InUseBy, &trunk.NotifyUserID,
+		&trunk.LastOnlinePlatform, &trunk.LastOnlineAt,
 		&trunk.PNAppID, &trunk.PNType, &trunk.PNToken, &trunk.PNUpdatedAt,
 		&trunk.CreatedAt, &trunk.UpdatedAt,
 	)

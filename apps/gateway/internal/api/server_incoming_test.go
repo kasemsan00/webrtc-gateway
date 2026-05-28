@@ -156,6 +156,10 @@ func (s *incomingNotifyTestTrunkManager) SetTrunkNotifyUserID(ctx context.Contex
 	return nil
 }
 
+func (s *incomingNotifyTestTrunkManager) SetTrunkNotifyUserIDAndPlatform(ctx context.Context, trunkID int64, userID *string, platform *string) error {
+	return nil
+}
+
 func (s *incomingNotifyTestTrunkManager) SetTrunkPushContact(ctx context.Context, trunkID int64, contact sip.TrunkPushContact) error {
 	return nil
 }
@@ -969,6 +973,70 @@ func TestNotifyIncomingCall_PushLookupDBErrorStillAvoidsCachePath(t *testing.T) 
 	}
 	if trunkMgr.getTrunkByIDCalls != 0 {
 		t.Fatalf("expected cache GetTrunkByID not to be used, got %d", trunkMgr.getTrunkByIDCalls)
+	}
+}
+
+func TestSelectIncomingPushRoute_AndroidUsesFCMOnly(t *testing.T) {
+	notifyUserID := "user-1"
+	platform := "android"
+	appID := trunkPNAppID
+	pnType := trunkPNType
+	token := "D6F5DF83B03398129B4AC01DFE5971662B46130F3F5424AF93CF0A8C02A74CCF"
+	trunk := &sip.Trunk{
+		ID:                 1,
+		NotifyUserID:       &notifyUserID,
+		LastOnlinePlatform: &platform,
+		PNAppID:            &appID,
+		PNType:             &pnType,
+		PNToken:            &token,
+	}
+
+	route := selectIncomingPushRoute(trunk, true)
+
+	if !route.SendFCM || route.SendAPNS {
+		t.Fatalf("expected android route to use FCM only, got %+v", route)
+	}
+}
+
+func TestSelectIncomingPushRoute_IOSUsesAPNSOnly(t *testing.T) {
+	notifyUserID := "user-1"
+	platform := "ios"
+	appID := trunkPNAppID
+	pnType := trunkPNType
+	token := "D6F5DF83B03398129B4AC01DFE5971662B46130F3F5424AF93CF0A8C02A74CCF"
+	trunk := &sip.Trunk{
+		ID:                 1,
+		NotifyUserID:       &notifyUserID,
+		LastOnlinePlatform: &platform,
+		PNAppID:            &appID,
+		PNType:             &pnType,
+		PNToken:            &token,
+	}
+
+	route := selectIncomingPushRoute(trunk, true)
+
+	if !route.SendAPNS || route.SendFCM {
+		t.Fatalf("expected ios route to use APNS only, got %+v", route)
+	}
+}
+
+func TestSelectIncomingPushRoute_UnknownPlatformKeepsFallback(t *testing.T) {
+	notifyUserID := "user-1"
+	appID := trunkPNAppID
+	pnType := trunkPNType
+	token := "D6F5DF83B03398129B4AC01DFE5971662B46130F3F5424AF93CF0A8C02A74CCF"
+	trunk := &sip.Trunk{
+		ID:           1,
+		NotifyUserID: &notifyUserID,
+		PNAppID:      &appID,
+		PNType:       &pnType,
+		PNToken:      &token,
+	}
+
+	route := selectIncomingPushRoute(trunk, true)
+
+	if !route.SendAPNS || !route.SendFCM || !route.UnknownPlatformFallback {
+		t.Fatalf("expected unknown platform fallback to use both targets, got %+v", route)
 	}
 }
 

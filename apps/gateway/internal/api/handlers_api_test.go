@@ -133,6 +133,10 @@ func (s *apiHandlerTrunkManagerStub) SetTrunkNotifyUserID(_ context.Context, _ i
 	return nil
 }
 
+func (s *apiHandlerTrunkManagerStub) SetTrunkNotifyUserIDAndPlatform(_ context.Context, _ int64, _ *string, _ *string) error {
+	return nil
+}
+
 func (s *apiHandlerTrunkManagerStub) SetTrunkPushContact(_ context.Context, _ int64, _ sip.TrunkPushContact) error {
 	return nil
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"strconv"
@@ -43,6 +44,7 @@ type clientDiagnosticsRequest struct {
 }
 
 type clientDiagnosticEvent struct {
+	ID        string                 `json:"id"`
 	Timestamp string                 `json:"timestamp"`
 	SessionID string                 `json:"sessionId"`
 	Source    string                 `json:"source"`
@@ -53,11 +55,15 @@ type clientDiagnosticEvent struct {
 }
 
 type clientDiagnosticsResponse struct {
-	Status           string `json:"status"`
-	AcceptedEvents   int    `json:"acceptedEvents"`
-	SessionEvents    int    `json:"sessionEvents"`
-	NonSessionEvents int    `json:"nonSessionEvents"`
-	Persistence      string `json:"persistence"`
+	Status                 string `json:"status"`
+	ClientTraceID          string `json:"clientTraceId,omitempty"`
+	AcceptedEvents         int    `json:"acceptedEvents"`
+	SessionEvents          int    `json:"sessionEvents"`
+	NonSessionEvents       int    `json:"nonSessionEvents"`
+	StoredSessionEvents    int    `json:"storedSessionEvents"`
+	StoredNonSessionEvents int    `json:"storedNonSessionEvents"`
+	DroppedEvents          int    `json:"droppedEvents"`
+	Persistence            string `json:"persistence"`
 }
 
 type clientDiagnosticReadResponse struct {
@@ -84,6 +90,7 @@ type clientDiagnosticListResponse struct {
 }
 
 type sanitizedClientDiagnosticEvent struct {
+	ID        string
 	Timestamp time.Time
 	SessionID string
 	Source    string
@@ -95,9 +102,11 @@ type sanitizedClientDiagnosticEvent struct {
 
 func (s *Server) handleClientDiagnostics(w http.ResponseWriter, r *http.Request) {
 	if s.logStore == nil {
+		log.Printf("🧾 [ClientDiagnostics] upload disabled: logStore unavailable")
 		s.respondJSON(w, http.StatusAccepted, clientDiagnosticsResponse{
-			Status:      "disabled",
-			Persistence: "unavailable",
+			Status:        "disabled",
+			Persistence:   "unavailable",
+			DroppedEvents: 0,
 		})
 		return
 	}
@@ -109,25 +118,30 @@ func (s *Server) handleClientDiagnostics(w http.ResponseWriter, r *http.Request)
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil {
+		log.Printf("🧾 [ClientDiagnostics] rejected invalid body: %v", err)
 		s.respondError(w, http.StatusBadRequest, "Invalid diagnostics request body")
 		return
 	}
 
 	claims, _ := AuthClaimsFromContext(r.Context())
+	clientTraceID := truncateString(strings.TrimSpace(req.ClientTraceID), clientDiagnosticsMaxStringLength)
 	rateKey := clientDiagnosticsRateKey(r, claimsSubject(claims))
 	if !s.allowClientDiagnostics(rateKey, time.Now()) {
+		log.Printf("🧾 [ClientDiagnostics] rate limited: subject=%s trace=%s events=%d", claimsSubject(claims), clientTraceID, len(req.Events))
 		s.respondError(w, http.StatusTooManyRequests, "Diagnostics upload rate limit exceeded")
 		return
 	}
 
 	events, err := sanitizeClientDiagnosticsRequest(req, time.Now())
 	if err != nil {
+		log.Printf("🧾 [ClientDiagnostics] rejected invalid payload: subject=%s trace=%s events=%d reason=%v", claimsSubject(claims), clientTraceID, len(req.Events), err)
 		s.respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	sessionEvents, nonSessionEvents, persistence, err := s.persistClientDiagnostics(r.Context(), req, events, claims)
 	if err != nil {
+		log.Printf("🧾 [ClientDiagnostics] persist failed: subject=%s trace=%s events=%d session=%d nonSession=%d persistence=%s error=%v", claimsSubject(claims), clientTraceID, len(events), sessionEvents, nonSessionEvents, persistence, err)
 		s.respondError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to store diagnostics: %v", err))
 		return
 	}
@@ -136,12 +150,17 @@ func (s *Server) handleClientDiagnostics(w http.ResponseWriter, r *http.Request)
 	if persistence == "disabled" {
 		status = "disabled"
 	}
+	log.Printf("🧾 [ClientDiagnostics] accepted: subject=%s trace=%s events=%d session=%d nonSession=%d persistence=%s", claimsSubject(claims), clientTraceID, len(events), sessionEvents, nonSessionEvents, persistence)
 	s.respondJSON(w, http.StatusAccepted, clientDiagnosticsResponse{
-		Status:           status,
-		AcceptedEvents:   len(events),
-		SessionEvents:    sessionEvents,
-		NonSessionEvents: nonSessionEvents,
-		Persistence:      persistence,
+		Status:                 status,
+		ClientTraceID:          clientTraceID,
+		AcceptedEvents:         len(events),
+		SessionEvents:          sessionEvents,
+		NonSessionEvents:       nonSessionEvents,
+		StoredSessionEvents:    sessionEvents,
+		StoredNonSessionEvents: nonSessionEvents,
+		DroppedEvents:          0,
+		Persistence:            persistence,
 	})
 }
 
@@ -330,6 +349,7 @@ func sanitizeClientDiagnosticsRequest(req clientDiagnosticsRequest, now time.Tim
 		}
 
 		events = append(events, sanitizedClientDiagnosticEvent{
+			ID:        truncateString(strings.TrimSpace(event.ID), clientDiagnosticsMaxStringLength),
 			Timestamp: normalizeClientDiagnosticTimestamp(event.Timestamp, now),
 			SessionID: truncateString(strings.TrimSpace(event.SessionID), clientDiagnosticsMaxStringLength),
 			Source:    source,
@@ -569,6 +589,9 @@ func eventSummaryData(event sanitizedClientDiagnosticEvent, clientTraceID, appVe
 	if event.SessionID != "" {
 		data["sessionId"] = event.SessionID
 	}
+	if event.ID != "" {
+		data["eventId"] = event.ID
+	}
 	return data
 }
 
@@ -577,6 +600,7 @@ func diagnosticEventsPayload(events []sanitizedClientDiagnosticEvent) []map[stri
 	for _, event := range events {
 		out = append(out, map[string]interface{}{
 			"timestamp": event.Timestamp.Format(time.RFC3339Nano),
+			"id":        event.ID,
 			"sessionId": event.SessionID,
 			"source":    event.Source,
 			"level":     event.Level,

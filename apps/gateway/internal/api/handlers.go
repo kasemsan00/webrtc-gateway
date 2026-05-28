@@ -210,6 +210,8 @@ type TrunkResponse struct {
 	IsRegistered       bool     `json:"isRegistered"`
 	LastError          string   `json:"lastError,omitempty"`
 	InUseBy            *string  `json:"inUseBy,omitempty"`
+	LastOnlinePlatform string   `json:"lastOnlinePlatform,omitempty"`
+	LastOnlineAt       string   `json:"lastOnlineAt,omitempty"`
 	PNAppID            string   `json:"pnAppId,omitempty"`
 	PNType             string   `json:"pnType,omitempty"`
 	PNTokenMasked      string   `json:"pnTokenMasked,omitempty"`
@@ -1499,6 +1501,12 @@ func trunkResponseFrom(trunk *sip.Trunk, activeCallCount int, activeDestinations
 	}
 	if trunk.InUseBy != nil {
 		response.InUseBy = trunk.InUseBy
+	}
+	if trunk.LastOnlinePlatform != nil {
+		response.LastOnlinePlatform = *trunk.LastOnlinePlatform
+	}
+	if trunk.LastOnlineAt != nil {
+		response.LastOnlineAt = trunk.LastOnlineAt.Format(time.RFC3339)
 	}
 	if trunk.PNAppID != nil {
 		response.PNAppID = *trunk.PNAppID

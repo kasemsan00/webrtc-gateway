@@ -38,6 +38,7 @@ type stubResolveTrunkManager struct {
 	registerID      int64
 	notifyTrunkID   int64
 	notifyUserID    *string
+	notifyPlatform  *string
 	notifyCallCount int
 	notifyErr       error
 }
@@ -106,6 +107,24 @@ func (s *stubResolveTrunkManager) SetTrunkNotifyUserID(_ context.Context, trunkI
 	} else {
 		copied := *userID
 		s.notifyUserID = &copied
+	}
+	s.notifyCallCount++
+	return s.notifyErr
+}
+
+func (s *stubResolveTrunkManager) SetTrunkNotifyUserIDAndPlatform(_ context.Context, trunkID int64, userID *string, platform *string) error {
+	s.notifyTrunkID = trunkID
+	if userID == nil {
+		s.notifyUserID = nil
+	} else {
+		copied := *userID
+		s.notifyUserID = &copied
+	}
+	if platform == nil {
+		s.notifyPlatform = nil
+	} else {
+		copied := *platform
+		s.notifyPlatform = &copied
 	}
 	s.notifyCallCount++
 	return s.notifyErr
@@ -334,6 +353,87 @@ func TestHandleWSTrunkResolve_ByCredentials_PersistsNotifyUserID(t *testing.T) {
 	}
 	if trunkMgr.notifyUserID == nil || *trunkMgr.notifyUserID != "user-1" {
 		t.Fatalf("expected notify_user_id user-1, got %#v", trunkMgr.notifyUserID)
+	}
+}
+
+func TestHandleWSTrunkResolve_ByCredentials_PersistsDevicePlatform(t *testing.T) {
+	owner := "gw-1"
+	future := time.Now().Add(2 * time.Minute)
+	store := &stubResolveStore{
+		resolveTrunkID:    42,
+		resolveLeaseOwner: &owner,
+		resolveLeaseUntil: &future,
+		resolveFound:      true,
+	}
+	trunkMgr := &stubResolveTrunkManager{
+		byID: map[int64]*sip.Trunk{
+			42: {
+				ID:         42,
+				PublicID:   "8f6f6d70-2b5a-4fe7-a0d5-9d0af0e90d3a",
+				LeaseOwner: &owner,
+				LeaseUntil: &future,
+			},
+		},
+	}
+
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{InstanceID: "gw-1"}, config.TranslatorConfig{}, nil, nil, nil, trunkMgr, store)
+	client := &WSClient{
+		send:       make(chan []byte, 8),
+		authClaims: &auth.VerifiedClaims{Subject: "user-1"},
+	}
+
+	srv.handleWSTrunkResolve(client, WSMessage{
+		Type:           "trunk_resolve",
+		SessionID:      "s1",
+		SIPDomain:      "sip.example.com",
+		SIPUsername:    "1001",
+		SIPPassword:    "secret",
+		SIPPort:        5060,
+		DevicePlatform: "android",
+	})
+
+	msgs := readWSMessages(t, client.send)
+	if len(msgs) != 1 || msgs[0].Type != "trunk_resolved" {
+		t.Fatalf("expected trunk_resolved, got %+v", msgs)
+	}
+	if trunkMgr.notifyPlatform == nil || *trunkMgr.notifyPlatform != "android" {
+		t.Fatalf("expected platform android, got %#v", trunkMgr.notifyPlatform)
+	}
+}
+
+func TestHandleWSTrunkResolve_InvalidDevicePlatformRejected(t *testing.T) {
+	owner := "gw-1"
+	future := time.Now().Add(2 * time.Minute)
+	trunkMgr := &stubResolveTrunkManager{
+		byID: map[int64]*sip.Trunk{
+			42: {
+				ID:         42,
+				PublicID:   "8f6f6d70-2b5a-4fe7-a0d5-9d0af0e90d3a",
+				LeaseOwner: &owner,
+				LeaseUntil: &future,
+			},
+		},
+	}
+
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{InstanceID: "gw-1"}, config.TranslatorConfig{}, nil, nil, nil, trunkMgr, &stubResolveStore{})
+	client := &WSClient{
+		send:       make(chan []byte, 8),
+		authClaims: &auth.VerifiedClaims{Subject: "user-1"},
+	}
+
+	srv.handleWSTrunkResolve(client, WSMessage{
+		Type:           "trunk_resolve",
+		SessionID:      "s1",
+		TrunkID:        42,
+		DevicePlatform: "windows",
+	})
+
+	msgs := readWSMessages(t, client.send)
+	if len(msgs) != 1 || msgs[0].Type != "error" {
+		t.Fatalf("expected error, got %+v", msgs)
+	}
+	if trunkMgr.notifyCallCount != 0 {
+		t.Fatalf("expected no notify/platform update, got %d", trunkMgr.notifyCallCount)
 	}
 }
 

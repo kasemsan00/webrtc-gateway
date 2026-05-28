@@ -9,6 +9,7 @@ Use a sortable timestamp prefix with enough precision to avoid collisions.
 Example format:
 
 - `202603310001_add_notify_user_id_to_sip_trunks.sql`
+- `202605270001_add_last_online_platform_to_sip_trunks.sql`
 
 ## File format
 
