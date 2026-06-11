@@ -1982,45 +1982,106 @@ func (tm *TrunkManager) setTrunkNotifyUserIDAndPlatform(ctx context.Context, tru
 }
 
 // SetTrunkPushContact stores the latest SIP Contact push parameters for a trunk.
-func (tm *TrunkManager) SetTrunkPushContact(ctx context.Context, trunkID int64, contact TrunkPushContact) error {
+// It returns true when the effective stored contact changed.
+func (tm *TrunkManager) SetTrunkPushContact(ctx context.Context, trunkID int64, contact TrunkPushContact) (bool, error) {
 	if tm.db == nil {
-		return fmt.Errorf("database not available for trunk manager")
+		return false, fmt.Errorf("database not available for trunk manager")
 	}
 
 	appID := strings.TrimSpace(contact.PNAppID)
 	pnType := strings.TrimSpace(contact.PNType)
 	pnToken := strings.TrimSpace(contact.PNToken)
 	if appID == "" || pnType == "" || pnToken == "" {
-		return fmt.Errorf("%w: push contact requires app-id, pn-type, and pn-token", ErrTrunkValidation)
+		return false, fmt.Errorf("%w: push contact requires app-id, pn-type, and pn-token", ErrTrunkValidation)
+	}
+	normalizedContact := TrunkPushContact{
+		PNAppID: appID,
+		PNType:  pnType,
+		PNToken: pnToken,
 	}
 
 	now := time.Now()
 	dbCtx, cancel := context.WithTimeout(ctx, trunkManagerDBTimeout)
 	defer cancel()
 
-	result, err := tm.db.Exec(dbCtx, `
+	tx, err := tm.db.BeginTx(dbCtx, pgx.TxOptions{})
+	if err != nil {
+		return false, fmt.Errorf("begin transaction failed: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback(dbCtx)
+	}()
+
+	var currentAppID, currentPNType, currentPNToken *string
+	err = tx.QueryRow(dbCtx, `
+		SELECT pn_app_id, pn_type, pn_token
+		FROM sip_trunks
+		WHERE id = $1
+		  AND enabled = true
+		FOR UPDATE
+	`, trunkID).Scan(&currentAppID, &currentPNType, &currentPNToken)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, fmt.Errorf("%w: trunk %d", ErrTrunkNotFound, trunkID)
+		}
+		return false, fmt.Errorf("load trunk push contact failed: %w", err)
+	}
+
+	changed := !trunkPushContactMatches(currentAppID, currentPNType, currentPNToken, normalizedContact)
+	if !changed {
+		if err := tx.Commit(dbCtx); err != nil {
+			return false, fmt.Errorf("commit unchanged push contact failed: %w", err)
+		}
+		tm.mu.Lock()
+		if trunk, ok := tm.trunks[trunkID]; ok {
+			trunk.PNAppID = &normalizedContact.PNAppID
+			trunk.PNType = &normalizedContact.PNType
+			trunk.PNToken = &normalizedContact.PNToken
+		}
+		tm.mu.Unlock()
+		return false, nil
+	}
+
+	result, err := tx.Exec(dbCtx, `
 		UPDATE sip_trunks
 		SET pn_app_id = $1, pn_type = $2, pn_token = $3, pn_updated_at = $4, updated_at = NOW()
 		WHERE id = $5
 		  AND enabled = true
 	`, appID, pnType, pnToken, now, trunkID)
 	if err != nil {
-		return fmt.Errorf("set trunk push contact failed: %w", err)
+		return false, fmt.Errorf("set trunk push contact failed: %w", err)
 	}
 	if result.RowsAffected() == 0 {
-		return fmt.Errorf("%w: trunk %d", ErrTrunkNotFound, trunkID)
+		return false, fmt.Errorf("%w: trunk %d", ErrTrunkNotFound, trunkID)
+	}
+
+	if err := tx.Commit(dbCtx); err != nil {
+		return false, fmt.Errorf("commit set trunk push contact failed: %w", err)
 	}
 
 	tm.mu.Lock()
 	if trunk, ok := tm.trunks[trunkID]; ok {
-		trunk.PNAppID = &appID
-		trunk.PNType = &pnType
-		trunk.PNToken = &pnToken
+		trunk.PNAppID = &normalizedContact.PNAppID
+		trunk.PNType = &normalizedContact.PNType
+		trunk.PNToken = &normalizedContact.PNToken
 		trunk.PNUpdatedAt = &now
 	}
 	tm.mu.Unlock()
 
-	return nil
+	return true, nil
+}
+
+func trunkPushContactMatches(currentAppID, currentPNType, currentPNToken *string, contact TrunkPushContact) bool {
+	return trimStringPtr(currentAppID) == strings.TrimSpace(contact.PNAppID) &&
+		trimStringPtr(currentPNType) == strings.TrimSpace(contact.PNType) &&
+		trimStringPtr(currentPNToken) == strings.TrimSpace(contact.PNToken)
+}
+
+func trimStringPtr(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return strings.TrimSpace(*value)
 }
 
 // FindTrunkByInUseBy finds a trunk currently assigned to the given in_use_by value.

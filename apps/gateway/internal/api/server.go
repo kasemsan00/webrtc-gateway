@@ -44,6 +44,8 @@ const (
 	incomingPushTrunkLookupTimeout = 5 * time.Second
 
 	defaultIncomingRingTimeout = 30 * time.Second
+
+	defaultMidCallRenegotiationTimeout = 10 * time.Second
 )
 
 const (
@@ -117,7 +119,7 @@ type TrunkManager interface {
 	FindTrunkByInUseBy(ctx context.Context, inUseBy string) (*sip.Trunk, error)
 	SetTrunkNotifyUserID(ctx context.Context, trunkID int64, userID *string) error
 	SetTrunkNotifyUserIDAndPlatform(ctx context.Context, trunkID int64, userID *string, platform *string) error
-	SetTrunkPushContact(ctx context.Context, trunkID int64, contact sip.TrunkPushContact) error
+	SetTrunkPushContact(ctx context.Context, trunkID int64, contact sip.TrunkPushContact) (bool, error)
 }
 
 // SIPCallMaker interface for making SIP calls (implemented by SIP server)
@@ -164,6 +166,12 @@ type WSMessage struct {
 	ReasonSource string          `json:"reasonSource,omitempty"`
 	Error        string          `json:"error,omitempty"`
 	HasVideo     string          `json:"hasVideo,omitempty"`
+	// Mid-call renegotiation fields. Additive for clients that support
+	// renegotiate, renegotiate_answer, and renegotiate_result messages.
+	RenegotiationID string `json:"renegotiationId,omitempty"`
+	MediaDirection  string `json:"mediaDirection,omitempty"`
+	RequiresAnswer  bool   `json:"requiresAnswer,omitempty"`
+	Status          string `json:"status,omitempty"`
 	// Trunk resolve fields
 	SIPDomain   string `json:"sipDomain,omitempty"`
 	SIPUsername string `json:"sipUsername,omitempty"`
@@ -253,6 +261,7 @@ func hasActiveVideoMedia(sdp string) bool {
 
 // NewServer creates a new API server
 func NewServer(cfg config.APIConfig, turnCfg config.TURNConfig, gatewayCfg config.GatewayConfig, translatorCfg config.TranslatorConfig, sessionMgr *session.Manager, sipMaker SIPCallMaker, publicRegistry PublicAccountRegistry, trunkMgr TrunkManager, logStore logstore.LogStore) *Server {
+	cfg.TrunkPNAppID = normalizeTrunkPNAppID(cfg.TrunkPNAppID)
 	return &Server{
 		sessionMgr:     sessionMgr,
 		sipMaker:       sipMaker,
@@ -566,6 +575,8 @@ func (s *Server) handleWSMessage(client *WSClient, message []byte) {
 		s.handleWSResume(client, msg)
 	case "request_keyframe":
 		s.handleWSRequestKeyframe(client, msg)
+	case "renegotiate_answer":
+		s.handleWSRenegotiateAnswer(client, msg)
 	case "trunk_resolve":
 		s.handleWSTrunkResolve(client, msg)
 	case "trunk_push_token":
@@ -1121,6 +1132,74 @@ func (s *Server) handleWSDTMF(client *WSClient, msg WSMessage) {
 	}
 }
 
+func (s *Server) handleWSRenegotiateAnswer(client *WSClient, msg WSMessage) {
+	sessionID := msg.SessionID
+	if sessionID == "" {
+		sessionID = client.sessionID
+	}
+	if sessionID == "" {
+		s.sendWSError(client, "", "Session ID required for renegotiation answer")
+		return
+	}
+	if msg.RenegotiationID == "" {
+		s.sendWSError(client, sessionID, "Renegotiation ID required")
+		return
+	}
+	if s.sessionMgr == nil {
+		s.sendWSError(client, sessionID, "Session manager not available")
+		return
+	}
+
+	sess, ok := s.sessionMgr.GetSession(sessionID)
+	if !ok || sess == nil {
+		s.sendWSError(client, sessionID, "Session not found")
+		return
+	}
+
+	status := strings.ToLower(strings.TrimSpace(msg.Status))
+	if status == "" {
+		status = "ok"
+	}
+
+	var completed bool
+	switch status {
+	case "ok":
+		completed = sess.CompleteMidCallRenegotiation(msg.RenegotiationID, msg.SDP)
+	case "failed":
+		completed = sess.FailMidCallRenegotiation(msg.RenegotiationID, 488, msg.Reason)
+	default:
+		s.sendWSError(client, sessionID, "Unsupported renegotiation answer status")
+		return
+	}
+	if !completed {
+		s.sendWSError(client, sessionID, "Renegotiation not pending or mismatched")
+		return
+	}
+
+	resultStatus := "ok"
+	if status == "failed" {
+		resultStatus = "failed"
+	}
+	s.sendWSMessage(client, WSMessage{
+		Type:            "renegotiate_result",
+		SessionID:       sessionID,
+		RenegotiationID: msg.RenegotiationID,
+		Status:          resultStatus,
+		Reason:          msg.Reason,
+	})
+	s.logEvent(&logstore.Event{
+		Timestamp: time.Now(),
+		SessionID: sessionID,
+		Category:  "ws",
+		Name:      "ws_midcall_renegotiation_answer",
+		Data: map[string]interface{}{
+			"renegotiationId": msg.RenegotiationID,
+			"status":          resultStatus,
+			"reason":          msg.Reason,
+		},
+	})
+}
+
 // sendWSMessage sends a message to a WebSocket client
 func (s *Server) sendWSMessage(client *WSClient, msg WSMessage) {
 	data, err := json.Marshal(msg)
@@ -1133,6 +1212,50 @@ func (s *Server) sendWSMessage(client *WSClient, msg WSMessage) {
 	default:
 		log.Printf("Dropping WebSocket message: client send buffer full (sessionID=%s, type=%s)", client.sessionID, msg.Type)
 	}
+}
+
+func (s *Server) scheduleMidCallRenegotiationTimeout(sessionID, renegotiationID string, timeout time.Duration) {
+	if timeout <= 0 {
+		return
+	}
+
+	time.AfterFunc(timeout, func() {
+		if s.sessionMgr == nil {
+			return
+		}
+		sess, ok := s.sessionMgr.GetSession(sessionID)
+		if !ok || sess == nil {
+			return
+		}
+		if !sess.FailMidCallRenegotiation(renegotiationID, 408, "client_timeout") {
+			return
+		}
+
+		s.mu.RLock()
+		client := s.wsClients[sessionID]
+		s.mu.RUnlock()
+		if client == nil {
+			return
+		}
+		s.sendWSMessage(client, WSMessage{
+			Type:            "renegotiate_result",
+			SessionID:       sessionID,
+			RenegotiationID: renegotiationID,
+			Status:          "timeout",
+			Reason:          "client_timeout",
+		})
+		s.logEvent(&logstore.Event{
+			Timestamp: time.Now(),
+			SessionID: sessionID,
+			Category:  "ws",
+			Name:      "ws_midcall_renegotiation_timeout",
+			Data: map[string]interface{}{
+				"renegotiationId": renegotiationID,
+				"status":          "timeout",
+				"reason":          "client_timeout",
+			},
+		})
+	})
 }
 
 // sendWSError sends an error message to a WebSocket client
@@ -1388,6 +1511,44 @@ func (s *Server) NotifySessionState(sessionID string, state session.SessionState
 	}
 }
 
+func (s *Server) NotifyMidCallRenegotiation(sessionID string, renegotiation session.MidCallRenegotiationSnapshot, validation session.MidCallSDPValidation) {
+	timeout := renegotiation.Timeout
+	if timeout <= 0 {
+		timeout = defaultMidCallRenegotiationTimeout
+	}
+	s.scheduleMidCallRenegotiationTimeout(sessionID, renegotiation.ID, timeout)
+
+	s.mu.RLock()
+	client := s.wsClients[sessionID]
+	s.mu.RUnlock()
+	if client == nil {
+		return
+	}
+
+	mediaDirection := validation.Video.Direction
+	if mediaDirection == "" {
+		mediaDirection = validation.Audio.Direction
+	}
+	reason := "renegotiate"
+	if validation.HasActiveVideo {
+		reason = "video_added"
+	} else if validation.Video.Present && (validation.Video.Port == 0 || validation.Video.Direction == "inactive") {
+		reason = "video_removed"
+	}
+
+	s.sendWSMessage(client, WSMessage{
+		Type:            "renegotiate",
+		SessionID:       sessionID,
+		RenegotiationID: renegotiation.ID,
+		Reason:          reason,
+		SDP:             renegotiation.OfferSDP,
+		MediaDirection:  mediaDirection,
+		HasVideo:        strconv.FormatBool(validation.HasActiveVideo),
+		RequiresAnswer:  true,
+		Status:          "pending",
+	})
+}
+
 func (s *Server) rejectIncomingSession(sessionID, statusReason, source string) {
 	if s.sessionMgr == nil {
 		return
@@ -1432,7 +1593,7 @@ func (s *Server) hasIncomingPushTarget(trunkID int64) bool {
 	if err != nil || trunk == nil {
 		return false
 	}
-	route := selectIncomingPushRoute(trunk, s.pushService.CanSendAPNS())
+	route := selectIncomingPushRoute(trunk, s.pushService.CanSendAPNS(), s.config.TrunkPNAppID)
 	return route.SendFCM || route.SendAPNS
 }
 
@@ -1440,11 +1601,11 @@ func trunkHasFCMPushTarget(trunk *sip.Trunk) bool {
 	return trunk != nil && trunk.NotifyUserID != nil && strings.TrimSpace(*trunk.NotifyUserID) != ""
 }
 
-func trunkHasApplePushKitTarget(trunk *sip.Trunk) bool {
+func trunkHasApplePushKitTarget(trunk *sip.Trunk, expectedAppID string) bool {
 	if trunk == nil || trunk.PNAppID == nil || trunk.PNType == nil || trunk.PNToken == nil {
 		return false
 	}
-	return strings.TrimSpace(*trunk.PNAppID) == trunkPNAppID &&
+	return strings.TrimSpace(*trunk.PNAppID) == normalizeTrunkPNAppID(expectedAppID) &&
 		strings.EqualFold(strings.TrimSpace(*trunk.PNType), trunkPNType) &&
 		strings.TrimSpace(*trunk.PNToken) != ""
 }
@@ -1469,9 +1630,9 @@ type incomingPushRoute struct {
 	Reason                  string
 }
 
-func selectIncomingPushRoute(trunk *sip.Trunk, canSendAPNS bool) incomingPushRoute {
+func selectIncomingPushRoute(trunk *sip.Trunk, canSendAPNS bool, expectedAppID string) incomingPushRoute {
 	hasFCM := trunkHasFCMPushTarget(trunk)
-	hasAPNS := canSendAPNS && trunkHasApplePushKitTarget(trunk)
+	hasAPNS := canSendAPNS && trunkHasApplePushKitTarget(trunk, expectedAppID)
 	if trunk == nil || (!hasFCM && !hasAPNS) {
 		return incomingPushRoute{Reason: "missing_push_target"}
 	}
@@ -1533,7 +1694,7 @@ func (s *Server) dispatchIncomingPush(sessionID, from, to string, trunkID int64,
 			return
 		}
 		dispatched := false
-		route := selectIncomingPushRoute(trunk, s.pushService.CanSendAPNS())
+		route := selectIncomingPushRoute(trunk, s.pushService.CanSendAPNS(), s.config.TrunkPNAppID)
 		if route.UnknownPlatformFallback {
 			log.Printf("🔔 [Push] Incoming push using unknown platform fallback: sessionID=%s trunkID=%d", sessionID, trunkID)
 		}
@@ -2329,9 +2490,16 @@ func (s *Server) handleWSResume(client *WSClient, msg WSMessage) {
 }
 
 const (
-	trunkPNAppID = "th.or.ttrs.video.prod"
-	trunkPNType  = "apple"
+	trunkPNType = "apple"
 )
+
+func normalizeTrunkPNAppID(appID string) string {
+	value := strings.TrimSpace(appID)
+	if value == "" {
+		return config.DefaultTrunkPNAppID
+	}
+	return value
+}
 
 func hasTrunkPushContact(msg WSMessage) bool {
 	return strings.TrimSpace(msg.PNAppID) != "" ||
@@ -2339,14 +2507,15 @@ func hasTrunkPushContact(msg WSMessage) bool {
 		strings.TrimSpace(msg.PNToken) != ""
 }
 
-func validateTrunkPushContact(msg WSMessage) (sip.TrunkPushContact, error) {
+func validateTrunkPushContact(msg WSMessage, expectedAppID string) (sip.TrunkPushContact, error) {
 	contact := sip.TrunkPushContact{
 		PNAppID: strings.TrimSpace(msg.PNAppID),
 		PNType:  strings.TrimSpace(msg.PNType),
 		PNToken: strings.TrimSpace(msg.PNToken),
 	}
-	if contact.PNAppID != trunkPNAppID {
-		return contact, fmt.Errorf("pnAppId must be %s", trunkPNAppID)
+	expectedAppID = normalizeTrunkPNAppID(expectedAppID)
+	if contact.PNAppID != expectedAppID {
+		return contact, fmt.Errorf("pnAppId must be %s", expectedAppID)
 	}
 	if contact.PNType != trunkPNType {
 		return contact, fmt.Errorf("pnType must be %s", trunkPNType)
@@ -2370,17 +2539,22 @@ func (s *Server) updateTrunkPushContact(ctx context.Context, client *WSClient, t
 		return fmt.Errorf("authenticated client required for trunk push token update")
 	}
 
-	contact, err := validateTrunkPushContact(msg)
+	contact, err := validateTrunkPushContact(msg, s.config.TrunkPNAppID)
 	if err != nil {
 		return err
 	}
-	if err := s.trunkManager.SetTrunkPushContact(ctx, trunkID, contact); err != nil {
+	changed, err := s.trunkManager.SetTrunkPushContact(ctx, trunkID, contact)
+	if err != nil {
 		return err
+	}
+	if !changed {
+		log.Printf("📲 Trunk push contact unchanged: trunkID=%d appID=%s pnType=%s action=unchanged_skip_reregister", trunkID, contact.PNAppID, contact.PNType)
+		return nil
 	}
 	if err := s.trunkManager.RegisterTrunk(trunkID, true); err != nil {
 		return fmt.Errorf("trunk push token persisted but re-register failed: %w", err)
 	}
-	log.Printf("📲 Trunk push contact updated: trunkID=%d appID=%s pnType=%s", trunkID, contact.PNAppID, contact.PNType)
+	log.Printf("📲 Trunk push contact updated: trunkID=%d appID=%s pnType=%s action=updated_and_reregistered", trunkID, contact.PNAppID, contact.PNType)
 	return nil
 }
 

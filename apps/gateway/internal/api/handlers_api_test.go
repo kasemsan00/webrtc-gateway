@@ -137,8 +137,8 @@ func (s *apiHandlerTrunkManagerStub) SetTrunkNotifyUserIDAndPlatform(_ context.C
 	return nil
 }
 
-func (s *apiHandlerTrunkManagerStub) SetTrunkPushContact(_ context.Context, _ int64, _ sip.TrunkPushContact) error {
-	return nil
+func (s *apiHandlerTrunkManagerStub) SetTrunkPushContact(_ context.Context, _ int64, _ sip.TrunkPushContact) (bool, error) {
+	return true, nil
 }
 
 func (s *apiHandlerTrunkManagerStub) FindTrunkByInUseBy(_ context.Context, inUseBy string) (*sip.Trunk, error) {

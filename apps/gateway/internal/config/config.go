@@ -54,7 +54,10 @@ type APIConfig struct {
 	DebugTURN                  bool   // Enable TURN/ICE debug logging (candidates, selected pair)
 	IncomingRingTimeoutSeconds int    // Incoming SIP ring timeout before 480 (default: 30)
 	IncomingOfflinePolicy      string // Offline incoming policy (default: push_then_480)
+	TrunkPNAppID               string // SIP Contact push app-id accepted for trunk PushKit tokens
 }
+
+const DefaultTrunkPNAppID = "th.or.ttrs.video.prod"
 
 // AuthConfig holds JWT/JWKS authentication settings.
 type AuthConfig struct {
@@ -139,6 +142,7 @@ type SIPConfig struct {
 	VideoRecoveryBurstIntervalMS int  // Burst watchdog interval in ms (default: 800)
 	VideoRecoveryBurstStaleMS    int  // Burst stale threshold for PLI in ms (default: 1200)
 	VideoRecoveryBurstFIRStaleMS int  // Burst stale threshold for FIR in ms (default: 2500)
+	MidCallRenegotiationEnable   bool // Enable SIP mid-call re-INVITE/UPDATE negotiation (default: true)
 }
 
 const (
@@ -208,9 +212,12 @@ type PushNotificationConfig struct {
 	FirebaseProjectID       string // Firebase project ID for FCM v1 API
 	APNSEnable              bool   // Enable APNs VoIP pushes for iOS PushKit
 	APNSEnvironment         string // APNs environment: sandbox or production
+	APNSAuthMode            string // APNs auth mode: token or certificate
 	APNSKeyFile             string // Path to APNs .p8 auth key
 	APNSKeyID               string // APNs key ID
 	APNSTeamID              string // Apple developer team ID
+	APNSCertFile            string // Path to APNs PEM certificate for certificate auth
+	APNSCertKeyFile         string // Path to APNs PEM private key, defaults to cert file when empty
 	APNSBundleID            string // iOS app bundle ID
 	APNSTopic               string // APNs VoIP topic, defaults to <bundle>.voip
 }
@@ -228,6 +235,10 @@ func Load() (*Config, error) {
 	rtpPortMin := getEnvAsInt("RTP_PORT_MIN", 10500)
 	rtpPortMax := getEnvAsInt("RTP_PORT_MAX", 10600)
 	rtpBufferSize := getEnvAsInt("RTP_BUFFER_SIZE", 16384)
+	trunkPNAppID := strings.TrimSpace(getEnvWithDefault("PUSH_TRUNK_PN_APP_ID", DefaultTrunkPNAppID))
+	if trunkPNAppID == "" {
+		trunkPNAppID = DefaultTrunkPNAppID
+	}
 
 	return &Config{
 		TURN: TURNConfig{
@@ -283,6 +294,7 @@ func Load() (*Config, error) {
 			VideoRecoveryBurstIntervalMS:         getEnvAsInt("SIP_VIDEO_RECOVERY_BURST_INTERVAL_MS", 800),
 			VideoRecoveryBurstStaleMS:            getEnvAsInt("SIP_VIDEO_RECOVERY_BURST_STALE_MS", 1200),
 			VideoRecoveryBurstFIRStaleMS:         getEnvAsInt("SIP_VIDEO_RECOVERY_BURST_FIR_STALE_MS", 2500),
+			MidCallRenegotiationEnable:           getEnvAsBool("SIP_MIDCALL_RENEGOTIATION_ENABLE", true),
 		},
 		API: APIConfig{
 			Port:                       apiPort,
@@ -293,6 +305,7 @@ func Load() (*Config, error) {
 			DebugTURN:                  getEnvAsBool("DEBUG_TURN", false),
 			IncomingRingTimeoutSeconds: getEnvAsInt("SIP_INCOMING_RING_TIMEOUT_SECONDS", 30),
 			IncomingOfflinePolicy:      getEnvWithDefault("SIP_INCOMING_OFFLINE_POLICY", "push_then_480"),
+			TrunkPNAppID:               trunkPNAppID,
 		},
 		Auth: AuthConfig{
 			Enable:    getEnvAsBool("AUTH_ENABLE", false),
@@ -359,9 +372,12 @@ func Load() (*Config, error) {
 			FirebaseProjectID:       os.Getenv("PUSH_FIREBASE_PROJECT_ID"),
 			APNSEnable:              getEnvAsBool("PUSH_APNS_ENABLE", false),
 			APNSEnvironment:         getEnvWithDefault("PUSH_APNS_ENV", "production"),
+			APNSAuthMode:            getEnvWithDefault("PUSH_APNS_AUTH_MODE", "token"),
 			APNSKeyFile:             os.Getenv("PUSH_APNS_KEY_FILE"),
 			APNSKeyID:               os.Getenv("PUSH_APNS_KEY_ID"),
 			APNSTeamID:              os.Getenv("PUSH_APNS_TEAM_ID"),
+			APNSCertFile:            os.Getenv("PUSH_APNS_CERT_FILE"),
+			APNSCertKeyFile:         os.Getenv("PUSH_APNS_CERT_KEY_FILE"),
 			APNSBundleID:            os.Getenv("PUSH_APNS_BUNDLE_ID"),
 			APNSTopic:               os.Getenv("PUSH_APNS_TOPIC"),
 		},
@@ -549,14 +565,18 @@ func (c *Config) Display() {
 		if c.PushNotification.TTRSClientSecret != "" {
 			fmt.Printf("  TTRS Client Secret: %s\n", maskPassword(c.PushNotification.TTRSClientSecret))
 		}
+		fmt.Printf("  Trunk PN App ID: %s\n", c.API.TrunkPNAppID)
 		fmt.Printf("  Firebase Credentials File: %s\n", c.PushNotification.FirebaseCredentialsFile)
 		fmt.Printf("  Firebase Project ID: %s\n", c.PushNotification.FirebaseProjectID)
 		fmt.Printf("  APNs Enabled: %v\n", c.PushNotification.APNSEnable)
 		if c.PushNotification.APNSEnable {
 			fmt.Printf("  APNs Environment: %s\n", c.PushNotification.APNSEnvironment)
+			fmt.Printf("  APNs Auth Mode: %s\n", c.PushNotification.APNSAuthMode)
 			fmt.Printf("  APNs Key File: %s\n", c.PushNotification.APNSKeyFile)
 			fmt.Printf("  APNs Key ID: %s\n", c.PushNotification.APNSKeyID)
 			fmt.Printf("  APNs Team ID: %s\n", c.PushNotification.APNSTeamID)
+			fmt.Printf("  APNs Cert File: %s\n", c.PushNotification.APNSCertFile)
+			fmt.Printf("  APNs Cert Key File: %s\n", c.PushNotification.APNSCertKeyFile)
 			fmt.Printf("  APNs Bundle ID: %s\n", c.PushNotification.APNSBundleID)
 			fmt.Printf("  APNs Topic: %s\n", c.PushNotification.APNSTopic)
 		}

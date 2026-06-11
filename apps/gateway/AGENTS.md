@@ -131,6 +131,9 @@ Auth behavior:
 
 - `answer`, `state`, `incoming`
 - `message`, `messageSent`, `dtmf`
+- `renegotiate`, `renegotiate_result`
+  - `renegotiate` is additive mid-call WebRTC assistance for SIP re-INVITE/UPDATE media changes. It includes `sessionId`, `renegotiationId`, optional `sdp`, `reason`, `mediaDirection`, `hasVideo`, and `requiresAnswer`.
+  - Clients that support it respond with `renegotiate_answer` (`sessionId`, `renegotiationId`, optional `sdp`, `status`, optional `reason`).
 - `resumed`, `resume_failed`, `resume_redirect`
 - `trunk_resolved`, `trunk_redirect`, `trunk_not_found`, `trunk_not_ready`
   - `trunk_resolved` now returns both `trunkId` and `trunkPublicId`
@@ -276,6 +279,25 @@ Use a real session ID in session URLs. The placeholder `<sessionId>` or encoded
 `%3CsessionId%3E` is not meaningful and should return no matching events.
 
 ### SIP public mode
+
+### Push notifications
+
+- `PUSH_ENABLE` (default `false`)
+- `PUSH_TRUNK_PN_APP_ID` (default `th.or.ttrs.video.prod`) controls the SIP Contact `app-id` accepted for trunk PushKit tokens.
+- `PUSH_TTRS_API_URL`, `PUSH_TTRS_API_TIMEOUT_MS`
+- `PUSH_FIREBASE_CREDENTIALS_FILE`, `PUSH_FIREBASE_PROJECT_ID`
+- `PUSH_APNS_ENABLE`, `PUSH_APNS_ENV`, `PUSH_APNS_AUTH_MODE`
+- `PUSH_APNS_KEY_FILE`, `PUSH_APNS_KEY_ID`, `PUSH_APNS_TEAM_ID`
+- `PUSH_APNS_CERT_FILE`, `PUSH_APNS_CERT_KEY_FILE`
+- `PUSH_APNS_BUNDLE_ID`, `PUSH_APNS_TOPIC`
+
+### Mid-call SIP behavior
+
+- In-dialog `re-INVITE` and `UPDATE` with valid Opus SDP can update hold/resume media direction without ending the SIP dialog.
+- H.264 video add/remove is accepted only when the SDP remains H.264-compatible. The gateway emits WebSocket `renegotiate` for client-assisted WebRTC changes and tracks a pending `renegotiationId` until `renegotiate_answer` or timeout.
+- Glare/pending mid-call renegotiation returns `491`; malformed or unsupported SDP returns `488`; unknown in-dialog requests return `481`.
+- `Allow`/`Supported` are intentionally conservative. Do not advertise `PRACK`, `REFER`, `100rel`, or session timers until those flows are implemented as first-class behavior.
+- `REFER`, `PRACK`, `Require: 100rel`, and `Session-Expires` currently have explicit reject policies so PBX/trunk behavior is deterministic.
 
 - `SIP_PUBLIC_REGISTER_EXPIRES_SECONDS` (default `3600`)
 - `SIP_PUBLIC_REGISTER_TIMEOUT_SECONDS` (default `10`)

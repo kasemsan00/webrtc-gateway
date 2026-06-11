@@ -288,9 +288,12 @@ func runAPIMode(ctx context.Context, cfg *config.Config, unicastAddress string, 
 			var err error
 			apnsSender, err = push.NewAPNSSender(push.APNSConfig{
 				Environment: cfg.PushNotification.APNSEnvironment,
+				AuthMode:    cfg.PushNotification.APNSAuthMode,
 				KeyFile:     cfg.PushNotification.APNSKeyFile,
 				KeyID:       cfg.PushNotification.APNSKeyID,
 				TeamID:      cfg.PushNotification.APNSTeamID,
+				CertFile:    cfg.PushNotification.APNSCertFile,
+				CertKeyFile: cfg.PushNotification.APNSCertKeyFile,
 				BundleID:    cfg.PushNotification.APNSBundleID,
 				Topic:       cfg.PushNotification.APNSTopic,
 			})
@@ -342,6 +345,7 @@ func runAPIMode(ctx context.Context, cfg *config.Config, unicastAddress string, 
 	// Wire dependencies for BYE request handling
 	sipServer.SetSessionManager(sessionMgr)
 	sipServer.SetStateNotifier(apiServer)
+	sipServer.SetMidCallRenegotiationNotifier(apiServer)
 
 	// Wire dependencies for incoming call support
 	sipServer.SetSessionCreator(sessionMgr)

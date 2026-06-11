@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ecdsa"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -20,20 +21,27 @@ const (
 	apnsProductionBaseURL = "https://api.push.apple.com"
 	apnsSandboxBaseURL    = "https://api.sandbox.push.apple.com"
 	apnsJWTTTL            = 50 * time.Minute
+
+	apnsAuthModeToken       = "token"
+	apnsAuthModeCertificate = "certificate"
 )
 
-// APNSConfig contains APNs token-auth settings for iOS VoIP pushes.
+// APNSConfig contains APNs settings for iOS VoIP pushes.
 type APNSConfig struct {
 	Environment string
+	AuthMode    string
 	KeyFile     string
 	KeyID       string
 	TeamID      string
+	CertFile    string
+	CertKeyFile string
 	BundleID    string
 	Topic       string
 }
 
 // APNSSender sends PushKit VoIP notifications through APNs.
 type APNSSender struct {
+	authMode   string
 	keyID      string
 	teamID     string
 	topic      string
@@ -46,14 +54,30 @@ type APNSSender struct {
 	jwtExpiry time.Time
 }
 
-// NewAPNSSender creates an APNs VoIP sender from a token-auth .p8 key.
+// NewAPNSSender creates an APNs VoIP sender.
 func NewAPNSSender(cfg APNSConfig) (*APNSSender, error) {
+	authMode := normalizeAPNSAuthMode(cfg.AuthMode)
+	if authMode != apnsAuthModeToken && authMode != apnsAuthModeCertificate {
+		return nil, fmt.Errorf("apns: unsupported auth mode %q (expected token or certificate)", cfg.AuthMode)
+	}
+
+	topic := normalizeAPNSTopic(cfg.BundleID, cfg.Topic)
+	if topic == "" {
+		return nil, fmt.Errorf("apns: bundle id or topic is required")
+	}
+
+	if authMode == apnsAuthModeCertificate {
+		return newAPNSCertificateSender(cfg, topic)
+	}
+	return newAPNSTokenSender(cfg, topic)
+}
+
+func newAPNSTokenSender(cfg APNSConfig, topic string) (*APNSSender, error) {
 	keyID := strings.TrimSpace(cfg.KeyID)
 	teamID := strings.TrimSpace(cfg.TeamID)
 	keyFile := strings.TrimSpace(cfg.KeyFile)
-	topic := normalizeAPNSTopic(cfg.BundleID, cfg.Topic)
-	if keyID == "" || teamID == "" || keyFile == "" || topic == "" {
-		return nil, fmt.Errorf("apns: key file, key id, team id, and bundle/topic are required")
+	if keyID == "" || teamID == "" || keyFile == "" {
+		return nil, fmt.Errorf("apns: key file, key id, and team id are required for token auth")
 	}
 
 	keyPEM, err := os.ReadFile(keyFile)
@@ -66,6 +90,7 @@ func NewAPNSSender(cfg APNSConfig) (*APNSSender, error) {
 	}
 
 	return &APNSSender{
+		authMode:   apnsAuthModeToken,
 		keyID:      keyID,
 		teamID:     teamID,
 		topic:      topic,
@@ -73,6 +98,44 @@ func NewAPNSSender(cfg APNSConfig) (*APNSSender, error) {
 		httpClient: &http.Client{Timeout: 10 * time.Second},
 		baseURL:    apnsBaseURL(cfg.Environment),
 	}, nil
+}
+
+func newAPNSCertificateSender(cfg APNSConfig, topic string) (*APNSSender, error) {
+	certFile := strings.TrimSpace(cfg.CertFile)
+	if certFile == "" {
+		return nil, fmt.Errorf("apns: certificate file is required for certificate auth")
+	}
+	certKeyFile := strings.TrimSpace(cfg.CertKeyFile)
+	if certKeyFile == "" {
+		certKeyFile = certFile
+	}
+	cert, err := tls.LoadX509KeyPair(certFile, certKeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("apns: load certificate pair: %w", err)
+	}
+
+	return &APNSSender{
+		authMode: apnsAuthModeCertificate,
+		topic:    topic,
+		httpClient: &http.Client{
+			Timeout: 10 * time.Second,
+			Transport: &http.Transport{
+				ForceAttemptHTTP2: true,
+				TLSClientConfig: &tls.Config{
+					Certificates: []tls.Certificate{cert},
+				},
+			},
+		},
+		baseURL: apnsBaseURL(cfg.Environment),
+	}, nil
+}
+
+func normalizeAPNSAuthMode(authMode string) string {
+	mode := strings.ToLower(strings.TrimSpace(authMode))
+	if mode == "" {
+		return apnsAuthModeToken
+	}
+	return mode
 }
 
 func normalizeAPNSTopic(bundleID, topic string) string {
@@ -136,21 +199,23 @@ func buildAPNSVoIPPayload(data map[string]string) map[string]interface{} {
 }
 
 func (s *APNSSender) buildRequest(ctx context.Context, token string, body []byte) (*http.Request, error) {
-	authToken, err := s.authToken()
-	if err != nil {
-		return nil, err
-	}
 	url := fmt.Sprintf("%s/3/device/%s", strings.TrimRight(s.baseURL, "/"), token)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("apns: build request: %w", err)
 	}
-	req.Header.Set("authorization", "bearer "+authToken)
 	req.Header.Set("apns-push-type", "voip")
 	req.Header.Set("apns-topic", s.topic)
 	req.Header.Set("apns-priority", "10")
 	req.Header.Set("apns-expiration", fmt.Sprintf("%d", time.Now().Add(time.Duration(incomingRingTimeoutSeconds)*time.Second).Unix()))
 	req.Header.Set("content-type", "application/json")
+	if normalizeAPNSAuthMode(s.authMode) == apnsAuthModeToken {
+		authToken, err := s.authToken()
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("authorization", "bearer "+authToken)
+	}
 	return req, nil
 }
 

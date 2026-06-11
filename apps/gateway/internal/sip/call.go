@@ -452,10 +452,10 @@ func (s *Server) handleInviteAuth(ctx context.Context, originalReq *sip.Request,
 		authReq.AppendHeader(sip.NewHeader("User-Agent", "LinphoneAndroid/4.6.0 (K2-Gateway)"))
 	}
 	if len(authReq.GetHeaders("Allow")) == 0 {
-		authReq.AppendHeader(sip.NewHeader("Allow", "INVITE, ACK, CANCEL, OPTIONS, BYE, REFER, NOTIFY, MESSAGE, SUBSCRIBE, INFO, PRACK, UPDATE"))
+		authReq.AppendHeader(sip.NewHeader("Allow", sipAllowHeaderValue()))
 	}
 	if len(authReq.GetHeaders("Supported")) == 0 {
-		authReq.AppendHeader(sip.NewHeader("Supported", "replaces, outbound, 100rel"))
+		authReq.AppendHeader(sip.NewHeader("Supported", sipSupportedHeaderValue()))
 	}
 
 	// Remove all Content-Type headers and add new one
@@ -1205,10 +1205,10 @@ func (s *Server) createInviteRequestWithParams(destination, from string, sdpBody
 	req.AppendHeader(sip.NewHeader("Max-Forwards", "70"))
 
 	// Add Supported header
-	req.AppendHeader(sip.NewHeader("Supported", "outbound"))
+	req.AppendHeader(sip.NewHeader("Supported", sipSupportedHeaderValue()))
 
 	// Add Allow header
-	req.AppendHeader(sip.NewHeader("Allow", "INVITE, ACK, CANCEL, OPTIONS, BYE, REFER, NOTIFY, MESSAGE, SUBSCRIBE, INFO, UPDATE"))
+	req.AppendHeader(sip.NewHeader("Allow", sipAllowHeaderValue()))
 
 	// Add Content-Type
 	req.AppendHeader(sip.NewHeader("Content-Type", "application/sdp"))

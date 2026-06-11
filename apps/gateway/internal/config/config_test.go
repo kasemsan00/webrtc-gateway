@@ -22,3 +22,51 @@ func TestNormalizeSwitchVideoTransitionMode(t *testing.T) {
 		})
 	}
 }
+
+func TestMidCallRenegotiationConfigDefault(t *testing.T) {
+	t.Setenv("SIP_MIDCALL_RENEGOTIATION_ENABLE", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.SIP.MidCallRenegotiationEnable {
+		t.Fatalf("expected SIP mid-call renegotiation to be enabled by default")
+	}
+}
+
+func TestMidCallRenegotiationConfigCanBeDisabled(t *testing.T) {
+	t.Setenv("SIP_MIDCALL_RENEGOTIATION_ENABLE", "false")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.SIP.MidCallRenegotiationEnable {
+		t.Fatalf("expected SIP mid-call renegotiation to be disabled by env")
+	}
+}
+
+func TestTrunkPNAppIDConfigDefault(t *testing.T) {
+	t.Setenv("PUSH_TRUNK_PN_APP_ID", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.API.TrunkPNAppID != DefaultTrunkPNAppID {
+		t.Fatalf("expected default trunk PN app ID %q, got %q", DefaultTrunkPNAppID, cfg.API.TrunkPNAppID)
+	}
+}
+
+func TestTrunkPNAppIDConfigCanBeCustomizedAndTrimmed(t *testing.T) {
+	t.Setenv("PUSH_TRUNK_PN_APP_ID", " th.or.ttrs.video.staging ")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.API.TrunkPNAppID != "th.or.ttrs.video.staging" {
+		t.Fatalf("expected custom trunk PN app ID to be trimmed, got %q", cfg.API.TrunkPNAppID)
+	}
+}

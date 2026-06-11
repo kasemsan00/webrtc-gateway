@@ -54,6 +54,19 @@ func (s *Server) setupHandlers() {
 	s.sipServer.OnMessage(func(req *sip.Request, tx sip.ServerTransaction) {
 		s.handleMESSAGE(req, tx)
 	})
+
+	// Handle UPDATE requests (mid-dialog session refresh / SDP update)
+	s.sipServer.OnUpdate(func(req *sip.Request, tx sip.ServerTransaction) {
+		s.handleUPDATE(req, tx)
+	})
+
+	s.sipServer.OnRefer(func(req *sip.Request, tx sip.ServerTransaction) {
+		s.handleREFER(req, tx)
+	})
+
+	s.sipServer.OnPrack(func(req *sip.Request, tx sip.ServerTransaction) {
+		s.handlePRACK(req, tx)
+	})
 }
 
 // handleINVITE handles incoming INVITE requests
@@ -225,11 +238,25 @@ func (s *Server) handleINVITE(req *sip.Request, tx sip.ServerTransaction) {
 			}
 			// If already active, this might be a mid-call re-INVITE (hold/resume)
 			if sess.GetState() == session.StateActive {
-				tryingRes := sip.NewResponseFromRequest(req, 100, "Trying", nil)
-				tx.Respond(tryingRes)
+				s.handleActiveReINVITE(req, tx, sess, callIDValue)
 			}
 			return // Don't create new session
 		}
+	}
+
+	if isInDialogRequest(req) {
+		res := sip.NewResponseFromRequest(req, 481, "Call/Transaction Does Not Exist", nil)
+		_ = tx.Respond(res)
+		s.logEvent(&logstore.Event{
+			Timestamp:     time.Now(),
+			SessionID:     "",
+			Category:      "sip",
+			Name:          "sip_midcall_unknown_dialog",
+			SIPMethod:     string(req.Method),
+			SIPStatusCode: 481,
+			SIPCallID:     callIDValue,
+		})
+		return
 	}
 
 	// NEW: For trunk calls, only proceed if it's a trunk we own
@@ -338,6 +365,292 @@ func (s *Server) handleINVITE(req *sip.Request, tx sip.ServerTransaction) {
 		SIPStatusCode: 503,
 		SIPCallID:     callIDValue,
 	})
+}
+
+func isInDialogRequest(req *sip.Request) bool {
+	if req == nil {
+		return false
+	}
+	fromHasTag := false
+	toHasTag := false
+	if h := req.From(); h != nil {
+		fromHasTag = strings.Contains(strings.ToLower(h.Value()), "tag=")
+	}
+	if h := req.To(); h != nil {
+		toHasTag = strings.Contains(strings.ToLower(h.Value()), "tag=")
+	}
+	return fromHasTag && toHasTag
+}
+
+func (s *Server) handleActiveReINVITE(req *sip.Request, tx sip.ServerTransaction, sess *session.Session, callIDValue string) {
+	tryingRes := sip.NewResponseFromRequest(req, 100, "Trying", nil)
+	_ = tx.Respond(tryingRes)
+
+	if !s.config.MidCallRenegotiationEnable {
+		res := sip.NewResponseFromRequest(req, 501, "Not Implemented", nil)
+		_ = tx.Respond(res)
+		return
+	}
+
+	started, ok := sess.TryBeginMidCallRenegotiation(session.MidCallRenegotiationRequest{
+		Source:    "sip_reinvite",
+		Method:    string(sip.INVITE),
+		OfferSDP:  string(req.Body()),
+		StartedAt: time.Now(),
+	})
+	if !ok {
+		res := sip.NewResponseFromRequest(req, 491, "Request Pending", nil)
+		_ = tx.Respond(res)
+		return
+	}
+	s.logEvent(&logstore.Event{
+		Timestamp: time.Now(),
+		SessionID: sess.ID,
+		Category:  "sip",
+		Name:      "sip_midcall_renegotiation_started",
+		SIPMethod: string(req.Method),
+		SIPCallID: callIDValue,
+		Data: map[string]interface{}{
+			"renegotiationId": started.ID,
+			"source":          started.Source,
+		},
+	})
+
+	validation := session.ValidateMidCallSDP(string(req.Body()))
+	if !validation.Accept {
+		_ = sess.FailMidCallRenegotiation(started.ID, validation.StatusCode, validation.Reason)
+		res := sip.NewResponseFromRequest(req, validation.StatusCode, sipReasonForStatus(validation.StatusCode), nil)
+		_ = tx.Respond(res)
+		s.logEvent(&logstore.Event{
+			Timestamp:     time.Now(),
+			SessionID:     sess.ID,
+			Category:      "sip",
+			Name:          "sip_midcall_renegotiation_failed",
+			SIPMethod:     string(req.Method),
+			SIPStatusCode: validation.StatusCode,
+			SIPCallID:     callIDValue,
+			Data: map[string]interface{}{
+				"renegotiationId": started.ID,
+				"reason":          validation.Reason,
+				"latencyMs":       time.Since(started.StartedAt).Milliseconds(),
+			},
+		})
+		return
+	}
+
+	previousMediaState := sess.GetMidCallMediaState()
+	requiresClientRenegotiation := validation.RequiresClientRenegotiation ||
+		(!previousMediaState.HasActiveVideo && validation.HasActiveVideo)
+
+	sess.ApplyMidCallSDPValidation(validation)
+	if s.stateNotifier != nil {
+		s.stateNotifier.NotifySessionState(sess.ID, session.StateActive)
+	}
+	if requiresClientRenegotiation && s.midCallNotifier != nil {
+		s.midCallNotifier.NotifyMidCallRenegotiation(sess.ID, started, validation)
+	}
+	rtpPort := sess.RTPPort
+	if rtpPort <= 0 {
+		rtpPort = 4000
+	}
+	answerSDP := s.createSDPAnswerForInvite(rtpPort, sess, req.Body())
+	res := sip.NewResponseFromRequest(req, 200, "OK", answerSDP)
+	res.AppendHeader(&sip.ContactHeader{
+		Address: sip.Uri{Host: s.publicAddress, Port: s.sipPort},
+	})
+	res.AppendHeader(&contentTypeHeaderSDPCall)
+	if err := tx.Respond(res); err != nil {
+		_ = sess.FailMidCallRenegotiation(started.ID, 500, err.Error())
+		return
+	}
+	if !requiresClientRenegotiation {
+		_ = sess.CompleteMidCallRenegotiation(started.ID, string(answerSDP))
+	}
+	s.logEvent(&logstore.Event{
+		Timestamp:     time.Now(),
+		SessionID:     sess.ID,
+		Category:      "sip",
+		Name:          "sip_midcall_renegotiation_completed",
+		SIPMethod:     string(req.Method),
+		SIPStatusCode: 200,
+		SIPCallID:     callIDValue,
+		Data: map[string]interface{}{
+			"renegotiationId": started.ID,
+			"audioDirection":  validation.Audio.Direction,
+			"videoDirection":  validation.Video.Direction,
+			"hasActiveVideo":  validation.HasActiveVideo,
+			"latencyMs":       time.Since(started.StartedAt).Milliseconds(),
+		},
+	})
+}
+
+func (s *Server) handleUPDATE(req *sip.Request, tx sip.ServerTransaction) {
+	if requestHeaderContains(req, "Require", "100rel") {
+		res := sip.NewResponseFromRequest(req, 420, "Bad Extension", nil)
+		res.AppendHeader(sip.NewHeader("Unsupported", "100rel"))
+		_ = tx.Respond(res)
+		return
+	}
+	if len(req.GetHeaders("Session-Expires")) > 0 {
+		res := sip.NewResponseFromRequest(req, 501, "Session Timer Not Implemented", nil)
+		_ = tx.Respond(res)
+		return
+	}
+
+	callIDValue := ""
+	if callID := req.CallID(); callID != nil {
+		callIDValue = callID.Value()
+	}
+	if s.sessionMgr == nil || callIDValue == "" {
+		res := sip.NewResponseFromRequest(req, 481, "Call/Transaction Does Not Exist", nil)
+		_ = tx.Respond(res)
+		return
+	}
+	sess, ok := s.sessionMgr.GetSessionBySIPCallID(callIDValue)
+	if !ok || sess == nil {
+		res := sip.NewResponseFromRequest(req, 481, "Call/Transaction Does Not Exist", nil)
+		_ = tx.Respond(res)
+		return
+	}
+	if !s.config.MidCallRenegotiationEnable {
+		res := sip.NewResponseFromRequest(req, 501, "Not Implemented", nil)
+		_ = tx.Respond(res)
+		return
+	}
+	if len(req.Body()) == 0 {
+		res := sip.NewResponseFromRequest(req, 200, "OK", nil)
+		_ = tx.Respond(res)
+		return
+	}
+
+	started, ok := sess.TryBeginMidCallRenegotiation(session.MidCallRenegotiationRequest{
+		Source:    "sip_update",
+		Method:    string(sip.UPDATE),
+		OfferSDP:  string(req.Body()),
+		StartedAt: time.Now(),
+	})
+	if !ok {
+		res := sip.NewResponseFromRequest(req, 491, "Request Pending", nil)
+		_ = tx.Respond(res)
+		return
+	}
+	s.logEvent(&logstore.Event{
+		Timestamp: time.Now(),
+		SessionID: sess.ID,
+		Category:  "sip",
+		Name:      "sip_midcall_renegotiation_started",
+		SIPMethod: string(req.Method),
+		SIPCallID: callIDValue,
+		Data: map[string]interface{}{
+			"renegotiationId": started.ID,
+			"source":          started.Source,
+		},
+	})
+
+	validation := session.ValidateMidCallSDP(string(req.Body()))
+	if !validation.Accept {
+		_ = sess.FailMidCallRenegotiation(started.ID, validation.StatusCode, validation.Reason)
+		res := sip.NewResponseFromRequest(req, validation.StatusCode, sipReasonForStatus(validation.StatusCode), nil)
+		_ = tx.Respond(res)
+		s.logEvent(&logstore.Event{
+			Timestamp:     time.Now(),
+			SessionID:     sess.ID,
+			Category:      "sip",
+			Name:          "sip_midcall_renegotiation_failed",
+			SIPMethod:     string(req.Method),
+			SIPStatusCode: validation.StatusCode,
+			SIPCallID:     callIDValue,
+			Data: map[string]interface{}{
+				"renegotiationId": started.ID,
+				"reason":          validation.Reason,
+				"latencyMs":       time.Since(started.StartedAt).Milliseconds(),
+			},
+		})
+		return
+	}
+
+	previousMediaState := sess.GetMidCallMediaState()
+	requiresClientRenegotiation := validation.RequiresClientRenegotiation ||
+		(!previousMediaState.HasActiveVideo && validation.HasActiveVideo)
+	sess.ApplyMidCallSDPValidation(validation)
+	if s.stateNotifier != nil {
+		s.stateNotifier.NotifySessionState(sess.ID, session.StateActive)
+	}
+	if requiresClientRenegotiation && s.midCallNotifier != nil {
+		s.midCallNotifier.NotifyMidCallRenegotiation(sess.ID, started, validation)
+	}
+
+	rtpPort := sess.RTPPort
+	if rtpPort <= 0 {
+		rtpPort = 4000
+	}
+	answerSDP := s.createSDPAnswerForInvite(rtpPort, sess, req.Body())
+	res := sip.NewResponseFromRequest(req, 200, "OK", answerSDP)
+	res.AppendHeader(&contentTypeHeaderSDPCall)
+	if err := tx.Respond(res); err != nil {
+		_ = sess.FailMidCallRenegotiation(started.ID, 500, err.Error())
+		return
+	}
+	if !requiresClientRenegotiation {
+		_ = sess.CompleteMidCallRenegotiation(started.ID, string(answerSDP))
+	}
+	s.logEvent(&logstore.Event{
+		Timestamp:     time.Now(),
+		SessionID:     sess.ID,
+		Category:      "sip",
+		Name:          "sip_midcall_renegotiation_completed",
+		SIPMethod:     string(req.Method),
+		SIPStatusCode: 200,
+		SIPCallID:     callIDValue,
+		Data: map[string]interface{}{
+			"renegotiationId":             started.ID,
+			"audioDirection":              validation.Audio.Direction,
+			"videoDirection":              validation.Video.Direction,
+			"hasActiveVideo":              validation.HasActiveVideo,
+			"requiresClientRenegotiation": requiresClientRenegotiation,
+			"latencyMs":                   time.Since(started.StartedAt).Milliseconds(),
+		},
+	})
+}
+
+func (s *Server) handleREFER(req *sip.Request, tx sip.ServerTransaction) {
+	res := sip.NewResponseFromRequest(req, 501, "Not Implemented", nil)
+	_ = tx.Respond(res)
+}
+
+func (s *Server) handlePRACK(req *sip.Request, tx sip.ServerTransaction) {
+	res := sip.NewResponseFromRequest(req, 420, "Bad Extension", nil)
+	res.AppendHeader(sip.NewHeader("Unsupported", "100rel"))
+	_ = tx.Respond(res)
+}
+
+func requestHeaderContains(req *sip.Request, name, token string) bool {
+	token = strings.ToLower(strings.TrimSpace(token))
+	for _, h := range req.GetHeaders(name) {
+		for _, part := range strings.Split(h.Value(), ",") {
+			if strings.ToLower(strings.TrimSpace(part)) == token {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func sipReasonForStatus(statusCode int) string {
+	switch statusCode {
+	case 415:
+		return "Unsupported Media Type"
+	case 481:
+		return "Call/Transaction Does Not Exist"
+	case 488:
+		return "Not Acceptable Here"
+	case 491:
+		return "Request Pending"
+	case 501:
+		return "Not Implemented"
+	default:
+		return "Error"
+	}
 }
 
 // handleBYE handles BYE requests (call termination)
@@ -639,7 +952,8 @@ func (s *Server) handleOPTIONS(req *sip.Request, tx sip.ServerTransaction) {
 	ctx := context.Background()
 	// Respond with 200 OK for OPTIONS (availability check)
 	res := sip.NewResponseFromRequest(req, 200, "OK", nil)
-	res.AppendHeader(sip.NewHeader("Allow", "INVITE, ACK, BYE, CANCEL, OPTIONS, MESSAGE"))
+	res.AppendHeader(sip.NewHeader("Allow", sipAllowHeaderValue()))
+	res.AppendHeader(sip.NewHeader("Supported", sipSupportedHeaderValue()))
 	res.AppendHeader(sip.NewHeader("Accept", "application/sdp, text/plain"))
 
 	if err := tx.Respond(res); err != nil {

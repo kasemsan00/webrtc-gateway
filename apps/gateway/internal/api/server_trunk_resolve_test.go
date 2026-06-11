@@ -41,6 +41,7 @@ type stubResolveTrunkManager struct {
 	notifyPlatform  *string
 	notifyCallCount int
 	notifyErr       error
+	pushChanged     bool
 }
 
 func (s *stubResolveTrunkManager) GetTrunkByID(id int64) (interface{}, bool) {
@@ -130,10 +131,19 @@ func (s *stubResolveTrunkManager) SetTrunkNotifyUserIDAndPlatform(_ context.Cont
 	return s.notifyErr
 }
 
-func (s *stubResolveTrunkManager) SetTrunkPushContact(_ context.Context, trunkID int64, contact sip.TrunkPushContact) error {
+func (s *stubResolveTrunkManager) SetTrunkPushContact(_ context.Context, trunkID int64, contact sip.TrunkPushContact) (bool, error) {
 	s.pushTrunkID = trunkID
 	s.pushContact = &contact
-	return nil
+	trunk, ok := s.byID[trunkID]
+	if ok && trunk.PNAppID != nil && trunk.PNType != nil && trunk.PNToken != nil &&
+		strings.TrimSpace(*trunk.PNAppID) == strings.TrimSpace(contact.PNAppID) &&
+		strings.TrimSpace(*trunk.PNType) == strings.TrimSpace(contact.PNType) &&
+		strings.TrimSpace(*trunk.PNToken) == strings.TrimSpace(contact.PNToken) {
+		s.pushChanged = false
+		return false, nil
+	}
+	s.pushChanged = true
+	return true, nil
 }
 
 func (s *stubResolveStore) ResolveTrunkByCredentials(ctx context.Context, domain string, port int, username, password string) (int64, *string, *time.Time, bool, error) {
@@ -678,7 +688,7 @@ func TestHandleWSTrunkResolve_WithPushContact_PersistsAndReregisters(t *testing.
 		Type:      "trunk_resolve",
 		SessionID: "s1",
 		TrunkID:   42,
-		PNAppID:   "th.or.ttrs.video.prod",
+		PNAppID:   config.DefaultTrunkPNAppID,
 		PNType:    "apple",
 		PNToken:   "D6F5DF83B03398129B4AC01DFE5971662B46130F3F5424AF93CF0A8C02A74CCF",
 	})
@@ -690,11 +700,58 @@ func TestHandleWSTrunkResolve_WithPushContact_PersistsAndReregisters(t *testing.
 	if trunkMgr.pushTrunkID != 42 {
 		t.Fatalf("expected push contact for trunk 42, got %d", trunkMgr.pushTrunkID)
 	}
-	if trunkMgr.pushContact == nil || trunkMgr.pushContact.PNAppID != "th.or.ttrs.video.prod" || trunkMgr.pushContact.PNType != "apple" {
+	if trunkMgr.pushContact == nil || trunkMgr.pushContact.PNAppID != config.DefaultTrunkPNAppID || trunkMgr.pushContact.PNType != "apple" {
 		t.Fatalf("unexpected push contact: %+v", trunkMgr.pushContact)
 	}
 	if trunkMgr.registerID != 42 {
 		t.Fatalf("expected re-register for trunk 42, got %d", trunkMgr.registerID)
+	}
+}
+
+func TestHandleWSTrunkResolve_WithUnchangedPushContact_SkipsReregister(t *testing.T) {
+	owner := "gw-1"
+	future := time.Now().Add(2 * time.Minute)
+	appID := config.DefaultTrunkPNAppID
+	pnType := "apple"
+	pnToken := "D6F5DF83B03398129B4AC01DFE5971662B46130F3F5424AF93CF0A8C02A74CCF"
+	trunkMgr := &stubResolveTrunkManager{
+		byID: map[int64]*sip.Trunk{
+			42: {
+				ID:         42,
+				PublicID:   "8f6f6d70-2b5a-4fe7-a0d5-9d0af0e90d3a",
+				LeaseOwner: &owner,
+				LeaseUntil: &future,
+				PNAppID:    &appID,
+				PNType:     &pnType,
+				PNToken:    &pnToken,
+			},
+		},
+	}
+
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{InstanceID: "gw-1"}, config.TranslatorConfig{}, nil, nil, nil, trunkMgr, &stubResolveStore{})
+	client := &WSClient{
+		send:       make(chan []byte, 8),
+		authClaims: &auth.VerifiedClaims{Subject: "user-1"},
+	}
+
+	srv.handleWSTrunkResolve(client, WSMessage{
+		Type:      "trunk_resolve",
+		SessionID: "s1",
+		TrunkID:   42,
+		PNAppID:   " " + config.DefaultTrunkPNAppID + " ",
+		PNType:    "apple",
+		PNToken:   " " + pnToken + " ",
+	})
+
+	msgs := readWSMessages(t, client.send)
+	if len(msgs) != 1 || msgs[0].Type != "trunk_resolved" {
+		t.Fatalf("expected trunk_resolved only, got %+v", msgs)
+	}
+	if trunkMgr.pushTrunkID != 42 {
+		t.Fatalf("expected push contact persist attempt for trunk 42, got %d", trunkMgr.pushTrunkID)
+	}
+	if trunkMgr.registerID != 0 {
+		t.Fatalf("expected unchanged push contact to skip re-register, got register trunk %d", trunkMgr.registerID)
 	}
 }
 
@@ -718,7 +775,7 @@ func TestHandleWSTrunkPushToken_RequiresResolvedMatchingTrunk(t *testing.T) {
 	srv.handleWSTrunkPushToken(client, WSMessage{
 		Type:          "trunk_push_token",
 		TrunkPublicID: "8f6f6d70-2b5a-4fe7-a0d5-9d0af0e90d3a",
-		PNAppID:       "th.or.ttrs.video.prod",
+		PNAppID:       config.DefaultTrunkPNAppID,
 		PNType:        "apple",
 		PNToken:       "D6F5DF83B03398129B4AC01DFE5971662B46130F3F5424AF93CF0A8C02A74CCF",
 	})
@@ -733,13 +790,98 @@ func TestHandleWSTrunkPushToken_RequiresResolvedMatchingTrunk(t *testing.T) {
 	srv.handleWSTrunkPushToken(client, WSMessage{
 		Type:    "trunk_push_token",
 		TrunkID: 99,
-		PNAppID: "th.or.ttrs.video.prod",
+		PNAppID: config.DefaultTrunkPNAppID,
 		PNType:  "apple",
 		PNToken: "D6F5DF83B03398129B4AC01DFE5971662B46130F3F5424AF93CF0A8C02A74CCF",
 	})
 	msgs := readWSMessages(t, client.send)
 	if len(msgs) != 1 || msgs[0].Type != "error" {
 		t.Fatalf("expected mismatch error, got %+v", msgs)
+	}
+}
+
+func TestHandleWSTrunkPushToken_UnchangedContactSkipsReregister(t *testing.T) {
+	appID := config.DefaultTrunkPNAppID
+	pnType := "apple"
+	pnToken := "D6F5DF83B03398129B4AC01DFE5971662B46130F3F5424AF93CF0A8C02A74CCF"
+	trunkMgr := &stubResolveTrunkManager{
+		byID: map[int64]*sip.Trunk{
+			42: {
+				ID:       42,
+				PublicID: "8f6f6d70-2b5a-4fe7-a0d5-9d0af0e90d3a",
+				PNAppID:  &appID,
+				PNType:   &pnType,
+				PNToken:  &pnToken,
+			},
+		},
+	}
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{InstanceID: "gw-1"}, config.TranslatorConfig{}, nil, nil, nil, trunkMgr, &stubResolveStore{})
+	client := &WSClient{
+		send:            make(chan []byte, 8),
+		trunkResolved:   true,
+		resolvedTrunkID: 42,
+		authClaims:      &auth.VerifiedClaims{Subject: "user-1"},
+	}
+
+	srv.handleWSTrunkPushToken(client, WSMessage{
+		Type:    "trunk_push_token",
+		TrunkID: 42,
+		PNAppID: " " + config.DefaultTrunkPNAppID + " ",
+		PNType:  "apple",
+		PNToken: " " + pnToken + " ",
+	})
+
+	if msgs := readWSMessages(t, client.send); len(msgs) != 0 {
+		t.Fatalf("expected no error messages, got %+v", msgs)
+	}
+	if trunkMgr.pushTrunkID != 42 {
+		t.Fatalf("expected push contact persist attempt for trunk 42, got %d", trunkMgr.pushTrunkID)
+	}
+	if trunkMgr.registerID != 0 {
+		t.Fatalf("expected unchanged push contact to skip re-register, got register trunk %d", trunkMgr.registerID)
+	}
+}
+
+func TestHandleWSTrunkPushToken_UsesConfiguredPNAppID(t *testing.T) {
+	trunkMgr := &stubResolveTrunkManager{
+		byID: map[int64]*sip.Trunk{
+			42: {ID: 42, PublicID: "8f6f6d70-2b5a-4fe7-a0d5-9d0af0e90d3a"},
+		},
+	}
+	srv := NewServer(config.APIConfig{TrunkPNAppID: "th.or.ttrs.video.staging"}, config.TURNConfig{}, config.GatewayConfig{InstanceID: "gw-1"}, config.TranslatorConfig{}, nil, nil, nil, trunkMgr, &stubResolveStore{})
+	client := &WSClient{
+		send:            make(chan []byte, 8),
+		trunkResolved:   true,
+		resolvedTrunkID: 42,
+		authClaims:      &auth.VerifiedClaims{Subject: "user-1"},
+	}
+
+	srv.handleWSTrunkPushToken(client, WSMessage{
+		Type:    "trunk_push_token",
+		TrunkID: 42,
+		PNAppID: "th.or.ttrs.video.staging",
+		PNType:  "apple",
+		PNToken: "D6F5DF83B03398129B4AC01DFE5971662B46130F3F5424AF93CF0A8C02A74CCF",
+	})
+
+	if msgs := readWSMessages(t, client.send); len(msgs) != 0 {
+		t.Fatalf("expected custom app ID to be accepted, got %+v", msgs)
+	}
+	if trunkMgr.pushContact == nil || trunkMgr.pushContact.PNAppID != "th.or.ttrs.video.staging" {
+		t.Fatalf("expected custom app ID to be persisted, got %+v", trunkMgr.pushContact)
+	}
+
+	srv.handleWSTrunkPushToken(client, WSMessage{
+		Type:    "trunk_push_token",
+		TrunkID: 42,
+		PNAppID: config.DefaultTrunkPNAppID,
+		PNType:  "apple",
+		PNToken: "D6F5DF83B03398129B4AC01DFE5971662B46130F3F5424AF93CF0A8C02A74CCF",
+	})
+
+	msgs := readWSMessages(t, client.send)
+	if len(msgs) != 1 || msgs[0].Type != "error" || !strings.Contains(msgs[0].Error, "th.or.ttrs.video.staging") {
+		t.Fatalf("expected old app ID to be rejected with custom app ID in error, got %+v", msgs)
 	}
 }
 

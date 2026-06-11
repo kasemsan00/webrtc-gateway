@@ -193,8 +193,12 @@ type Session struct {
 	IncomingClaimed   bool   `json:"-"` // True if this incoming call has been claimed
 	IncomingClaimedBy string `json:"-"` // WS client ID that claimed this call
 	// Terminal signaling action guard for accept/reject/cancel/timeout/bye races.
-	TerminalAction   string    `json:"-"`
-	TerminalActionAt time.Time `json:"-"`
+	TerminalAction              string                     `json:"-"`
+	TerminalActionAt            time.Time                  `json:"-"`
+	PendingMidCallRenegotiation *midCallRenegotiationState `json:"-"`
+	RemoteAudioDirection        string                     `json:"-"`
+	RemoteVideoDirection        string                     `json:"-"`
+	MidCallHasActiveVideo       bool                       `json:"-"`
 	// PLI (Picture Loss Indication) tracking
 	PLISent       int       `json:"pliSent"`     // Number of PLIs sent to SIP
 	PLIResponse   int       `json:"pliResponse"` // Number of keyframes received after PLI
@@ -898,6 +902,7 @@ func (s *Session) TryBeginTerminalAction(action string) bool {
 	now := time.Now()
 	s.TerminalAction = action
 	s.TerminalActionAt = now
+	s.PendingMidCallRenegotiation = nil
 	s.UpdatedAt = now
 	return true
 }

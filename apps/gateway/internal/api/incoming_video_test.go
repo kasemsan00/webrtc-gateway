@@ -3,6 +3,7 @@ package api
 import (
 	"testing"
 
+	"k2-gateway/internal/config"
 	"k2-gateway/internal/sip"
 )
 
@@ -44,7 +45,7 @@ func TestHasActiveVideoMedia(t *testing.T) {
 }
 
 func TestTrunkHasApplePushKitTarget(t *testing.T) {
-	appID := trunkPNAppID
+	appID := config.DefaultTrunkPNAppID
 	pnType := "apple"
 	token := "D6F5DF83B03398129B4AC01DFE5971662B46130F3F5424AF93CF0A8C02A74CCF"
 	trunk := &sip.Trunk{
@@ -53,12 +54,12 @@ func TestTrunkHasApplePushKitTarget(t *testing.T) {
 		PNToken: &token,
 	}
 
-	if !trunkHasApplePushKitTarget(trunk) {
+	if !trunkHasApplePushKitTarget(trunk, config.DefaultTrunkPNAppID) {
 		t.Fatal("expected valid Apple PushKit target")
 	}
 
 	pnType = "firebase"
-	if trunkHasApplePushKitTarget(trunk) {
+	if trunkHasApplePushKitTarget(trunk, config.DefaultTrunkPNAppID) {
 		t.Fatal("did not expect non-apple PN type to be a PushKit target")
 	}
 }

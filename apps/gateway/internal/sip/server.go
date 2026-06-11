@@ -19,6 +19,12 @@ type StateNotifier interface {
 	NotifySessionState(sessionID string, state session.SessionState)
 }
 
+// MidCallRenegotiationNotifier notifies clients about WebRTC-assisted
+// renegotiation needed after an accepted SIP mid-call offer.
+type MidCallRenegotiationNotifier interface {
+	NotifyMidCallRenegotiation(sessionID string, renegotiation session.MidCallRenegotiationSnapshot, validation session.MidCallSDPValidation)
+}
+
 // IncomingCallNotifier interface for notifying about incoming calls
 type IncomingCallNotifier interface {
 	NotifyIncomingCall(sessionID, from, to string, trunkID int64)
@@ -59,9 +65,10 @@ type Server struct {
 	unicastAddress   string
 	publicAddress    string // Public IP address for NAT traversal
 	sipPort          int
-	sessionMgr       SessionManager       // For finding sessions by Call-ID
-	sessionCreator   SessionCreator       // For creating sessions for incoming calls
-	stateNotifier    StateNotifier        // For notifying WebSocket clients
+	sessionMgr       SessionManager // For finding sessions by Call-ID
+	sessionCreator   SessionCreator // For creating sessions for incoming calls
+	stateNotifier    StateNotifier  // For notifying WebSocket clients
+	midCallNotifier  MidCallRenegotiationNotifier
 	incomingNotifier IncomingCallNotifier // For notifying incoming calls
 	messageNotifier  MessageNotifier      // For notifying incoming SIP messages
 	dtmfNotifier     DTMFNotifier         // For notifying received DTMF
@@ -125,6 +132,10 @@ func (s *Server) SetSessionManager(mgr SessionManager) {
 // SetStateNotifier sets the state notifier for the server
 func (s *Server) SetStateNotifier(notifier StateNotifier) {
 	s.stateNotifier = notifier
+}
+
+func (s *Server) SetMidCallRenegotiationNotifier(notifier MidCallRenegotiationNotifier) {
+	s.midCallNotifier = notifier
 }
 
 func (s *Server) notifySessionStateChange(sess *session.Session, state session.SessionState) {

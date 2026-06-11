@@ -160,8 +160,8 @@ func (s *incomingNotifyTestTrunkManager) SetTrunkNotifyUserIDAndPlatform(ctx con
 	return nil
 }
 
-func (s *incomingNotifyTestTrunkManager) SetTrunkPushContact(ctx context.Context, trunkID int64, contact sip.TrunkPushContact) error {
-	return nil
+func (s *incomingNotifyTestTrunkManager) SetTrunkPushContact(ctx context.Context, trunkID int64, contact sip.TrunkPushContact) (bool, error) {
+	return true, nil
 }
 
 func waitForDBLookups(t *testing.T, trunkMgr *incomingNotifyTestTrunkManager, want int) {
@@ -979,7 +979,7 @@ func TestNotifyIncomingCall_PushLookupDBErrorStillAvoidsCachePath(t *testing.T) 
 func TestSelectIncomingPushRoute_AndroidUsesFCMOnly(t *testing.T) {
 	notifyUserID := "user-1"
 	platform := "android"
-	appID := trunkPNAppID
+	appID := config.DefaultTrunkPNAppID
 	pnType := trunkPNType
 	token := "D6F5DF83B03398129B4AC01DFE5971662B46130F3F5424AF93CF0A8C02A74CCF"
 	trunk := &sip.Trunk{
@@ -991,7 +991,7 @@ func TestSelectIncomingPushRoute_AndroidUsesFCMOnly(t *testing.T) {
 		PNToken:            &token,
 	}
 
-	route := selectIncomingPushRoute(trunk, true)
+	route := selectIncomingPushRoute(trunk, true, config.DefaultTrunkPNAppID)
 
 	if !route.SendFCM || route.SendAPNS {
 		t.Fatalf("expected android route to use FCM only, got %+v", route)
@@ -1001,7 +1001,7 @@ func TestSelectIncomingPushRoute_AndroidUsesFCMOnly(t *testing.T) {
 func TestSelectIncomingPushRoute_IOSUsesAPNSOnly(t *testing.T) {
 	notifyUserID := "user-1"
 	platform := "ios"
-	appID := trunkPNAppID
+	appID := config.DefaultTrunkPNAppID
 	pnType := trunkPNType
 	token := "D6F5DF83B03398129B4AC01DFE5971662B46130F3F5424AF93CF0A8C02A74CCF"
 	trunk := &sip.Trunk{
@@ -1013,7 +1013,7 @@ func TestSelectIncomingPushRoute_IOSUsesAPNSOnly(t *testing.T) {
 		PNToken:            &token,
 	}
 
-	route := selectIncomingPushRoute(trunk, true)
+	route := selectIncomingPushRoute(trunk, true, config.DefaultTrunkPNAppID)
 
 	if !route.SendAPNS || route.SendFCM {
 		t.Fatalf("expected ios route to use APNS only, got %+v", route)
@@ -1022,7 +1022,7 @@ func TestSelectIncomingPushRoute_IOSUsesAPNSOnly(t *testing.T) {
 
 func TestSelectIncomingPushRoute_UnknownPlatformKeepsFallback(t *testing.T) {
 	notifyUserID := "user-1"
-	appID := trunkPNAppID
+	appID := config.DefaultTrunkPNAppID
 	pnType := trunkPNType
 	token := "D6F5DF83B03398129B4AC01DFE5971662B46130F3F5424AF93CF0A8C02A74CCF"
 	trunk := &sip.Trunk{
@@ -1033,10 +1033,32 @@ func TestSelectIncomingPushRoute_UnknownPlatformKeepsFallback(t *testing.T) {
 		PNToken:      &token,
 	}
 
-	route := selectIncomingPushRoute(trunk, true)
+	route := selectIncomingPushRoute(trunk, true, config.DefaultTrunkPNAppID)
 
 	if !route.SendAPNS || !route.SendFCM || !route.UnknownPlatformFallback {
 		t.Fatalf("expected unknown platform fallback to use both targets, got %+v", route)
+	}
+}
+
+func TestSelectIncomingPushRoute_UsesConfiguredPNAppIDForAPNSTarget(t *testing.T) {
+	notifyUserID := "user-1"
+	platform := "ios"
+	appID := "th.or.ttrs.video.staging"
+	pnType := trunkPNType
+	token := "D6F5DF83B03398129B4AC01DFE5971662B46130F3F5424AF93CF0A8C02A74CCF"
+	trunk := &sip.Trunk{
+		ID:                 1,
+		NotifyUserID:       &notifyUserID,
+		LastOnlinePlatform: &platform,
+		PNAppID:            &appID,
+		PNType:             &pnType,
+		PNToken:            &token,
+	}
+
+	route := selectIncomingPushRoute(trunk, true, "th.or.ttrs.video.staging")
+
+	if !route.SendAPNS || route.SendFCM {
+		t.Fatalf("expected configured app ID to enable APNS route, got %+v", route)
 	}
 }
 
