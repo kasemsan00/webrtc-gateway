@@ -219,3 +219,40 @@ func TestSetTrunkNotifyUserID_BlankUserIDClearsOnlyTarget(t *testing.T) {
 		t.Fatalf("expected target trunk notify_user_id to be cleared")
 	}
 }
+
+func TestSetTrunkNotifyUserIDAndPlatform_PersistsPlatform(t *testing.T) {
+	userID := "user-1"
+	tx := &notifyTestTx{
+		targetUsername: "1002",
+		targetDomain:   "sip.example.com",
+		targetPort:     5060,
+	}
+	tm := &TrunkManager{
+		db: &notifyTestDB{tx: tx},
+		trunks: map[int64]*Trunk{
+			2: {ID: 2, Username: "1002", Domain: "sip.example.com", Port: 5060},
+		},
+	}
+
+	platform := " Android "
+	if err := tm.SetTrunkNotifyUserIDAndPlatform(context.Background(), 2, &userID, &platform); err != nil {
+		t.Fatalf("SetTrunkNotifyUserIDAndPlatform failed: %v", err)
+	}
+
+	if len(tx.execs) != 2 {
+		t.Fatalf("expected clear + set execs, got %d", len(tx.execs))
+	}
+	setExec := tx.execs[1]
+	if !strings.Contains(setExec.sql, "last_online_platform = $2") {
+		t.Fatalf("expected platform update SQL, got %s", setExec.sql)
+	}
+	if got := setExec.args[1]; got != "android" {
+		t.Fatalf("expected normalized platform android, got %#v", got)
+	}
+	if tm.trunks[2].LastOnlinePlatform == nil || *tm.trunks[2].LastOnlinePlatform != "android" {
+		t.Fatalf("expected in-memory platform android, got %#v", tm.trunks[2].LastOnlinePlatform)
+	}
+	if tm.trunks[2].LastOnlineAt == nil {
+		t.Fatalf("expected in-memory last_online_at to be set")
+	}
+}

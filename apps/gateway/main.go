@@ -24,6 +24,7 @@ import (
 	"k2-gateway/internal/push"
 	"k2-gateway/internal/session"
 	"k2-gateway/internal/sip"
+	"k2-gateway/internal/sipclientauth"
 	"k2-gateway/internal/translator"
 	"k2-gateway/internal/webrtc"
 )
@@ -186,6 +187,21 @@ func runAPIMode(ctx context.Context, cfg *config.Config, unicastAddress string, 
 		trunkMgrInterface = trunkManager
 	}
 	apiServer := api.NewServer(cfg.API, cfg.TURN, cfg.Gateway, cfg.Translator, sessionMgr, sipServer, publicRegistry, trunkMgrInterface, store)
+	if cfg.API.MobileSIPAuthRegisterURL != "" {
+		if trunkManager == nil {
+			log.Printf("⚠️ Warning: Mobile SIP provisioning disabled — trunk manager is not available")
+		} else {
+			timeout := time.Duration(cfg.API.MobileSIPAuthTimeoutMS) * time.Millisecond
+			apiServer.SetMobileSIPProvisioner(api.NewMobileSIPProvisioner(
+				sipclientauth.NewClient(sipclientauth.Config{
+					RegisterURL: cfg.API.MobileSIPAuthRegisterURL,
+					Timeout:     timeout,
+				}),
+				trunkManager,
+			))
+			log.Printf("Mobile SIP provisioning enabled: registerURL=%s timeout=%dms", cfg.API.MobileSIPAuthRegisterURL, cfg.API.MobileSIPAuthTimeoutMS)
+		}
+	}
 	if cfg.Auth.Enable {
 		if cfg.Auth.User.JWKSURL == "" && cfg.Auth.Employee.JWKSURL == "" {
 			log.Fatalf("AUTH_ENABLE=true requires at least one realm JWKS URL: AUTH_TTRS_USERS_JWKS_URL or AUTH_TTRS_EMPLOYEE_JWKS_URL")

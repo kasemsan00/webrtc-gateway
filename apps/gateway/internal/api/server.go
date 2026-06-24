@@ -57,29 +57,30 @@ const (
 
 // Server represents the HTTP/WebSocket API server
 type Server struct {
-	sessionMgr       *session.Manager
-	sipMaker         SIPCallMaker
-	tokenVerifier    TokenVerifier
-	publicRegistry   PublicAccountRegistry
-	trunkManager     TrunkManager
-	logStore         logstore.LogStore
-	pushService      *push.Service
-	config           config.APIConfig
-	turnConfig       config.TURNConfig
-	gatewayConfig    config.GatewayConfig
-	translatorCfg    config.TranslatorConfig
-	translatorClient *translator.Client
-	upgrader         websocket.Upgrader
-	wsClients        map[string]*WSClient
-	wsConnections    map[*WSClient]struct{}
-	trunkStreams     map[int]chan []byte
-	trunkStreamSeq   int
-	sessionStreams   map[int]chan []byte
-	sessionStreamSeq int
-	incomingCounters map[string]int64
-	diagnosticLimits map[string]*diagnosticRateState
-	startTime        time.Time
-	mu               sync.RWMutex
+	sessionMgr        *session.Manager
+	sipMaker          SIPCallMaker
+	tokenVerifier     TokenVerifier
+	publicRegistry    PublicAccountRegistry
+	trunkManager      TrunkManager
+	logStore          logstore.LogStore
+	pushService       *push.Service
+	mobileProvisioner MobileSIPProvisioner
+	config            config.APIConfig
+	turnConfig        config.TURNConfig
+	gatewayConfig     config.GatewayConfig
+	translatorCfg     config.TranslatorConfig
+	translatorClient  *translator.Client
+	upgrader          websocket.Upgrader
+	wsClients         map[string]*WSClient
+	wsConnections     map[*WSClient]struct{}
+	trunkStreams      map[int]chan []byte
+	trunkStreamSeq    int
+	sessionStreams    map[int]chan []byte
+	sessionStreamSeq  int
+	incomingCounters  map[string]int64
+	diagnosticLimits  map[string]*diagnosticRateState
+	startTime         time.Time
+	mu                sync.RWMutex
 }
 
 type trunkOutboundValidation struct {
@@ -310,6 +311,11 @@ func (s *Server) SetPushService(svc *push.Service) {
 	s.pushService = svc
 }
 
+// SetMobileSIPProvisioner enables mobile SIP trunk provisioning during WebSocket auth.
+func (s *Server) SetMobileSIPProvisioner(provisioner MobileSIPProvisioner) {
+	s.mobileProvisioner = provisioner
+}
+
 // Start starts the HTTP server with graceful shutdown support
 func (s *Server) Start(ctx context.Context) error {
 	router := mux.NewRouter()
@@ -418,6 +424,7 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 // handleWebSocket handles WebSocket connections
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	req := r
+	var provisioned *MobileSIPProvisionResult
 	if s.tokenVerifier != nil {
 		rawToken := strings.TrimSpace(r.URL.Query().Get("access_token"))
 		if rawToken == "" {
@@ -432,6 +439,27 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		log.Printf("WebSocket auth accepted: hint=%s realm=%s sub=%s", realmHint, claims.Realm, claims.Subject)
+		if s.mobileProvisioner != nil && claims.Realm == auth.TokenRealmUser {
+			devicePlatform, ok := normalizeDevicePlatform(r.URL.Query().Get("devicePlatform"))
+			if !ok || devicePlatform == "" {
+				log.Printf("WebSocket mobile SIP provisioning rejected: sub=%s stage=device_platform", claims.Subject)
+				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				return
+			}
+			startedAt := time.Now()
+			result, err := s.mobileProvisioner.ProvisionMobileSIPTrunk(r.Context(), rawToken, claims, devicePlatform)
+			if err != nil {
+				log.Printf("WebSocket mobile SIP provisioning rejected: sub=%s stage=provision elapsed=%s err=%v", claims.Subject, time.Since(startedAt).Round(10*time.Millisecond), err)
+				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				return
+			}
+			provisioned = result
+			trunkID := int64(0)
+			if result != nil {
+				trunkID = result.TrunkID
+			}
+			log.Printf("WebSocket mobile SIP provisioning accepted: sub=%s trunkID=%d elapsed=%s", claims.Subject, trunkID, time.Since(startedAt).Round(10*time.Millisecond))
+		}
 		req = withAuthClaims(r, claims)
 	}
 
@@ -452,12 +480,23 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	if claims, ok := AuthClaimsFromContext(req.Context()); ok {
 		client.authClaims = claims
 	}
+	if provisioned != nil && provisioned.TrunkID > 0 {
+		client.trunkResolved = true
+		client.resolvedTrunkID = provisioned.TrunkID
+	}
 	s.mu.Lock()
 	s.wsConnections[client] = struct{}{}
 	s.mu.Unlock()
 
 	// Start write pump
 	go s.wsWritePump(client)
+	if provisioned != nil && provisioned.TrunkID > 0 {
+		s.sendWSMessage(client, WSMessage{
+			Type:          "trunk_resolved",
+			TrunkID:       provisioned.TrunkID,
+			TrunkPublicID: provisioned.TrunkPublicID,
+		})
+	}
 
 	conn.SetReadLimit(maxMessageSize)
 	conn.SetReadDeadline(time.Now().Add(pongWait))
@@ -819,15 +858,25 @@ func (s *Server) handleWSCall(client *WSClient, msg WSMessage) {
 	var accountKey string
 	var trunkID int64
 	var trunkPublicID string
+	useResolvedConnectionTrunk := msg.TrunkID == 0 &&
+		strings.TrimSpace(msg.TrunkPublicID) == "" &&
+		strings.TrimSpace(msg.SIPDomain) == "" &&
+		strings.TrimSpace(msg.SIPUsername) == "" &&
+		strings.TrimSpace(msg.SIPPassword) == "" &&
+		client != nil &&
+		client.trunkResolved &&
+		client.resolvedTrunkID > 0
 
-	if msg.TrunkID > 0 || msg.TrunkPublicID != "" {
+	if msg.TrunkID > 0 || msg.TrunkPublicID != "" || useResolvedConnectionTrunk {
 		// Trunk mode: use trunk from DB
 		authMode = "trunk"
 		if s.trunkManager == nil {
 			s.sendWSError(client, msg.SessionID, "Trunk manager not available")
 			return
 		}
-		if msg.TrunkID > 0 {
+		if useResolvedConnectionTrunk {
+			trunkID = client.resolvedTrunkID
+		} else if msg.TrunkID > 0 {
 			trunkID = msg.TrunkID
 		} else {
 			normalized, ok := sip.NormalizeTrunkPublicID(msg.TrunkPublicID)

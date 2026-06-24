@@ -55,6 +55,8 @@ type APIConfig struct {
 	IncomingRingTimeoutSeconds int    // Incoming SIP ring timeout before 480 (default: 30)
 	IncomingOfflinePolicy      string // Offline incoming policy (default: push_then_480)
 	TrunkPNAppID               string // SIP Contact push app-id accepted for trunk PushKit tokens
+	MobileSIPAuthRegisterURL   string // External auth endpoint for mobile SIP credential provisioning
+	MobileSIPAuthTimeoutMS     int    // Timeout for mobile SIP auth register requests
 }
 
 const DefaultTrunkPNAppID = "th.or.ttrs.video.prod"
@@ -306,6 +308,8 @@ func Load() (*Config, error) {
 			IncomingRingTimeoutSeconds: getEnvAsInt("SIP_INCOMING_RING_TIMEOUT_SECONDS", 30),
 			IncomingOfflinePolicy:      getEnvWithDefault("SIP_INCOMING_OFFLINE_POLICY", "push_then_480"),
 			TrunkPNAppID:               trunkPNAppID,
+			MobileSIPAuthRegisterURL:   os.Getenv("SIPCLIENT_AUTH_REGISTER_URL"),
+			MobileSIPAuthTimeoutMS:     getEnvAsInt("SIPCLIENT_AUTH_TIMEOUT_MS", 5000),
 		},
 		Auth: AuthConfig{
 			Enable:    getEnvAsBool("AUTH_ENABLE", false),
@@ -487,6 +491,10 @@ func (c *Config) Display() {
 	fmt.Printf("  CORS Origins: %s\n", c.API.CORSOrigins)
 	fmt.Printf("  Debug WebSocket: %v\n", c.API.DebugWebSocket)
 	fmt.Printf("  Debug TURN/ICE: %v\n", c.API.DebugTURN)
+	if c.API.MobileSIPAuthRegisterURL != "" {
+		fmt.Printf("  Mobile SIP Auth Register URL: %s\n", c.API.MobileSIPAuthRegisterURL)
+		fmt.Printf("  Mobile SIP Auth Timeout: %d ms\n", c.API.MobileSIPAuthTimeoutMS)
+	}
 
 	// Display Auth Configuration
 	fmt.Println("\nAuth Configuration:")

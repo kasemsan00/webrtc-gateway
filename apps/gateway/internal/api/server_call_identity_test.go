@@ -201,6 +201,47 @@ func TestHandleWSCallRejectsTrunkCallWhenNotResolved(t *testing.T) {
 	}
 }
 
+func TestHandleWSCallUsesResolvedTrunkWhenNoAuthFieldsProvided(t *testing.T) {
+	mgr := newTestSessionManager()
+	sess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+
+	owner := "gw-1"
+	future := time.Now().Add(2 * time.Minute)
+	trunkMgr := &stubResolveTrunkManager{
+		byID: map[int64]*sip.Trunk{
+			42: {ID: 42, PublicID: "8f6f6d70-2b5a-4fe7-a0d5-9d0af0e90d3a", LeaseOwner: &owner, LeaseUntil: &future},
+		},
+	}
+
+	sipMaker := &stubSIPCallMaker{}
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{InstanceID: "gw-1"}, config.TranslatorConfig{}, mgr, sipMaker, nil, trunkMgr, nil)
+	client := &WSClient{
+		send:            make(chan []byte, 8),
+		trunkResolved:   true,
+		resolvedTrunkID: 42,
+	}
+
+	srv.handleWSCall(client, WSMessage{
+		Type:        "call",
+		SessionID:   sess.ID,
+		Destination: "1004",
+	})
+
+	waitForMakeCallCount(t, sipMaker, 1)
+	mode, _, trunkID, _, _, _, _ := sess.GetSIPAuthContext()
+	if mode != "trunk" || trunkID != 42 {
+		t.Fatalf("expected call to use resolved trunk 42, got mode=%q trunkID=%d", mode, trunkID)
+	}
+
+	msgs := readWSMessages(t, client.send)
+	if len(msgs) != 1 || msgs[0].Type != "state" {
+		t.Fatalf("expected state message, got %+v", msgs)
+	}
+}
+
 func TestHandleWSCallRejectsTrunkCallWhenLeaseNotActive(t *testing.T) {
 	mgr := newTestSessionManager()
 	sess, err := mgr.CreateSession(config.TURNConfig{})

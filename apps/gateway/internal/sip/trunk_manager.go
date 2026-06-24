@@ -80,6 +80,14 @@ type CreateTrunkPayload struct {
 	IsDefault bool
 }
 
+// MobileTrunkPayload defines SIP credentials provisioned from a mobile access token.
+type MobileTrunkPayload struct {
+	Subject  string
+	Domain   string
+	Username string
+	Password string
+}
+
 // Trunk represents a SIP trunk account from DB
 type Trunk struct {
 	ID        int64
@@ -187,6 +195,102 @@ func NewTrunkManager(db *pgxpool.Pool, cfg *config.Config, userAgent *sipgo.User
 		ctx:            ctx,
 		cancel:         cancel,
 	}
+}
+
+// BuildMobileTrunkName returns the deterministic DB trunk name for a mobile auth subject.
+func BuildMobileTrunkName(subject string) (string, error) {
+	subject = strings.TrimSpace(subject)
+	if subject == "" {
+		return "", fmt.Errorf("%w: subject is required", ErrTrunkValidation)
+	}
+	return "sipclient-mobile-" + subject, nil
+}
+
+// UpsertMobileTrunk creates or updates the deterministic SIP trunk for a mobile auth subject.
+func (tm *TrunkManager) UpsertMobileTrunk(ctx context.Context, payload MobileTrunkPayload) (*Trunk, error) {
+	if tm.db == nil {
+		return nil, fmt.Errorf("database not available for trunk manager")
+	}
+
+	name, err := BuildMobileTrunkName(payload.Subject)
+	if err != nil {
+		return nil, err
+	}
+	domain := strings.TrimSpace(payload.Domain)
+	username := strings.TrimSpace(payload.Username)
+	password := strings.TrimSpace(payload.Password)
+	if domain == "" {
+		return nil, fmt.Errorf("%w: domain is required", ErrTrunkValidation)
+	}
+	if username == "" {
+		return nil, fmt.Errorf("%w: username is required", ErrTrunkValidation)
+	}
+	if password == "" {
+		return nil, fmt.Errorf("%w: password is required", ErrTrunkValidation)
+	}
+
+	const (
+		port      = 5060
+		transport = "tcp"
+	)
+
+	trunk := &Trunk{}
+	err = tm.db.QueryRow(ctx, `
+		INSERT INTO sip_trunks (
+			public_id, name, domain, port, username, password, transport, enabled, is_default
+		)
+		VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, false)
+		ON CONFLICT (name) DO UPDATE
+		SET domain = EXCLUDED.domain,
+		    port = EXCLUDED.port,
+		    username = EXCLUDED.username,
+		    password = EXCLUDED.password,
+		    transport = EXCLUDED.transport,
+		    enabled = true,
+		    updated_at = NOW()
+		RETURNING id, public_id, name, domain, port, username, password, transport, enabled, is_default,
+		          lease_owner, lease_until, last_registered_at, last_error, in_use_by, notify_user_id,
+		          last_online_platform, last_online_at,
+		          pn_app_id, pn_type, pn_token, pn_updated_at, created_at, updated_at
+	`, name, domain, port, username, password, transport, true).Scan(
+		&trunk.ID, &trunk.PublicID, &trunk.Name, &trunk.Domain, &trunk.Port,
+		&trunk.Username, &trunk.Password, &trunk.Transport,
+		&trunk.Enabled, &trunk.IsDefault,
+		&trunk.LeaseOwner, &trunk.LeaseUntil,
+		&trunk.LastRegisteredAt, &trunk.LastError, &trunk.InUseBy, &trunk.NotifyUserID,
+		&trunk.LastOnlinePlatform, &trunk.LastOnlineAt,
+		&trunk.PNAppID, &trunk.PNType, &trunk.PNToken, &trunk.PNUpdatedAt,
+		&trunk.CreatedAt, &trunk.UpdatedAt,
+	)
+	if err != nil {
+		msg := strings.ToLower(err.Error())
+		if strings.Contains(msg, "check constraint") {
+			return nil, fmt.Errorf("%w: %v", ErrTrunkValidation, err)
+		}
+		return nil, fmt.Errorf("upsert mobile trunk failed: %w", err)
+	}
+
+	tm.mu.Lock()
+	if tm.trunks == nil {
+		tm.trunks = make(map[int64]*Trunk)
+	}
+	if tm.trunkByPublic == nil {
+		tm.trunkByPublic = make(map[string]int64)
+	}
+	if trunk.Enabled {
+		tm.trunks[trunk.ID] = trunk
+		if trunk.PublicID != "" {
+			tm.trunkByPublic[trunk.PublicID] = trunk.ID
+		}
+	} else {
+		delete(tm.trunks, trunk.ID)
+		if trunk.PublicID != "" {
+			delete(tm.trunkByPublic, trunk.PublicID)
+		}
+	}
+	tm.mu.Unlock()
+
+	return trunk, nil
 }
 
 // Start loads trunks, acquires leases, and starts registration workers

@@ -110,6 +110,14 @@ Auth behavior:
 
 - When `AUTH_ENABLE=true`, `/ws` requires `access_token` query parameter (`/ws?access_token=<jwt>`).
 - Token is validated against configured JWKS/issuer/audience before WebSocket upgrade.
+- When `SIPCLIENT_AUTH_REGISTER_URL` is configured, authenticated user-realm `/ws` clients are provisioned as mobile SIP trunks before upgrade completes:
+  - clients must include `devicePlatform=android|ios` in the WebSocket URL;
+  - gateway posts form-data `token=<jwt>` and `type=mobile` to the configured register URL;
+  - response `data.domain`, `data.ext`, and `data.secret` become the trunk domain, username, and password;
+  - trunk identity is deterministic by JWT subject (`sipclient-mobile-<sub>`);
+  - `notify_user_id` is bound from verified JWT `sub`, and `last_online_platform` is updated from `devicePlatform`;
+  - provisioning or SIP REGISTER failure rejects the WebSocket connection;
+  - after successful provisioning and SIP REGISTER, the gateway sends `trunk_resolved` with `trunkId` and `trunkPublicId`.
 
 ### Client -> Server message types
 
@@ -117,6 +125,7 @@ Auth behavior:
 - `call` -> requires `sessionId`, `destination` (`from` optional)
   - Public mode: include `sipDomain`, `sipUsername`, `sipPassword`, optional `sipPort`
   - Trunk mode: include `trunkId` or `trunkPublicId`
+  - Auto-provisioned mobile connections may omit trunk fields and public SIP credentials; the gateway uses the connection's resolved trunk.
 - `hangup` -> requires `sessionId`
 - `accept` -> requires `sessionId`
 - `reject` -> requires `sessionId` (`reason` optional, defaults to `busy`)
@@ -181,6 +190,8 @@ If you add/change a message type, update all of:
 - `API_ENABLE_WS` (default `true`)
 - `API_ENABLE_REST` (default `true`)
 - `API_CORS_ORIGINS` (default `*`)
+- `SIPCLIENT_AUTH_REGISTER_URL` (optional; when set, user-realm WebSocket auth auto-provisions a mobile SIP trunk)
+- `SIPCLIENT_AUTH_TIMEOUT_MS` (default `5000`)
 - `RTP_PORT_MIN` (default `10500`)
 - `RTP_PORT_MAX` (default `10600`)
 - `RTP_BUFFER_SIZE` (default `16384`)
