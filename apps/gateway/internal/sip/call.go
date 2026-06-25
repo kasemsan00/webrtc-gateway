@@ -18,6 +18,17 @@ var (
 	contentTypeHeaderSDPCall = sip.ContentTypeHeader("application/sdp")
 )
 
+func (s *Server) enableInboundGainIfConfigured(sess *session.Session) {
+	if !s.config.AudioInboundGainEnable {
+		return
+	}
+	gain := s.config.AudioInboundGain
+	if gain <= 0 {
+		gain = 1.0
+	}
+	sess.EnableInboundGain(gain, 24000)
+}
+
 type sipAuthParams struct {
 	Domain    string
 	Port      int
@@ -129,6 +140,7 @@ func (s *Server) MakeCall(destination, from string, sess *session.Session) error
 	if err != nil {
 		return fmt.Errorf("failed to start RTP listener: %w", err)
 	}
+	s.enableInboundGainIfConfigured(sess)
 	cleanupOnError := true
 	defer func() {
 		if cleanupOnError {
@@ -852,6 +864,7 @@ func (s *Server) AcceptCall(sess *session.Session) error {
 		tx.Respond(errRes)
 		return fmt.Errorf("failed to start RTP listener: %w", err)
 	}
+	s.enableInboundGainIfConfigured(sess)
 	cleanupOnError := true
 	defer func() {
 		if cleanupOnError {

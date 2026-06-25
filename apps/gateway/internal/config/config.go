@@ -145,6 +145,10 @@ type SIPConfig struct {
 	VideoRecoveryBurstStaleMS    int  // Burst stale threshold for PLI in ms (default: 1200)
 	VideoRecoveryBurstFIRStaleMS int  // Burst stale threshold for FIR in ms (default: 2500)
 	MidCallRenegotiationEnable   bool // Enable SIP mid-call re-INVITE/UPDATE negotiation (default: true)
+	// Inbound audio gain (SIP → WebRTC): decode Opus, apply PCM gain, re-encode Opus
+	AudioInboundGainEnable bool    // Enable inbound gain processing (default: false)
+	AudioInboundGain       float32 // Linear gain multiplier (default: 1.0)
+	AudioInboundGainMax    float32 // Maximum allowed gain (default: 3.0)
 }
 
 const (
@@ -297,6 +301,9 @@ func Load() (*Config, error) {
 			VideoRecoveryBurstStaleMS:            getEnvAsInt("SIP_VIDEO_RECOVERY_BURST_STALE_MS", 1200),
 			VideoRecoveryBurstFIRStaleMS:         getEnvAsInt("SIP_VIDEO_RECOVERY_BURST_FIR_STALE_MS", 2500),
 			MidCallRenegotiationEnable:           getEnvAsBool("SIP_MIDCALL_RENEGOTIATION_ENABLE", true),
+			AudioInboundGainEnable:               getEnvAsBool("SIP_AUDIO_INBOUND_GAIN_ENABLE", false),
+			AudioInboundGain:                     clampInboundGain(getEnvAsFloat32("SIP_AUDIO_INBOUND_GAIN", 1.0), getEnvAsFloat32("SIP_AUDIO_INBOUND_GAIN_MAX", 3.0)),
+			AudioInboundGainMax:                  getEnvAsFloat32("SIP_AUDIO_INBOUND_GAIN_MAX", 3.0),
 		},
 		API: APIConfig{
 			Port:                       apiPort,
@@ -433,6 +440,11 @@ func (c *Config) Display() {
 	fmt.Printf("  SIP Listen TCP: %v\n", c.SIP.ListenTCP)
 	fmt.Printf("  SIP Listen UDP: %v\n", c.SIP.ListenUDP)
 	fmt.Printf("  Audio Use AVPF: %v\n", c.SIP.AudioUseAVPF)
+	if c.SIP.AudioInboundGainEnable {
+		fmt.Printf("  Inbound Audio Gain: enabled (gain=%.2f, max=%.2f)\n", c.SIP.AudioInboundGain, c.SIP.AudioInboundGainMax)
+	} else {
+		fmt.Printf("  Inbound Audio Gain: disabled\n")
+	}
 	fmt.Printf("  Video Use AVPF: %v\n", c.SIP.VideoUseAVPF)
 	fmt.Printf("  Video Feedback Transport: %s\n", c.SIP.VideoFeedbackTransport)
 	fmt.Printf("  Video Preserve STAP-A: %v\n", c.SIP.VideoPreserveSTAPA)
@@ -666,6 +678,33 @@ func getEnvAsInt(key string, defaultValue int) int {
 }
 
 // getEnvAsBool retrieves an environment variable as a boolean with a default value
+func clampInboundGain(gain, max float32) float32 {
+	if max <= 0 {
+		max = 3.0
+	}
+	if gain < 0 {
+		gain = 0
+	}
+	if gain > max {
+		fmt.Printf("Warning: SIP_AUDIO_INBOUND_GAIN=%.2f exceeds max %.2f, clamping\n", gain, max)
+		gain = max
+	}
+	return gain
+}
+
+func getEnvAsFloat32(key string, defaultValue float32) float32 {
+	valueStr := os.Getenv(key)
+	if valueStr == "" {
+		return defaultValue
+	}
+	value, err := strconv.ParseFloat(valueStr, 32)
+	if err != nil {
+		fmt.Printf("Warning: Invalid value for %s: %s, using default: %.2f\n", key, valueStr, defaultValue)
+		return defaultValue
+	}
+	return float32(value)
+}
+
 func getEnvAsBool(key string, defaultValue bool) bool {
 	valueStr := os.Getenv(key)
 	if valueStr == "" {

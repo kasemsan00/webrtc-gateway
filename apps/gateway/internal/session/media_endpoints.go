@@ -9,6 +9,8 @@ import (
 // CloseMediaTransports closes all session RTP/RTCP sockets and clears transport pointers/ports.
 // Socket closes are performed outside the session lock to keep lock hold time short.
 func (s *Session) CloseMediaTransports() {
+	s.DisableInboundGain()
+
 	s.mu.Lock()
 	audioRTP := s.RTPConn
 	videoRTP := s.VideoRTPConn

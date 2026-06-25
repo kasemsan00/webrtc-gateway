@@ -4,8 +4,8 @@
 # Stage 1: Build
 FROM golang:1.26.2-alpine AS builder
 
-# Install build dependencies
-RUN apk add --no-cache git
+# Install build dependencies (opus-dev required for CGO inbound audio gain)
+RUN apk add --no-cache git gcc musl-dev opus-dev pkgconf
 
 # Set working directory
 WORKDIR /build
@@ -22,16 +22,15 @@ RUN go install github.com/pressly/goose/v3/cmd/goose@v3.24.1
 # Copy source code
 COPY apps/gateway/ .
 
-# Build the application
-# CGO_ENABLED=0 for static binary
+# Build the application (CGO required for libopus decode/encode)
 # -ldflags="-w -s" to reduce binary size
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -ldflags="-w -s" -o k2-gateway .
+RUN CGO_ENABLED=1 GOOS=linux go build -ldflags="-w -s" -o k2-gateway .
 
 # Stage 2: Runtime
 FROM alpine:latest
 
-# Install ca-certificates for HTTPS/TLS
-RUN apk --no-cache add ca-certificates
+# Install ca-certificates for HTTPS/TLS and libopus runtime
+RUN apk --no-cache add ca-certificates opus
 
 WORKDIR /app
 

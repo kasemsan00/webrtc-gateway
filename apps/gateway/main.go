@@ -53,6 +53,18 @@ func main() {
 
 	// Display configuration
 	cfg.Display()
+
+	if cfg.SIP.AudioInboundGainEnable {
+		codec, err := translator.NewOpusCodec(24000)
+		if err != nil {
+			log.Printf("⚠️ Warning: SIP_AUDIO_INBOUND_GAIN_ENABLE=true but Opus codec unavailable (%v); disabling inbound gain", err)
+			cfg.SIP.AudioInboundGainEnable = false
+		} else {
+			codec.Close()
+			log.Printf("🔊 SIP inbound audio gain enabled: gain=%.2f max=%.2f", cfg.SIP.AudioInboundGain, cfg.SIP.AudioInboundGainMax)
+		}
+	}
+
 	if cfg.SIP.Port != cfg.SIP.LocalPort {
 		fmt.Printf("⚠️ SIP_PORT (%d) differs from SIP_LOCAL_PORT (%d). Listener binds SIP_LOCAL_PORT; ensure upstream INVITEs target that port.\n", cfg.SIP.Port, cfg.SIP.LocalPort)
 	}

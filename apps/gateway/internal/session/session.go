@@ -13,6 +13,7 @@ import (
 	"github.com/pion/rtcp"
 	"github.com/pion/webrtc/v4"
 
+	"k2-gateway/internal/audio"
 	"k2-gateway/internal/config"
 	pkg_webrtc "k2-gateway/internal/pkg/webrtc"
 	"k2-gateway/internal/translator"
@@ -224,6 +225,10 @@ type Session struct {
 	TranslatorSrcLang  string                  `json:"-"`
 	TranslatorTgtLang  string                  `json:"-"`
 	TranslatorTTSVoice string                  `json:"-"`
+	// Inbound audio gain (SIP → WebRTC)
+	InboundGainEnabled bool                      `json:"-"`
+	InboundGain        float32                   `json:"-"`
+	inboundGainProc    *audio.InboundGainProcessor `json:"-"`
 	ctx                context.Context         `json:"-"`
 	cancel             context.CancelFunc      `json:"-"`
 	videoRTPHistoryMu  sync.Mutex

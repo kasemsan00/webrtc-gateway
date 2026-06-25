@@ -3,9 +3,14 @@
 package translator
 
 /*
-#cgo LDFLAGS: -lopus
+#cgo pkg-config: opus
 #include <opus.h>
+#include <opus_defines.h>
 #include <stdlib.h>
+
+static int set_opus_bitrate(OpusEncoder *enc, int bitrate) {
+	return opus_encoder_ctl(enc, OPUS_SET_BITRATE_REQUEST, bitrate);
+}
 */
 import "C"
 import (
@@ -44,7 +49,7 @@ func NewOpusCodec(bitrate int) (OpusCodec, error) {
 
 	if bitrate > 0 {
 		val := C.int(bitrate)
-		encRet := C.opus_encoder_ctl(encoder, C.OPUS_SET_BITRATE(val))
+		encRet := C.set_opus_bitrate(encoder, val)
 		if encRet != C.OPUS_OK {
 			C.opus_decoder_destroy(decoder)
 			C.opus_encoder_destroy(encoder)

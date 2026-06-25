@@ -254,36 +254,48 @@ func (s *Server) handleAudioRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 		}
 
 		if sess.AudioTrack != nil {
-			// CRITICAL: Rewrite RTP payload type from SIP side to WebRTC side
-			// SIP may use PT=107 (or other), but WebRTC expects PT=111 (registered in MediaEngine)
-			if sess.SIPOpusPT > 0 && sess.SIPOpusPT != 111 {
-				// Parse RTP packet to rewrite PT
-				packet := &rtp.Packet{}
-				if err := packet.Unmarshal(buffer[:n]); err == nil {
-					originalPT := packet.Header.PayloadType
+			outBuf := buffer[:n]
+			packet := &rtp.Packet{}
+			if err := packet.Unmarshal(buffer[:n]); err != nil {
+				if _, writeErr := sess.AudioTrack.Write(outBuf); writeErr != nil {
+					fmt.Printf("[%s] Error writing to audio track: %v\n", sess.ID, writeErr)
+					return
+				}
+				continue
+			}
 
-					// Rewrite non-DTMF audio packets (DTMF is always PT=101)
-					if originalPT != DTMFPayloadType && originalPT == sess.SIPOpusPT {
-						packet.Header.PayloadType = 111 // WebRTC side Opus PT
-
-						if packetCount <= 5 {
-							fmt.Printf("[%s] 🔄 Rewrite audio PT: %d → 111 (packet #%d)\n", sess.ID, originalPT, packetCount)
-						}
-
-						// Re-marshal and write
-						if rewrittenBuf, err := packet.Marshal(); err == nil {
-							if _, err := sess.AudioTrack.Write(rewrittenBuf); err != nil {
-								fmt.Printf("[%s] Error writing rewritten audio to track: %v\n", sess.ID, err)
-								return
-							}
-							continue
-						}
+			outPacket := packet
+			if sess.IsInboundGainEnabled() {
+				gained, gainErr := sess.ProcessInboundGain(packet)
+				if gainErr != nil {
+					if packetCount <= 5 || packetCount%1000 == 0 {
+						fmt.Printf("[%s] ⚠️ Inbound gain error for packet #%d: %v (falling back to passthrough)\n",
+							sess.ID, packetCount, gainErr)
+					}
+				} else if gained != nil {
+					outPacket = gained
+					if marshaled, marshalErr := gained.Marshal(); marshalErr == nil {
+						outBuf = marshaled
 					}
 				}
 			}
 
-			// Passthrough mode (PT already matches or rewrite failed)
-			if _, err := sess.AudioTrack.Write(buffer[:n]); err != nil {
+			// CRITICAL: Rewrite RTP payload type from SIP side to WebRTC side
+			// SIP may use PT=107 (or other), but WebRTC expects PT=111 (registered in MediaEngine)
+			if sess.SIPOpusPT > 0 && sess.SIPOpusPT != 111 {
+				originalPT := outPacket.Header.PayloadType
+				if originalPT != DTMFPayloadType && originalPT == sess.SIPOpusPT {
+					outPacket.Header.PayloadType = 111
+					if packetCount <= 5 {
+						fmt.Printf("[%s] 🔄 Rewrite audio PT: %d → 111 (packet #%d)\n", sess.ID, originalPT, packetCount)
+					}
+					if rewrittenBuf, marshalErr := outPacket.Marshal(); marshalErr == nil {
+						outBuf = rewrittenBuf
+					}
+				}
+			}
+
+			if _, err := sess.AudioTrack.Write(outBuf); err != nil {
 				fmt.Printf("[%s] Error writing to audio track: %v\n", sess.ID, err)
 				return
 			}

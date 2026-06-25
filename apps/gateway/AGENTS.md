@@ -11,7 +11,7 @@
 1. **Stability first.** This service is in the media path. A minor bug can become dropped calls, one-way audio, or black video.
 2. **Concurrency discipline is mandatory.** Protect shared state with `sync.RWMutex`; do not hold locks while doing network I/O.
 3. **Do not break media invariants.**
-   - Audio is **Opus passthrough** end-to-end (no transcoding).
+   - Audio is **Opus passthrough** by default; optional inbound gain (`SIP_AUDIO_INBOUND_GAIN_ENABLE`) transcodes SIP → WebRTC only.
    - Video is **H.264 only**.
    - SPS/PPS caching and keyframe injection logic must stay intact.
 4. **Never panic in hot paths.** RTP/RTCP/SIP loops should log and continue when possible.
@@ -160,8 +160,9 @@ If you add/change a message type, update all of:
 
 ### 6.1 Audio path
 
-- Opus-only passthrough, browser <-> gateway <-> SIP peer.
-- No audio transcoding.
+- Default: Opus-only passthrough, browser <-> gateway <-> SIP peer (no transcoding).
+- Optional inbound gain (`SIP_AUDIO_INBOUND_GAIN_ENABLE=true`): SIP → WebRTC only — decode Opus, apply PCM gain, re-encode Opus. Requires CGO + libopus (Docker build). On processing error, falls back to passthrough for that packet.
+- Outbound (WebRTC → SIP) remains passthrough.
 - DTMF uses RFC2833 (`telephone-event`, usually PT 101).
 
 ### 6.2 Video path
@@ -219,6 +220,9 @@ When `AUTH_ENABLE=true`:
 - `DEBUG_SIP_INVITE` (default `false`)
 - `SWITCH_PLI_DELAY_MS` (default `1000`)
 - `SIP_AUDIO_USE_AVPF` (default `false`)
+- `SIP_AUDIO_INBOUND_GAIN_ENABLE` (default `false`; requires CGO + libopus in Docker build)
+- `SIP_AUDIO_INBOUND_GAIN` (default `1.0`; linear multiplier, clamped to max)
+- `SIP_AUDIO_INBOUND_GAIN_MAX` (default `3.0`)
 - `SIP_VIDEO_USE_AVPF` (default `false`)
 - `SIP_VIDEO_FEEDBACK_TRANSPORT` (default `auto`; `auto|rtp|rtcp|dual`)
 - `SIP_VIDEO_PRESERVE_STAPA` (default `false`)
