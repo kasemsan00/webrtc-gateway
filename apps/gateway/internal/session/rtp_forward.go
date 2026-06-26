@@ -105,6 +105,7 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 		var pendingWrites [][]byte
 		var destAddr *net.UDPAddr
 		var conn *net.UDPConn
+		dropPacket := false
 
 		if kind == "audio" {
 			destAddr = s.AsteriskAudioAddr
@@ -129,9 +130,9 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 				s.mu.Lock()
 
 				if err != nil {
-					// Translation failed — fall through to original forwarding (passthrough)
-					fmt.Printf("[%s] ⚠️ Translation error for packet #%d: %v (falling back to passthrough)\n",
+					fmt.Printf("[%s] ⚠️ Translation error for packet #%d: %v (suppressing original audio)\n",
 						s.ID, packetCount, err)
+					dropPacket = true
 				} else if translated != nil {
 					// Use translated packet instead of original
 					packet = translated
@@ -139,7 +140,18 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 						fmt.Printf("[%s] 🎤 Translated audio packet #%d: %d bytes → %d bytes\n",
 							s.ID, packetCount, len(packet.Payload), len(translated.Payload))
 					}
+				} else {
+					if packetCount <= 5 || packetCount%1000 == 0 {
+						fmt.Printf("[%s] 🎤 Translation pending for packet #%d (suppressing original audio)\n",
+							s.ID, packetCount)
+					}
+					dropPacket = true
 				}
+			}
+
+			if dropPacket {
+				s.mu.Unlock()
+				continue
 			}
 
 			// Rewrite Header (passthrough mode - no transcoding)

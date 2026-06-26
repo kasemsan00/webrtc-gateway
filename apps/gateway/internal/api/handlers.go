@@ -2468,13 +2468,13 @@ func (s *Server) handleWSTranslate(client *WSClient, msg WSMessage) {
 	if tgtLang == "" {
 		tgtLang = s.translatorCfg.TargetLang
 	}
-	outboundVoice := msg.TTSVoice
-	if outboundVoice == "" {
-		outboundVoice = translatorVoiceForTargetLang(tgtLang, s.translatorCfg.TTSVoice)
-	}
+	outboundVoice := translatorVoiceForTargetLang(tgtLang, msg.TTSVoice)
 	inboundVoice := translatorVoiceForTargetLang(srcLang, s.translatorCfg.TTSVoice)
 
 	sess.SetTranslator(s.translatorClient, srcLang, tgtLang, outboundVoice, inboundVoice)
+	sess.SetTranslationCaptionHandler(func(event session.TranslationCaptionEvent) {
+		s.handleTranslationCaption(sessionID, event)
+	})
 	sess.EnableTranslator()
 
 	log.Printf("[%s] 🎤 Translation enabled via WS: outbound %s → %s (voice: %s), inbound %s → %s (voice: %s)",
@@ -2491,17 +2491,13 @@ func (s *Server) handleWSTranslate(client *WSClient, msg WSMessage) {
 }
 
 func translatorVoiceForTargetLang(targetLang, fallback string) string {
-	switch translatorLanguageBase(targetLang) {
-	case "en":
-		return "en-US-AriaNeural"
-	case "th":
-		return "th-TH-Sarawut"
-	default:
-		if fallback != "" {
-			return fallback
-		}
-		return "en-US-AriaNeural"
+	if voice, ok := translatorVoiceByLanguage[translatorLanguageBase(targetLang)]; ok {
+		return voice
 	}
+	if fallback != "" {
+		return fallback
+	}
+	return "en-US-AriaNeural"
 }
 
 func translatorLanguageBase(lang string) string {
@@ -2513,6 +2509,18 @@ func translatorLanguageBase(lang string) string {
 		return lang[:idx]
 	}
 	return lang
+}
+
+var translatorVoiceByLanguage = map[string]string{
+	"th": "th-TH-PremwadeeNeural",
+	"en": "en-US-AriaNeural",
+	"zh": "zh-CN-XiaoxiaoNeural",
+	"ko": "ko-KR-SunHiNeural",
+	"ja": "ja-JP-NanamiNeural",
+	"ru": "ru-RU-SvetlanaNeural",
+	"hi": "hi-IN-SwaraNeural",
+	"de": "de-DE-KatjaNeural",
+	"fr": "fr-FR-DeniseNeural",
 }
 
 // handleWSTranslateStop disables S2S speech translation for a session.

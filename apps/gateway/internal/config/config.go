@@ -33,7 +33,7 @@ type TranslatorConfig struct {
 	Addr        string // gRPC server address (default: "localhost:5000")
 	SourceLang  string // Source language code (default: "en-US")
 	TargetLang  string // Target language code (default: "th")
-	TTSVoice    string // TTS voice name (default: "th-TH-Sarawut")
+	TTSVoice    string // TTS voice name (default: "th-TH-PremwadeeNeural")
 	OpusBitrate int    // Opus encoding bitrate (default: 24000)
 }
 
@@ -399,7 +399,7 @@ func Load() (*Config, error) {
 			Addr:        getEnvWithDefault("TRANSLATOR_ADDR", "localhost:5000"),
 			SourceLang:  getEnvWithDefault("TRANSLATOR_SOURCE_LANG", "en-US"),
 			TargetLang:  getEnvWithDefault("TRANSLATOR_TARGET_LANG", "th"),
-			TTSVoice:    getEnvWithDefault("TRANSLATOR_TTS_VOICE", "th-TH-Sarawut"),
+			TTSVoice:    getEnvWithDefault("TRANSLATOR_TTS_VOICE", "th-TH-PremwadeeNeural"),
 			OpusBitrate: getEnvAsInt("TRANSLATOR_OPUS_BITRATE", 24000),
 		},
 	}, nil

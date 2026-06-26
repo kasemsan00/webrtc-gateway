@@ -220,16 +220,17 @@ type Session struct {
 	// Video optimization flags
 	PreserveSTAPA bool `json:"-"` // If true, preserve STAP-A packets (don't de-aggregate) when they contain SPS+PPS+IDR
 	// Speech-to-Speech translation pipeline
-	Translator                *translator.S2SPipeline `json:"-"`
-	InboundTranslator         *translator.S2SPipeline `json:"-"`
-	TranslatorClient          *translator.Client      `json:"-"`
-	TranslatorEnabled         bool                    `json:"-"`
-	TranslatorSrcLang         string                  `json:"-"`
-	TranslatorTgtLang         string                  `json:"-"`
-	TranslatorTTSVoice        string                  `json:"-"`
-	InboundTranslatorSrcLang  string                  `json:"-"`
-	InboundTranslatorTgtLang  string                  `json:"-"`
-	InboundTranslatorTTSVoice string                  `json:"-"`
+	Translator                *translator.S2SPipeline   `json:"-"`
+	InboundTranslator         *translator.S2SPipeline   `json:"-"`
+	TranslatorClient          *translator.Client        `json:"-"`
+	TranslatorEnabled         bool                      `json:"-"`
+	TranslatorSrcLang         string                    `json:"-"`
+	TranslatorTgtLang         string                    `json:"-"`
+	TranslatorTTSVoice        string                    `json:"-"`
+	InboundTranslatorSrcLang  string                    `json:"-"`
+	InboundTranslatorTgtLang  string                    `json:"-"`
+	InboundTranslatorTTSVoice string                    `json:"-"`
+	TranslationCaptionHandler TranslationCaptionHandler `json:"-"`
 	// Inbound audio gain (SIP → WebRTC)
 	InboundGainEnabled bool                        `json:"-"`
 	InboundGain        float32                     `json:"-"`
@@ -239,6 +240,17 @@ type Session struct {
 	videoRTPHistoryMu  sync.Mutex
 	mu                 sync.RWMutex
 }
+
+type TranslationCaptionEvent struct {
+	Direction      string
+	SourceLang     string
+	TargetLang     string
+	RecognizedText string
+	TranslatedText string
+	IsFinal        bool
+}
+
+type TranslationCaptionHandler func(TranslationCaptionEvent)
 
 // Snapshot provides a thread-safe view of session metadata for logging.
 type Snapshot struct {
@@ -1172,6 +1184,32 @@ func (s *Session) SetTranslator(client *translator.Client, srcLang, tgtLang, out
 	s.InboundTranslatorTTSVoice = inboundTTSVoice
 }
 
+func (s *Session) SetTranslationCaptionHandler(handler TranslationCaptionHandler) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.TranslationCaptionHandler = handler
+	if s.InboundTranslator != nil {
+		s.InboundTranslator.SetCaptionHandler(s.makeInboundCaptionHandlerLocked())
+	}
+}
+
+func (s *Session) makeInboundCaptionHandlerLocked() translator.CaptionHandler {
+	handler := s.TranslationCaptionHandler
+	if handler == nil {
+		return nil
+	}
+	return func(event translator.CaptionEvent) {
+		handler(TranslationCaptionEvent{
+			Direction:      "sip_to_webrtc",
+			SourceLang:     event.SourceLang,
+			TargetLang:     event.TargetLang,
+			RecognizedText: event.RecognizedText,
+			TranslatedText: event.TranslatedText,
+			IsFinal:        event.IsFinal,
+		})
+	}
+}
+
 // EnableTranslator activates bidirectional S2S translation pipelines for this session (thread-safe).
 func (s *Session) EnableTranslator() {
 	s.mu.Lock()
@@ -1194,6 +1232,9 @@ func (s *Session) EnableTranslator() {
 
 	outbound := translator.NewS2SPipeline(s.TranslatorClient, outboundCodec, s.TranslatorSrcLang, s.TranslatorTgtLang, s.TranslatorTTSVoice)
 	inbound := translator.NewS2SPipeline(s.TranslatorClient, inboundCodec, s.InboundTranslatorSrcLang, s.InboundTranslatorTgtLang, s.InboundTranslatorTTSVoice)
+	outbound.SetDebugLabel(s.ID + " outbound")
+	inbound.SetDebugLabel(s.ID + " inbound")
+	inbound.SetCaptionHandler(s.makeInboundCaptionHandlerLocked())
 	outbound.Start()
 	inbound.Start()
 	s.Translator = outbound

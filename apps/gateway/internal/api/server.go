@@ -192,9 +192,13 @@ type WSMessage struct {
 	PNType         string `json:"pnType,omitempty"`  // SIP Contact push pn-type
 	PNToken        string `json:"pnToken,omitempty"` // SIP Contact push pn-tok
 	// S2S Translation fields
-	SourceLang string `json:"sourceLang,omitempty"`
-	TargetLang string `json:"targetLang,omitempty"`
-	TTSVoice   string `json:"ttsVoice,omitempty"`
+	SourceLang     string `json:"sourceLang,omitempty"`
+	TargetLang     string `json:"targetLang,omitempty"`
+	TTSVoice       string `json:"ttsVoice,omitempty"`
+	Direction      string `json:"direction,omitempty"`
+	RecognizedText string `json:"recognizedText,omitempty"`
+	TranslatedText string `json:"translatedText,omitempty"`
+	IsFinal        *bool  `json:"isFinal,omitempty"`
 	// Session resume redirect
 	RedirectURL string `json:"redirectUrl,omitempty"` // Server response: resume_redirect with new WS URL
 }
@@ -1377,6 +1381,32 @@ func (s *Server) sendWSMessage(client *WSClient, msg WSMessage) {
 	default:
 		log.Printf("Dropping WebSocket message: client send buffer full (sessionID=%s, type=%s)", client.sessionID, msg.Type)
 	}
+}
+
+func (s *Server) handleTranslationCaption(sessionID string, event session.TranslationCaptionEvent) {
+	if sessionID == "" || event.Direction != "sip_to_webrtc" {
+		return
+	}
+
+	s.mu.RLock()
+	client := s.wsClients[sessionID]
+	s.mu.RUnlock()
+	if client == nil {
+		log.Printf("[%s] Translation caption dropped: no WebSocket client", sessionID)
+		return
+	}
+
+	isFinal := event.IsFinal
+	s.sendWSMessage(client, WSMessage{
+		Type:           "translation_caption",
+		SessionID:      sessionID,
+		Direction:      event.Direction,
+		SourceLang:     event.SourceLang,
+		TargetLang:     event.TargetLang,
+		RecognizedText: event.RecognizedText,
+		TranslatedText: event.TranslatedText,
+		IsFinal:        &isFinal,
+	})
 }
 
 func (s *Server) scheduleMidCallRenegotiationTimeout(sessionID, renegotiationID string, timeout time.Duration) {

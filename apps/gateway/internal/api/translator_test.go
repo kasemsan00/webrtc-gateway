@@ -11,10 +11,18 @@ func TestTranslatorVoiceForTargetLang(t *testing.T) {
 	}{
 		{name: "english base", targetLang: "en", fallback: "fallback", want: "en-US-AriaNeural"},
 		{name: "english locale", targetLang: "en-US", fallback: "fallback", want: "en-US-AriaNeural"},
-		{name: "thai base", targetLang: "th", fallback: "fallback", want: "th-TH-Sarawut"},
-		{name: "thai locale underscore", targetLang: "th_TH", fallback: "fallback", want: "th-TH-Sarawut"},
-		{name: "unknown uses fallback", targetLang: "ja", fallback: "ja-JP-NanamiNeural", want: "ja-JP-NanamiNeural"},
-		{name: "unknown without fallback uses english", targetLang: "ja", fallback: "", want: "en-US-AriaNeural"},
+		{name: "thai base", targetLang: "th", fallback: "fallback", want: "th-TH-PremwadeeNeural"},
+		{name: "thai locale underscore", targetLang: "th_TH", fallback: "fallback", want: "th-TH-PremwadeeNeural"},
+		{name: "chinese base", targetLang: "zh", fallback: "fallback", want: "zh-CN-XiaoxiaoNeural"},
+		{name: "chinese locale", targetLang: "zh-CN", fallback: "fallback", want: "zh-CN-XiaoxiaoNeural"},
+		{name: "korean base", targetLang: "ko", fallback: "fallback", want: "ko-KR-SunHiNeural"},
+		{name: "japanese base", targetLang: "ja", fallback: "fallback", want: "ja-JP-NanamiNeural"},
+		{name: "russian base", targetLang: "ru", fallback: "fallback", want: "ru-RU-SvetlanaNeural"},
+		{name: "hindi base", targetLang: "hi", fallback: "fallback", want: "hi-IN-SwaraNeural"},
+		{name: "german base", targetLang: "de", fallback: "fallback", want: "de-DE-KatjaNeural"},
+		{name: "french base", targetLang: "fr", fallback: "fallback", want: "fr-FR-DeniseNeural"},
+		{name: "unknown uses fallback", targetLang: "es", fallback: "es-ES-ElviraNeural", want: "es-ES-ElviraNeural"},
+		{name: "unknown without fallback uses english", targetLang: "es", fallback: "", want: "en-US-AriaNeural"},
 	}
 
 	for _, tt := range tests {

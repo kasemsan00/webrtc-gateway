@@ -338,6 +338,42 @@ func TestHandleWSMessage_PublicOnlyAllowsTranslateStopForPublicSession(t *testin
 	}
 }
 
+func TestHandleTranslationCaptionSendsOnlyOwningSessionClient(t *testing.T) {
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, nil, nil, nil, nil, nil)
+	owner := &WSClient{send: make(chan []byte, 8), sessionID: "session-1"}
+	other := &WSClient{send: make(chan []byte, 8), sessionID: "session-2"}
+	srv.wsClients["session-1"] = owner
+	srv.wsClients["session-2"] = other
+
+	srv.handleTranslationCaption("session-1", session.TranslationCaptionEvent{
+		Direction:      "sip_to_webrtc",
+		SourceLang:     "th-TH",
+		TargetLang:     "en",
+		RecognizedText: "สวัสดี",
+		TranslatedText: "hello",
+		IsFinal:        false,
+	})
+
+	msgs := readWSMessages(t, owner.send)
+	if len(msgs) != 1 {
+		t.Fatalf("expected owner to receive one caption, got %+v", msgs)
+	}
+	if msgs[0].Type != "translation_caption" ||
+		msgs[0].SessionID != "session-1" ||
+		msgs[0].Direction != "sip_to_webrtc" ||
+		msgs[0].SourceLang != "th-TH" ||
+		msgs[0].TargetLang != "en" ||
+		msgs[0].RecognizedText != "สวัสดี" ||
+		msgs[0].TranslatedText != "hello" ||
+		msgs[0].IsFinal == nil ||
+		*msgs[0].IsFinal {
+		t.Fatalf("unexpected caption message: %+v", msgs[0])
+	}
+	if len(other.send) != 0 {
+		t.Fatalf("expected other client not to receive caption, got %d messages", len(other.send))
+	}
+}
+
 func TestHandleWSCall_AllowsIdentityChangeForNonPublicMode(t *testing.T) {
 	mgr := newTestSessionManager()
 	sess, err := mgr.CreateSession(config.TURNConfig{})

@@ -14,6 +14,13 @@ func TestNormalizeSpeechLocale(t *testing.T) {
 		{in: "", want: "en-US"},
 		{in: "en", want: "en-US"},
 		{in: "th", want: "th-TH"},
+		{in: "zh", want: "zh-CN"},
+		{in: "ko", want: "ko-KR"},
+		{in: "ja", want: "ja-JP"},
+		{in: "ru", want: "ru-RU"},
+		{in: "hi", want: "hi-IN"},
+		{in: "de", want: "de-DE"},
+		{in: "fr", want: "fr-FR"},
 		{in: "en_US", want: "en-US"},
 		{in: "ja-JP", want: "ja-JP"},
 	}
@@ -90,6 +97,142 @@ func TestDecodeTranslatorAudioWAV(t *testing.T) {
 	}
 	if sampleRate != 16000 || channels != 1 {
 		t.Fatalf("format = %d/%d, want 16000/1", sampleRate, channels)
+	}
+}
+
+func TestParseCaptionTextSuffix(t *testing.T) {
+	tests := []struct {
+		name      string
+		in        string
+		wantText  string
+		wantFinal bool
+	}{
+		{name: "partial", in: "hello +++", wantText: "hello", wantFinal: false},
+		{name: "final", in: "สวัสดี###", wantText: "สวัสดี", wantFinal: true},
+		{name: "default final", in: "plain text", wantText: "plain text", wantFinal: true},
+		{name: "trim empty", in: " +++ ", wantText: "", wantFinal: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotText, gotFinal := parseCaptionText(tt.in)
+			if gotText != tt.wantText || gotFinal != tt.wantFinal {
+				t.Fatalf("parseCaptionText(%q) = (%q, %v), want (%q, %v)", tt.in, gotText, gotFinal, tt.wantText, tt.wantFinal)
+			}
+		})
+	}
+}
+
+func TestShouldFallbackT2S(t *testing.T) {
+	tests := []struct {
+		name  string
+		event CaptionEvent
+		want  bool
+	}{
+		{
+			name: "partial does not fallback",
+			event: CaptionEvent{
+				RecognizedText: "สวัสดี",
+				TranslatedText: "hello",
+				IsFinal:        false,
+			},
+			want: false,
+		},
+		{
+			name: "final translated text fallback",
+			event: CaptionEvent{
+				RecognizedText: "สวัสดี",
+				TranslatedText: "hello",
+				IsFinal:        true,
+			},
+			want: true,
+		},
+		{
+			name: "same recognized and translated skips fallback",
+			event: CaptionEvent{
+				RecognizedText: "hello",
+				TranslatedText: " hello ",
+				IsFinal:        true,
+			},
+			want: false,
+		},
+		{
+			name: "empty recognized still fallback with translated text",
+			event: CaptionEvent{
+				TranslatedText: "hello",
+				IsFinal:        true,
+			},
+			want: true,
+		},
+		{
+			name: "empty translated skips fallback",
+			event: CaptionEvent{
+				RecognizedText: "สวัสดี",
+				IsFinal:        true,
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldFallbackT2S(tt.event); got != tt.want {
+				t.Fatalf("shouldFallbackT2S() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestShouldFallbackPartialT2S(t *testing.T) {
+	tests := []struct {
+		name  string
+		event CaptionEvent
+		want  bool
+	}{
+		{
+			name: "short partial skips fallback",
+			event: CaptionEvent{
+				RecognizedText: "กรุณา",
+				TranslatedText: "Please",
+				IsFinal:        false,
+			},
+			want: false,
+		},
+		{
+			name: "long partial translated text fallback",
+			event: CaptionEvent{
+				RecognizedText: "ศูนย์เพื่อติดต่อโอเปอเรเตอร์",
+				TranslatedText: "Operator Contact Center",
+				IsFinal:        false,
+			},
+			want: true,
+		},
+		{
+			name: "final skips partial fallback",
+			event: CaptionEvent{
+				RecognizedText: "กรุณา รอสักครู่",
+				TranslatedText: "Please wait.",
+				IsFinal:        true,
+			},
+			want: false,
+		},
+		{
+			name: "same text skips fallback",
+			event: CaptionEvent{
+				RecognizedText: "Operator Contact Center",
+				TranslatedText: "Operator Contact Center",
+				IsFinal:        false,
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldFallbackPartialT2S(tt.event); got != tt.want {
+				t.Fatalf("shouldFallbackPartialT2S() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 

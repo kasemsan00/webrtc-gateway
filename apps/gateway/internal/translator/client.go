@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"time"
 
@@ -111,6 +112,118 @@ func (c *Client) Send(ctx context.Context, audioData []byte) (*pb.TranslationRes
 	}
 	stream.CloseSend()
 	return resp, nil
+}
+
+func (c *Client) SynthesizeText(ctx context.Context, lang, text, voiceName string) ([]byte, error) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil, nil
+	}
+
+	var lastErr error
+	for _, voice := range synthesizeVoiceCandidates(lang, voiceName) {
+		audio, err := c.synthesizeTextOnce(ctx, lang, text, voice)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if len(audio) > 0 {
+			return audio, nil
+		}
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, nil
+}
+
+func (c *Client) synthesizeTextOnce(ctx context.Context, lang, text, voiceName string) ([]byte, error) {
+	stream, err := c.TranslateStream(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	sourceLang := normalizeSpeechLocale(lang)
+	targetLang := normalizeTranslationTarget(lang)
+	if err := stream.Send(&pb.TranslationRequest{
+		SourceLanguage: sourceLang,
+		TargetLanguage: targetLang,
+		ReturnAudio:    true,
+		TTSVoiceName:   voiceName,
+		Mode:           pb.TranslationMode_MODE_T2S,
+	}); err != nil {
+		stream.CloseSend()
+		return nil, fmt.Errorf("failed to send T2S config: %w", err)
+	}
+
+	if err := stream.Send(&pb.TranslationRequest{
+		SourceLanguage: sourceLang,
+		TargetLanguage: targetLang,
+		ReturnAudio:    true,
+		TTSVoiceName:   voiceName,
+		TextInput:      text,
+		Mode:           pb.TranslationMode_MODE_T2S,
+	}); err != nil {
+		stream.CloseSend()
+		return nil, fmt.Errorf("failed to send T2S text: %w", err)
+	}
+	_ = stream.CloseSend()
+
+	for {
+		resp, err := stream.Recv()
+		if err != nil {
+			if err == io.EOF {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("failed to receive T2S result: %w", err)
+		}
+		if len(resp.GetAudioData()) > 0 {
+			return resp.GetAudioData(), nil
+		}
+	}
+}
+
+func synthesizeVoiceCandidates(lang, requested string) []string {
+	defaultVoice := defaultTTSVoiceForLang(lang)
+	candidates := make([]string, 0, 3)
+	add := func(voice string) {
+		voice = strings.TrimSpace(voice)
+		for _, existing := range candidates {
+			if strings.EqualFold(existing, voice) {
+				return
+			}
+		}
+		candidates = append(candidates, voice)
+	}
+	add(requested)
+	add(defaultVoice)
+	add("")
+	return candidates
+}
+
+func defaultTTSVoiceForLang(lang string) string {
+	switch strings.ToLower(normalizeTranslationTarget(lang)) {
+	case "th":
+		return "th-TH-PremwadeeNeural"
+	case "en":
+		return "en-US-AriaNeural"
+	case "zh":
+		return "zh-CN-XiaoxiaoNeural"
+	case "ko":
+		return "ko-KR-SunHiNeural"
+	case "ja":
+		return "ja-JP-NanamiNeural"
+	case "ru":
+		return "ru-RU-SvetlanaNeural"
+	case "hi":
+		return "hi-IN-SwaraNeural"
+	case "de":
+		return "de-DE-KatjaNeural"
+	case "fr":
+		return "fr-FR-DeniseNeural"
+	default:
+		return ""
+	}
 }
 
 func (c *Client) Config() Config {

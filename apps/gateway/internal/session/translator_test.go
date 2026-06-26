@@ -50,10 +50,11 @@ func TestEnableTranslatorCreatesBidirectionalPipelines(t *testing.T) {
 	client := translator.NewClient(translator.Config{
 		SourceLang: "en",
 		TargetLang: "th",
-		TTSVoice:   "th-TH-Sarawut",
+		TTSVoice:   "th-TH-PremwadeeNeural",
 	})
 
-	sess.SetTranslator(client, "en", "th", "th-TH-Sarawut", "en-US-AriaNeural")
+	sess.SetTranslator(client, "en", "th", "th-TH-PremwadeeNeural", "en-US-AriaNeural")
+	sess.SetTranslationCaptionHandler(func(TranslationCaptionEvent) {})
 	sess.EnableTranslator()
 
 	if codecCalls != 2 {
@@ -74,6 +75,12 @@ func TestEnableTranslatorCreatesBidirectionalPipelines(t *testing.T) {
 	if sess.InboundTranslatorTTSVoice != "en-US-AriaNeural" {
 		t.Fatalf("unexpected inbound voice: %s", sess.InboundTranslatorTTSVoice)
 	}
+	if sess.Translator.CaptionHandlerSet() {
+		t.Fatal("expected outbound translator to have no caption handler")
+	}
+	if !sess.InboundTranslator.CaptionHandlerSet() {
+		t.Fatal("expected inbound translator to have caption handler")
+	}
 
 	sess.DisableTranslator()
 
@@ -85,5 +92,35 @@ func TestEnableTranslatorCreatesBidirectionalPipelines(t *testing.T) {
 	}
 	if sess.InboundTranslator != nil {
 		t.Fatal("expected inbound translator to be cleared")
+	}
+}
+
+func TestEnableTranslatorDoesNotAttachCaptionHandlerWhenUnset(t *testing.T) {
+	origCreateOpusCodec := createOpusCodec
+	defer func() {
+		createOpusCodec = origCreateOpusCodec
+	}()
+
+	createOpusCodec = func(bitrate int) (translator.OpusCodec, error) {
+		return &fakeTranslatorCodec{}, nil
+	}
+
+	sess := &Session{ID: "translator-no-caption"}
+	client := translator.NewClient(translator.Config{
+		SourceLang: "en",
+		TargetLang: "th",
+	})
+
+	sess.SetTranslator(client, "en", "th", "", "")
+	sess.EnableTranslator()
+
+	if sess.Translator == nil || sess.InboundTranslator == nil {
+		t.Fatal("expected translator pipelines")
+	}
+	if sess.Translator.CaptionHandlerSet() {
+		t.Fatal("expected outbound translator to have no caption handler")
+	}
+	if sess.InboundTranslator.CaptionHandlerSet() {
+		t.Fatal("expected inbound translator to have no caption handler when session handler is unset")
 	}
 }
