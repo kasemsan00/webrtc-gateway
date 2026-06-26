@@ -1,0 +1,91 @@
+{
+  "name": "code_search",
+  "description": "Search GitHub code in LiveKit repos (scoped allowlist). Returns structured results.\n\nHigh-precision GitHub code search across LiveKit repositories.\nSearch like code, not like English. Use actual class names, function names, method calls - not descriptions.\nGOOD: \"class AgentSession\", \"def on_enter\", \"@function_tool\", \"async def update_activity\", \"session.update_agent\"\nBAD: \"how does handoff work\", \"agent transfer implementation\", \"context preservation strategy\"\nWorkflow: Search class/function name to get snippets, then use returnFullFile=true to get implementation, then use get_pages() for related files.\nParameters: language=\"Python\" (always), returnFullFile=false (exploration), returnFullFile=true (deep dive), scope=\"content\" (default), limit=5-10\nIt's grep not RAG, search for code tokens not descriptions. Regex is not supported.\nFor examples use the get_python_agent_example tool instead.\n\nResults come from default branches; very new code in feature branches may not appear.\nWhen returnFullFile is true, complete file contents are fetched (may be slower for many results, use only with narrow queries)",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "query": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Search term or phrase for grep search, not a natural language query. Example: \"ConnectOptions\", \"room.connect token\", \"PublishTrack\""
+      },
+      "repo": {
+        "type": "string",
+        "enum": [
+          "ALL",
+          "livekit/client-sdk-swift",
+          "livekit/client-sdk-android",
+          "livekit/client-sdk-js",
+          "livekit/client-sdk-react-native",
+          "livekit/client-sdk-flutter",
+          "livekit/client-sdk-unity",
+          "livekit/client-sdk-unity-web",
+          "livekit/python-sdks",
+          "livekit/node-sdks",
+          "livekit/rust-sdks",
+          "livekit/client-sdk-cpp",
+          "livekit/server-sdk-go",
+          "agence104/livekit-server-sdk-php",
+          "livekit/server-sdk-ruby",
+          "livekit/server-sdk-kotlin",
+          "livekit/components-js",
+          "livekit/components-swift",
+          "livekit/components-android",
+          "livekit/components-flutter",
+          "livekit/track-processors-js",
+          "livekit/agents",
+          "livekit/agents-js",
+          "livekit/protocol"
+        ],
+        "description": "Target repository or \"ALL\" to search across all LiveKit repos. Use specific repo when you know the SDK, use \"ALL\" if unsure where code lives."
+      },
+      "language": {
+        "type": "string",
+        "description": "Optional GitHub language qualifier. Examples: \"Python\", \"TypeScript\", \"JavaScript\". Supports any language recognized by GitHub. Use when question is tied to a specific SDK language."
+      },
+      "scope": {
+        "type": "string",
+        "enum": [
+          "content",
+          "filename",
+          "both"
+        ],
+        "default": "content",
+        "description": "Where to search: \"content\" searches within file contents (typical for code lookups), \"filename\" searches file names/paths (use when hunting a file by name), \"both\" searches both (broader but noisier)."
+      },
+      "limit": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 50,
+        "default": 20,
+        "description": "Max results to return (1..50)."
+      },
+      "returnFullFile": {
+        "type": "boolean",
+        "default": false,
+        "description": "Return full file content instead of just snippets. Use when you need to see the entire file context"
+      },
+      "format": {
+        "type": "string",
+        "enum": [
+          "markdown",
+          "json"
+        ],
+        "default": "markdown",
+        "description": "Response format. \"markdown\" (default) returns human-readable markdown optimized for LLM consumption. \"json\" returns structured JSON for programmatic use."
+      },
+      "lkCliVersion": {
+        "type": "string"
+      },
+      "projectId": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "query",
+      "repo"
+    ],
+    "additionalProperties": false,
+    "$schema": "http://json-schema.org/draft-07/schema#"
+  }
+}

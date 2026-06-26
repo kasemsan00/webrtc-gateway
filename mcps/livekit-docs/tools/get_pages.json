@@ -1,0 +1,36 @@
+{
+  "name": "get_pages",
+  "description": "Render one or more docs pages to markdown, by relative path.\n\nAlso supports fetching code from public LiveKit repositories on GitHub.\n\nTab filtering: Append ?groupKey=label to a path to receive only the matching tab content, reducing output size. Example: /agents/start/voice-ai?agents-sdk=python\n\nA single query param applies to every tab/panel with that group key on the page. Common tab groups: agents-sdk (Python, Node.js), client-sdk (React, Swift, Android, Flutter, etc.), server-api-client (Go, Node, Python, Ruby, etc.), package-manager-js (yarn, npm, pnpm).\n\nLabel matching tries exact match first, then case-insensitive, then normalized slug (punctuation-stripped, e.g. \"nodejs\" matches \"Node.js\", \"react-native\" matches \"React Native\"). If matching is ambiguous or no match is found, all tab content is returned. Only tabs/panels with explicit group keys are filterable.\n\nLimitations:\n- Auto-generated SDK reference pages (e.g. /reference/client-sdk-js) are hosted externally and must be fetched via HTTP URL directly\n- Hand-written reference pages (e.g. /reference/telephony, /reference/components/agents-ui) are supported\n- Python API reference pages are supported via /reference/python/module.path (e.g. /reference/python/livekit/agents/llm). Append ?source=true to include source code\n- GitHub URLs must be from public LiveKit or LiveKit-Examples repositories\n",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "paths": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "Page paths (e.g. [`/agents/start/voice-ai`, `/recipes`]) or GitHub URLs. GitHub examples: single file `https://github.com/livekit/agents/blob/main/livekit-agents/livekit/agents/llm/llm.py`, directory `https://github.com/livekit-examples/python-agents-examples/tree/main/complex-agents/drive-thru`, versioned `https://github.com/livekit/agents/blob/v0.8.0/README.md?ref=v0.8.0`"
+      },
+      "format": {
+        "type": "string",
+        "enum": [
+          "markdown",
+          "json"
+        ],
+        "default": "markdown",
+        "description": "Response format. \"markdown\" (default) returns human-readable markdown optimized for LLM consumption. \"json\" returns structured JSON for programmatic use."
+      },
+      "lkCliVersion": {
+        "type": "string"
+      },
+      "projectId": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "paths"
+    ],
+    "additionalProperties": false,
+    "$schema": "http://json-schema.org/draft-07/schema#"
+  }
+}

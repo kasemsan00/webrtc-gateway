@@ -1,0 +1,48 @@
+{
+  "name": "docs_search",
+  "description": "Search the docs for a given query.\n      Paged results will be returned, showing page titles, hiearchical placement, and (sometimes) a snippet of the content.\n      You must then use the get_page tool with any provided URL to get the full page content (except for auto-generated SDK reference pages like /reference/client-sdk-js, which must be fetched from the web directly by URL). Python API reference pages (/reference/python/*) are supported natively.\n      The search index is not perfect, as it covers a large amount of content in many different programming languages.\n      Search should usually be used as a complement to browsing the docs directly, rather than as a replacement for it. To browse the docs directly, use the get_docs_overview and get_pages tools.\n      So examine the returned results critically and perform additional searches or fetch individual pages if necessary to find what you're looking for.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "query": {
+        "type": "string",
+        "description": "Search query text"
+      },
+      "queries": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "Alternative: array of search queries to run in parallel (overrides query)"
+      },
+      "page": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "Page number, starts at 0 (applies to each query when using queries array)"
+      },
+      "hitsPerPage": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 50,
+        "description": "Results per page (applies to each query when using queries array)"
+      },
+      "format": {
+        "type": "string",
+        "enum": [
+          "markdown",
+          "json"
+        ],
+        "default": "markdown",
+        "description": "Response format. \"markdown\" (default) returns human-readable markdown optimized for LLM consumption. \"json\" returns structured JSON for programmatic use."
+      },
+      "lkCliVersion": {
+        "type": "string"
+      },
+      "projectId": {
+        "type": "string"
+      }
+    },
+    "additionalProperties": false,
+    "$schema": "http://json-schema.org/draft-07/schema#"
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "name": "get_python_agent_example",
+  "description": "Browse and retrieve full example source code for various agents built with LiveKit Agents for Python, from the repository at http://github.com/livekit-examples/python-agents-examples\n\nWithout name parameter: Returns index of all 100+ examples with metadata (title, description, tags, difficulty, category).\n\nWith name parameter: Fetches full source code for the specific example directory. Do not use github URLs from another tools, check list of examples first using this tool.\n\nExamples of names: \"complex-agents/avatars/anam/agent-py/src/agent.py\", \"docs/examples/tool_calling/tool_calling.py\", \"complex-agents/drive-thru/drive-thru-agent/src/agent.py\"",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "type": "string",
+        "description": "Example file path (e.g., \"docs/examples/tool_calling/tool_calling.py\", \"complex-agents/drive-thru/drive-thru-agent/src/agent.py\"). Omit to get full index."
+      },
+      "format": {
+        "type": "string",
+        "enum": [
+          "markdown",
+          "json"
+        ],
+        "default": "markdown",
+        "description": "Response format. \"markdown\" (default) returns human-readable markdown optimized for LLM consumption. \"json\" returns structured JSON for programmatic use."
+      },
+      "lkCliVersion": {
+        "type": "string"
+      },
+      "projectId": {
+        "type": "string"
+      }
+    },
+    "additionalProperties": false,
+    "$schema": "http://json-schema.org/draft-07/schema#"
+  }
+}

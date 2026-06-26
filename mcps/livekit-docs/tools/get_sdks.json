@@ -1,0 +1,26 @@
+{
+  "name": "get_sdks",
+  "description": "List of all LiveKit SDK repositories (client SDKs, server SDKs, and agent frameworks). Each repository includes its package names, allowing you to cross-reference package.json dependencies (e.g., \"livekit-client\") with their corresponding repository IDs (e.g., \"livekit/client-sdk-js\") and changelogs.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "format": {
+        "type": "string",
+        "enum": [
+          "markdown",
+          "json"
+        ],
+        "default": "markdown",
+        "description": "Response format. \"markdown\" (default) returns human-readable markdown optimized for LLM consumption. \"json\" returns structured JSON for programmatic use."
+      },
+      "lkCliVersion": {
+        "type": "string"
+      },
+      "projectId": {
+        "type": "string"
+      }
+    },
+    "additionalProperties": false,
+    "$schema": "http://json-schema.org/draft-07/schema#"
+  }
+}

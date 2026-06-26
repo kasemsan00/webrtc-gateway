@@ -1,0 +1,26 @@
+{
+  "name": "get_pricing_info",
+  "description": "Get LiveKit Cloud pricing information including plans, feature comparison matrix, inference model pricing, and calculator assumptions.\n\nReturns all pricing information in one call.\n\nUse this tool when users ask about LiveKit pricing, plan features, costs, or model pricing.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "format": {
+        "type": "string",
+        "enum": [
+          "markdown",
+          "json"
+        ],
+        "default": "markdown",
+        "description": "Response format. \"markdown\" (default) returns human-readable markdown optimized for LLM consumption. \"json\" returns structured JSON for programmatic use."
+      },
+      "lkCliVersion": {
+        "type": "string"
+      },
+      "projectId": {
+        "type": "string"
+      }
+    },
+    "additionalProperties": false,
+    "$schema": "http://json-schema.org/draft-07/schema#"
+  }
+}

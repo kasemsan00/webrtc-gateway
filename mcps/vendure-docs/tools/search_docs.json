@@ -1,0 +1,32 @@
+{
+  "name": "search_docs",
+  "description": "Search across all Vendure documentation pages. Returns matching pages with title, URL, snippet, and section.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "query": {
+        "type": "string",
+        "description": "Search query string"
+      },
+      "limit": {
+        "type": "number",
+        "minimum": 1,
+        "maximum": 20,
+        "description": "Maximum number of results to return (default: 10, max: 20)"
+      },
+      "section": {
+        "type": "string",
+        "description": "Filter by documentation section (e.g., \"Developer Guide\", \"Reference\", \"Legacy Apis\")"
+      },
+      "packageId": {
+        "type": "string",
+        "description": "Filter by package ID (e.g., \"core\")"
+      }
+    },
+    "required": [
+      "query"
+    ],
+    "additionalProperties": false,
+    "$schema": "http://json-schema.org/draft-07/schema#"
+  }
+}

@@ -1,0 +1,99 @@
+{
+  "name": "get_changelog",
+  "description": "Get recent changelog/releases for a LiveKit repository.\n\nUse for: \"What's new in Python Agents?\", \"Recent Swift SDK updates\", \"Has feature X been added?\"\n\nPrefer using package identifiers (e.g., \"npm:livekit-client\", \"pypi:livekit-agents\", \"cargo:livekit\") over repository IDs. Package identifiers are automatically resolved to their corresponding repository. For monorepos like rust-sdks or python-sdks, package identifiers help disambiguate which specific package you're interested in. Repository IDs (e.g., \"livekit/client-sdk-js\") are also supported but package identifiers are preferred.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "identifier": {
+        "type": "string",
+        "enum": [
+          "livekit/client-sdk-swift",
+          "livekit/client-sdk-android",
+          "livekit/client-sdk-js",
+          "livekit/client-sdk-react-native",
+          "livekit/client-sdk-flutter",
+          "livekit/client-sdk-unity",
+          "livekit/client-sdk-unity-web",
+          "livekit/python-sdks",
+          "livekit/node-sdks",
+          "livekit/rust-sdks",
+          "livekit/client-sdk-cpp",
+          "agence104/livekit-server-sdk-php",
+          "livekit/server-sdk-kotlin",
+          "livekit/components-js",
+          "livekit/components-swift",
+          "livekit/components-android",
+          "livekit/components-flutter",
+          "livekit/track-processors-js",
+          "livekit/agents",
+          "livekit/agents-js",
+          "livekit/protocol",
+          "swift:LiveKit",
+          "maven:io.livekit:livekit-android",
+          "npm:livekit-client",
+          "npm:@livekit/react-native",
+          "pub:livekit_client",
+          "unity:LiveKit",
+          "unity-webgl:LiveKit",
+          "pypi:livekit-api",
+          "pypi:livekit",
+          "npm:livekit-server-sdk",
+          "npm:@livekit/rtc-node",
+          "cargo:livekit-api",
+          "cargo:livekit",
+          "cargo:livekit-ffi",
+          "cargo:livekit-protocol",
+          "github-releases:livekit/client-sdk-cpp",
+          "composer:agence104/livekit-server-sdk",
+          "maven:io.livekit:livekit-server",
+          "npm:@livekit/components-react",
+          "npm:@livekit/components-styles",
+          "npm:@livekit/components-js-docs",
+          "npm:@livekit/components-core",
+          "spm:LiveKitComponents",
+          "maven:io.livekit:livekit-android-compose-components",
+          "pub:livekit_components",
+          "npm:@livekit/track-processors",
+          "pypi:livekit-agents",
+          "npm:@livekit/agents",
+          "npm:@livekit/protocol",
+          "go:livekit/protocol"
+        ],
+        "description": "Repository ID (e.g., \"livekit/client-sdk-js\") or package name (e.g., \"livekit-client\", \"@livekit/react-native\", \"livekit-agents\"). Package names are automatically resolved to repository IDs."
+      },
+      "releasesToFetch": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 20,
+        "default": 2,
+        "description": "Number of releases to fetch (if changelog is GitHub releases then this limit will be applied)"
+      },
+      "skip": {
+        "type": "integer",
+        "minimum": 0,
+        "default": 0,
+        "description": "Number of releases to skip for pagination"
+      },
+      "format": {
+        "type": "string",
+        "enum": [
+          "markdown",
+          "json"
+        ],
+        "default": "markdown",
+        "description": "Response format. \"markdown\" (default) returns human-readable markdown optimized for LLM consumption. \"json\" returns structured JSON for programmatic use."
+      },
+      "lkCliVersion": {
+        "type": "string"
+      },
+      "projectId": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "identifier"
+    ],
+    "additionalProperties": false,
+    "$schema": "http://json-schema.org/draft-07/schema#"
+  }
+}

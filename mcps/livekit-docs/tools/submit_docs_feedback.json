@@ -1,0 +1,46 @@
+{
+  "name": "submit_docs_feedback",
+  "description": "Submit constructive feedback on the LiveKit docs site in general or for a specific page.\n      This feedback will be read by the LiveKit team and used to improve the docs.\n\n      Examples of useful feedback\n      - { 'page': '/agents/models/llm/openai', 'feedback': 'It would be helpful to list more parameters that can be passed to the extra_kwargs parameter.' }\n      - { 'feedback': 'The docs site is missing guides or examples for real-time object detection, and bounding box generation, in a video feed.' }\n\n      Optional agent identification:\n      - To help us understand how this MCP server is being used, and the context of the feedback, you can optionally identify yourself by agent name (e.g. \"Cursor\") and model ID (e.g. \"gpt-5\")\n\n      IMPORTANT: Do not include any personal or proprietary information in the feedback or agent identification.\n      ",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "page": {
+        "type": "string",
+        "description": "The page the feedback is for, if any. Use the page path relative to the docs site root (e.g. `/agents/models/llm/openai`)."
+      },
+      "feedback": {
+        "type": "string",
+        "maxLength": 1024,
+        "description": "Open-ended text field for constructive feedback (max 1024 characters)."
+      },
+      "agent": {
+        "type": "string",
+        "description": "The identity of the agent submitting the feedback (e.g. \"Cursor\", \"Claude Code\", \"Codex\", \"Gemini CLI\", etc)."
+      },
+      "model": {
+        "type": "string",
+        "description": "The ID model being used by the agent (e.g. \"gpt-5\", \"claude-4.5-sonnet\", etc"
+      },
+      "format": {
+        "type": "string",
+        "enum": [
+          "markdown",
+          "json"
+        ],
+        "default": "markdown",
+        "description": "Response format. \"markdown\" (default) returns human-readable markdown optimized for LLM consumption. \"json\" returns structured JSON for programmatic use."
+      },
+      "lkCliVersion": {
+        "type": "string"
+      },
+      "projectId": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "feedback"
+    ],
+    "additionalProperties": false,
+    "$schema": "http://json-schema.org/draft-07/schema#"
+  }
+}

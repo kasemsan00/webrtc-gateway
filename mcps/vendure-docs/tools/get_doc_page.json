@@ -1,0 +1,19 @@
+{
+  "name": "get_doc_page",
+  "description": "Retrieve the full markdown content of a Vendure documentation page by URL. The URL must be under docs.vendure.io.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "url": {
+        "type": "string",
+        "format": "uri",
+        "description": "Full URL of the documentation page (e.g., https://docs.vendure.io/current/core/getting-started/installation)"
+      }
+    },
+    "required": [
+      "url"
+    ],
+    "additionalProperties": false,
+    "$schema": "http://json-schema.org/draft-07/schema#"
+  }
+}
