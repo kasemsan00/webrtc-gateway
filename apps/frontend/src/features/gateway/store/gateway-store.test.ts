@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  buildTranslatorCaptionFromMessage,
   canPlaceCall,
   canResolveTrunk,
   isCallInProgress,
@@ -29,6 +30,7 @@ function createState(overrides?: Partial<GatewayState>): GatewayState {
       translatorEnabled: false,
       translatorSrcLang: '',
       translatorTgtLang: '',
+      translatorCaption: null,
     },
     mode: 'public',
     publicCredentials: {
@@ -113,6 +115,7 @@ describe('canPlaceCall', () => {
             translatorEnabled: false,
             translatorSrcLang: '',
             translatorTgtLang: '',
+            translatorCaption: null,
           },
         }),
       ),
@@ -221,10 +224,39 @@ describe('call state normalization', () => {
             translatorEnabled: false,
             translatorSrcLang: '',
             translatorTgtLang: '',
+            translatorCaption: null,
           },
         }),
       ),
     ).toBe(true)
+  })
+})
+
+describe('buildTranslatorCaptionFromMessage', () => {
+  it('parses translation caption payloads', () => {
+    expect(
+      buildTranslatorCaptionFromMessage({
+        type: 'translation_caption',
+        recognizedText: 'สวัสดี',
+        translatedText: 'Hello',
+        isFinal: true,
+        direction: 'sip_to_webrtc',
+      }),
+    ).toEqual({
+      recognizedText: 'สวัสดี',
+      translatedText: 'Hello',
+      isFinal: true,
+      direction: 'sip_to_webrtc',
+    })
+  })
+
+  it('returns null for non-caption messages', () => {
+    expect(
+      buildTranslatorCaptionFromMessage({
+        type: 'state',
+        state: 'active',
+      }),
+    ).toBeNull()
   })
 })
 

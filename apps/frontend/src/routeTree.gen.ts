@@ -13,8 +13,10 @@ import { Route as TrunksRouteImport } from './routes/trunks'
 import { Route as SessionsRouteImport } from './routes/sessions'
 import { Route as SessionDirectoryRouteImport } from './routes/session-directory'
 import { Route as PublicAccountsRouteImport } from './routes/public-accounts'
+import { Route as LogsRouteImport } from './routes/logs'
 import { Route as InstancesRouteImport } from './routes/instances'
 import { Route as DashboardRouteImport } from './routes/dashboard'
+import { Route as ClientDiagnosticsRouteImport } from './routes/client-diagnostics'
 import { Route as ActiveSessionsRouteImport } from './routes/active-sessions'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as SessionsIndexRouteImport } from './routes/sessions.index'
@@ -40,6 +42,11 @@ const PublicAccountsRoute = PublicAccountsRouteImport.update({
   path: '/public-accounts',
   getParentRoute: () => rootRouteImport,
 } as any)
+const LogsRoute = LogsRouteImport.update({
+  id: '/logs',
+  path: '/logs',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const InstancesRoute = InstancesRouteImport.update({
   id: '/instances',
   path: '/instances',
@@ -48,6 +55,11 @@ const InstancesRoute = InstancesRouteImport.update({
 const DashboardRoute = DashboardRouteImport.update({
   id: '/dashboard',
   path: '/dashboard',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ClientDiagnosticsRoute = ClientDiagnosticsRouteImport.update({
+  id: '/client-diagnostics',
+  path: '/client-diagnostics',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ActiveSessionsRoute = ActiveSessionsRouteImport.update({
@@ -74,8 +86,10 @@ const SessionsSessionIdRoute = SessionsSessionIdRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/active-sessions': typeof ActiveSessionsRoute
+  '/client-diagnostics': typeof ClientDiagnosticsRoute
   '/dashboard': typeof DashboardRoute
   '/instances': typeof InstancesRoute
+  '/logs': typeof LogsRoute
   '/public-accounts': typeof PublicAccountsRoute
   '/session-directory': typeof SessionDirectoryRoute
   '/sessions': typeof SessionsRouteWithChildren
@@ -86,8 +100,10 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/active-sessions': typeof ActiveSessionsRoute
+  '/client-diagnostics': typeof ClientDiagnosticsRoute
   '/dashboard': typeof DashboardRoute
   '/instances': typeof InstancesRoute
+  '/logs': typeof LogsRoute
   '/public-accounts': typeof PublicAccountsRoute
   '/session-directory': typeof SessionDirectoryRoute
   '/trunks': typeof TrunksRoute
@@ -98,8 +114,10 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/active-sessions': typeof ActiveSessionsRoute
+  '/client-diagnostics': typeof ClientDiagnosticsRoute
   '/dashboard': typeof DashboardRoute
   '/instances': typeof InstancesRoute
+  '/logs': typeof LogsRoute
   '/public-accounts': typeof PublicAccountsRoute
   '/session-directory': typeof SessionDirectoryRoute
   '/sessions': typeof SessionsRouteWithChildren
@@ -112,8 +130,10 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/active-sessions'
+    | '/client-diagnostics'
     | '/dashboard'
     | '/instances'
+    | '/logs'
     | '/public-accounts'
     | '/session-directory'
     | '/sessions'
@@ -124,8 +144,10 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/active-sessions'
+    | '/client-diagnostics'
     | '/dashboard'
     | '/instances'
+    | '/logs'
     | '/public-accounts'
     | '/session-directory'
     | '/trunks'
@@ -135,8 +157,10 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/active-sessions'
+    | '/client-diagnostics'
     | '/dashboard'
     | '/instances'
+    | '/logs'
     | '/public-accounts'
     | '/session-directory'
     | '/sessions'
@@ -148,8 +172,10 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ActiveSessionsRoute: typeof ActiveSessionsRoute
+  ClientDiagnosticsRoute: typeof ClientDiagnosticsRoute
   DashboardRoute: typeof DashboardRoute
   InstancesRoute: typeof InstancesRoute
+  LogsRoute: typeof LogsRoute
   PublicAccountsRoute: typeof PublicAccountsRoute
   SessionDirectoryRoute: typeof SessionDirectoryRoute
   SessionsRoute: typeof SessionsRouteWithChildren
@@ -186,6 +212,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PublicAccountsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/logs': {
+      id: '/logs'
+      path: '/logs'
+      fullPath: '/logs'
+      preLoaderRoute: typeof LogsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/instances': {
       id: '/instances'
       path: '/instances'
@@ -198,6 +231,13 @@ declare module '@tanstack/react-router' {
       path: '/dashboard'
       fullPath: '/dashboard'
       preLoaderRoute: typeof DashboardRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/client-diagnostics': {
+      id: '/client-diagnostics'
+      path: '/client-diagnostics'
+      fullPath: '/client-diagnostics'
+      preLoaderRoute: typeof ClientDiagnosticsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/active-sessions': {
@@ -248,8 +288,10 @@ const SessionsRouteWithChildren = SessionsRoute._addFileChildren(
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ActiveSessionsRoute: ActiveSessionsRoute,
+  ClientDiagnosticsRoute: ClientDiagnosticsRoute,
   DashboardRoute: DashboardRoute,
   InstancesRoute: InstancesRoute,
+  LogsRoute: LogsRoute,
   PublicAccountsRoute: PublicAccountsRoute,
   SessionDirectoryRoute: SessionDirectoryRoute,
   SessionsRoute: SessionsRouteWithChildren,

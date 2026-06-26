@@ -5,8 +5,10 @@ import { toast } from 'sonner'
 import {
   RiAccountCircleLine,
   RiBarChartGroupedLine,
+  RiBugLine,
   RiCloseLine,
   RiComputerLine,
+  RiFileTextLine,
   RiHistoryLine,
   RiLogoutBoxLine,
   RiMenuLine,
@@ -215,6 +217,30 @@ export default function Header({ children }: { children?: React.ReactNode }) {
                 >
                   <RiPulseLine size={16} />
                   <span className="font-medium">Active Sessions</span>
+                </Link>
+                <Link
+                  to="/logs"
+                  onClick={close}
+                  className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors hover:bg-muted"
+                  activeProps={{
+                    className:
+                      'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm bg-cyan-600/10 text-cyan-700 dark:bg-cyan-600/20 dark:text-cyan-300 hover:bg-cyan-600/20 dark:hover:bg-cyan-600/30 transition-colors',
+                  }}
+                >
+                  <RiFileTextLine size={16} />
+                  <span className="font-medium">Gateway Logs</span>
+                </Link>
+                <Link
+                  to="/client-diagnostics"
+                  onClick={close}
+                  className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors hover:bg-muted"
+                  activeProps={{
+                    className:
+                      'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm bg-cyan-600/10 text-cyan-700 dark:bg-cyan-600/20 dark:text-cyan-300 hover:bg-cyan-600/20 dark:hover:bg-cyan-600/30 transition-colors',
+                  }}
+                >
+                  <RiBugLine size={16} />
+                  <span className="font-medium">Client Diagnostics</span>
                 </Link>
                 <Link
                   to="/public-accounts"

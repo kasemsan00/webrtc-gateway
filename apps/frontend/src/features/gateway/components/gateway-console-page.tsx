@@ -931,6 +931,23 @@ export function GatewayConsolePage() {
             </div>
           ) : null}
 
+          {state.call.translatorEnabled && state.call.translatorCaption ? (
+            <div
+              className="pointer-events-none absolute bottom-24 left-1/2 z-30 w-[min(90%,44rem)] -translate-x-1/2 rounded-lg bg-black/85 px-4 py-3 text-center text-sm text-white shadow-lg"
+              aria-live="polite"
+              role="status"
+            >
+              {state.call.translatorCaption.recognizedText ? (
+                <p className="text-xs text-white/70">
+                  {state.call.translatorCaption.recognizedText}
+                </p>
+              ) : null}
+              <p className="whitespace-pre-wrap wrap-break-word text-base">
+                {state.call.translatorCaption.translatedText}
+              </p>
+            </div>
+          ) : null}
+
           {hasLocalVideo ? (
             <div className="absolute bottom-14 right-3 h-24 w-36 overflow-hidden rounded-lg border border-white/20 bg-gray-900">
               <video

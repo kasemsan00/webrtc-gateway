@@ -11,13 +11,15 @@ vi.mock('@/lib/http-client', () => ({
 }))
 
 describe('gateway smoke route and action contracts', () => {
-  it('keeps required route contracts for trunks and sessions', () => {
+  it('keeps required route contracts for admin pages', () => {
     const routeTreePath = resolve(process.cwd(), 'src/routeTree.gen.ts')
     const routeTreeContent = readFileSync(routeTreePath, 'utf8')
 
     expect(routeTreeContent.includes("'/trunks'")).toBe(true)
     expect(routeTreeContent.includes("'/sessions'")).toBe(true)
     expect(routeTreeContent.includes("'/sessions/$sessionId'")).toBe(true)
+    expect(routeTreeContent.includes("'/logs'")).toBe(true)
+    expect(routeTreeContent.includes("'/client-diagnostics'")).toBe(true)
   })
 
   it('keeps trunks and sessions API action wiring', async () => {
@@ -25,6 +27,10 @@ describe('gateway smoke route and action contracts', () => {
       await import('@/features/trunk/services/trunk-api')
     const { fetchSessionHistory } =
       await import('@/features/session-history/services/session-history-api')
+    const { fetchLogFiles } =
+      await import('@/features/gateway-logs/services/gateway-logs-api')
+    const { fetchClientDiagnostics } =
+      await import('@/features/client-diagnostics/services/client-diagnostics-api')
 
     fetchJsonMock.mockResolvedValueOnce({
       items: [],
@@ -54,6 +60,23 @@ describe('gateway smoke route and action contracts', () => {
     expect(fetchJsonMock).toHaveBeenCalledWith(
       expect.stringContaining(
         '/sessions/history?page=1&pageSize=20&direction=outbound',
+      ),
+    )
+
+    fetchJsonMock.mockResolvedValueOnce({ items: [] })
+    await fetchLogFiles()
+    expect(fetchJsonMock).toHaveBeenCalledWith('http://gateway.local/api/logs')
+
+    fetchJsonMock.mockResolvedValueOnce({
+      items: [],
+      total: 0,
+      page: 1,
+      pageSize: 20,
+    })
+    await fetchClientDiagnostics({ page: 1, pageSize: 20, level: 'error' })
+    expect(fetchJsonMock).toHaveBeenCalledWith(
+      expect.stringContaining(
+        '/client-diagnostics?page=1&pageSize=20&level=error',
       ),
     )
   })

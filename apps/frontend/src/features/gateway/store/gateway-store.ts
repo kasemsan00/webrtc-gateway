@@ -35,6 +35,7 @@ import type {
   MessageEntry,
   PendingCallRequest,
   PublicCredentials,
+  TranslatorCaption,
   TrunkCredentials,
   TrunkStatus,
   VrsConfig,
@@ -99,6 +100,7 @@ const initialState: GatewayState = {
     translatorEnabled: false,
     translatorSrcLang: '',
     translatorTgtLang: '',
+    translatorCaption: null,
   },
   mode: 'siptrunk',
   publicCredentials: {
@@ -1446,6 +1448,27 @@ function setTrunkStatus(
   }
 }
 
+export function buildTranslatorCaptionFromMessage(
+  message: Record<string, unknown>,
+): TranslatorCaption | null {
+  if (message.type !== 'translation_caption') {
+    return null
+  }
+
+  const recognizedText = String(message.recognizedText ?? '').trim()
+  const translatedText = String(message.translatedText ?? '').trim()
+  if (!recognizedText && !translatedText) {
+    return null
+  }
+
+  return {
+    recognizedText,
+    translatedText,
+    isFinal: Boolean(message.isFinal),
+    direction: message.direction ? String(message.direction) : undefined,
+  }
+}
+
 function handleMessage(event: MessageEvent<string>) {
   let message: Record<string, unknown>
   try {
@@ -1555,7 +1578,6 @@ function handleMessage(event: MessageEvent<string>) {
       break
     case 'message':
       {
-        console.log('message', message)
         const from = String(message.from ?? 'Remote')
         const body = String(message.body ?? '')
         const contentType = String(message.contentType ?? '')
@@ -1670,9 +1692,27 @@ function handleMessage(event: MessageEvent<string>) {
           translatorEnabled: false,
           translatorSrcLang: '',
           translatorTgtLang: '',
+          translatorCaption: null,
         },
       }))
       appendLog('Translation disabled', 'info')
+      break
+    }
+    case 'translation_caption': {
+      const caption = buildTranslatorCaptionFromMessage(message)
+      if (!caption) break
+
+      gatewayStore.setState((s) => ({
+        ...s,
+        call: {
+          ...s.call,
+          translatorCaption: caption,
+        },
+      }))
+
+      if (caption.isFinal && caption.translatedText) {
+        appendLog(`Caption: ${caption.translatedText}`, 'info')
+      }
       break
     }
     default:

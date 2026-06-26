@@ -276,7 +276,14 @@ export function TrunkListPage() {
           sortBy: sortParams.sortBy,
           sortDir: sortParams.sortDir,
         })
-        setTrunks(res.items)
+        let items = res.items
+        if (sortMode === 'activeCallsDesc' || sortMode === 'activeCallsAsc') {
+          items = [...items].sort((left, right) => {
+            const diff = left.activeCallCount - right.activeCallCount
+            return sortMode === 'activeCallsDesc' ? -diff : diff
+          })
+        }
+        setTrunks(items)
         setTotal(res.total)
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to fetch trunks')
@@ -286,7 +293,7 @@ export function TrunkListPage() {
         }
       }
     },
-    [page, pageSize, getSortParams],
+    [page, pageSize, getSortParams, sortMode],
   )
 
   useEffect(() => {

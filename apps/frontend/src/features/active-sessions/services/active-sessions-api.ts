@@ -1,5 +1,6 @@
 import type { ActiveSession } from '../types'
 import { fetchJson, resolveGatewayApiBaseUrl } from '@/lib/http-client'
+import { subscribeAuthenticatedSse } from '@/lib/sse-subscriber'
 
 export interface SessionStreamEvent {
   type: string
@@ -17,28 +18,10 @@ export function subscribeSessionEvents(
   onEvent: (event: SessionStreamEvent) => void,
   onError?: (event: Event) => void,
 ) {
-  const stream = new EventSource(`${API_BASE}/sessions/stream`)
-
-  const handleSessionEvent = (message: MessageEvent<string>) => {
-    try {
-      const parsed = JSON.parse(message.data) as SessionStreamEvent
-      onEvent(parsed)
-    } catch {
-      // Ignore malformed event payloads.
-    }
-  }
-
-  stream.addEventListener('session', (event) => {
-    handleSessionEvent(event as MessageEvent<string>)
+  return subscribeAuthenticatedSse<SessionStreamEvent>({
+    url: `${API_BASE}/sessions/stream`,
+    eventName: 'session',
+    onEvent,
+    onError,
   })
-
-  stream.onerror = (event) => {
-    if (onError) {
-      onError(event)
-    }
-  }
-
-  return () => {
-    stream.close()
-  }
 }

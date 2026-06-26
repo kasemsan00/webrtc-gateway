@@ -22,6 +22,13 @@ import { DataTable } from '@/components/ui/data-table'
 import { Input } from '@/components/ui/input'
 import { ServerPaginationControls } from '@/components/ui/server-pagination-controls'
 import { Separator } from '@/components/ui/separator'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import Header from '@/components/Header'
 import { useTheme } from '@/lib/theme'
 import { ExpiryStatusBadge, TimestampCell } from '@/components/ui/table-cells'
@@ -38,6 +45,35 @@ function formatUptime(seconds: number) {
   const minutes = Math.floor((total % 3600) / 60)
   const remain = total % 60
   return `${hours}h ${minutes}m ${remain}s`
+}
+
+const WS_CLIENT_PREVIEW_LIMIT = 8
+
+function WSClientCard({ client }: { client: WSClient }) {
+  return (
+    <div className="rounded-md border border-border/60 px-3 py-2">
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <span className="truncate font-mono text-[11px] text-muted-foreground">
+          {client.sessionId || '-'}
+        </span>
+        <ClientAvailabilityBadge availability={client.availability} />
+      </div>
+      <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
+        <span className="text-muted-foreground">Call State</span>
+        <span className="text-right">{client.callState || '-'}</span>
+        <span className="text-muted-foreground">Trunk</span>
+        <span className="truncate text-right font-mono">
+          {client.resolvedTrunkPublicId || client.resolvedTrunkId || '-'}
+        </span>
+        <span className="text-muted-foreground">Auth</span>
+        <span className="truncate text-right">{client.authSubject || '-'}</span>
+        <span className="text-muted-foreground">Connected</span>
+        <span className="text-right">
+          <TimestampCell value={client.connectedAt} />
+        </span>
+      </div>
+    </div>
+  )
 }
 
 function ClientAvailabilityBadge({ availability }: { availability?: string }) {
@@ -76,6 +112,7 @@ export function GatewayInstancesPage() {
   const { theme, toggleTheme } = useTheme()
   const [dashboard, setDashboard] = useState<GatewayDashboard | null>(null)
   const [wsClients, setWsClients] = useState<Array<WSClient>>([])
+  const [wsClientsDialogOpen, setWsClientsDialogOpen] = useState(false)
   const [overviewError, setOverviewError] = useState<string | null>(null)
   const {
     items: instances,
@@ -274,51 +311,31 @@ export function GatewayInstancesPage() {
         {wsClients.length > 0 ? (
           <Card className="mb-4 border-border/60">
             <CardContent className="p-3">
-              <div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-                <RiSignalWifiLine className="size-3.5" />
-                Live Clients ({wsClients.length})
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                  <RiSignalWifiLine className="size-3.5" />
+                  Live Clients ({wsClients.length})
+                </div>
+                {wsClients.length > WS_CLIENT_PREVIEW_LIMIT ? (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 px-2 text-xs"
+                    onClick={() => setWsClientsDialogOpen(true)}
+                  >
+                    Show all ({wsClients.length})
+                  </Button>
+                ) : null}
               </div>
               <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-                {wsClients.slice(0, 8).map((client) => (
-                  <div
-                    key={`${client.sessionId}-${client.connectedAt}`}
-                    className="rounded-md border border-border/60 px-3 py-2"
-                  >
-                    <div className="mb-1 flex items-center justify-between gap-2">
-                      <span className="truncate font-mono text-[11px] text-muted-foreground">
-                        {client.sessionId || '-'}
-                      </span>
-                      <ClientAvailabilityBadge
-                        availability={client.availability}
-                      />
-                    </div>
-                    <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
-                      <span className="text-muted-foreground">Call State</span>
-                      <span className="text-right">
-                        {client.callState || '-'}
-                      </span>
-                      <span className="text-muted-foreground">Trunk</span>
-                      <span className="truncate text-right font-mono">
-                        {client.resolvedTrunkPublicId ||
-                          client.resolvedTrunkId ||
-                          '-'}
-                      </span>
-                      <span className="text-muted-foreground">Auth</span>
-                      <span className="truncate text-right">
-                        {client.authSubject || '-'}
-                      </span>
-                      <span className="text-muted-foreground">Connected</span>
-                      <span className="text-right">
-                        <TimestampCell value={client.connectedAt} />
-                      </span>
-                    </div>
-                  </div>
-                ))}
-                {wsClients.length > 8 ? (
-                  <p className="text-[11px] text-muted-foreground">
-                    +{wsClients.length - 8} more clients
-                  </p>
-                ) : null}
+                {wsClients
+                  .slice(0, WS_CLIENT_PREVIEW_LIMIT)
+                  .map((client) => (
+                    <WSClientCard
+                      key={`${client.sessionId}-${client.connectedAt}`}
+                      client={client}
+                    />
+                  ))}
               </div>
             </CardContent>
           </Card>
@@ -365,6 +382,26 @@ export function GatewayInstancesPage() {
           totalLabel="total"
         />
       </div>
+
+      <Dialog open={wsClientsDialogOpen} onOpenChange={setWsClientsDialogOpen}>
+        <DialogContent className="max-h-[85vh] max-w-4xl overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Live WebSocket Clients</DialogTitle>
+            <DialogDescription>
+              {wsClients.length} connected client
+              {wsClients.length === 1 ? '' : 's'}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-2 md:grid-cols-2">
+            {wsClients.map((client) => (
+              <WSClientCard
+                key={`dialog-${client.sessionId}-${client.connectedAt}`}
+                client={client}
+              />
+            ))}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

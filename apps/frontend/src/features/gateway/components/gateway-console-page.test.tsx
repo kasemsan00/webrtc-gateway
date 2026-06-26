@@ -106,6 +106,7 @@ function createState(overrides?: Partial<GatewayState>): GatewayState {
       translatorEnabled: false,
       translatorSrcLang: '',
       translatorTgtLang: '',
+      translatorCaption: null,
     },
     mode: 'siptrunk',
     publicCredentials: {

@@ -40,7 +40,13 @@ import {
 } from '@/features/session-detail/services/session-detail-api'
 
 type TabType = 'events' | 'payloads' | 'dialogs' | 'stats'
-type EventQuickFilter = 'all' | 'sip' | 'terminal' | 'busy486' | 'noAnswer480'
+type EventQuickFilter =
+  | 'all'
+  | 'sip'
+  | 'client'
+  | 'terminal'
+  | 'busy486'
+  | 'noAnswer480'
 
 const DEFAULT_PAGE_SIZE = 50
 
@@ -53,6 +59,8 @@ function eventQuickFilterParams(filter: EventQuickFilter) {
   switch (filter) {
     case 'sip':
       return { category: 'sip' }
+    case 'client':
+      return { category: 'client' }
     case 'terminal':
       return { category: 'sip', name: 'sip_terminal_action' }
     case 'busy486':
@@ -295,6 +303,7 @@ function EventsTab({ sessionId }: { sessionId: string }) {
         {[
           ['all', 'All'],
           ['sip', 'SIP'],
+          ['client', 'Client'],
           ['terminal', 'Terminal'],
           ['busy486', '486'],
           ['noAnswer480', '480'],

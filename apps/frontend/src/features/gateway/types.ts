@@ -31,6 +31,13 @@ export type IncomingActionStatus =
   | 'sending_accept'
   | 'sending_reject'
 
+export interface TranslatorCaption {
+  recognizedText: string
+  translatedText: string
+  isFinal: boolean
+  direction?: string
+}
+
 export interface LogEntry {
   id: string
   time: string
@@ -156,6 +163,7 @@ export interface GatewayState {
     translatorEnabled: boolean
     translatorSrcLang: string
     translatorTgtLang: string
+    translatorCaption: TranslatorCaption | null
   }
   mode: CallMode
   publicCredentials: PublicCredentials
