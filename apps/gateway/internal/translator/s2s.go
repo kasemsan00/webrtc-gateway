@@ -16,6 +16,9 @@ import (
 type S2SPipeline struct {
 	client    *Client
 	codec     OpusCodec
+	srcLang   string
+	tgtLang   string
+	ttsVoice  string
 	srcPort   int
 	stats     S2SStats
 	statsMu   sync.Mutex
@@ -37,10 +40,22 @@ type S2SStats struct {
 	LastErrorAt   time.Time
 }
 
-func NewS2SPipeline(client *Client, codec OpusCodec) *S2SPipeline {
+func NewS2SPipeline(client *Client, codec OpusCodec, srcLang, tgtLang, ttsVoice string) *S2SPipeline {
+	if srcLang == "" {
+		srcLang = client.cfg.SourceLang
+	}
+	if tgtLang == "" {
+		tgtLang = client.cfg.TargetLang
+	}
+	if ttsVoice == "" {
+		ttsVoice = client.cfg.TTSVoice
+	}
 	return &S2SPipeline{
-		client: client,
-		codec:  codec,
+		client:   client,
+		codec:    codec,
+		srcLang:  srcLang,
+		tgtLang:  tgtLang,
+		ttsVoice: ttsVoice,
 	}
 }
 
@@ -93,10 +108,10 @@ func (p *S2SPipeline) Process(original *rtp.Packet) (*rtp.Packet, error) {
 
 	pcmBytes := int16SliceToBytes(pcm)
 	req := &pb.TranslationRequest{
-		SourceLanguage: p.client.cfg.SourceLang,
-		TargetLanguage: p.client.cfg.TargetLang,
+		SourceLanguage: p.srcLang,
+		TargetLanguage: p.tgtLang,
 		ReturnAudio:    true,
-		TTSVoiceName:   p.client.cfg.TTSVoice,
+		TTSVoiceName:   p.ttsVoice,
 		AudioData:      pcmBytes,
 		Mode:           pb.TranslationMode_MODE_S2S,
 	}

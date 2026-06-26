@@ -265,8 +265,27 @@ func (s *Server) handleAudioRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 			}
 
 			outPacket := packet
+			if sess.IsTranslatorEnabled() {
+				translated, translateErr := sess.ProcessInboundTranslator(packet)
+				if translateErr != nil {
+					if packetCount <= 5 || packetCount%1000 == 0 {
+						fmt.Printf("[%s] ⚠️ Inbound translation error for packet #%d: %v (falling back to passthrough)\n",
+							sess.ID, packetCount, translateErr)
+					}
+				} else if translated != nil {
+					outPacket = translated
+					if marshaled, marshalErr := translated.Marshal(); marshalErr == nil {
+						outBuf = marshaled
+					}
+					if packetCount <= 5 {
+						fmt.Printf("[%s] 🎤 Inbound translated audio packet #%d: %d bytes → %d bytes\n",
+							sess.ID, packetCount, len(packet.Payload), len(translated.Payload))
+					}
+				}
+			}
+
 			if sess.IsInboundGainEnabled() {
-				gained, gainErr := sess.ProcessInboundGain(packet)
+				gained, gainErr := sess.ProcessInboundGain(outPacket)
 				if gainErr != nil {
 					if packetCount <= 5 || packetCount%1000 == 0 {
 						fmt.Printf("[%s] ⚠️ Inbound gain error for packet #%d: %v (falling back to passthrough)\n",

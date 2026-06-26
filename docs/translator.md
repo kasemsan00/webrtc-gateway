@@ -2,20 +2,25 @@
 
 ## Overview
 
-This feature enables real-time Speech-to-Speech (S2S) translation of audio during active WebRTC calls. Audio from the WebRTC browser/mobile client is decoded from Opus, sent to an external Azure gRPC translation server, and the translated audio is re-encoded to Opus and forwarded to the SIP peer (Asterisk).
+This feature enables per-call Speech-to-Speech (S2S) translation of audio during active WebRTC calls. When a WebRTC client enables translation, the gateway creates two translation pipelines:
+
+- WebRTC/browser/mobile -> SIP/Linphone uses the selected direction, for example `en -> th`.
+- SIP/Linphone -> WebRTC/browser/mobile automatically uses the reverse direction, for example `th -> en`.
+
+In both directions, Opus RTP audio is decoded to PCM, sent to an external Azure gRPC translation server, re-encoded to Opus, and forwarded to the opposite peer.
 
 Architecture:
 
 ```
-Browser (WebRTC)
+Browser (WebRTC)                          SIP/Linphone
   │  Opus RTP
   ▼
-Gateway ──Opus→PCM──► Azure gRPC Server
-  │                        │
-  │                  ┌─────┘
-  │  Translated PCM
+Gateway ──Opus→PCM──► Azure gRPC Server ◄──PCM←Opus── Gateway
+  │                        │                         │
+  │                  ┌─────┘                         │
+  │  Translated Opus                                 │  Translated Opus
   ▼
-Asterisk (SIP)
+SIP/Linphone                              Browser (WebRTC)
 ```
 
 ## Dependencies
@@ -36,7 +41,7 @@ Environment variables (see `.env.example`):
 | `TRANSLATOR_ADDR` | `localhost:5000` | gRPC server address |
 | `TRANSLATOR_SOURCE_LANG` | `en` | Source language code |
 | `TRANSLATOR_TARGET_LANG` | `th` | Target language code |
-| `TRANSLATOR_TTS_VOICE` | `th-TH-Sarawut` | TTS voice name |
+| `TRANSLATOR_TTS_VOICE` | `th-TH-Sarawut` | Default/fallback TTS voice name |
 | `TRANSLATOR_OPUS_BITRATE` | `24000` | Opus encoding bitrate |
 
 ### Example `.env`
@@ -81,24 +86,39 @@ TranslationResult {
 
 Translation is activated **per-call** via WebSocket messages. No translation happens unless the client explicitly enables it.
 
+The request direction is interpreted as the WebRTC -> SIP direction. The gateway automatically enables the reverse SIP -> WebRTC direction.
+
 ### Enable translation
 
 Client → Server:
 ```json
 {
   "type": "translate",
-  "sessionId": "AbCdEfGh1234"
+  "sessionId": "AbCdEfGh1234",
+  "sourceLang": "en",
+  "targetLang": "th",
+  "ttsVoice": "th-TH-Sarawut"
 }
 ```
+
+For this example:
+
+- WebRTC -> SIP/Linphone uses `en -> th` with `th-TH-Sarawut`.
+- SIP/Linphone -> WebRTC uses `th -> en` with an English voice selected by the gateway.
 
 Server → Client:
 ```json
 {
   "type": "translate",
   "sessionId": "AbCdEfGh1234",
-  "state": "enabled"
+  "state": "enabled",
+  "sourceLang": "en",
+  "targetLang": "th",
+  "ttsVoice": "th-TH-Sarawut"
 }
 ```
+
+The response preserves the requested WebRTC -> SIP direction for backward compatibility. It does not currently expose the derived reverse direction.
 
 ### Disable translation
 
@@ -121,7 +141,9 @@ Server → Client:
 
 ## Audio Pipeline Details
 
-1. **WebRTC Opus RTP** arrives at `forwardRTPToAsterisk()` in `internal/session/rtp_forward.go`
+### WebRTC -> SIP/Linphone
+
+1. **WebRTC Opus RTP** arrives at `forwardRTPToAsterisk()` in `internal/session/rtp_forward.go`.
 2. If `session.TranslatorEnabled == true` and `session.Translator != nil`:
    - Opus payload is decoded to PCM `int16` via `translator.OpusCodec.Decode()`
    - PCM is sent to the Azure gRPC `Translate` stream as `TranslationRequest{mode: MODE_S2S, return_audio: true}`
@@ -129,7 +151,32 @@ Server → Client:
    - PCM is re-encoded to Opus via `translator.OpusCodec.Encode()`
    - Translated Opus replaces the original packet's payload
    - The rewritten packet continues through the existing RTP rewrite logic (SSRC, seq, PT)
-3. On any error (decode/gRPC/encode): logs the error and falls back to **original audio passthrough** — no audio loss
+3. On any error (decode/gRPC/encode), the gateway logs the error and falls back to **original audio passthrough**.
+
+### SIP/Linphone -> WebRTC
+
+1. **SIP/Linphone Opus RTP** arrives at `handleAudioRTPPacketsForSession()` in `internal/sip/rtp.go`.
+2. If `session.TranslatorEnabled == true` and `session.InboundTranslator != nil`:
+   - Opus payload is decoded to PCM `int16`.
+   - PCM is sent to the Azure gRPC `Translate` stream using the reverse language direction.
+   - Response `TranslationResult.audio_data` (PCM) is received.
+   - PCM is re-encoded to Opus.
+   - Translated Opus replaces the packet payload.
+3. Optional inbound gain (`SIP_AUDIO_INBOUND_GAIN_ENABLE`) runs after inbound translation.
+4. The packet payload type is rewritten to WebRTC Opus PT `111` when needed and written to the WebRTC audio track.
+5. On any error, the gateway logs the error and falls back to **original SIP audio passthrough**.
+
+## TTS Voice Selection
+
+The WebRTC -> SIP direction uses the `ttsVoice` provided in the `translate` message, or a gateway default for the requested target language.
+
+The SIP -> WebRTC direction automatically selects a TTS voice from the reverse target language:
+
+| Target language | Voice |
+|-----------------|-------|
+| `en`, `en-*` | `en-US-AriaNeural` |
+| `th`, `th-*` | `th-TH-Sarawut` |
+| Other | `TRANSLATOR_TTS_VOICE`, or `en-US-AriaNeural` when unset |
 
 ## Key Source Files
 
@@ -142,12 +189,14 @@ Server → Client:
 | `internal/translator/opus_cgo.go` | Real Opus codec via libopus CGo (`//go:build cgo`) |
 | `internal/translator/opus_stub.go` | No-op stub when `CGO_ENABLED=0` (`//go:build !cgo`) |
 | `internal/translator/s2s.go` | `S2SPipeline` — orchestrator: decode→send→recv→encode |
-| `internal/session/session.go` | `SetTranslator()`, `EnableTranslator()`, `DisableTranslator()` methods |
-| `internal/session/rtp_forward.go` | Audio fork to `S2SPipeline.Process()` in the RTP forward loop |
+| `internal/session/session.go` | Bidirectional translator state plus `SetTranslator()`, `EnableTranslator()`, `DisableTranslator()`, `ProcessInboundTranslator()` |
+| `internal/session/rtp_forward.go` | WebRTC -> SIP audio fork to `S2SPipeline.Process()` |
+| `internal/sip/rtp.go` | SIP -> WebRTC audio fork to `ProcessInboundTranslator()` |
 | `internal/api/server.go` | WS message dispatch for `translate`/`translate_stop` |
-| `internal/api/handlers.go` | `handleWSTranslate()`, `handleWSTranslateStop()` |
+| `internal/api/handlers.go` | `handleWSTranslate()`, `handleWSTranslateStop()`, reverse direction and TTS voice selection |
 | `internal/config/config.go` | `TranslatorConfig` struct + env loading |
 | `main.go` | Translator client init + health check |
+| `docs/bidirectional-s2s-translation.md` | Phase 1 and Phase 2 implementation plan |
 
 ## Build Requirements
 

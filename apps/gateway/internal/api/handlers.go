@@ -2468,16 +2468,17 @@ func (s *Server) handleWSTranslate(client *WSClient, msg WSMessage) {
 	if tgtLang == "" {
 		tgtLang = s.translatorCfg.TargetLang
 	}
-	ttsVoice := msg.TTSVoice
-	if ttsVoice == "" {
-		ttsVoice = s.translatorCfg.TTSVoice
+	outboundVoice := msg.TTSVoice
+	if outboundVoice == "" {
+		outboundVoice = translatorVoiceForTargetLang(tgtLang, s.translatorCfg.TTSVoice)
 	}
+	inboundVoice := translatorVoiceForTargetLang(srcLang, s.translatorCfg.TTSVoice)
 
-	sess.SetTranslator(s.translatorClient, srcLang, tgtLang, ttsVoice)
+	sess.SetTranslator(s.translatorClient, srcLang, tgtLang, outboundVoice, inboundVoice)
 	sess.EnableTranslator()
 
-	log.Printf("[%s] 🎤 Translation enabled via WS: %s → %s (voice: %s)",
-		sessionID, srcLang, tgtLang, ttsVoice)
+	log.Printf("[%s] 🎤 Translation enabled via WS: outbound %s → %s (voice: %s), inbound %s → %s (voice: %s)",
+		sessionID, srcLang, tgtLang, outboundVoice, tgtLang, srcLang, inboundVoice)
 
 	s.sendWSMessage(client, WSMessage{
 		Type:       "translate",
@@ -2485,8 +2486,33 @@ func (s *Server) handleWSTranslate(client *WSClient, msg WSMessage) {
 		State:      "enabled",
 		SourceLang: srcLang,
 		TargetLang: tgtLang,
-		TTSVoice:   ttsVoice,
+		TTSVoice:   outboundVoice,
 	})
+}
+
+func translatorVoiceForTargetLang(targetLang, fallback string) string {
+	switch translatorLanguageBase(targetLang) {
+	case "en":
+		return "en-US-AriaNeural"
+	case "th":
+		return "th-TH-Sarawut"
+	default:
+		if fallback != "" {
+			return fallback
+		}
+		return "en-US-AriaNeural"
+	}
+}
+
+func translatorLanguageBase(lang string) string {
+	lang = strings.TrimSpace(strings.ToLower(lang))
+	if lang == "" {
+		return ""
+	}
+	if idx := strings.IndexAny(lang, "-_"); idx >= 0 {
+		return lang[:idx]
+	}
+	return lang
 }
 
 // handleWSTranslateStop disables S2S speech translation for a session.
