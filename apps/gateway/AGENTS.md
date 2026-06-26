@@ -189,6 +189,7 @@ If you add/change a message type, update all of:
 - `SIP_LOCAL_PORT` (default `5060`)
 - `API_PORT` (default `8080`)
 - `API_ENABLE_WS` (default `true`)
+- `API_ENABLE_PUBLIC_WS` (default `false`; enables unauthenticated `/ws-public` for public SIP per-call credentials only)
 - `API_ENABLE_REST` (default `true`)
 - `API_CORS_ORIGINS` (default `*`)
 - `SIPCLIENT_AUTH_REGISTER_URL` (optional; when set, user-realm WebSocket auth auto-provisions a mobile SIP trunk)

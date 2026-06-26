@@ -148,6 +148,7 @@ type WSClient struct {
 	send            chan []byte
 	ConnectedAt     time.Time
 	authClaims      *auth.VerifiedClaims // populated when tokenVerifier is set
+	publicOnly      bool                 // true for unauthenticated /ws-public clients
 }
 
 // WSMessage represents a WebSocket message
@@ -328,6 +329,10 @@ func (s *Server) Start(ctx context.Context) error {
 		router.HandleFunc("/ws", s.handleWebSocket)
 		fmt.Printf("WebSocket endpoint enabled: /ws\n")
 	}
+	if s.config.EnablePublicWS {
+		router.HandleFunc("/ws-public", s.handlePublicWebSocket)
+		fmt.Printf("Public WebSocket endpoint enabled: /ws-public\n")
+	}
 
 	// REST API endpoints
 	if s.config.EnableREST {
@@ -423,9 +428,17 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 
 // handleWebSocket handles WebSocket connections
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
+	s.handleWebSocketConn(w, r, false)
+}
+
+func (s *Server) handlePublicWebSocket(w http.ResponseWriter, r *http.Request) {
+	s.handleWebSocketConn(w, r, true)
+}
+
+func (s *Server) handleWebSocketConn(w http.ResponseWriter, r *http.Request, publicOnly bool) {
 	req := r
 	var provisioned *MobileSIPProvisionResult
-	if s.tokenVerifier != nil {
+	if s.tokenVerifier != nil && !publicOnly {
 		rawToken := strings.TrimSpace(r.URL.Query().Get("access_token"))
 		if rawToken == "" {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
@@ -461,6 +474,8 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			log.Printf("WebSocket mobile SIP provisioning accepted: sub=%s trunkID=%d elapsed=%s", claims.Subject, trunkID, time.Since(startedAt).Round(10*time.Millisecond))
 		}
 		req = withAuthClaims(r, claims)
+	} else if publicOnly {
+		log.Printf("Public WebSocket connection accepted: remote=%s", r.RemoteAddr)
 	}
 
 	conn, err := s.upgrader.Upgrade(w, req, nil)
@@ -476,6 +491,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		availability: clientAvailabilityIdle,
 		callState:    string(session.StateNew),
 		ConnectedAt:  time.Now(),
+		publicOnly:   publicOnly,
 	}
 	if claims, ok := AuthClaimsFromContext(req.Context()); ok {
 		client.authClaims = claims
@@ -591,6 +607,14 @@ func (s *Server) handleWSMessage(client *WSClient, message []byte) {
 		return
 	}
 
+	if client != nil && client.publicOnly {
+		if ok, reason := s.allowPublicWSMessage(client, msg); !ok {
+			log.Printf("Public WebSocket message rejected: type=%s sessionID=%s reason=%s", msg.Type, msg.SessionID, reason)
+			s.sendWSError(client, msg.SessionID, reason)
+			return
+		}
+	}
+
 	switch msg.Type {
 	case "offer":
 		s.handleWSoffer(client, msg)
@@ -629,6 +653,85 @@ func (s *Server) handleWSMessage(client *WSClient, message []byte) {
 	default:
 		s.sendWSError(client, msg.SessionID, "Unknown message type")
 	}
+}
+
+func (s *Server) allowPublicWSMessage(client *WSClient, msg WSMessage) (bool, string) {
+	switch msg.Type {
+	case "offer", "ping":
+		return true, ""
+	case "call":
+		if msg.TrunkID > 0 || strings.TrimSpace(msg.TrunkPublicID) != "" {
+			return false, "Trunk calls require authenticated WebSocket"
+		}
+		if strings.TrimSpace(msg.SIPDomain) == "" ||
+			strings.TrimSpace(msg.SIPUsername) == "" ||
+			strings.TrimSpace(msg.SIPPassword) == "" {
+			return false, "Public SIP credentials required on public WebSocket"
+		}
+		return s.publicClientOwnsSession(client, msg, false)
+	case "ice", "hangup", "dtmf", "request_keyframe":
+		return s.publicClientOwnsSession(client, msg, false)
+	case "renegotiate_answer":
+		return s.publicClientOwnsSession(client, msg, true)
+	case "translate", "translate_stop":
+		return s.publicClientOwnsSession(client, msg, true)
+	case "resume":
+		return s.publicClientCanResume(client, msg)
+	default:
+		return false, fmt.Sprintf("Message type %q requires authenticated WebSocket", msg.Type)
+	}
+}
+
+func (s *Server) publicClientOwnsSession(client *WSClient, msg WSMessage, requirePublic bool) (bool, string) {
+	sessionID := strings.TrimSpace(msg.SessionID)
+	if sessionID == "" && client != nil {
+		sessionID = strings.TrimSpace(client.sessionID)
+	}
+	if sessionID == "" {
+		return false, "Session ID required"
+	}
+	if client == nil || strings.TrimSpace(client.sessionID) == "" {
+		return false, "Public WebSocket session is not established"
+	}
+	if sessionID != client.sessionID {
+		return false, "Public WebSocket can only access its own session"
+	}
+	if s.sessionMgr == nil {
+		return false, "Session manager not available"
+	}
+	sess, ok := s.sessionMgr.GetSession(sessionID)
+	if !ok {
+		return false, "Session not found"
+	}
+	if requirePublic && !sessionIsPublic(sess) {
+		return false, "Public WebSocket can only access public SIP sessions"
+	}
+	return true, ""
+}
+
+func (s *Server) publicClientCanResume(client *WSClient, msg WSMessage) (bool, string) {
+	sessionID := strings.TrimSpace(msg.SessionID)
+	if sessionID == "" {
+		return false, "Session ID required for resume"
+	}
+	if client != nil && strings.TrimSpace(client.sessionID) != "" && sessionID != client.sessionID {
+		return false, "Public WebSocket can only access its own session"
+	}
+	if s.sessionMgr == nil {
+		return false, "Session manager not available"
+	}
+	if sess, ok := s.sessionMgr.GetSession(sessionID); ok && !sessionIsPublic(sess) {
+		return false, "Public WebSocket can only resume public SIP sessions"
+	}
+	return true, ""
+}
+
+func sessionIsPublic(sess *session.Session) bool {
+	if sess == nil {
+		return false
+	}
+	mode, _, _, _, _, _, _ := sess.GetSIPAuthContext()
+	return mode == "public"
 }
 
 // handleWSoffer handles WebSocket offer messages
@@ -866,6 +969,19 @@ func (s *Server) handleWSCall(client *WSClient, msg WSMessage) {
 		client != nil &&
 		client.trunkResolved &&
 		client.resolvedTrunkID > 0
+
+	if client != nil && client.publicOnly {
+		if msg.TrunkID > 0 || strings.TrimSpace(msg.TrunkPublicID) != "" || useResolvedConnectionTrunk {
+			s.sendWSError(client, msg.SessionID, "Trunk calls require authenticated WebSocket")
+			return
+		}
+		if strings.TrimSpace(msg.SIPDomain) == "" ||
+			strings.TrimSpace(msg.SIPUsername) == "" ||
+			strings.TrimSpace(msg.SIPPassword) == "" {
+			s.sendWSError(client, msg.SessionID, "Public SIP credentials required on public WebSocket")
+			return
+		}
+	}
 
 	if msg.TrunkID > 0 || msg.TrunkPublicID != "" || useResolvedConnectionTrunk {
 		// Trunk mode: use trunk from DB

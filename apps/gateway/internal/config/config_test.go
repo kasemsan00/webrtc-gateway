@@ -70,3 +70,27 @@ func TestTrunkPNAppIDConfigCanBeCustomizedAndTrimmed(t *testing.T) {
 		t.Fatalf("expected custom trunk PN app ID to be trimmed, got %q", cfg.API.TrunkPNAppID)
 	}
 }
+
+func TestPublicWebSocketConfigDefaultDisabled(t *testing.T) {
+	t.Setenv("API_ENABLE_PUBLIC_WS", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.API.EnablePublicWS {
+		t.Fatalf("expected public WebSocket endpoint to be disabled by default")
+	}
+}
+
+func TestPublicWebSocketConfigCanBeEnabled(t *testing.T) {
+	t.Setenv("API_ENABLE_PUBLIC_WS", "true")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.API.EnablePublicWS {
+		t.Fatalf("expected public WebSocket endpoint to be enabled by env")
+	}
+}

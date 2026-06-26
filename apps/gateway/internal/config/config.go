@@ -31,7 +31,7 @@ type Config struct {
 type TranslatorConfig struct {
 	Enable      bool   // Enable translation client (default: false)
 	Addr        string // gRPC server address (default: "localhost:5000")
-	SourceLang  string // Source language code (default: "en")
+	SourceLang  string // Source language code (default: "en-US")
 	TargetLang  string // Target language code (default: "th")
 	TTSVoice    string // TTS voice name (default: "th-TH-Sarawut")
 	OpusBitrate int    // Opus encoding bitrate (default: 24000)
@@ -48,6 +48,7 @@ type RTPConfig struct {
 type APIConfig struct {
 	Port                       int    // HTTP server port (default: 8080)
 	EnableWS                   bool   // Enable WebSocket endpoint
+	EnablePublicWS             bool   // Enable unauthenticated public SIP WebSocket endpoint
 	EnableREST                 bool   // Enable REST API
 	CORSOrigins                string // CORS allowed origins (comma-separated)
 	DebugWebSocket             bool   // Enable WebSocket debug logging (ping/pong, messages)
@@ -308,6 +309,7 @@ func Load() (*Config, error) {
 		API: APIConfig{
 			Port:                       apiPort,
 			EnableWS:                   getEnvAsBool("API_ENABLE_WS", true),
+			EnablePublicWS:             getEnvAsBool("API_ENABLE_PUBLIC_WS", false),
 			EnableREST:                 getEnvAsBool("API_ENABLE_REST", true),
 			CORSOrigins:                getEnvWithDefault("API_CORS_ORIGINS", "*"),
 			DebugWebSocket:             getEnvAsBool("DEBUG_WEBSOCKET", false),
@@ -395,7 +397,7 @@ func Load() (*Config, error) {
 		Translator: TranslatorConfig{
 			Enable:      getEnvAsBool("TRANSLATOR_ENABLE", false),
 			Addr:        getEnvWithDefault("TRANSLATOR_ADDR", "localhost:5000"),
-			SourceLang:  getEnvWithDefault("TRANSLATOR_SOURCE_LANG", "en"),
+			SourceLang:  getEnvWithDefault("TRANSLATOR_SOURCE_LANG", "en-US"),
 			TargetLang:  getEnvWithDefault("TRANSLATOR_TARGET_LANG", "th"),
 			TTSVoice:    getEnvWithDefault("TRANSLATOR_TTS_VOICE", "th-TH-Sarawut"),
 			OpusBitrate: getEnvAsInt("TRANSLATOR_OPUS_BITRATE", 24000),

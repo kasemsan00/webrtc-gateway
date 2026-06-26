@@ -37,6 +37,8 @@ Unauthenticated clients on `/ws-public` may use only the public outgoing call li
 - `ping`
 - `request_keyframe`
 - `renegotiate_answer`, only for the same public session
+- `translate`, only for the same public session
+- `translate_stop`, only for the same public session
 - `resume`, only when the target session exists and its auth mode is `public`
 
 All other messages are rejected with a WebSocket error response. In particular, public clients cannot use:
@@ -47,7 +49,6 @@ All other messages are rejected with a WebSocket error response. In particular, 
 - connection-resolved trunk calls
 - legacy calls that omit public SIP credentials
 - `accept` or `reject` for incoming calls
-- translation control
 - `client_state`
 
 ## Data Flow

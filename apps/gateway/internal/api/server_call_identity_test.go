@@ -130,6 +130,214 @@ func TestHandleWSCallAllowsSamePublicIdentity(t *testing.T) {
 	}
 }
 
+func TestHandleWSCall_PublicOnlyAllowsPublicCredentials(t *testing.T) {
+	mgr := newTestSessionManager()
+	sess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+
+	sipMaker := &stubSIPCallMaker{}
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, sipMaker, nil, nil, nil)
+	client := &WSClient{send: make(chan []byte, 8), publicOnly: true, sessionID: sess.ID}
+
+	srv.handleWSCall(client, WSMessage{
+		Type:        "call",
+		SessionID:   sess.ID,
+		Destination: "1002",
+		From:        "callerA",
+		SIPDomain:   "example.com",
+		SIPUsername: "userA",
+		SIPPassword: "secret",
+		SIPPort:     5060,
+	})
+
+	waitForMakeCallCount(t, sipMaker, 1)
+	mode, _, _, domain, username, password, port := sess.GetSIPAuthContext()
+	if mode != "public" || domain != "example.com" || username != "userA" || password != "secret" || port != 5060 {
+		t.Fatalf("expected public SIP auth context, got mode=%q domain=%q username=%q password=%q port=%d", mode, domain, username, password, port)
+	}
+}
+
+func TestHandleWSCall_PublicOnlyRejectsMissingPublicCredentials(t *testing.T) {
+	mgr := newTestSessionManager()
+	sess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+
+	sipMaker := &stubSIPCallMaker{}
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, sipMaker, nil, nil, nil)
+	client := &WSClient{send: make(chan []byte, 8), publicOnly: true, sessionID: sess.ID}
+
+	srv.handleWSCall(client, WSMessage{
+		Type:        "call",
+		SessionID:   sess.ID,
+		Destination: "1002",
+	})
+
+	if sipMaker.makeCallCount != 0 {
+		t.Fatalf("expected MakeCall not to be called, got %d", sipMaker.makeCallCount)
+	}
+	msgs := readWSMessages(t, client.send)
+	if len(msgs) != 1 || msgs[0].Type != "error" || !strings.Contains(msgs[0].Error, "Public SIP credentials required") {
+		t.Fatalf("expected public credentials error, got %+v", msgs)
+	}
+}
+
+func TestHandleWSCall_PublicOnlyRejectsTrunkFields(t *testing.T) {
+	mgr := newTestSessionManager()
+	sess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+
+	sipMaker := &stubSIPCallMaker{}
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, sipMaker, nil, nil, nil)
+	client := &WSClient{send: make(chan []byte, 8), publicOnly: true, sessionID: sess.ID}
+
+	srv.handleWSCall(client, WSMessage{
+		Type:        "call",
+		SessionID:   sess.ID,
+		Destination: "1002",
+		TrunkID:     42,
+	})
+
+	if sipMaker.makeCallCount != 0 {
+		t.Fatalf("expected MakeCall not to be called, got %d", sipMaker.makeCallCount)
+	}
+	msgs := readWSMessages(t, client.send)
+	if len(msgs) != 1 || msgs[0].Type != "error" || !strings.Contains(msgs[0].Error, "Trunk calls require authenticated WebSocket") {
+		t.Fatalf("expected trunk auth error, got %+v", msgs)
+	}
+}
+
+func TestHandleWSMessage_PublicOnlyRejectsTrunkResolve(t *testing.T) {
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, newTestSessionManager(), nil, nil, nil, nil)
+	client := &WSClient{send: make(chan []byte, 8), publicOnly: true}
+
+	srv.handleWSMessage(client, []byte(`{"type":"trunk_resolve","sessionId":"s1","trunkId":42}`))
+
+	msgs := readWSMessages(t, client.send)
+	if len(msgs) != 1 || msgs[0].Type != "error" || !strings.Contains(msgs[0].Error, "requires authenticated WebSocket") {
+		t.Fatalf("expected authenticated websocket error, got %+v", msgs)
+	}
+}
+
+func TestHandleWSMessage_PublicOnlyRejectsSessionActionBeforeOwnSession(t *testing.T) {
+	mgr := newTestSessionManager()
+	sess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, nil, nil, nil, nil)
+	client := &WSClient{send: make(chan []byte, 8), publicOnly: true}
+
+	srv.handleWSMessage(client, []byte(`{"type":"hangup","sessionId":"`+sess.ID+`"}`))
+
+	msgs := readWSMessages(t, client.send)
+	if len(msgs) != 1 || msgs[0].Type != "error" || !strings.Contains(msgs[0].Error, "session is not established") {
+		t.Fatalf("expected public session ownership error, got %+v", msgs)
+	}
+}
+
+func TestHandleWSMessage_PublicOnlyResumeRequiresPublicSession(t *testing.T) {
+	mgr := newTestSessionManager()
+	sess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, nil, nil, nil, nil)
+	client := &WSClient{send: make(chan []byte, 8), publicOnly: true}
+
+	srv.handleWSMessage(client, []byte(`{"type":"resume","sessionId":"`+sess.ID+`"}`))
+
+	msgs := readWSMessages(t, client.send)
+	if len(msgs) != 1 || msgs[0].Type != "error" || !strings.Contains(msgs[0].Error, "resume public SIP sessions") {
+		t.Fatalf("expected public resume guard error, got %+v", msgs)
+	}
+}
+
+func TestHandleWSMessage_PublicOnlyResumeAllowsPublicSession(t *testing.T) {
+	mgr := newTestSessionManager()
+	sess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+	sess.SetSIPAuthContext("public", "userA@example.com", 0, "example.com", "userA", "secret", 5060)
+
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, nil, nil, nil, nil)
+	client := &WSClient{send: make(chan []byte, 8), publicOnly: true}
+
+	srv.handleWSMessage(client, []byte(`{"type":"resume","sessionId":"`+sess.ID+`"}`))
+
+	msgs := readWSMessages(t, client.send)
+	if len(msgs) != 1 || msgs[0].Type != "resume_failed" {
+		t.Fatalf("expected resume handler to run for public session, got %+v", msgs)
+	}
+	if strings.Contains(msgs[0].Error, "Public WebSocket") {
+		t.Fatalf("did not expect public websocket guard error, got %+v", msgs)
+	}
+}
+
+func TestHandleWSMessage_PublicOnlyAllowsTranslateForPublicSession(t *testing.T) {
+	mgr := newTestSessionManager()
+	sess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+	sess.SetSIPAuthContext("public", "userA@example.com", 0, "example.com", "userA", "secret", 5060)
+
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, nil, nil, nil, nil)
+	client := &WSClient{send: make(chan []byte, 8), publicOnly: true, sessionID: sess.ID}
+
+	srv.handleWSMessage(client, []byte(`{"type":"translate","sessionId":"`+sess.ID+`","sourceLang":"en","targetLang":"th"}`))
+
+	msgs := readWSMessages(t, client.send)
+	if len(msgs) != 1 || msgs[0].Type != "error" || !strings.Contains(msgs[0].Error, "Translator not available") {
+		t.Fatalf("expected translate handler to run and report missing translator, got %+v", msgs)
+	}
+}
+
+func TestHandleWSMessage_PublicOnlyRejectsTranslateForNonPublicSession(t *testing.T) {
+	mgr := newTestSessionManager()
+	sess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, nil, nil, nil, nil)
+	client := &WSClient{send: make(chan []byte, 8), publicOnly: true, sessionID: sess.ID}
+
+	srv.handleWSMessage(client, []byte(`{"type":"translate","sessionId":"`+sess.ID+`","sourceLang":"en","targetLang":"th"}`))
+
+	msgs := readWSMessages(t, client.send)
+	if len(msgs) != 1 || msgs[0].Type != "error" || !strings.Contains(msgs[0].Error, "public SIP sessions") {
+		t.Fatalf("expected public session guard error, got %+v", msgs)
+	}
+}
+
+func TestHandleWSMessage_PublicOnlyAllowsTranslateStopForPublicSession(t *testing.T) {
+	mgr := newTestSessionManager()
+	sess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+	sess.SetSIPAuthContext("public", "userA@example.com", 0, "example.com", "userA", "secret", 5060)
+
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, nil, nil, nil, nil)
+	client := &WSClient{send: make(chan []byte, 8), publicOnly: true, sessionID: sess.ID}
+
+	srv.handleWSMessage(client, []byte(`{"type":"translate_stop","sessionId":"`+sess.ID+`"}`))
+
+	msgs := readWSMessages(t, client.send)
+	if len(msgs) != 1 || msgs[0].Type != "translate_stop" || msgs[0].State != "disabled" {
+		t.Fatalf("expected translate_stop handler to run for public session, got %+v", msgs)
+	}
+}
+
 func TestHandleWSCall_AllowsIdentityChangeForNonPublicMode(t *testing.T) {
 	mgr := newTestSessionManager()
 	sess, err := mgr.CreateSession(config.TURNConfig{})

@@ -203,6 +203,63 @@ func TestWebSocketAuthAccessToken(t *testing.T) {
 	})
 }
 
+func TestPublicWebSocketAcceptsWithoutAccessToken(t *testing.T) {
+	t.Parallel()
+
+	provisioner := &mobileSIPProvisionerStub{}
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, nil, nil, nil, nil, nil)
+	srv.SetTokenVerifier(tokenVerifierStub{
+		verify: func(_ context.Context, _ string, _ auth.TokenRealm) (*auth.VerifiedClaims, error) {
+			return nil, context.DeadlineExceeded
+		},
+	})
+	srv.SetMobileSIPProvisioner(provisioner)
+
+	httpServer := httptest.NewServer(http.HandlerFunc(srv.handlePublicWebSocket))
+	defer httpServer.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(httpServer.URL, "http")
+	dialer := websocket.Dialer{HandshakeTimeout: 2 * time.Second}
+
+	conn, resp, err := dialer.Dial(wsURL, nil)
+	if err != nil {
+		status := 0
+		if resp != nil {
+			status = resp.StatusCode
+		}
+		t.Fatalf("expected successful public ws upgrade, err=%v status=%d", err, status)
+	}
+	defer conn.Close()
+
+	if provisioner.called {
+		t.Fatalf("public websocket must not trigger mobile SIP provisioning")
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		srv.mu.RLock()
+		var found *WSClient
+		for client := range srv.wsConnections {
+			found = client
+			break
+		}
+		srv.mu.RUnlock()
+		if found != nil {
+			if !found.publicOnly {
+				t.Fatalf("expected public websocket client to be marked publicOnly")
+			}
+			if found.authClaims != nil {
+				t.Fatalf("public websocket client should not have auth claims")
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for public websocket client registration")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestWebSocketAuthProvisionsMobileUserTrunk(t *testing.T) {
 	t.Parallel()
 

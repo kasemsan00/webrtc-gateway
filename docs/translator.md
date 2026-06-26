@@ -39,7 +39,7 @@ Environment variables (see `.env.example`):
 |----------|---------|-------------|
 | `TRANSLATOR_ENABLE` | `false` | Enable translation client on startup |
 | `TRANSLATOR_ADDR` | `localhost:5000` | gRPC server address |
-| `TRANSLATOR_SOURCE_LANG` | `en` | Source language code |
+| `TRANSLATOR_SOURCE_LANG` | `en-US` | Source language code/locale |
 | `TRANSLATOR_TARGET_LANG` | `th` | Target language code |
 | `TRANSLATOR_TTS_VOICE` | `th-TH-Sarawut` | Default/fallback TTS voice name |
 | `TRANSLATOR_OPUS_BITRATE` | `24000` | Opus encoding bitrate |
@@ -48,7 +48,7 @@ Environment variables (see `.env.example`):
 ```
 TRANSLATOR_ENABLE=true
 TRANSLATOR_ADDR=192.168.1.100:5000
-TRANSLATOR_SOURCE_LANG=en
+TRANSLATOR_SOURCE_LANG=en-US
 TRANSLATOR_TARGET_LANG=th
 TRANSLATOR_TTS_VOICE=th-TH-Sarawut
 TRANSLATOR_OPUS_BITRATE=24000
@@ -63,7 +63,7 @@ Service: `SpeechTranslator.Translate` (bidirectional stream)
 ### Request
 ```protobuf
 TranslationRequest {
-  source_language = "en"
+  source_language = "en-US"
   target_language = "th"
   return_audio = true
   tts_voice_name = "th-TH-Sarawut"

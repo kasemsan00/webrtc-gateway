@@ -488,7 +488,8 @@ export function canPlaceCall(state: GatewayState) {
 }
 
 export function canResolveTrunk(state: GatewayState) {
-  const hasTrunkId = parseTrunkIdentifier(state.trunk.credentials.trunkId) !== null
+  const hasTrunkId =
+    parseTrunkIdentifier(state.trunk.credentials.trunkId) !== null
   return state.connection.status === 'connected' && hasTrunkId
 }
 
@@ -883,7 +884,10 @@ function flushPendingIncomingAcceptQueue() {
     incomingCall: null,
     incomingAction: 'sending_accept',
   }))
-  appendLog('Incoming call accepted after media session became ready', 'success')
+  appendLog(
+    'Incoming call accepted after media session became ready',
+    'success',
+  )
 }
 
 function handlePublicIdentityChangedError() {
@@ -1284,12 +1288,11 @@ function handleTrunkResolved(payload: {
       status: 'resolved',
       credentials: {
         ...state.trunk.credentials,
-        trunkId:
-          hasPublicId
-            ? trunkPublicId
-            : Number.isInteger(trunkId) && trunkId > 0
-              ? String(trunkId)
-              : '',
+        trunkId: hasPublicId
+          ? trunkPublicId
+          : Number.isInteger(trunkId) && trunkId > 0
+            ? String(trunkId)
+            : '',
       },
     },
   }))
@@ -1324,6 +1327,106 @@ function handleTrunkRedirect(payload: { redirectUrl?: string }) {
   } else {
     connect(payload.redirectUrl)
   }
+}
+
+async function handleRenegotiate(payload: {
+  sessionId: string
+  renegotiationId: string
+  sdp: string
+}) {
+  if (!runtime.pc) {
+    appendLog('Cannot renegotiate: no PeerConnection', 'warning')
+    sendJson(runtime.ws, {
+      type: 'renegotiate_answer',
+      sessionId: payload.sessionId,
+      renegotiationId: payload.renegotiationId,
+      status: 'failed',
+      reason: 'PeerConnection not available',
+    })
+    return
+  }
+
+  try {
+    await runtime.pc.setRemoteDescription({
+      type: 'offer',
+      sdp: payload.sdp,
+    })
+    const answer = await runtime.pc.createAnswer()
+    await runtime.pc.setLocalDescription(answer)
+    await waitForIceGatheringComplete(runtime.pc)
+
+    sendJson(runtime.ws, {
+      type: 'renegotiate_answer',
+      sessionId: payload.sessionId,
+      renegotiationId: payload.renegotiationId,
+      status: 'ok',
+      sdp: runtime.pc.localDescription?.sdp,
+    })
+    appendLog(
+      `Renegotiation answer sent (${payload.renegotiationId})`,
+      'success',
+    )
+  } catch (error) {
+    const reason = (error as Error).message
+    appendLog(`Renegotiation failed: ${reason}`, 'error')
+    sendJson(runtime.ws, {
+      type: 'renegotiate_answer',
+      sessionId: payload.sessionId,
+      renegotiationId: payload.renegotiationId,
+      status: 'failed',
+      reason,
+    })
+  }
+}
+
+function handleRenegotiateResult(payload: {
+  sessionId?: string
+  renegotiationId?: string
+  status?: string
+  reason?: string
+}) {
+  const status = String(payload.status ?? 'unknown')
+  const renegotiationId = String(payload.renegotiationId ?? '-')
+  const reason = String(payload.reason ?? '')
+
+  if (status === 'ok') {
+    appendLog(`Renegotiation completed (${renegotiationId})`, 'success')
+  } else {
+    appendLog(
+      `Renegotiation result: ${status}${reason ? ` - ${reason}` : ''} (${renegotiationId})`,
+      status === 'timeout' ? 'warning' : 'error',
+    )
+  }
+}
+
+function handleIncomingCallCancel(payload: {
+  sessionId?: string
+  reason?: string
+}) {
+  const sessionId = String(payload.sessionId ?? '')
+  const reason = String(payload.reason ?? 'cancelled')
+
+  if (
+    gatewayStore.state.incomingCall &&
+    gatewayStore.state.incomingCall.sessionId === sessionId
+  ) {
+    gatewayStore.setState((state) => ({
+      ...state,
+      incomingCall: null,
+      incomingAction: 'idle',
+    }))
+    runtime.pendingIncomingAcceptSessionId = null
+    runtime.pendingAutoSwitchSessionId = null
+  }
+
+  if (
+    gatewayStore.state.call.sessionId === sessionId &&
+    gatewayStore.state.call.state !== 'active'
+  ) {
+    handleCallState('ended')
+  }
+
+  appendLog(`Incoming call cancelled: ${reason}`, 'info')
 }
 
 function setTrunkStatus(
@@ -1496,6 +1599,29 @@ function handleMessage(event: MessageEvent<string>) {
     case 'dtmf':
       appendLog(`DTMF received: ${String(message.digits ?? '-')}`, 'info')
       break
+    case 'renegotiate':
+      void handleRenegotiate({
+        sessionId: String(message.sessionId ?? ''),
+        renegotiationId: String(message.renegotiationId ?? ''),
+        sdp: String(message.sdp ?? ''),
+      })
+      break
+    case 'renegotiate_result':
+      handleRenegotiateResult({
+        sessionId: message.sessionId ? String(message.sessionId) : undefined,
+        renegotiationId: message.renegotiationId
+          ? String(message.renegotiationId)
+          : undefined,
+        status: message.status ? String(message.status) : undefined,
+        reason: message.reason ? String(message.reason) : undefined,
+      })
+      break
+    case 'cancel':
+      handleIncomingCallCancel({
+        sessionId: message.sessionId ? String(message.sessionId) : undefined,
+        reason: message.reason ? String(message.reason) : undefined,
+      })
+      break
     case 'error': {
       const error = String(message.error ?? 'Unknown server error')
       if (
@@ -1530,7 +1656,10 @@ function handleMessage(event: MessageEvent<string>) {
           translatorTgtLang: tgtLang,
         },
       }))
-      appendLog(`Translation enabled${srcLang ? ` (${srcLang} → ${tgtLang})` : ''}`, 'success')
+      appendLog(
+        `Translation enabled${srcLang ? ` (${srcLang} → ${tgtLang})` : ''}`,
+        'success',
+      )
       break
     }
     case 'translate_stop': {
@@ -2137,7 +2266,11 @@ export async function sendSwitch() {
   }
 }
 
-export function toggleTranslator(sourceLang?: string, targetLang?: string, ttsVoice?: string) {
+export function toggleTranslator(
+  sourceLang?: string,
+  targetLang?: string,
+  ttsVoice?: string,
+) {
   const state = gatewayStore.state
   const sessionId = state.call.sessionId
   if (!sessionId) {
@@ -2195,7 +2328,10 @@ export function acceptCall() {
     return
   }
 
-  const sent = sendJson(runtime.ws, { type: 'accept', sessionId: incoming.sessionId })
+  const sent = sendJson(runtime.ws, {
+    type: 'accept',
+    sessionId: incoming.sessionId,
+  })
   if (!sent) {
     gatewayStore.setState((state) => ({
       ...state,
@@ -2216,7 +2352,10 @@ export function acceptCall() {
 
 export function rejectCall() {
   if (gatewayStore.state.incomingAction !== 'idle') {
-    appendLog('Incoming call is being processed. Reject is temporarily disabled.', 'warning')
+    appendLog(
+      'Incoming call is being processed. Reject is temporarily disabled.',
+      'warning',
+    )
     return
   }
   const incoming = gatewayStore.state.incomingCall
