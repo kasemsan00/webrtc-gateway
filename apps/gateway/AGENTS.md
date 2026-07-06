@@ -28,438 +28,154 @@ K2 Gateway bridges WebRTC clients (browser/mobile) to SIP/RTP endpoints (Asteris
 - **Runtime mode:** API mode (HTTP + WebSocket)
 - **Data plane:** SRTP (WebRTC side) <-> RTP/RTCP (SIP side)
 - **Control plane:** JSON over WebSocket/REST <-> SIP signaling
-- **Persistence:** Optional Postgres-backed LogStore (no-op implementation when `DB_ENABLE=false`)
+- **Persistence:** Optional Postgres-backed LogStore (no-op when `DB_ENABLE=false`)
+- **Push:** `internal/push/` — FCM, APNS, TTRS incoming-call dispatch
+- **Translation:** `internal/translator/` — gRPC client for live caption/TTS
+- **Audio processing:** `internal/audio/` — optional inbound Opus gain (CGO/libopus)
+- **Mobile SIP provision:** `internal/sipclientauth/` — JWT-to-trunk registration client
 
 ---
 
-## 3. Runtime Architecture (As Implemented)
+## 3. Runtime Architecture
 
 1. `main.go` loads env config, initializes logger, starts LogStore, and boots API mode.
 2. `internal/auth/*` loads JWKS and verifies JWT (`iss`, `aud`, `exp/nbf`, RSA signature).
-3. `internal/api/server.go` handles `/ws`, session offers/answers, call control, resume, trunk resolve, SIP messaging, DTMF, and HTTP/WS auth enforcement.
-4. `internal/session/*` owns per-call state and WebRTC PeerConnection lifecycle.
-5. `internal/sip/*` handles SIP server/client behavior, INVITE/ACK/BYE/MESSAGE/DTMF, SDP generation/parsing, public registry, and trunk manager.
-6. `internal/logstore/*` persists events/payloads/stats/dialog/session snapshots and instance/session directories.
+3. `internal/api/server.go` — `Server` struct, `NewServer`, route registration in `Start()`.
+4. `internal/api/ws_*.go` — WebSocket upgrade, dispatch, and per-flow handlers.
+5. `internal/api/handlers_*.go` — REST endpoints and SSE streams.
+6. `internal/session/*` owns per-call state and WebRTC PeerConnection lifecycle.
+7. `internal/sip/*` handles SIP signaling, SDP, public registry, and trunk manager.
+8. `internal/logstore/*` persists events/payloads/stats/dialog/session snapshots.
 
 ---
 
-## 4. Repository Map (Current)
+## 4. Repository Map
 
-> Root-level `docs/` contains client integration guides and call flows: see `docs/dual-flow.md`, `docs/call-resume.md`, `docs/web.md`, `docs/react-native.md`, `docs/ios.md`, `docs/android.md`.
+> Client integration guides: `docs/dual-flow.md`, `docs/call-resume.md`, `docs/web.md`, `docs/react-native.md`, `docs/ios.md`, `docs/android.md`.
 
 ```text
-k2-gateway/
+apps/gateway/
 |- main.go
 |- internal/
-|  |- api/
-|  |  |- server.go
-|  |  |- auth_http.go
-|  |  `- handlers.go
-|  |- auth/
-|  |  `- verifier.go
+|  |- api/           # HTTP/WS server (see file map below)
+|  |- auth/verifier.go
+|  |- audio/         # inbound Opus gain
 |  |- config/config.go
-|  |- logger/logger.go
 |  |- logstore/
-|  |  |- logstore.go
-|  |  |- queue.go
-|  |  |- partition.go
-|  |  `- models.go
-|  |- session/
-|  |  |- manager.go
-|  |  |- session.go
-|  |  |- session_state.go
-|  |  |- session_media.go
-|  |  |- rtp_forward.go
-|  |  |- rtp_cache.go
-|  |  |- keyframe.go
-|  |  |- h264_paramsets.go
-|  |  |- sdp_h264.go
-|  |  |- media_engine.go
-|  |  |- media_endpoints.go
-|  |  `- renegotiate.go
-|  |- sip/
-|  |  |- server.go
-|  |  |- handlers.go
-|  |  |- call.go
-|  |  |- dialog.go
-|  |  |- registration.go
-|  |  |- public_registry.go
-|  |  |- trunk_manager.go
-|  |  |- trunk_public_id.go
-|  |  |- sdp.go
-|  |  |- rtp.go
-|  |  |- dtmf.go
-|  |  |- message.go
-|  |  |- ice.go
-|  |  `- logging.go
-|  |- webrtc/webrtc.go
-|  `- pkg/webrtc/utils.go
+|  |- push/          # FCM, APNS, TTRS
+|  |- session/       # WebRTC + RTP forwarding
+|  |- sip/           # SIP server, trunks, SDP
+|  |- sipclientauth/ # mobile trunk provision client
+|  |- translator/    # gRPC translation client
+|  `- webrtc/
 |- init.sql
-|- docker-compose.yml
 `- .env.example
 ```
 
 ---
 
-## 5. WebSocket Contract (Source of Truth)
+## 5. internal/api/ File Map
 
-Endpoint: `/ws`  
-Payload format: JSON
-
-Auth behavior:
-
-- When `AUTH_ENABLE=true`, `/ws` requires `access_token` query parameter (`/ws?access_token=<jwt>`).
-- Token is validated against configured JWKS/issuer/audience before WebSocket upgrade.
-- When `SIPCLIENT_AUTH_REGISTER_URL` is configured, authenticated user-realm `/ws` clients are provisioned as mobile SIP trunks before upgrade completes:
-  - clients must include `devicePlatform=android|ios` in the WebSocket URL;
-  - gateway posts form-data `token=<jwt>` and `type=mobile` to the configured register URL;
-  - response `data.domain`, `data.ext`, and `data.secret` become the trunk domain, username, and password;
-  - trunk identity is deterministic by JWT subject (`sipclient-mobile-<sub>`);
-  - `notify_user_id` is bound from verified JWT `sub`, and `last_online_platform` is updated from `devicePlatform`;
-  - provisioning or SIP REGISTER failure rejects the WebSocket connection;
-  - after successful provisioning and SIP REGISTER, the gateway sends `trunk_resolved` with `trunkId` and `trunkPublicId`.
-
-### Client -> Server message types
-
-- `offer` -> requires `sdp` (`sessionId` optional for existing session)
-- `call` -> requires `sessionId`, `destination` (`from` optional)
-  - Public mode: include `sipDomain`, `sipUsername`, `sipPassword`, optional `sipPort`
-  - Trunk mode: include `trunkId` or `trunkPublicId`
-  - Auto-provisioned mobile connections may omit trunk fields and public SIP credentials; the gateway uses the connection's resolved trunk.
-- `hangup` -> requires `sessionId`
-- `accept` -> requires `sessionId`
-- `reject` -> requires `sessionId` (`reason` optional, defaults to `busy`)
-- `dtmf` -> requires `sessionId`, `digits`
-- `send_message` -> requires `body`; use in-dialog if session exists, otherwise requires `destination`
-- `resume` -> requires `sessionId`, optional `sdp`
-- `trunk_resolve` -> requires `sipDomain`, `sipUsername`, `sipPassword`, optional `sipPort` (resolve-only; no auto-create)
-  - Mobile clients may include `devicePlatform` (`ios` or `android`) so the gateway can persist the latest online platform for incoming push routing.
-- `ping` -> keepalive
-
-### Server -> Client message types
-
-- `answer`, `state`, `incoming`
-- `message`, `messageSent`, `dtmf`
-- `renegotiate`, `renegotiate_result`
-  - `renegotiate` is additive mid-call WebRTC assistance for SIP re-INVITE/UPDATE media changes. It includes `sessionId`, `renegotiationId`, optional `sdp`, `reason`, `mediaDirection`, `hasVideo`, and `requiresAnswer`.
-  - Clients that support it respond with `renegotiate_answer` (`sessionId`, `renegotiationId`, optional `sdp`, `status`, optional `reason`).
-- `resumed`, `resume_failed`, `resume_redirect`
-- `trunk_resolved`, `trunk_redirect`, `trunk_not_found`, `trunk_not_ready`
-  - `trunk_resolved` now returns both `trunkId` and `trunkPublicId`
-- `pong`, `error`
-
-If you add/change a message type, update all of:
-
-1. `internal/api/server.go` switch + payload struct
-2. Frontend client handlers/senders in `frontend` (`src/features/gateway/store/gateway-store.ts`)
-3. this document
+| File | Responsibility |
+|------|----------------|
+| `server.go` | `Server`, interfaces, `WSClient`/`WSMessage`, `NewServer`, `Start`, routing |
+| `auth_http.go` | HTTP/WS JWT middleware |
+| `mobile_sip_provision.go` | Mobile trunk auto-provision on `/ws` connect |
+| `client_diagnostics.go` | `/api/client-diagnostics` upload and query |
+| `ws_conn.go` | WebSocket upgrade, read/write pumps |
+| `ws_dispatch.go` | `handleWSMessage` router, public-only guards |
+| `ws_call.go` | `offer`, `ice`, `call`, `hangup`, `dtmf` |
+| `ws_incoming.go` | `accept`, `reject`, push dispatch, ring timeout |
+| `ws_resume.go` | `resume`, SDP diagnostics |
+| `ws_trunk.go` | `trunk_resolve`, `trunk_push_token` |
+| `ws_midcall.go` | `renegotiate_answer`, `client_state`, `request_keyframe`, `ping` |
+| `ws_translate.go` | `translate`, `translate_stop`, caption events |
+| `ws_notify.go` | `Notify*` callbacks, `send_message` |
+| `ws_util.go` | `sendWSMessage`, logging helpers, SSE broadcast |
+| `handlers.go` | Shared REST types, `respondJSON`/`respondError` |
+| `handlers_call.go` | offer/call/hangup/dtmf/switch REST |
+| `handlers_trunk.go` | trunk CRUD, register/unregister, heartbeat |
+| `handlers_session.go` | session history, events, payloads, dialogs, stats |
+| `handlers_ops.go` | dashboard, instances, ws-clients, public accounts |
+| `handlers_sse.go` | trunk/session SSE streams |
+| `handlers_log.go` | `/api/logs/*` |
 
 ---
 
-## 6. Critical Media Behaviors (Do Not Regress)
+## 6. Where to Start
 
-### 6.1 Audio path
+| Task | File(s) |
+|------|---------|
+| WS connect / auth / mobile provision | `ws_conn.go`, `auth_http.go`, `mobile_sip_provision.go` |
+| WS message routing | `ws_dispatch.go` |
+| Outbound call / offer / hangup | `ws_call.go` |
+| Incoming call / accept / reject / push | `ws_incoming.go`, `internal/push/` |
+| Session resume | `ws_resume.go` |
+| Trunk resolve / push token | `ws_trunk.go` |
+| Mid-call renegotiation | `ws_midcall.go`, `internal/session/renegotiate.go` |
+| Live translation | `ws_translate.go`, `internal/translator/` |
+| SIP MESSAGE / DTMF notify | `ws_notify.go` |
+| REST call control | `handlers_call.go` |
+| Trunk CRUD / register | `handlers_trunk.go`, `internal/sip/trunk_manager.go` |
+| Session history / payloads | `handlers_session.go` |
+| Dashboard / ops REST | `handlers_ops.go` |
+| Log file API | `handlers_log.go` |
+| Client diagnostics | `client_diagnostics.go` |
+| SDP / codecs / RTP | `internal/sip/sdp.go`, `internal/session/session_media.go` |
+| Inbound audio gain | `internal/audio/inbound.go` |
 
-- Default: Opus-only passthrough, browser <-> gateway <-> SIP peer (no transcoding).
-- Optional inbound gain (`SIP_AUDIO_INBOUND_GAIN_ENABLE=true`): SIP → WebRTC only — decode Opus, apply PCM gain, re-encode Opus. Requires CGO + libopus (Docker build). On processing error, falls back to passthrough for that packet.
-- Outbound (WebRTC → SIP) remains passthrough.
-- DTMF uses RFC2833 (`telephone-event`, usually PT 101).
-
-### 6.2 Video path
-
-- H.264 only.
-- Preserve SPS/PPS caching and reinjection strategy (`internal/session/h264_paramsets.go`, `internal/session/keyframe.go`, `internal/sip/sdp.go`).
-- Do not remove profile-level-id + sprop handling in SDP offer generation.
-
-### 6.3 Recovery / resilience behavior
-
-- Session resume after transport changes (`resume` flow) is first-class.
-- Session directory and gateway registry are used for cross-instance redirect.
-- Incoming call acceptance uses first-accept-wins claim semantics.
-
----
-
-## 7. Configuration Reference (From `internal/config/config.go`)
-
-### Core SIP/API/RTP
-
-- `SIP_LOCAL_IP` (default `0.0.0.0`)
-- `SIP_PUBLIC_IP` (optional, important behind NAT)
-- `SIP_PORT` (default `5060`)
-- `SIP_LOCAL_PORT` (default `5060`)
-- `API_PORT` (default `8080`)
-- `API_ENABLE_WS` (default `true`)
-- `API_ENABLE_PUBLIC_WS` (default `false`; enables unauthenticated `/ws-public` for public SIP per-call credentials only)
-- `API_ENABLE_REST` (default `true`)
-- `API_CORS_ORIGINS` (default `*`)
-- `SIPCLIENT_AUTH_REGISTER_URL` (optional; when set, user-realm WebSocket auth auto-provisions a mobile SIP trunk)
-- `SIPCLIENT_AUTH_TIMEOUT_MS` (default `5000`)
-- `RTP_PORT_MIN` (default `10500`)
-- `RTP_PORT_MAX` (default `10600`)
-- `RTP_BUFFER_SIZE` (default `16384`)
-
-### JWT auth (Keycloak/JWKS)
-
-- `AUTH_ENABLE` (default `false`)
-- `AUTH_JWKS_URL` (required when auth enabled)
-- `AUTH_JWT_ISSUER` (required when auth enabled)
-- `AUTH_JWT_AUDIENCE` (required when auth enabled)
-- `AUTH_JWKS_TIMEOUT_MS` (default `5000`)
-
-When `AUTH_ENABLE=true`:
-
-- Startup is fail-fast if required auth env is missing.
-- Startup is fail-fast if initial JWKS prefetch fails.
-- `/api/*` requires `Authorization: Bearer <jwt>`.
-- `/ws` requires `?access_token=<jwt>`.
-
-### Debug and media behavior toggles
-
-- `DEBUG_WEBSOCKET` (default `false`)
-- `DEBUG_TURN` (default `false`)
-- `DEBUG_SIP_MESSAGE` (default `false`)
-- `DEBUG_SIP_INVITE` (default `false`)
-- `SWITCH_PLI_DELAY_MS` (default `1000`)
-- `SIP_AUDIO_USE_AVPF` (default `false`)
-- `SIP_AUDIO_INBOUND_GAIN_ENABLE` (default `false`; requires CGO + libopus in Docker build)
-- `SIP_AUDIO_INBOUND_GAIN` (default `1.0`; linear multiplier, clamped to max)
-- `SIP_AUDIO_INBOUND_GAIN_MAX` (default `3.0`)
-- `SIP_VIDEO_USE_AVPF` (default `false`)
-- `SIP_VIDEO_FEEDBACK_TRANSPORT` (default `auto`; `auto|rtp|rtcp|dual`)
-- `SIP_VIDEO_PRESERVE_STAPA` (default `false`)
-- `SIP_VIDEO_KEYFRAME_WATCHDOG` (default `true`)
-- `SIP_VIDEO_KEYFRAME_WATCHDOG_INTERVAL_MS` (default `1000`)
-- `SIP_VIDEO_KEYFRAME_STALE_MS` (default `2500`)
-- `SIP_VIDEO_KEYFRAME_FIR_STALE_MS` (default `6000`)
-
-### TURN
-
-- `TURN_SERVER`, `TURN_USERNAME`, `TURN_PASSWORD`
-
-### Database / LogStore
-
-- `DB_ENABLE` (default `false`)
-- `DB_DSN`
-- `DB_STATS_INTERVAL_MS` (default `5000`)
-- `DB_LOG_FULL_SIP` (default `false`)
-- `DB_BATCH_SIZE` (default `100`)
-- `DB_BATCH_INTERVAL_MS` (default `1000`)
-- `DB_PARTITION_LOOKAHEAD_DAYS` (default `7`)
-- `DB_RETENTION_PAYLOADS_DAYS` (default `730`)
-- `DB_RETENTION_EVENTS_DAYS` (default `730`)
-- `DB_RETENTION_STATS_DAYS` (default `730`)
-- `DB_RETENTION_SESSIONS_DAYS` (default `730`)
-
-Direct database access for agent work:
-
-- When work on `apps/gateway` needs live database data or schema verification, read from the MCP/database connection named `database-dev-k2-gateway`.
-- Treat direct database queries as read-only unless the user explicitly asks for a write or migration.
-- Prefer source-controlled schema files (`init.sql`, `migrations/`) for expected structure, then use `database-dev-k2-gateway` only to verify the live dev state.
-
-### Operational log access for agents
-
-Default public gateway base URL:
-
-- `https://k2-gateway.kasemsan.com`
-
-Use the HTTP API before asking the user for host or database access.
-
-Gateway process logs:
-
-- `GET /api/logs` lists gateway-managed `k2-gateway-*.log` files.
-- `GET /api/logs/current?tail=500` reads the current gateway log tail.
-- `GET /api/logs/{name}?tail=500` reads a selected gateway log file tail.
-- These read endpoints are intentionally available without a bearer token, even when API auth is enabled.
-
-Softphone mobile diagnostics uploaded to gateway:
-
-- `POST /api/client-diagnostics` accepts authenticated mobile uploads, max 100 events/request.
-- `GET /api/client-diagnostics?page=1&pageSize=100` reads non-session mobile diagnostics from all clients.
-- Optional list filters: `clientTraceId`, `authSubject`, `source`, `level`, `name`.
-- `GET /api/client-diagnostics/sessions/{sessionId}/events?page=1&pageSize=100` reads mobile diagnostics stored as `call_events` category `client`.
-- `GET /api/client-diagnostics/sessions/{sessionId}/payloads?page=1&pageSize=100` lists large session diagnostics payloads.
-- `GET /api/client-diagnostics/payloads/{payloadId}` reads one stored diagnostics payload.
-- The `GET /api/client-diagnostics*` read endpoints are intentionally available without a bearer token.
-
-PowerShell examples:
-
-```powershell
-$base = "https://k2-gateway.kasemsan.com"
-Invoke-RestMethod "$base/api/logs/current?tail=500" | ConvertTo-Json -Depth 8
-Invoke-RestMethod "$base/api/client-diagnostics?page=1&pageSize=100" | ConvertTo-Json -Depth 12
-Invoke-RestMethod "$base/api/client-diagnostics?level=error&page=1&pageSize=100" | ConvertTo-Json -Depth 12
-Invoke-RestMethod "$base/api/client-diagnostics/sessions/<sessionId>/events?page=1&pageSize=100" | ConvertTo-Json -Depth 12
-```
-
-Use a real session ID in session URLs. The placeholder `<sessionId>` or encoded
-`%3CsessionId%3E` is not meaningful and should return no matching events.
-
-### SIP public mode
-
-### Push notifications
-
-- `PUSH_ENABLE` (default `false`)
-- `PUSH_TRUNK_PN_APP_ID` (default `th.or.ttrs.video.prod`) controls the SIP Contact `app-id` accepted for trunk PushKit tokens.
-- `PUSH_TTRS_API_URL`, `PUSH_TTRS_API_TIMEOUT_MS`
-- `PUSH_FIREBASE_CREDENTIALS_FILE`, `PUSH_FIREBASE_PROJECT_ID`
-- `PUSH_APNS_ENABLE`, `PUSH_APNS_ENV`, `PUSH_APNS_AUTH_MODE`
-- `PUSH_APNS_KEY_FILE`, `PUSH_APNS_KEY_ID`, `PUSH_APNS_TEAM_ID`
-- `PUSH_APNS_CERT_FILE`, `PUSH_APNS_CERT_KEY_FILE`
-- `PUSH_APNS_BUNDLE_ID`, `PUSH_APNS_TOPIC`
-
-### Mid-call SIP behavior
-
-- In-dialog `re-INVITE` and `UPDATE` with valid Opus SDP can update hold/resume media direction without ending the SIP dialog.
-- H.264 video add/remove is accepted only when the SDP remains H.264-compatible. The gateway emits WebSocket `renegotiate` for client-assisted WebRTC changes and tracks a pending `renegotiationId` until `renegotiate_answer` or timeout.
-- Glare/pending mid-call renegotiation returns `491`; malformed or unsupported SDP returns `488`; unknown in-dialog requests return `481`.
-- `Allow`/`Supported` are intentionally conservative. Do not advertise `PRACK`, `REFER`, `100rel`, or session timers until those flows are implemented as first-class behavior.
-- `REFER`, `PRACK`, `Require: 100rel`, and `Session-Expires` currently have explicit reject policies so PBX/trunk behavior is deterministic.
-
-- `SIP_PUBLIC_REGISTER_EXPIRES_SECONDS` (default `3600`)
-- `SIP_PUBLIC_REGISTER_TIMEOUT_SECONDS` (default `10`)
-- `SIP_PUBLIC_IDLE_TTL_SECONDS` (default `600`)
-- `SIP_PUBLIC_CLEANUP_INTERVAL_SECONDS` (default `30`)
-- `SIP_PUBLIC_MAX_ACCOUNTS` (default `1000`)
-
-### Trunk / multi-instance
-
-- `SIP_TRUNK_ENABLE` (default follows `DB_ENABLE`)
-- `SIP_TRUNK_LEASE_TTL_SECONDS` (default `60`)
-- `SIP_TRUNK_LEASE_RENEW_INTERVAL_SECONDS` (default `20`)
-- `SIP_TRUNK_REGISTER_TIMEOUT_SECONDS` (default `10`)
-- `GATEWAY_INSTANCE_ID` (default hostname/random)
-- `GATEWAY_PUBLIC_WS_URL` (for redirects)
-- `SESSION_DIRECTORY_TTL_SECONDS` (default `7200`)
-- `SESSION_DIRECTORY_CLEANUP_INTERVAL_SECONDS` (default `300`)
-
-### Compatibility override (use carefully)
-
-- `SIP_FORCE_AVP` (read in `internal/sip/sdp.go`) can force `RTP/AVP` even when AVPF flags are enabled.
+Full WS message types: [`docs/gateway/ws-contract.md`](../../docs/gateway/ws-contract.md).
 
 ---
 
-## 8. SIP Public and Trunk Details
+## 7. Critical Media Behaviors
 
-### Public account key behavior (`internal/sip/public_registry.go`)
-
-- Hostname domain keys: `username@domain` (port omitted)
-- IP-literal keys: `username@ip:port` (IPv6 bracketed)
-
-### Destination resolution
-
-- Hostname + explicit port -> dial that port
-- Hostname + port 0 -> SRV lookup (`_sip._<transport>`) then fallback to `:5060`
-- IP literal -> direct `ip:port` (or `:5060` when zero)
-
-### Trunk manager
-
-- Uses DB lease ownership (`lease_owner`, `lease_until`) to enforce single-active registration per trunk.
-- Supports force unregister API via REST endpoints.
-- Trunks are soft-deleted by update flow (`enabled=false`); rows are not hard-deleted from `sip_trunks`.
-- Provides dual ID support:
-  - internal numeric `trunkId` (DB primary key),
-  - `trunkPublicId` from DB column `sip_trunks.public_id` (`UUID UNIQUE`) for external/API use.
-- REST `/api/trunks` supports filters `trunkId` and `trunkPublicId`, and trunk responses include `publicId`.
-- Trunk REST now supports update flow:
-  - `PUT /api/trunk/{id}` for partial updates (`name`, `domain`, `port`, `username`, `password`, `transport`, `enabled`, `isDefault`, `updatedBy`).
-  - Active-call safety policy: when active calls exist on trunk, reject with `409` for:
-    - disabling trunk (`enabled=false`)
-    - editing critical fields (`domain`, `port`, `username`, `transport`)
-  - On successful update to `enabled=false`, gateway performs best-effort unregister and lease release.
-  - `public_id` is immutable after creation.
-  - Trunk responses expose both `public_id` and `publicId` during migration compatibility window.
+- **Audio:** Opus passthrough default; optional SIP→WebRTC gain in `internal/audio/` (`SIP_AUDIO_INBOUND_GAIN_ENABLE`). Outbound passthrough. DTMF via RFC2833.
+- **Video:** H.264 only. Preserve SPS/PPS cache/reinject (`h264_paramsets.go`, `keyframe.go`, `sip/sdp.go`).
+- **Recovery:** Session resume is first-class; session directory enables cross-instance redirect; incoming uses first-accept-wins.
 
 ---
 
-## 9. Logging and Persistence
-
-- LogStore uses async queues for events/stats to avoid RTP hot-path DB writes.
-- Schema is in `init.sql` (sessions, events, payloads, stats, dialogs, trunks, session directory, gateway instances).
-- When DB is disabled, `noopStore` keeps runtime behavior without persistence.
-- For operational gateway process logs, prefer the REST log API over direct host/file access:
-  - `GET https://k2-gateway.kasemsan.com/api/logs`
-  - `GET https://k2-gateway.kasemsan.com/api/logs/current?tail=500`
-  - `GET https://k2-gateway.kasemsan.com/api/logs/{name}?tail=500`
-- `/api/logs` endpoints are intentionally unauthenticated and only expose gateway-managed `k2-gateway-*.log` files.
-
-Operational checks after DB-related changes:
-
-1. Verify startup can connect (`DB_ENABLE=true`, valid `DB_DSN`).
-2. Verify event/payload insertion on call setup and teardown.
-3. Verify partition maintenance worker creates future partitions.
-4. Verify redirect tables (`session_directory`, `gateway_instances`) are updated and cleaned up.
-5. Verify queue backpressure behavior does not impact call media loops.
-
----
-
-## 10. Build, Run, Test
+## 8. Build, Run, Test
 
 ```bash
-# Build
 go build -o k2-gateway .
-
-# Run
 ./k2-gateway
-
-# Run tests
 go test ./...
-
-# SIP key formatting + SRV behavior tests
 go test -v ./internal/sip -run "TestBuildPublicAccountKey|TestResolveSIPDestination"
 ```
 
-If fixing a bug, prefer adding a focused `_test.go` reproduction in the affected package.
+Prefer focused `_test.go` reproductions in the affected package when fixing bugs.
 
 ---
 
-## 11. Troubleshooting Quick Guide
-
-### 488 Not Acceptable Here
-
-Most common causes:
-
-1. malformed SDP `o=` username
-2. codec mismatch (must support Opus + H.264)
-3. video not enabled on SIP endpoint
-
-Checkpoints:
-
-- confirm SDP origin username fallback logic in `internal/sip/sdp.go`
-- confirm peer config has `allow=opus` and `allow=h264`
-- confirm `videosupport=yes`/equivalent endpoint settings
-
-### Video rejected (`m=video ... 0`)
-
-- inspect full SDP answer logs through `https://k2-gateway.kasemsan.com/api/logs/current?tail=500`
-- validate AVPF compatibility (`SIP_VIDEO_USE_AVPF` and endpoint support)
-- temporarily force AVP with `SIP_FORCE_AVP=true` for interoperability testing
-
-### Auth/register timeouts
-
-- transport consistency matters; requests explicitly set transport to avoid digest retry switching transports.
-
-### 401 Unauthorized on API/WS
-
-Checkpoints:
-
-- Verify `AUTH_ENABLE`, `AUTH_JWKS_URL`, `AUTH_JWT_ISSUER`, `AUTH_JWT_AUDIENCE` are set correctly.
-- Verify token `iss` and `aud` match configured values exactly.
-- Verify token is not expired (`exp`) and is already valid (`nbf`).
-- Verify JWT header `kid` exists in current JWKS (gateway auto-refreshes JWKS once on unknown `kid`).
-- For WebSocket, verify client sends `access_token` query param on the connect URL.
-
----
-
-## 12. Agent Workflow Expectations
+## 9. Agent Workflow
 
 When modifying this codebase:
 
-1. Start by tracing the exact call path (`api` -> `session` -> `sip` -> `logstore`).
-2. Keep lock scopes narrow and avoid network calls inside critical sections.
-3. Preserve wire compatibility for WebSocket and SIP unless change is explicitly requested.
-4. Keep logs actionable; include session IDs in high-signal logs.
-5. Validate with `go test ./...` after meaningful changes.
+1. Trace the exact call path (`api` → `session` → `sip` → `logstore`).
+2. Keep lock scopes narrow; no network I/O inside critical sections.
+3. Preserve wire compatibility unless change is explicitly requested.
+4. Include session IDs in high-signal logs.
+5. Run `go test ./...` after meaningful changes.
 
-If a change touches media forwarding, SDP, or session lifecycle, perform an extra careful review for race and regression risk before finalizing.
+**Agent rules:**
+
+1. Use the file map — do not read `server.go` wholesale for WS handler work.
+2. WS message changes: update `ws_dispatch.go` + handler file + `docs/gateway/ws-contract.md` + frontend `gateway-store.ts`.
+3. New files should stay ≤ ~600 lines; split further if exceeded.
+4. Do not merge unrelated handlers back into monolith files.
+5. Mechanical moves only — no behavior changes unless explicitly requested.
+
+Extra review required for media forwarding, SDP, or session lifecycle changes.
 
 ---
+
+## 10. Reference Docs
+
+| Topic | Document |
+|-------|----------|
+| WebSocket contract | [`docs/gateway/ws-contract.md`](../../docs/gateway/ws-contract.md) |
+| Environment variables | [`docs/gateway/config-reference.md`](../../docs/gateway/config-reference.md) |
+| Logs, diagnostics, DB MCP | [`docs/gateway/ops-guide.md`](../../docs/gateway/ops-guide.md) |
+| Troubleshooting | [`docs/gateway/troubleshooting.md`](../../docs/gateway/troubleshooting.md) |
