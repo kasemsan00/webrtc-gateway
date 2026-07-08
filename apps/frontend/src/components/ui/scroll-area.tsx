@@ -7,7 +7,7 @@ function ScrollArea({ className, ...props }: React.ComponentProps<'div'>) {
     <div
       data-slot="scroll-area"
       className={cn(
-        'overflow-auto scrollbar-thin scrollbar-thumb-white/20',
+        'overflow-auto',
         className,
       )}
       {...props}

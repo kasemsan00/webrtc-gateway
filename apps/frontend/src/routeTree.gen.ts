@@ -17,6 +17,7 @@ import { Route as PublicAccountsRouteImport } from './routes/public-accounts'
 import { Route as LogsRouteImport } from './routes/logs'
 import { Route as InstancesRouteImport } from './routes/instances'
 import { Route as DashboardRouteImport } from './routes/dashboard'
+import { Route as ConsoleRouteImport } from './routes/console'
 import { Route as ClientDiagnosticsRouteImport } from './routes/client-diagnostics'
 import { Route as ActiveSessionsRouteImport } from './routes/active-sessions'
 import { Route as IndexRouteImport } from './routes/index'
@@ -63,6 +64,11 @@ const DashboardRoute = DashboardRouteImport.update({
   path: '/dashboard',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ConsoleRoute = ConsoleRouteImport.update({
+  id: '/console',
+  path: '/console',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ClientDiagnosticsRoute = ClientDiagnosticsRouteImport.update({
   id: '/client-diagnostics',
   path: '/client-diagnostics',
@@ -93,6 +99,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/active-sessions': typeof ActiveSessionsRoute
   '/client-diagnostics': typeof ClientDiagnosticsRoute
+  '/console': typeof ConsoleRoute
   '/dashboard': typeof DashboardRoute
   '/instances': typeof InstancesRoute
   '/logs': typeof LogsRoute
@@ -108,6 +115,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/active-sessions': typeof ActiveSessionsRoute
   '/client-diagnostics': typeof ClientDiagnosticsRoute
+  '/console': typeof ConsoleRoute
   '/dashboard': typeof DashboardRoute
   '/instances': typeof InstancesRoute
   '/logs': typeof LogsRoute
@@ -123,6 +131,7 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/active-sessions': typeof ActiveSessionsRoute
   '/client-diagnostics': typeof ClientDiagnosticsRoute
+  '/console': typeof ConsoleRoute
   '/dashboard': typeof DashboardRoute
   '/instances': typeof InstancesRoute
   '/logs': typeof LogsRoute
@@ -140,6 +149,7 @@ export interface FileRouteTypes {
     | '/'
     | '/active-sessions'
     | '/client-diagnostics'
+    | '/console'
     | '/dashboard'
     | '/instances'
     | '/logs'
@@ -155,6 +165,7 @@ export interface FileRouteTypes {
     | '/'
     | '/active-sessions'
     | '/client-diagnostics'
+    | '/console'
     | '/dashboard'
     | '/instances'
     | '/logs'
@@ -169,6 +180,7 @@ export interface FileRouteTypes {
     | '/'
     | '/active-sessions'
     | '/client-diagnostics'
+    | '/console'
     | '/dashboard'
     | '/instances'
     | '/logs'
@@ -185,6 +197,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ActiveSessionsRoute: typeof ActiveSessionsRoute
   ClientDiagnosticsRoute: typeof ClientDiagnosticsRoute
+  ConsoleRoute: typeof ConsoleRoute
   DashboardRoute: typeof DashboardRoute
   InstancesRoute: typeof InstancesRoute
   LogsRoute: typeof LogsRoute
@@ -253,6 +266,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DashboardRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/console': {
+      id: '/console'
+      path: '/console'
+      fullPath: '/console'
+      preLoaderRoute: typeof ConsoleRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/client-diagnostics': {
       id: '/client-diagnostics'
       path: '/client-diagnostics'
@@ -309,6 +329,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ActiveSessionsRoute: ActiveSessionsRoute,
   ClientDiagnosticsRoute: ClientDiagnosticsRoute,
+  ConsoleRoute: ConsoleRoute,
   DashboardRoute: DashboardRoute,
   InstancesRoute: InstancesRoute,
   LogsRoute: LogsRoute,
