@@ -56,7 +56,9 @@ func (s *Server) notifyWSClientChanged(eventType string, client *WSClient) {
 	if client == nil {
 		return
 	}
+	s.mu.RLock()
 	resp := s.buildWSClientResponse(client)
+	s.mu.RUnlock()
 	payload, err := json.Marshal(WSClientStreamEvent{
 		Type:     eventType,
 		ClientID: client.clientID,

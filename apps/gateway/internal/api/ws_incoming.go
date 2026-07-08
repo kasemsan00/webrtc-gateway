@@ -517,6 +517,7 @@ func (s *Server) handleWSAccept(client *WSClient, msg WSMessage) {
 		s.mu.Lock()
 		s.wsClients[callSession.ID] = client
 		s.mu.Unlock()
+		s.notifyWSClientChanged("updated", client)
 	}
 
 	// Accept the incoming call

@@ -63,6 +63,7 @@ func (s *Server) handleWSoffer(client *WSClient, msg WSMessage) {
 	s.mu.Lock()
 	s.wsClients[sess.ID] = client
 	s.mu.Unlock()
+	s.notifyWSClientChanged("updated", client)
 
 	// Best-effort: cache H.264 SPS/PPS from Offer SDP (if present) so SIP SDP can include sprop-parameter-sets.
 	if sps, pps, ok := session.ExtractH264SpropParameterSets(msg.SDP); ok {
@@ -309,6 +310,7 @@ func (s *Server) handleWSCall(client *WSClient, msg WSMessage) {
 		if validation.reason != "" {
 			client.trunkResolved = false
 			client.resolvedTrunkID = 0
+			s.notifyWSClientChanged("updated", client)
 			s.sendWSMessage(client, WSMessage{Type: "trunk_not_ready", Reason: validation.reason})
 			s.sendWSError(client, msg.SessionID, fmt.Sprintf("Trunk not ready: %s", validation.reason))
 			return

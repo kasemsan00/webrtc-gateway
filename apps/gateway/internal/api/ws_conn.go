@@ -106,6 +106,7 @@ func (s *Server) handleWebSocketConn(w http.ResponseWriter, r *http.Request, pub
 	s.mu.Lock()
 	s.wsConnections[client] = struct{}{}
 	s.mu.Unlock()
+	s.notifyWSClientChanged("connected", client)
 
 	// Start write pump
 	go s.wsWritePump(client)
@@ -149,6 +150,7 @@ func (s *Server) handleWebSocketConn(w http.ResponseWriter, r *http.Request, pub
 		}
 	}
 	s.mu.Unlock()
+	s.notifyWSClientChanged("disconnected", client)
 }
 
 // wsWritePump pumps messages from the send channel to the WebSocket connection

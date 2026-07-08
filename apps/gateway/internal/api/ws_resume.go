@@ -215,6 +215,7 @@ func (s *Server) handleWSResume(client *WSClient, msg WSMessage) {
 	s.wsClients[msg.SessionID] = client
 	client.sessionID = msg.SessionID
 	s.mu.Unlock()
+	s.notifyWSClientChanged("updated", client)
 
 	// If client provided SDP, renegotiate the PeerConnection
 	var answerSDP string

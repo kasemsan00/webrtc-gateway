@@ -133,6 +133,7 @@ func (s *Server) handleWSClientState(client *WSClient, msg WSMessage) {
 	client.availability = availability
 	client.callState = callState
 	s.mu.Unlock()
+	s.notifyWSClientChanged("updated", client)
 
 	s.logEvent(&logstore.Event{
 		Timestamp: time.Now(),
