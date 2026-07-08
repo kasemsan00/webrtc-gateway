@@ -96,9 +96,9 @@ function formatInUseBy(trunk: Pick<Trunk, 'in_use_by' | 'inUseBy'>) {
 export function isPushContactReady(trunk: Trunk) {
   return Boolean(
     trunk.pushContactReady &&
-      trunk.pnAppId?.trim() &&
-      trunk.pnType?.trim() &&
-      trunk.pnTokenMasked?.trim(),
+    trunk.pnAppId?.trim() &&
+    trunk.pnType?.trim() &&
+    trunk.pnTokenMasked?.trim(),
   )
 }
 
@@ -1410,7 +1410,10 @@ function TrunkCard({
               </Badge>
             }
           />
-          <Detail label="Push Contact" value={<PushContactBadge trunk={trunk} />} />
+          <Detail
+            label="Push Contact"
+            value={<PushContactBadge trunk={trunk} />}
+          />
           <Detail label="PN App ID" value={trunk.pnAppId || '-'} />
           <Detail label="PN Type" value={trunk.pnType || '-'} />
           <Detail

@@ -1,5 +1,5 @@
-import { getAccessToken } from '@/features/auth/token-store'
 import { readAppEnvValue } from './runtime-env'
+import { getAccessToken } from '@/features/auth/token-store'
 
 const DEFAULT_TIMEOUT_MS = 15_000
 

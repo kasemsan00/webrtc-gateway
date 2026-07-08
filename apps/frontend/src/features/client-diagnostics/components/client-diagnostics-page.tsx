@@ -102,7 +102,9 @@ export function ClientDiagnosticsPage() {
       setViewPayload(payload)
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : 'Failed to fetch diagnostic payload',
+        err instanceof Error
+          ? err.message
+          : 'Failed to fetch diagnostic payload',
       )
     } finally {
       setPayloadLoading(false)
@@ -128,7 +130,10 @@ export function ClientDiagnosticsPage() {
     } catch (err) {
       const message =
         err instanceof Error ? err.message : 'Failed to fetch diagnostics'
-      if (message.includes('503') || message.toLowerCase().includes('not available')) {
+      if (
+        message.includes('503') ||
+        message.toLowerCase().includes('not available')
+      ) {
         setDbUnavailable(true)
       }
       setError(message)
@@ -289,7 +294,8 @@ export function ClientDiagnosticsPage() {
       <div className="flex-1 overflow-y-auto p-4">
         {dbUnavailable ? (
           <div className="mb-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-500">
-            Database logging not available. Client diagnostics require DB_ENABLE.
+            Database logging not available. Client diagnostics require
+            DB_ENABLE.
           </div>
         ) : null}
 

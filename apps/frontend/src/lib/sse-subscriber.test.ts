@@ -35,11 +35,13 @@ describe('subscribeAuthenticatedSse', () => {
   it('parses named SSE events and sends bearer auth', async () => {
     setAccessToken('sse-token')
     const onEvent = vi.fn()
-    const fetchMock = vi.fn().mockResolvedValue(
-      createSseResponse([
-        'event: session\ndata: {"type":"session_created","sessionId":"s-1","at":"now"}\n\n',
-      ]),
-    )
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        createSseResponse([
+          'event: session\ndata: {"type":"session_created","sessionId":"s-1","at":"now"}\n\n',
+        ]),
+      )
     vi.stubGlobal('fetch', fetchMock)
 
     const unsubscribe = subscribeAuthenticatedSse({
@@ -75,11 +77,13 @@ describe('subscribeAuthenticatedSse', () => {
     const onEvent = vi.fn()
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockResolvedValue(
-        createSseResponse([
-          'event: heartbeat\ndata: {"type":"heartbeat"}\n\n',
-        ]),
-      ),
+      vi
+        .fn()
+        .mockResolvedValue(
+          createSseResponse([
+            'event: heartbeat\ndata: {"type":"heartbeat"}\n\n',
+          ]),
+        ),
     )
 
     subscribeAuthenticatedSse({

@@ -1,0 +1,1 @@
+ echo "=== COMMITS (8e71d0c..HEAD) ==="; git log --oneline 8e71d0c..HEAD; echo; echo "=== DIFF STAT ==="; git diff --stat 8e71d0c..HEAD; echo; echo "=== FULL DIFF ==="; git diff -U10 8e71d0c..HEAD; 

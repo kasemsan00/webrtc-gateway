@@ -22,15 +22,18 @@ describe('sendSwitchRequest', () => {
     })
 
     expect(result).toEqual(response)
-    expect(fetchJsonMock).toHaveBeenCalledWith('http://gateway.local/api/switch', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
+    expect(fetchJsonMock).toHaveBeenCalledWith(
+      'http://gateway.local/api/switch',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          sessionId: 'sess-1',
+        }),
       },
-      body: JSON.stringify({
-        sessionId: 'sess-1',
-      }),
-    })
+    )
   })
 
   it('propagates backend error from fetchJson', async () => {

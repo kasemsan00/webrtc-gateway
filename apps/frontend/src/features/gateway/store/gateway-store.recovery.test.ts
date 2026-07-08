@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { gatewayActions, gatewayStore } from './gateway-store'
+
 const { sendSwitchRequestMock } = vi.hoisted(() => ({
   sendSwitchRequestMock: vi.fn(),
 }))
@@ -7,8 +9,6 @@ const { sendSwitchRequestMock } = vi.hoisted(() => ({
 vi.mock('../services/switch-api', () => ({
   sendSwitchRequest: sendSwitchRequestMock,
 }))
-
-import { gatewayActions, gatewayStore } from './gateway-store'
 
 const TEST_TRUNK_PUBLIC_ID = '8f6f6d70-2b5a-4fe7-a0d5-9d0af0e90d3a'
 const originalWindow = (globalThis as { window?: unknown }).window
@@ -79,9 +79,9 @@ class MockMediaStreamTrack {
 }
 
 class MockMediaStream {
-  private readonly tracks: MockMediaStreamTrack[]
+  private readonly tracks: Array<MockMediaStreamTrack>
 
-  constructor(tracks: MockMediaStreamTrack[] = []) {
+  constructor(tracks: Array<MockMediaStreamTrack> = []) {
     this.tracks = [...tracks]
   }
 
@@ -212,11 +212,12 @@ describe('gateway recovery signaling', () => {
         enumerateDevices: vi.fn(async () => []),
         addEventListener: vi.fn(),
         removeEventListener: vi.fn(),
-        getUserMedia: vi.fn(async () =>
-          new MockMediaStream([
-            new MockMediaStreamTrack('audio'),
-            new MockMediaStreamTrack('video'),
-          ]),
+        getUserMedia: vi.fn(
+          async () =>
+            new MockMediaStream([
+              new MockMediaStreamTrack('audio'),
+              new MockMediaStreamTrack('video'),
+            ]),
         ),
       },
       configurable: true,
@@ -487,7 +488,8 @@ describe('gateway recovery signaling', () => {
     expect(
       ws.sent.filter(
         (raw) =>
-          raw.includes('"type":"accept"') && raw.includes('"sessionId":"incoming-1"'),
+          raw.includes('"type":"accept"') &&
+          raw.includes('"sessionId":"incoming-1"'),
       ).length,
     ).toBe(0)
   })
@@ -646,7 +648,8 @@ describe('gateway recovery signaling', () => {
     expect(
       ws.sent.some(
         (raw) =>
-          raw.includes('"type":"reject"') && raw.includes('"sessionId":"incoming-2"'),
+          raw.includes('"type":"reject"') &&
+          raw.includes('"sessionId":"incoming-2"'),
       ),
     ).toBe(false)
     expect(gatewayStore.state.incomingCall?.sessionId).toBe('incoming-2')

@@ -484,6 +484,24 @@ func (s *Server) buildWSClientResponse(client *WSClient) WSClientResponse {
 }
 ```
 
+**DRY refactor (pre-flight resolution):** Now that `buildWSClientResponse` exists, refactor `handleListWSClients` (in `handlers_ops.go`, from Task 1) to use it instead of inline per-client logic:
+
+```go
+// handleListWSClients returns all connected WebSocket clients (including idle)
+func (s *Server) handleListWSClients(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	clients := make([]WSClientResponse, 0, len(s.wsConnections))
+	for client := range s.wsConnections {
+		clients = append(clients, s.buildWSClientResponse(client))
+	}
+	s.mu.RUnlock()
+
+	s.respondJSON(w, http.StatusOK, clients)
+}
+```
+
+Note: `buildWSClientResponse` acquires `s.trunkManager.GetTrunkByID` which is safe to call inside RLock (it's a read-only cache lookup). If it locks, move the trunk-public-id enrichment outside the lock loop — but `GetTrunkByID` is a sync.Map/cache read, no lock conflict.
+
 Add the handler (mirror `handleSessionStream`, event name `"ws-client"`):
 
 ```go
@@ -819,7 +837,6 @@ import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
 import Header from '@/components/Header'
 import { useTheme } from '@/lib/theme'
-import { useVisibilityRealtimeReload } from '@/lib/use-visibility-realtime-reload'
 import {
   fetchWSClients,
   subscribeWSClientEvents,
@@ -880,12 +897,7 @@ export function WSClientsPage() {
     })
   }, [])
 
-  useVisibilityRealtimeReload({
-    subscribe: subscribeWSClientEvents,
-    onReload: () => void loadRef.current(),
-  })
-
-  // Override: use SSE directly instead of visibility reload's subscribe
+  // Single SSE subscription (pre-flight resolution: no useVisibilityRealtimeReload — SSE persists)
   useEffect(() => {
     const unsubscribe = subscribeWSClientEvents(handleSseEvent, () => {
       void loadRef.current()

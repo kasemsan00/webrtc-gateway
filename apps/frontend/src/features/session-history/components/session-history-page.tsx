@@ -207,8 +207,7 @@ export function SessionHistoryPage() {
           search: (params?.search ?? searchRef.current) || undefined,
           direction: (params?.direction ?? directionRef.current) || undefined,
           state: (params?.state ?? stateRef.current) || undefined,
-          endReason:
-            (params?.endReason ?? endReasonRef.current) || undefined,
+          endReason: (params?.endReason ?? endReasonRef.current) || undefined,
         })
         setSessions(res.items)
         setTotal(res.total)

@@ -1,0 +1,588 @@
+[KSPLc6GMcGaT] Created new session
+[B3NZZG1ekA7q] Created new session
+[M0TB3MsM3uFg] Created new session
+[9JTDVdKmpcod] Created new session
+[9JTDVdKmpcod] Deleted session
+[yE66fszYt4PC] Created new session
+[IlSxV6tSeT0S] Created new session
+[oOQln5a8tHPV] Created new session
+2026/07/08 15:22:18 โ ๏ธ Failed to trigger switch via REST: session=oOQln5a8tHPV caller=sip:0900200002@example.com err=trigger failed
+2026/07/08 15:22:18 โ ๏ธ [User Trunk] Trunk does not exist for user 9999999999999 (sub=other-user-id), alert!
+[dLd527hS8kG1] Created new session
+2026/07/08 15:22:18 REST auth accepted: path=/api/health hint=unknown realm=user sub=user-1
+[gKuGMda6pJ29] Created new session
+[ILpgylGcshu3] Created new session
+2026/07/08 15:22:18 ๐“ [WS Call] Session ILpgylGcshu3 using public mode (account=, port=5060)
+==================
+WARNING: DATA RACE
+Read at 0x00c0005a05c0 by goroutine 172:
+  k2-gateway/internal/api.waitForMakeCallCount()
+      E:/dev/webrtc-gateway/apps/gateway/internal/api/server_call_identity_test.go:49 +0x9a
+  k2-gateway/internal/api.TestHandleWSCallAllowsSamePublicIdentity()
+      E:/dev/webrtc-gateway/apps/gateway/internal/api/server_call_identity_test.go:119 +0x686
+  testing.tRunner()
+      C:/Program Files/Go/src/testing/testing.go:2036 +0x1ca
+  testing.(*T).Run.gowrap1()
+      C:/Program Files/Go/src/testing/testing.go:2101 +0x38
+
+Previous write at 0x00c0005a05c0 by goroutine 180:
+  k2-gateway/internal/api.(*stubSIPCallMaker).MakeCall()
+      E:/dev/webrtc-gateway/apps/gateway/internal/api/server_call_identity_test.go:21 +0x57
+  k2-gateway/internal/api.(*Server).runWSCall()
+      E:/dev/webrtc-gateway/apps/gateway/internal/api/ws_call.go:442 +0xf8
+  k2-gateway/internal/api.(*Server).handleWSCall.gowrap1()
+      E:/dev/webrtc-gateway/apps/gateway/internal/api/ws_call.go:429 +0x186
+
+Goroutine 172 (running) created at:
+  testing.(*T).Run()
+      C:/Program Files/Go/src/testing/testing.go:2101 +0xb2a
+  testing.runTests.func1()
+      C:/Program Files/Go/src/testing/testing.go:2585 +0x84
+  testing.tRunner()
+      C:/Program Files/Go/src/testing/testing.go:2036 +0x1ca
+  testing.runTests()
+      C:/Program Files/Go/src/testing/testing.go:2583 +0x9f7
+  testing.(*M).Run()
+      C:/Program Files/Go/src/testing/testing.go:2443 +0xf4b
+  main.main()
+      _testmain.go:334 +0x164
+
+Goroutine 180 (finished) created at:
+  k2-gateway/internal/api.(*Server).handleWSCall()
+      E:/dev/webrtc-gateway/apps/gateway/internal/api/ws_call.go:429 +0x2ecc
+  k2-gateway/internal/api.TestHandleWSCallAllowsSamePublicIdentity()
+      E:/dev/webrtc-gateway/apps/gateway/internal/api/server_call_identity_test.go:108 +0x66c
+  testing.tRunner()
+      C:/Program Files/Go/src/testing/testing.go:2036 +0x1ca
+  testing.(*T).Run.gowrap1()
+      C:/Program Files/Go/src/testing/testing.go:2101 +0x38
+==================
+==================
+WARNING: DATA RACE
+Read at 0x00c0005a05e8 by goroutine 172:
+  k2-gateway/internal/api.TestHandleWSCallAllowsSamePublicIdentity()
+      E:/dev/webrtc-gateway/apps/gateway/internal/api/server_call_identity_test.go:120 +0x6a4
+  testing.tRunner()
+      C:/Program Files/Go/src/testing/testing.go:2036 +0x1ca
+  testing.(*T).Run.gowrap1()
+      C:/Program Files/Go/src/testing/testing.go:2101 +0x38
+
+Previous write at 0x00c0005a05e8 by goroutine 180:
+  k2-gateway/internal/api.(*stubSIPCallMaker).MakeCall()
+      E:/dev/webrtc-gateway/apps/gateway/internal/api/server_call_identity_test.go:25 +0x11a
+  k2-gateway/internal/api.(*Server).runWSCall()
+      E:/dev/webrtc-gateway/apps/gateway/internal/api/ws_call.go:442 +0xf8
+  k2-gateway/internal/api.(*Server).handleWSCall.gowrap1()
+      E:/dev/webrtc-gateway/apps/gateway/internal/api/ws_call.go:429 +0x186
+
+Goroutine 172 (running) created at:
+  testing.(*T).Run()
+      C:/Program Files/Go/src/testing/testing.go:2101 +0xb2a
+  testing.runTests.func1()
+      C:/Program Files/Go/src/testing/testing.go:2585 +0x84
+  testing.tRunner()
+      C:/Program Files/Go/src/testing/testing.go:2036 +0x1ca
+  testing.runTests()
+      C:/Program Files/Go/src/testing/testing.go:2583 +0x9f7
+  testing.(*M).Run()
+      C:/Program Files/Go/src/testing/testing.go:2443 +0xf4b
+  main.main()
+      _testmain.go:334 +0x164
+
+Goroutine 180 (finished) created at:
+  k2-gateway/internal/api.(*Server).handleWSCall()
+      E:/dev/webrtc-gateway/apps/gateway/internal/api/ws_call.go:429 +0x2ecc
+  k2-gateway/internal/api.TestHandleWSCallAllowsSamePublicIdentity()
+      E:/dev/webrtc-gateway/apps/gateway/internal/api/server_call_identity_test.go:108 +0x66c
+  testing.tRunner()
+      C:/Program Files/Go/src/testing/testing.go:2036 +0x1ca
+  testing.(*T).Run.gowrap1()
+      C:/Program Files/Go/src/testing/testing.go:2101 +0x38
+==================
+--- FAIL: TestHandleWSCallAllowsSamePublicIdentity (0.00s)
+    testing.go:1712: race detected during execution of test
+[VsncudcCXV9w] Created new session
+2026/07/08 15:22:18 ๐“ [WS Call] Session VsncudcCXV9w using public mode (account=, port=5060)
+==================
+WARNING: DATA RACE
+Read at 0x00c000788580 by goroutine 181:
+  k2-gateway/internal/api.waitForMakeCallCount()
+      E:/dev/webrtc-gateway/apps/gateway/internal/api/server_call_identity_test.go:49 +0x9a
+  k2-gateway/internal/api.TestHandleWSCall_PublicOnlyAllowsPublicCredentials()
+      E:/dev/webrtc-gateway/apps/gateway/internal/api/server_call_identity_test.go:155 +0x6b2
+  testing.tRunner()
+      C:/Program Files/Go/src/testing/testing.go:2036 +0x1ca
+  testing.(*T).Run.gowrap1()
+      C:/Program Files/Go/src/testing/testing.go:2101 +0x38
+
+Previous write at 0x00c000788580 by goroutine 189:
+  k2-gateway/internal/api.(*stubSIPCallMaker).MakeCall()
+      E:/dev/webrtc-gateway/apps/gateway/internal/api/server_call_identity_test.go:21 +0x57
+  k2-gateway/internal/api.(*Server).runWSCall()
+      E:/dev/webrtc-gateway/apps/gateway/internal/api/ws_call.go:442 +0xf8
+  k2-gateway/internal/api.(*Server).handleWSCall.gowrap1()
+      E:/dev/webrtc-gateway/apps/gateway/internal/api/ws_call.go:429 +0x186
+
+Goroutine 181 (running) created at:
+  testing.(*T).Run()
+      C:/Program Files/Go/src/testing/testing.go:2101 +0xb2a
+  testing.runTests.func1()
+      C:/Program Files/Go/src/testing/testing.go:2585 +0x84
+  testing.tRunner()
+      C:/Program Files/Go/src/testing/testing.go:2036 +0x1ca
+  testing.runTests()
+      C:/Program Files/Go/src/testing/testing.go:2583 +0x9f7
+  testing.(*M).Run()
+      C:/Program Files/Go/src/testing/testing.go:2443 +0xf4b
+  main.main()
+      _testmain.go:334 +0x164
+
+Goroutine 189 (finished) created at:
+  k2-gateway/internal/api.(*Server).handleWSCall()
+      E:/dev/webrtc-gateway/apps/gateway/internal/api/ws_call.go:429 +0x2ecc
+  k2-gateway/internal/api.TestHandleWSCall_PublicOnlyAllowsPublicCredentials()
+      E:/dev/webrtc-gateway/apps/gateway/internal/api/server_call_identity_test.go:144 +0x698
+  testing.tRunner()
+      C:/Program Files/Go/src/testing/testing.go:2036 +0x1ca
+  testing.(*T).Run.gowrap1()
+      C:/Program Files/Go/src/testing/testing.go:2101 +0x38
+==================
+--- FAIL: TestHandleWSCall_PublicOnlyAllowsPublicCredentials (0.00s)
+    testing.go:1712: race detected during execution of test
+[eXh4lLmm6e8H] Created new session
+[7B0T7nNIB0lG] Created new session
+2026/07/08 15:22:18 Public WebSocket message rejected: type=trunk_resolve sessionID=s1 reason=Message type "trunk_resolve" requires authenticated WebSocket
+[eU18a9u6M6Va] Created new session
+2026/07/08 15:22:18 Public WebSocket message rejected: type=hangup sessionID=eU18a9u6M6Va reason=Public WebSocket session is not established
+[a2f4JRaRdwtG] Created new session
+2026/07/08 15:22:18 Public WebSocket message rejected: type=resume sessionID=a2f4JRaRdwtG reason=Public WebSocket can only resume public SIP sessions
+[MLmK1AeD8cGW] Created new session
+2026/07/08 15:22:18 ๐” Resume request for session: MLmK1AeD8cGW (has SDP: false)
+2026/07/08 15:22:18 ๐“ Resume timing start: session=MLmK1AeD8cGW
+2026/07/08 15:22:18 ๐“ Resume local session lookup: session=MLmK1AeD8cGW found=true elapsed=0s
+2026/07/08 15:22:18 ๐” Resume media status for MLmK1AeD8cGW: audioRTP=false:0 videoRTP=false:0 audioRTCP=false:0 videoRTCP=false:0 hasAsteriskAudio=false hasAsteriskVideo=false
+2026/07/08 15:22:18 โ Resume failed: session MLmK1AeD8cGW is in state new (not resumable)
+[eA9X613qdWL0] Created new session
+[q1ADFe4jbilK] Created new session
+2026/07/08 15:22:18 Public WebSocket message rejected: type=translate sessionID=q1ADFe4jbilK reason=Public WebSocket can only access public SIP sessions
+[9OCVmGUH6cWh] Created new session
+[9OCVmGUH6cWh] ๐ค Translation disabled
+2026/07/08 15:22:18 [9OCVmGUH6cWh] ๐ค Translation disabled via WS
+[YkVqDMALm4KZ] Created new session
+2026/07/08 15:22:18 ๐“ [WS Call] Session YkVqDMALm4KZ using public mode (account=, port=5060)
+==================
+WARNING: DATA RACE
+Write at 0x00c00031d0c0 by goroutine 264:
+  k2-gateway/internal/api.(*stubSIPCallMaker).MakeCall()
+      E:/dev/webrtc-gateway/apps/gateway/internal/api/server_call_identity_test.go:21 +0x57
+  k2-gateway/internal/api.(*Server).runWSCall()
+      E:/dev/webrtc-gateway/apps/gateway/internal/api/ws_call.go:442 +0xf8
+  k2-gateway/internal/api.(*Server).handleWSCall.gowrap1()
+      E:/dev/webrtc-gateway/apps/gateway/internal/api/ws_call.go:429 +0x186
+
+Previous read at 0x00c00031d0c0 by goroutine 256:
+  k2-gateway/internal/api.waitForMakeCallCount()
+      E:/dev/webrtc-gateway/apps/gateway/internal/api/server_call_identity_test.go:49 +0x9a
+  k2-gateway/internal/api.TestHandleWSCall_AllowsIdentityChangeForNonPublicMode()
+      E:/dev/webrtc-gateway/apps/gateway/internal/api/server_call_identity_test.go:400 +0x67e
+  testing.tRunner()
+      C:/Program Files/Go/src/testing/testing.go:2036 +0x1ca
+  testing.(*T).Run.gowrap1()
+      C:/Program Files/Go/src/testing/testing.go:2101 +0x38
+
+Goroutine 264 (running) created at:
+  k2-gateway/internal/api.(*Server).handleWSCall()
+      E:/dev/webrtc-gateway/apps/gateway/internal/api/ws_call.go:429 +0x2ecc
+  k2-gateway/internal/api.TestHandleWSCall_AllowsIdentityChangeForNonPublicMode()
+      E:/dev/webrtc-gateway/apps/gateway/internal/api/server_call_identity_test.go:389 +0x664
+  testing.tRunner()
+      C:/Program Files/Go/src/testing/testing.go:2036 +0x1ca
+  testing.(*T).Run.gowrap1()
+      C:/Program Files/Go/src/testing/testing.go:2101 +0x38
+
+Goroutine 256 (running) created at:
+  testing.(*T).Run()
+      C:/Program Files/Go/src/testing/testing.go:2101 +0xb2a
+  testing.runTests.func1()
+      C:/Program Files/Go/src/testing/testing.go:2585 +0x84
+  testing.tRunner()
+      C:/Program Files/Go/src/testing/testing.go:2036 +0x1ca
+  testing.runTests()
+      C:/Program Files/Go/src/testing/testing.go:2583 +0x9f7
+  testing.(*M).Run()
+      C:/Program Files/Go/src/testing/testing.go:2443 +0xf4b
+  main.main()
+      _testmain.go:334 +0x164
+==================
+--- FAIL: TestHandleWSCall_AllowsIdentityChangeForNonPublicMode (0.01s)
+    testing.go:1712: race detected during execution of test
+[vqtxg0pzNgFV] Created new session
+[8pJZqZPyt8hy] Created new session
+2026/07/08 15:22:18 ๐“ [WS Call] Session 8pJZqZPyt8hy using trunk mode (trunkId=42, trunkPublicId=8f6f6d70-2b5a-4fe7-a0d5-9d0af0e90d3a)
+==================
+WARNING: DATA RACE
+Read at 0x00c0005a14c0 by goroutine 274:
+  k2-gateway/internal/api.waitForMakeCallCount()
+      E:/dev/webrtc-gateway/apps/gateway/internal/api/server_call_identity_test.go:49 +0x9a
+  k2-gateway/internal/api.TestHandleWSCallUsesResolvedTrunkWhenNoAuthFieldsProvided()
+      E:/dev/webrtc-gateway/apps/gateway/internal/api/server_call_identity_test.go:477 +0x9ee
+  testing.tRunner()
+      C:/Program Files/Go/src/testing/testing.go:2036 +0x1ca
+  testing.(*T).Run.gowrap1()
+      C:/Program Files/Go/src/testing/testing.go:2101 +0x38
+
+Previous write at 0x00c0005a14c0 by goroutine 282:
+  k2-gateway/internal/api.(*stubSIPCallMaker).MakeCall()
+      E:/dev/webrtc-gateway/apps/gateway/internal/api/server_call_identity_test.go:21 +0x57
+  k2-gateway/internal/api.(*Server).runWSCall()
+      E:/dev/webrtc-gateway/apps/gateway/internal/api/ws_call.go:442 +0xf8
+  k2-gateway/internal/api.(*Server).handleWSCall.gowrap1()
+      E:/dev/webrtc-gateway/apps/gateway/internal/api/ws_call.go:429 +0x186
+
+Goroutine 274 (running) created at:
+  testing.(*T).Run()
+      C:/Program Files/Go/src/testing/testing.go:2101 +0xb2a
+  testing.runTests.func1()
+      C:/Program Files/Go/src/testing/testing.go:2585 +0x84
+  testing.tRunner()
+      C:/Program Files/Go/src/testing/testing.go:2036 +0x1ca
+  testing.runTests()
+      C:/Program Files/Go/src/testing/testing.go:2583 +0x9f7
+  testing.(*M).Run()
+      C:/Program Files/Go/src/testing/testing.go:2443 +0xf4b
+  main.main()
+      _testmain.go:334 +0x164
+
+Goroutine 282 (finished) created at:
+  k2-gateway/internal/api.(*Server).handleWSCall()
+      E:/dev/webrtc-gateway/apps/gateway/internal/api/ws_call.go:429 +0x2ecc
+  k2-gateway/internal/api.TestHandleWSCallUsesResolvedTrunkWhenNoAuthFieldsProvided()
+      E:/dev/webrtc-gateway/apps/gateway/internal/api/server_call_identity_test.go:471 +0x9d4
+  testing.tRunner()
+      C:/Program Files/Go/src/testing/testing.go:2036 +0x1ca
+  testing.(*T).Run.gowrap1()
+      C:/Program Files/Go/src/testing/testing.go:2101 +0x38
+==================
+--- FAIL: TestHandleWSCallUsesResolvedTrunkWhenNoAuthFieldsProvided (0.00s)
+    testing.go:1712: race detected during execution of test
+[68PUeCdqNBrH] Created new session
+2026/07/08 15:22:18 โ ๏ธ Failed to upsert session snapshot for sess-upsert-error: db unavailable
+[0yPmh7IK2Kx0] Created new session
+[bWDVcCLKMYzC] Created new session
+[KHFnbFNmvyim] Created new session
+2026/07/08 15:22:18 ๐“ [Accept] Incoming sessionID: 0yPmh7IK2Kx0, Client sessionID: bWDVcCLKMYzC
+2026/07/08 15:22:18 ๐“ Found client's WebRTC session: bWDVcCLKMYzC
+2026/07/08 15:22:18 ๐“ [Accept] decision incomingSessionID=0yPmh7IK2Kx0 clientSessionID=bWDVcCLKMYzC webrtcSessionFound=true webrtcPeerConnectionReady=true willTransferSIP=true
+2026/07/08 15:22:18 โ… [Accept] Session 0yPmh7IK2Kx0 claimed by client 0xc0002ac1b0
+2026/07/08 15:22:18 ๐“ Transferring SIP data from session 0yPmh7IK2Kx0 to WebRTC session bWDVcCLKMYzC
+2026/07/08 15:22:18 ๐“ [Accept] selected_call_session incomingSessionID=0yPmh7IK2Kx0 callSessionID=bWDVcCLKMYzC transferredSIP=true
+[bWDVcCLKMYzC] SIP Dialog state set - FromTag: local-tag, ToTag: remote-tag, Domain: 203.151.21.121, RouteSet: []
+2026/07/08 15:22:18 ๐—‘๏ธ Deleting old incoming session: 0yPmh7IK2Kx0
+[0yPmh7IK2Kx0] Deleted session
+2026/07/08 15:22:18 โ… Call accepted, using session: bWDVcCLKMYzC
+2026/07/08 15:22:18 ๐“ [Accept] Incoming sessionID: 0yPmh7IK2Kx0, Client sessionID: KHFnbFNmvyim
+[qJU8H4l7iByl] Created new session
+2026/07/08 15:22:18 ๐“ด [Reject] Received incoming reject via WS (session=qJU8H4l7iByl, reason=busy, source=client_unspecified)
+2026/07/08 15:22:18 โ… [Reject] SIP reject sent successfully (session=qJU8H4l7iByl, reason=busy, source=client_unspecified)
+[qJU8H4l7iByl] Deleted session
+[KjKI0hEzNAMw] Created new session
+2026/07/08 15:22:18 ๐“ด [Reject] Received incoming reject via WS (session=KjKI0hEzNAMw, reason=unavailable, source=callkeep_create_incoming_connection_failed)
+2026/07/08 15:22:18 โ… [Reject] SIP reject sent successfully (session=KjKI0hEzNAMw, reason=unavailable, source=callkeep_create_incoming_connection_failed)
+[KjKI0hEzNAMw] Deleted session
+[RewgtCLcHOOV] Created new session
+2026/07/08 15:22:18 ๐“ด [Reject] Received incoming reject via WS (session=RewgtCLcHOOV, reason=busy, source=in_app_decline)
+2026/07/08 15:22:18 โ… [Reject] SIP reject sent successfully (session=RewgtCLcHOOV, reason=busy, source=in_app_decline)
+[RewgtCLcHOOV] Deleted session
+[VnqMAEGLOGWK] Created new session
+2026/07/08 15:22:18 ๐“ด [Reject] Received incoming reject via WS (session=VnqMAEGLOGWK, reason=decline, source=client_unspecified)
+2026/07/08 15:22:18 โ ๏ธ [Reject] Incoming reject reached terminated transaction, treating as ended (session=VnqMAEGLOGWK): failed to send reject response: transaction terminated
+[VnqMAEGLOGWK] Deleted session
+[0U7L0XgTHCMA] Created new session
+2026/07/08 15:22:18 ๐“ด [Reject] Received incoming reject via WS (session=0U7L0XgTHCMA, reason=decline, source=client_unspecified)
+[SFG3MCVwVevI] Created new session
+2026/07/08 15:22:18 ๐“ฒ Incoming admission rejected: sessionID=SFG3MCVwVevI trunkID=7 reason=busy matching=1 busy=1 unavailable=0
+[SFG3MCVwVevI] Deleted session
+[kmoWTJojCmTX] Created new session
+2026/07/08 15:22:18 ๐“ฒ Incoming admission rejected: sessionID=kmoWTJojCmTX trunkID=7 reason=busy matching=1 busy=1 unavailable=0
+[kmoWTJojCmTX] Deleted session
+[aDC13yLPSnfi] Created new session
+2026/07/08 15:22:18 โ ๏ธ No WebSocket clients connected for incoming call notification
+2026/07/08 15:22:18 ๐“ฒ Incoming admission rejected: sessionID=aDC13yLPSnfi trunkID=8 reason=offline_no_push
+[aDC13yLPSnfi] Deleted session
+[Xf0Vo7uk0Qeu] Created new session
+2026/07/08 15:22:18 โ ๏ธ No WebSocket clients connected for incoming call notification
+2026/07/08 15:22:18 ๐”” [Push] Incoming push using unknown platform fallback: sessionID=Xf0Vo7uk0Qeu trunkID=9
+2026/07/08 15:22:18 ๐”” [Push] Dispatch incoming call FCM fallback: userID=user-1 sessionID=Xf0Vo7uk0Qeu trunkID=9
+2026/07/08 15:22:18 ๐”” [Push] FCM fallback skipped: sender not configured (userID=user-1 sessionID=Xf0Vo7uk0Qeu)
+2026/07/08 15:22:19 โฑ๏ธ Incoming call timed out: sessionID=Xf0Vo7uk0Qeu trunkID=9 timeout=1s
+2026/07/08 15:22:19 โ ๏ธ No WebSocket clients connected for incoming cancel notification
+==================
+WARNING: DATA RACE
+Write at 0x00c0008145f8 by goroutine 392:
+  k2-gateway/internal/api.(*incomingTestSIPCallMaker).RejectCall()
+      E:/dev/webrtc-gateway/apps/gateway/internal/api/server_incoming_test.go:53 +0x5c
+  k2-gateway/internal/api.(*Server).startIncomingRingTimeout.func1()
+      E:/dev/webrtc-gateway/apps/gateway/internal/api/ws_incoming.go:272 +0x421
+
+Previous read at 0x00c0008145f8 by goroutine 383:
+  k2-gateway/internal/api.TestNotifyIncomingCall_PushPathTimesOutNoAnswer()
+      E:/dev/webrtc-gateway/apps/gateway/internal/api/server_incoming_test.go:542 +0x92e
+  testing.tRunner()
+      C:/Program Files/Go/src/testing/testing.go:2036 +0x1ca
+  testing.(*T).Run.gowrap1()
+      C:/Program Files/Go/src/testing/testing.go:2101 +0x38
+
+Goroutine 392 (running) created at:
+  k2-gateway/internal/api.(*Server).startIncomingRingTimeout()
+      E:/dev/webrtc-gateway/apps/gateway/internal/api/ws_incoming.go:250 +0x157
+  k2-gateway/internal/api.(*Server).NotifyIncomingCall()
+      E:/dev/webrtc-gateway/apps/gateway/internal/api/ws_incoming.go:358 +0xad7
+  k2-gateway/internal/api.TestNotifyIncomingCall_PushPathTimesOutNoAnswer()
+      E:/dev/webrtc-gateway/apps/gateway/internal/api/server_incoming_test.go:538 +0x8c4
+  testing.tRunner()
+      C:/Program Files/Go/src/testing/testing.go:2036 +0x1ca
+  testing.(*T).Run.gowrap1()
+      C:/Program Files/Go/src/testing/testing.go:2101 +0x38
+
+Goroutine 383 (running) created at:
+  testing.(*T).Run()
+      C:/Program Files/Go/src/testing/testing.go:2101 +0xb2a
+  testing.runTests.func1()
+      C:/Program Files/Go/src/testing/testing.go:2585 +0x84
+  testing.tRunner()
+      C:/Program Files/Go/src/testing/testing.go:2036 +0x1ca
+  testing.runTests()
+      C:/Program Files/Go/src/testing/testing.go:2583 +0x9f7
+  testing.(*M).Run()
+      C:/Program Files/Go/src/testing/testing.go:2443 +0xf4b
+  main.main()
+      _testmain.go:334 +0x164
+==================
+[Xf0Vo7uk0Qeu] Deleted session
+==================
+WARNING: DATA RACE
+Read at 0x00c000814600 by goroutine 383:
+  k2-gateway/internal/api.TestNotifyIncomingCall_PushPathTimesOutNoAnswer()
+      E:/dev/webrtc-gateway/apps/gateway/internal/api/server_incoming_test.go:547 +0x984
+  testing.tRunner()
+      C:/Program Files/Go/src/testing/testing.go:2036 +0x1ca
+  testing.(*T).Run.gowrap1()
+      C:/Program Files/Go/src/testing/testing.go:2101 +0x38
+
+Previous write at 0x00c000814600 by goroutine 392:
+  k2-gateway/internal/api.(*incomingTestSIPCallMaker).RejectCall()
+      E:/dev/webrtc-gateway/apps/gateway/internal/api/server_incoming_test.go:54 +0x76
+  k2-gateway/internal/api.(*Server).startIncomingRingTimeout.func1()
+      E:/dev/webrtc-gateway/apps/gateway/internal/api/ws_incoming.go:272 +0x421
+
+Goroutine 383 (running) created at:
+  testing.(*T).Run()
+      C:/Program Files/Go/src/testing/testing.go:2101 +0xb2a
+  testing.runTests.func1()
+      C:/Program Files/Go/src/testing/testing.go:2585 +0x84
+  testing.tRunner()
+      C:/Program Files/Go/src/testing/testing.go:2036 +0x1ca
+  testing.runTests()
+      C:/Program Files/Go/src/testing/testing.go:2583 +0x9f7
+  testing.(*M).Run()
+      C:/Program Files/Go/src/testing/testing.go:2443 +0xf4b
+  main.main()
+      _testmain.go:334 +0x164
+
+Goroutine 392 (finished) created at:
+  k2-gateway/internal/api.(*Server).startIncomingRingTimeout()
+      E:/dev/webrtc-gateway/apps/gateway/internal/api/ws_incoming.go:250 +0x157
+  k2-gateway/internal/api.(*Server).NotifyIncomingCall()
+      E:/dev/webrtc-gateway/apps/gateway/internal/api/ws_incoming.go:358 +0xad7
+  k2-gateway/internal/api.TestNotifyIncomingCall_PushPathTimesOutNoAnswer()
+      E:/dev/webrtc-gateway/apps/gateway/internal/api/server_incoming_test.go:538 +0x8c4
+  testing.tRunner()
+      C:/Program Files/Go/src/testing/testing.go:2036 +0x1ca
+  testing.(*T).Run.gowrap1()
+      C:/Program Files/Go/src/testing/testing.go:2101 +0x38
+==================
+--- FAIL: TestNotifyIncomingCall_PushPathTimesOutNoAnswer (1.02s)
+    testing.go:1712: race detected during execution of test
+[ueM7vG4zM7Nb] Created new session
+[574nWSKp3RYW] Created new session
+2026/07/08 15:22:19 ๐“ [Accept] Incoming sessionID: ueM7vG4zM7Nb, Client sessionID: 574nWSKp3RYW
+2026/07/08 15:22:19 ๐“ Found client's WebRTC session: 574nWSKp3RYW
+2026/07/08 15:22:19 ๐“ [Accept] decision incomingSessionID=ueM7vG4zM7Nb clientSessionID=574nWSKp3RYW webrtcSessionFound=true webrtcPeerConnectionReady=true willTransferSIP=true
+2026/07/08 15:22:19 โ… [Accept] Session ueM7vG4zM7Nb claimed by client 0xc000532090
+2026/07/08 15:22:19 ๐“ Transferring SIP data from session ueM7vG4zM7Nb to WebRTC session 574nWSKp3RYW
+2026/07/08 15:22:19 ๐“ [Accept] selected_call_session incomingSessionID=ueM7vG4zM7Nb callSessionID=574nWSKp3RYW transferredSIP=true
+[574nWSKp3RYW] SIP Dialog state set - FromTag: local-tag, ToTag: remote-tag, Domain: 203.151.21.121, RouteSet: []
+2026/07/08 15:22:19 ๐—‘๏ธ Deleting old incoming session: ueM7vG4zM7Nb
+[ueM7vG4zM7Nb] Deleted session
+2026/07/08 15:22:19 โ… Call accepted, using session: 574nWSKp3RYW
+[SB3f89nK6TLp] Created new session
+2026/07/08 15:22:19 ๐“ [Accept] Incoming sessionID: SB3f89nK6TLp, Client sessionID: 
+2026/07/08 15:22:19 โ ๏ธ No valid client.sessionID (empty=true, same=false)
+2026/07/08 15:22:19 ๐“ [Accept] decision incomingSessionID=SB3f89nK6TLp clientSessionID= webrtcSessionFound=false webrtcPeerConnectionReady=false willTransferSIP=false
+2026/07/08 15:22:19 โ ๏ธ [Accept] Rejecting accept without ready WebRTC session: incomingSessionID=SB3f89nK6TLp clientSessionID=
+[XwHFZl5pu07w] Created new session
+[XwHFZl5pu07w] Deleted session
+[x31xXqgJHGKa] Created new session
+[x31xXqgJHGKa] SIP Dialog state set - FromTag: from-tag, ToTag: to-tag, Domain: example.com, RouteSet: []
+[x31xXqgJHGKa] Deleted session
+[Pc4QCs9K0wbf] Created new session
+[Pc4QCs9K0wbf] Deleted session
+2026/07/08 15:22:19 ๐“ฒ Sent incoming call notification to resolved client (sessionID=incoming-123 trunkID=1)
+2026/07/08 15:22:19 ๐“ฒ Sent incoming call notification to resolved client (sessionID=incoming-123 trunkID=1)
+2026/07/08 15:22:19 ๐“ฒ Incoming fanout summary: sessionID=incoming-123 trunkID=1 recipients=2 recipientSessionIDs=[a b] filtered=2 total=4
+2026/07/08 15:22:19 ๐“ฒ Sent incoming call notification to resolved client (sessionID=incoming-trunk-2 trunkID=2)
+2026/07/08 15:22:19 ๐“ฒ Incoming fanout summary: sessionID=incoming-trunk-2 trunkID=2 recipients=1 recipientSessionIDs=[trunk-2-client] filtered=1 total=2
+2026/07/08 15:22:19 ๐“ฒ Sent incoming call notification to resolved client (sessionID=incoming-ws-push trunkID=1)
+2026/07/08 15:22:19 ๐“ฒ Incoming fanout summary: sessionID=incoming-ws-push trunkID=1 recipients=1 recipientSessionIDs=[mobile-client] filtered=0 total=1
+2026/07/08 15:22:19 ๐”” [Push] Incoming push using unknown platform fallback: sessionID=incoming-ws-push trunkID=1
+2026/07/08 15:22:19 ๐”” [Push] Dispatch incoming call FCM fallback: userID=user-1 sessionID=incoming-ws-push trunkID=1
+2026/07/08 15:22:19 ๐”” [Push] FCM fallback skipped: sender not configured (userID=user-1 sessionID=incoming-ws-push)
+2026/07/08 15:22:19 ๐“ฒ Sent incoming call notification to resolved client (sessionID=incoming-ws-only trunkID=1)
+2026/07/08 15:22:19 ๐“ฒ Incoming fanout summary: sessionID=incoming-ws-only trunkID=1 recipients=1 recipientSessionIDs=[mobile-client] filtered=0 total=1
+2026/07/08 15:22:19 ๐“ฒ Sent incoming cancel notification to resolved client (sessionID=incoming-123 trunkID=1)
+2026/07/08 15:22:19 ๐“ฒ Sent incoming cancel notification to resolved client (sessionID=incoming-123 trunkID=1)
+2026/07/08 15:22:19 ๐“ฒ Incoming cancel fanout summary: sessionID=incoming-123 trunkID=1 recipients=2 recipientSessionIDs=[a b] filtered=2 total=4
+[lFfa2UFnHNjy] Created new session
+[2rrugb8qd0ju] Created new session
+2026/07/08 15:22:19 ๐’ฌ Sent message notification to client (sessionID=lFfa2UFnHNjy targetSessionID=lFfa2UFnHNjy)
+2026/07/08 15:22:19 ๐’ฌ SIP message fanout summary: from=00025 to=sip:1100200372057@203.151.21.121:5060 targetSessionID=lFfa2UFnHNjy recipients=1 filtered=1 duplicates=0 total=2 bodyBytes=5
+[rqL52iscGViO] Created new session
+2026/07/08 15:22:19 ๐’ฌ Sent message notification to client (sessionID=rqL52iscGViO targetSessionID=rqL52iscGViO)
+2026/07/08 15:22:19 ๐’ฌ SIP message fanout summary: from=00025 to=sip:1100200372057@203.151.21.121:5060 targetSessionID=rqL52iscGViO recipients=1 filtered=1 duplicates=2 total=2 bodyBytes=5
+2026/07/08 15:22:19 โ ๏ธ No WebSocket clients connected for incoming call notification
+2026/07/08 15:22:19 ๐“ฒ Incoming admission rejected: sessionID=incoming-db-lookup trunkID=1 reason=offline_no_push
+2026/07/08 15:22:19 โ ๏ธ No WebSocket clients connected for incoming call notification
+2026/07/08 15:22:19 ๐“ฒ Incoming admission rejected: sessionID=incoming-db-error trunkID=1 reason=offline_no_push
+[x6poKNvwedLq] Created new session
+[eD3ij7OO0eHI] Created new session
+2026/07/08 15:22:19 ๐“ [Accept] Incoming sessionID: x6poKNvwedLq, Client sessionID: eD3ij7OO0eHI
+2026/07/08 15:22:19 ๐“ Found client's WebRTC session: eD3ij7OO0eHI
+2026/07/08 15:22:19 ๐“ [Accept] decision incomingSessionID=x6poKNvwedLq clientSessionID=eD3ij7OO0eHI webrtcSessionFound=true webrtcPeerConnectionReady=true willTransferSIP=true
+2026/07/08 15:22:19 โ… [Accept] Session x6poKNvwedLq claimed by client 0xc0008a2120
+2026/07/08 15:22:19 ๐“ Transferring SIP data from session x6poKNvwedLq to WebRTC session eD3ij7OO0eHI
+2026/07/08 15:22:19 ๐“ [Accept] selected_call_session incomingSessionID=x6poKNvwedLq callSessionID=eD3ij7OO0eHI transferredSIP=true
+[eD3ij7OO0eHI] SIP Dialog state set - FromTag: local-tag, ToTag: remote-tag, Domain: 203.151.21.121, RouteSet: []
+2026/07/08 15:22:19 ๐—‘๏ธ Deleting old incoming session: x6poKNvwedLq
+[x6poKNvwedLq] Deleted session
+2026/07/08 15:22:19 โ… Call accepted, using session: eD3ij7OO0eHI
+[eD3ij7OO0eHI] Deleted session
+[5PkJkMj7u2f1] Created new session
+[15Wx4EA9gCro] Created new session
+[ooNnrK46Z3sl] Created new session
+2026/07/08 15:22:19 ๐” Resume request for session: missing-session (has SDP: false)
+2026/07/08 15:22:19 ๐“ Resume timing start: session=missing-session
+2026/07/08 15:22:19 ๐“ Resume local session lookup: session=missing-session found=false elapsed=0s
+2026/07/08 15:22:19 โ Resume failed: session missing-session not found
+[I97oHYFXVGzp] Created new session
+2026/07/08 15:22:19 ๐” Resume request for session: I97oHYFXVGzp (has SDP: false)
+2026/07/08 15:22:19 ๐“ Resume timing start: session=I97oHYFXVGzp
+2026/07/08 15:22:19 ๐“ Resume local session lookup: session=I97oHYFXVGzp found=true elapsed=0s
+2026/07/08 15:22:19 ๐” Resume media status for I97oHYFXVGzp: audioRTP=false:0 videoRTP=false:0 audioRTCP=false:0 videoRTCP=false:0 hasAsteriskAudio=false hasAsteriskVideo=false
+2026/07/08 15:22:19 โ Resume failed: session I97oHYFXVGzp is in state ended (not resumable)
+[tHx62phol18X] Created new session
+2026/07/08 15:22:19 ๐” Resume request for session: tHx62phol18X (has SDP: false)
+2026/07/08 15:22:19 ๐“ Resume timing start: session=tHx62phol18X
+2026/07/08 15:22:19 ๐“ Resume local session lookup: session=tHx62phol18X found=true elapsed=0s
+2026/07/08 15:22:19 ๐” Resume media status for tHx62phol18X: audioRTP=false:0 videoRTP=false:0 audioRTCP=false:0 videoRTCP=false:0 hasAsteriskAudio=false hasAsteriskVideo=false
+2026/07/08 15:22:19 ๐“ Resume total elapsed: session=tHx62phol18X elapsed=0s
+2026/07/08 15:22:19 โ… Session tHx62phol18X resumed successfully (state: active, direction: outbound, wasReconnecting: false, hasSDP: false)
+2026/07/08 15:22:19 ๐“ Resume send elapsed: session=tHx62phol18X elapsed=0s
+[9fx6fLtwfb7U] Created new session
+2026/07/08 15:22:19 ๐” Resume request for session: 9fx6fLtwfb7U (has SDP: false)
+2026/07/08 15:22:19 ๐“ Resume timing start: session=9fx6fLtwfb7U
+2026/07/08 15:22:19 ๐“ Resume local session lookup: session=9fx6fLtwfb7U found=true elapsed=0s
+2026/07/08 15:22:19 ๐” Resume media status for 9fx6fLtwfb7U: audioRTP=false:0 videoRTP=false:0 audioRTCP=false:0 videoRTCP=false:0 hasAsteriskAudio=false hasAsteriskVideo=false
+2026/07/08 15:22:19 โ… Session 9fx6fLtwfb7U transitioned from reconnecting to active
+2026/07/08 15:22:19 ๐“ Resume total elapsed: session=9fx6fLtwfb7U elapsed=0s
+2026/07/08 15:22:19 โ… Session 9fx6fLtwfb7U resumed successfully (state: active, direction: outbound, wasReconnecting: true, hasSDP: false)
+2026/07/08 15:22:19 ๐“ Resume send elapsed: session=9fx6fLtwfb7U elapsed=0s
+[R5dUQ3x20AKV] Created new session
+๐“ Database logging: Disabled
+2026/07/08 15:22:19 ๐” Resume request for session: R5dUQ3x20AKV (has SDP: false)
+2026/07/08 15:22:19 ๐“ Resume timing start: session=R5dUQ3x20AKV
+2026/07/08 15:22:19 ๐“ Resume local session lookup: session=R5dUQ3x20AKV found=true elapsed=0s
+2026/07/08 15:22:19 ๐” Resume media status for R5dUQ3x20AKV: audioRTP=false:0 videoRTP=false:0 audioRTCP=false:0 videoRTCP=false:0 hasAsteriskAudio=false hasAsteriskVideo=false
+2026/07/08 15:22:19 ๐“ Resume total elapsed: session=R5dUQ3x20AKV elapsed=0s
+2026/07/08 15:22:19 โ… Session R5dUQ3x20AKV resumed successfully (state: active, direction: outbound, wasReconnecting: false, hasSDP: false)
+2026/07/08 15:22:19 ๐“ Resume send elapsed: session=R5dUQ3x20AKV elapsed=0s
+[Rcx6dmIh32yX] Created new session
+2026/07/08 15:22:19 ๐” Resume request for session: Rcx6dmIh32yX (has SDP: true)
+2026/07/08 15:22:19 ๐“ Resume timing start: session=Rcx6dmIh32yX
+2026/07/08 15:22:19 ๐“ Resume local session lookup: session=Rcx6dmIh32yX found=true elapsed=0s
+2026/07/08 15:22:19 ๐” Resume media status for Rcx6dmIh32yX: audioRTP=false:0 videoRTP=false:0 audioRTCP=false:0 videoRTCP=false:0 hasAsteriskAudio=false hasAsteriskVideo=false
+2026/07/08 15:22:19 ๐” Renegotiating PeerConnection for session Rcx6dmIh32yX
+2026/07/08 15:22:19 ๐” Resume SDP video diagnostics: session=Rcx6dmIh32yX hasVideoMLine=false videoPort=-1 videoDirection=unspecified
+[Rcx6dmIh32yX] ๐” Renegotiating PeerConnection...
+[Rcx6dmIh32yX] ๐” Renegotiate offer video diagnostics: hasVideoMLine=false videoPort=-1 videoDirection=unspecified expectVideoUplink=false
+[Rcx6dmIh32yX] ๐” Closing old PeerConnection
+2026/07/08 15:22:19 โ Resume renegotiation failed for session Rcx6dmIh32yX: failed to set remote description: failed to unmarshal SDP: sdp: syntax error at pos 1: "n" (elapsed=0s)
+2026/07/08 15:22:19 ๐“ [Trunk NotifyUserID] updated sessionID=s1 trunkID=42 trunkPublicID=8f6f6d70-2b5a-4fe7-a0d5-9d0af0e90d3a preferredUsername= sipUsername= authSub=user-1
+2026/07/08 15:22:19 ๐“ [Trunk NotifyUserID] updated sessionID=s1 trunkID=42 trunkPublicID=8f6f6d70-2b5a-4fe7-a0d5-9d0af0e90d3a preferredUsername= sipUsername= authSub=user-1
+[9FLNPG1h4xb8] Created new session
+[QwvQuwOVd14O] Created new session
+2026/07/08 15:22:19 ๐“ [Trunk NotifyUserID] updated sessionID=s1 trunkID=42 trunkPublicID=8f6f6d70-2b5a-4fe7-a0d5-9d0af0e90d3a preferredUsername= sipUsername= authSub=user-1
+2026/07/08 15:22:19 ๐“ [Trunk NotifyUserID] updated sessionID=s1 trunkID=42 trunkPublicID=8f6f6d70-2b5a-4fe7-a0d5-9d0af0e90d3a preferredUsername= sipUsername= authSub=user-1
+2026/07/08 15:22:19 ๐“ฒ Trunk push contact updated: trunkID=42 appID=th.or.ttrs.video.prod pnType=apple action=updated_and_reregistered
+2026/07/08 15:22:19 ๐“ [Trunk NotifyUserID] updated sessionID=s1 trunkID=42 trunkPublicID=8f6f6d70-2b5a-4fe7-a0d5-9d0af0e90d3a preferredUsername= sipUsername= authSub=user-1
+2026/07/08 15:22:19 ๐“ฒ Trunk push contact unchanged: trunkID=42 appID=th.or.ttrs.video.prod pnType=apple action=unchanged_skip_reregister
+2026/07/08 15:22:19 ๐“ฒ Trunk push contact updated: trunkID=42 appID=th.or.ttrs.video.prod pnType=apple action=updated_and_reregistered
+2026/07/08 15:22:19 ๐“ฒ Trunk push contact unchanged: trunkID=42 appID=th.or.ttrs.video.prod pnType=apple action=unchanged_skip_reregister
+2026/07/08 15:22:19 ๐“ฒ Trunk push contact updated: trunkID=42 appID=th.or.ttrs.video.staging pnType=apple action=updated_and_reregistered
+2026/07/08 15:22:19 ๐“ [Trunk NotifyUserID] updated sessionID=s1 trunkID=42 trunkPublicID=8f6f6d70-2b5a-4fe7-a0d5-9d0af0e90d3a preferredUsername= sipUsername= authSub=user-1
+2026/07/08 15:22:19 ๐งพ [ClientDiagnostics] accepted: subject=user-1 trace= events=1 session=0 nonSession=1 persistence=disabled
+2026/07/08 15:22:19 REST auth rejected: path=/api/health hint=unknown err=context deadline exceeded
+2026/07/08 15:22:19 REST auth accepted: path=/api/health hint=unknown realm=user sub=user-1
+2026/07/08 15:22:19 REST auth accepted: path=/api/health hint=employee realm=employee sub=employee-1
+2026/07/08 15:22:19 ๐งพ [ClientDiagnostics] accepted: subject=user-1 trace=trace-1 events=2 session=1 nonSession=1 persistence=stored
+2026/07/08 15:22:19 ๐งพ [ClientDiagnostics] rejected invalid payload: subject=user-1 trace= events=1 reason=invalid event level
+2026/07/08 15:22:19 ๐งพ [ClientDiagnostics] accepted: subject=rate-user trace=trace-rate events=1 session=0 nonSession=1 persistence=stored
+2026/07/08 15:22:19 ๐งพ [ClientDiagnostics] accepted: subject=rate-user trace=trace-rate events=1 session=0 nonSession=1 persistence=stored
+2026/07/08 15:22:19 REST auth accepted: path=/api/client-diagnostics hint=unknown realm= sub=user-1
+2026/07/08 15:22:19 ๐งพ [ClientDiagnostics] accepted: subject=rate-user trace=trace-rate events=1 session=0 nonSession=1 persistence=stored
+2026/07/08 15:22:19 ๐งพ [ClientDiagnostics] accepted: subject=user-1 trace= events=1 session=0 nonSession=1 persistence=stored
+2026/07/08 15:22:19 ๐งพ [ClientDiagnostics] accepted: subject=rate-user trace=trace-rate events=1 session=0 nonSession=1 persistence=stored
+2026/07/08 15:22:19 ๐งพ [ClientDiagnostics] accepted: subject=rate-user trace=trace-rate events=1 session=0 nonSession=1 persistence=stored
+2026/07/08 15:22:19 Public WebSocket connection accepted: remote=127.0.0.1:51640
+2026/07/08 15:22:19 WebSocket auth accepted: hint=unknown realm=user sub=user-1
+2026/07/08 15:22:19 WebSocket auth accepted: hint=unknown realm=user sub=user-1
+2026/07/08 15:22:19 ๐งพ [ClientDiagnostics] accepted: subject=rate-user trace=trace-rate events=1 session=0 nonSession=1 persistence=stored
+2026/07/08 15:22:19 WebSocket auth accepted: hint=unknown realm=user sub=user-1
+2026/07/08 15:22:19 WebSocket mobile SIP provisioning rejected: sub=user-1 stage=device_platform
+2026/07/08 15:22:19 WebSocket mobile SIP provisioning rejected: sub=user-1 stage=provision elapsed=0s err=provision failed
+2026/07/08 15:22:19 WebSocket auth accepted: hint=unknown realm=user sub=user-1
+2026/07/08 15:22:19 WebSocket mobile SIP provisioning rejected: sub=user-1 stage=device_platform
+2026/07/08 15:22:19 WebSocket mobile SIP provisioning accepted: sub=user-1 trunkID=43 elapsed=0s
+2026/07/08 15:22:19 WebSocket auth accepted: hint=unknown realm=user sub=user-1
+2026/07/08 15:22:19 ๐งพ [ClientDiagnostics] accepted: subject=rate-user trace=trace-rate events=1 session=0 nonSession=1 persistence=stored
+2026/07/08 15:22:19 WebSocket auth accepted: hint=employee realm=employee sub=employee-1
+2026/07/08 15:22:19 WebSocket mobile SIP provisioning accepted: sub=user-1 trunkID=42 elapsed=0s
+2026/07/08 15:22:19 ๐งพ [ClientDiagnostics] accepted: subject=rate-user trace=trace-rate events=1 session=0 nonSession=1 persistence=stored
+2026/07/08 15:22:19 ๐งพ [ClientDiagnostics] accepted: subject=rate-user trace=trace-rate events=1 session=0 nonSession=1 persistence=stored
+2026/07/08 15:22:19 ๐งพ [ClientDiagnostics] accepted: subject=rate-user trace=trace-rate events=1 session=0 nonSession=1 persistence=stored
+2026/07/08 15:22:19 ๐งพ [ClientDiagnostics] accepted: subject=rate-user trace=trace-rate events=1 session=0 nonSession=1 persistence=stored
+2026/07/08 15:22:19 WebSocket auth rejected: hint=unknown err=context deadline exceeded
+2026/07/08 15:22:19 ๐งพ [ClientDiagnostics] accepted: subject=rate-user trace=trace-rate events=1 session=0 nonSession=1 persistence=stored
+2026/07/08 15:22:19 ๐งพ [ClientDiagnostics] accepted: subject=rate-user trace=trace-rate events=1 session=0 nonSession=1 persistence=stored
+2026/07/08 15:22:19 ๐งพ [ClientDiagnostics] accepted: subject=rate-user trace=trace-rate events=1 session=0 nonSession=1 persistence=stored
+2026/07/08 15:22:19 ๐งพ [ClientDiagnostics] accepted: subject=rate-user trace=trace-rate events=1 session=0 nonSession=1 persistence=stored
+2026/07/08 15:22:19 ๐งพ [ClientDiagnostics] accepted: subject=rate-user trace=trace-rate events=1 session=0 nonSession=1 persistence=stored
+2026/07/08 15:22:19 ๐งพ [ClientDiagnostics] accepted: subject=rate-user trace=trace-rate events=1 session=0 nonSession=1 persistence=stored
+2026/07/08 15:22:19 ๐งพ [ClientDiagnostics] accepted: subject=rate-user trace=trace-rate events=1 session=0 nonSession=1 persistence=stored
+2026/07/08 15:22:19 ๐งพ [ClientDiagnostics] accepted: subject=rate-user trace=trace-rate events=1 session=0 nonSession=1 persistence=stored
+2026/07/08 15:22:19 ๐งพ [ClientDiagnostics] accepted: subject=rate-user trace=trace-rate events=1 session=0 nonSession=1 persistence=stored
+2026/07/08 15:22:19 ๐งพ [ClientDiagnostics] accepted: subject=rate-user trace=trace-rate events=1 session=0 nonSession=1 persistence=stored
+2026/07/08 15:22:19 ๐งพ [ClientDiagnostics] accepted: subject=rate-user trace=trace-rate events=1 session=0 nonSession=1 persistence=stored
+2026/07/08 15:22:19 ๐งพ [ClientDiagnostics] accepted: subject=rate-user trace=trace-rate events=1 session=0 nonSession=1 persistence=stored
+2026/07/08 15:22:19 WebSocket auth accepted: hint=unknown realm=user sub=user-1
+2026/07/08 15:22:19 ๐งพ [ClientDiagnostics] accepted: subject=rate-user trace=trace-rate events=1 session=0 nonSession=1 persistence=stored
+2026/07/08 15:22:19 ๐งพ [ClientDiagnostics] accepted: subject=rate-user trace=trace-rate events=1 session=0 nonSession=1 persistence=stored
+2026/07/08 15:22:19 ๐งพ [ClientDiagnostics] accepted: subject=rate-user trace=trace-rate events=1 session=0 nonSession=1 persistence=stored
+2026/07/08 15:22:19 ๐งพ [ClientDiagnostics] accepted: subject=rate-user trace=trace-rate events=1 session=0 nonSession=1 persistence=stored
+2026/07/08 15:22:19 ๐งพ [ClientDiagnostics] accepted: subject=rate-user trace=trace-rate events=1 session=0 nonSession=1 persistence=stored
+2026/07/08 15:22:19 ๐งพ [ClientDiagnostics] accepted: subject=rate-user trace=trace-rate events=1 session=0 nonSession=1 persistence=stored
+2026/07/08 15:22:19 ๐งพ [ClientDiagnostics] accepted: subject=rate-user trace=trace-rate events=1 session=0 nonSession=1 persistence=stored
+2026/07/08 15:22:19 ๐งพ [ClientDiagnostics] rate limited: subject=rate-user trace=trace-rate events=1
+2026/07/08 15:22:19 WebSocket auth accepted: hint=employee realm=employee sub=employee-1
+FAIL
+FAIL	k2-gateway/internal/api	1.434s
+FAIL

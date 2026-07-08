@@ -328,14 +328,12 @@ export function GatewayInstancesPage() {
                 ) : null}
               </div>
               <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-                {wsClients
-                  .slice(0, WS_CLIENT_PREVIEW_LIMIT)
-                  .map((client) => (
-                    <WSClientCard
-                      key={`${client.sessionId}-${client.connectedAt}`}
-                      client={client}
-                    />
-                  ))}
+                {wsClients.slice(0, WS_CLIENT_PREVIEW_LIMIT).map((client) => (
+                  <WSClientCard
+                    key={`${client.sessionId}-${client.connectedAt}`}
+                    client={client}
+                  />
+                ))}
               </div>
             </CardContent>
           </Card>

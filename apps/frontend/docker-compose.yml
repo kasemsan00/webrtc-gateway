@@ -12,7 +12,7 @@ services:
         VITE_KEYCLOAK_CLIENT: ${VITE_KEYCLOAK_CLIENT}
         VITE_CONFIG_AUTORECORD: ${VITE_CONFIG_AUTORECORD}
     ports:
-      - "4173:4173"
+      - '4173:4173'
     environment:
       NODE_ENV: production
       VITE_TURN_CREDENTIAL: ${VITE_TURN_CREDENTIAL}

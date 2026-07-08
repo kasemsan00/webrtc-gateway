@@ -18,6 +18,7 @@ import {
 } from '@remixicon/react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
+import type {Trunk} from '@/features/trunk/types';
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -41,7 +42,7 @@ import {
 import { Textarea } from '@/components/ui/textarea'
 import { useTheme } from '@/lib/theme'
 import { fetchTrunks } from '@/features/trunk/services/trunk-api'
-import { normalizeTrunkUid, type Trunk } from '@/features/trunk/types'
+import {  normalizeTrunkUid } from '@/features/trunk/types'
 import {
   canPlaceCall,
   canResolveTrunk,
@@ -172,10 +173,12 @@ export function GatewayConsolePage() {
   const [translatorTgtLang, setTranslatorTgtLang] = useState('th')
   const [translatorVoice, setTranslatorVoice] = useState('th-TH-Sarawut')
   const [isSendingSwitch, setIsSendingSwitch] = useState(false)
-  const [trunkOptions, setTrunkOptions] = useState<Array<{
-    value: string
-    label: string
-  }>>([])
+  const [trunkOptions, setTrunkOptions] = useState<
+    Array<{
+      value: string
+      label: string
+    }>
+  >([])
   const [trunkOptionsLoading, setTrunkOptionsLoading] = useState(false)
   const [trunkOptionsError, setTrunkOptionsError] = useState('')
 
@@ -362,7 +365,9 @@ export function GatewayConsolePage() {
   const selectedTrunkValue = useMemo(() => {
     if (!selectedTrunkIdentifier) return '__none__'
     if (trunkOptionsLoading) return selectedTrunkIdentifier
-    return trunkOptions.some((option) => option.value === selectedTrunkIdentifier)
+    return trunkOptions.some(
+      (option) => option.value === selectedTrunkIdentifier,
+    )
       ? selectedTrunkIdentifier
       : '__none__'
   }, [selectedTrunkIdentifier, trunkOptions, trunkOptionsLoading])
@@ -746,10 +751,16 @@ export function GatewayConsolePage() {
                     }
                     disabled={trunkOptionsLoading}
                   >
-                    <SelectTrigger id="t-id" className="h-7 w-full px-2 text-xs" size="sm">
+                    <SelectTrigger
+                      id="t-id"
+                      className="h-7 w-full px-2 text-xs"
+                      size="sm"
+                    >
                       <SelectValue
                         placeholder={
-                          trunkOptionsLoading ? 'Loading trunks...' : 'Select trunk'
+                          trunkOptionsLoading
+                            ? 'Loading trunks...'
+                            : 'Select trunk'
                         }
                       />
                     </SelectTrigger>
@@ -768,7 +779,9 @@ export function GatewayConsolePage() {
                     Failed to load trunks: {trunkOptionsError}
                   </p>
                 ) : null}
-                {!trunkOptionsLoading && !trunkOptionsError && trunkOptions.length === 0 ? (
+                {!trunkOptionsLoading &&
+                !trunkOptionsError &&
+                trunkOptions.length === 0 ? (
                   <p className="text-[10px] text-muted-foreground">
                     No enabled trunks available
                   </p>
@@ -782,8 +795,8 @@ export function GatewayConsolePage() {
                   {trunkOptionsLoading
                     ? 'Loading trunks...'
                     : state.trunk.status === 'resolving'
-                    ? 'Resolving...'
-                    : 'Resolve'}
+                      ? 'Resolving...'
+                      : 'Resolve'}
                 </Button>
               </CardContent>
             </Card>
@@ -973,134 +986,140 @@ export function GatewayConsolePage() {
 
           {/* Floating controls */}
           {inCall ? (
-          <div className="absolute bottom-3 left-1/2 flex -translate-x-1/2 flex-col items-center gap-1.5">
-            <div className="flex items-center gap-1.5 rounded-full px-3 py-1.5 backdrop-blur">
-              <Button
-                size="icon"
-                className="size-12"
-                variant={
-                  state.controls.isMutedAudio ? 'destructive' : 'outline'
-                }
-                onClick={gatewayActions.toggleMuteAudio}
-                aria-label={
-                  state.controls.isMutedAudio ? 'Unmute mic' : 'Mute mic'
-                }
-                aria-pressed={state.controls.isMutedAudio}
-              >
-                {state.controls.isMutedAudio ? (
-                  <RiMicOffLine className="size-5" />
-                ) : (
-                  <RiMicLine className="size-5" />
-                )}
-              </Button>
-              <Button
-                size="icon"
-                className="size-12"
-                variant={
-                  state.controls.isMutedVideo ? 'destructive' : 'outline'
-                }
-                onClick={gatewayActions.toggleMuteVideo}
-                aria-label={
-                  state.controls.isMutedVideo
-                    ? 'Turn on camera'
-                    : 'Turn off camera'
-                }
-                aria-pressed={state.controls.isMutedVideo}
-              >
-                {state.controls.isMutedVideo ? (
-                  <RiVideoOffLine className="size-5" />
-                ) : (
-                  <RiVideoOnLine className="size-5" />
-                )}
-              </Button>
-              <Button
-                size="icon"
-                className="size-12"
-                variant="destructive"
-                onClick={gatewayActions.hangup}
-                disabled={!inCall}
-                aria-label="Hang up"
-              >
-                <RiShutDownLine className="size-5" />
-              </Button>
-              <Button
-                size="icon"
-                className="size-12"
-                variant={state.controls.statsOpen ? 'default' : 'outline'}
-                onClick={gatewayActions.toggleStats}
-                aria-label={
-                  state.controls.statsOpen ? 'Hide stats' : 'Show stats'
-                }
-                aria-pressed={state.controls.statsOpen}
-              >
-                <RiSignalWifiLine className="size-5" />
-              </Button>
-              <Button
-                size="icon"
-                className="size-12"
-                variant={
-                  state.call.translatorEnabled ? 'default' : 'outline'
-                }
-                onClick={() => {
-                  setTranslatorOpen(true)
-                }}
-                aria-label="Translation settings"
-                aria-pressed={state.call.translatorEnabled}
-              >
-                <RiTranslate className="size-5" />
-              </Button>
-            </div>
-            {state.media.status === 'active' ? (
-              <div className="flex items-center gap-1.5 rounded-full bg-black/50 px-2 py-1 backdrop-blur">
-                <Select
-                  value={selectedCameraValue}
-                  onValueChange={(value) => {
-                    void gatewayActions.setSelectedVideoInput(value)
-                  }}
-                  disabled={state.controls.switchingVideoInput}
+            <div className="absolute bottom-3 left-1/2 flex -translate-x-1/2 flex-col items-center gap-1.5">
+              <div className="flex items-center gap-1.5 rounded-full px-3 py-1.5 backdrop-blur">
+                <Button
+                  size="icon"
+                  className="size-12"
+                  variant={
+                    state.controls.isMutedAudio ? 'destructive' : 'outline'
+                  }
+                  onClick={gatewayActions.toggleMuteAudio}
+                  aria-label={
+                    state.controls.isMutedAudio ? 'Unmute mic' : 'Mute mic'
+                  }
+                  aria-pressed={state.controls.isMutedAudio}
                 >
-                  <SelectTrigger
-                    className="h-8 w-44 bg-black/30 px-2 text-xs"
-                    size="sm"
-                  >
-                    <SelectValue placeholder="Camera" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__default__">Default camera</SelectItem>
-                    {state.controls.availableVideoInputs.map((device) => (
-                      <SelectItem key={device.deviceId} value={device.deviceId}>
-                        {device.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Select
-                  value={selectedMicValue}
-                  onValueChange={(value) => {
-                    void gatewayActions.setSelectedAudioInput(value)
-                  }}
-                  disabled={state.controls.switchingAudioInput}
+                  {state.controls.isMutedAudio ? (
+                    <RiMicOffLine className="size-5" />
+                  ) : (
+                    <RiMicLine className="size-5" />
+                  )}
+                </Button>
+                <Button
+                  size="icon"
+                  className="size-12"
+                  variant={
+                    state.controls.isMutedVideo ? 'destructive' : 'outline'
+                  }
+                  onClick={gatewayActions.toggleMuteVideo}
+                  aria-label={
+                    state.controls.isMutedVideo
+                      ? 'Turn on camera'
+                      : 'Turn off camera'
+                  }
+                  aria-pressed={state.controls.isMutedVideo}
                 >
-                  <SelectTrigger
-                    className="h-8 w-44 bg-black/30 px-2 text-xs"
-                    size="sm"
-                  >
-                    <SelectValue placeholder="Microphone" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__default__">
-                      Default microphone
-                    </SelectItem>
-                    {state.controls.availableAudioInputs.map((device) => (
-                      <SelectItem key={device.deviceId} value={device.deviceId}>
-                        {device.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                  {state.controls.isMutedVideo ? (
+                    <RiVideoOffLine className="size-5" />
+                  ) : (
+                    <RiVideoOnLine className="size-5" />
+                  )}
+                </Button>
+                <Button
+                  size="icon"
+                  className="size-12"
+                  variant="destructive"
+                  onClick={gatewayActions.hangup}
+                  disabled={!inCall}
+                  aria-label="Hang up"
+                >
+                  <RiShutDownLine className="size-5" />
+                </Button>
+                <Button
+                  size="icon"
+                  className="size-12"
+                  variant={state.controls.statsOpen ? 'default' : 'outline'}
+                  onClick={gatewayActions.toggleStats}
+                  aria-label={
+                    state.controls.statsOpen ? 'Hide stats' : 'Show stats'
+                  }
+                  aria-pressed={state.controls.statsOpen}
+                >
+                  <RiSignalWifiLine className="size-5" />
+                </Button>
+                <Button
+                  size="icon"
+                  className="size-12"
+                  variant={state.call.translatorEnabled ? 'default' : 'outline'}
+                  onClick={() => {
+                    setTranslatorOpen(true)
+                  }}
+                  aria-label="Translation settings"
+                  aria-pressed={state.call.translatorEnabled}
+                >
+                  <RiTranslate className="size-5" />
+                </Button>
               </div>
-            ) : null}
-          </div>
+              {state.media.status === 'active' ? (
+                <div className="flex items-center gap-1.5 rounded-full bg-black/50 px-2 py-1 backdrop-blur">
+                  <Select
+                    value={selectedCameraValue}
+                    onValueChange={(value) => {
+                      void gatewayActions.setSelectedVideoInput(value)
+                    }}
+                    disabled={state.controls.switchingVideoInput}
+                  >
+                    <SelectTrigger
+                      className="h-8 w-44 bg-black/30 px-2 text-xs"
+                      size="sm"
+                    >
+                      <SelectValue placeholder="Camera" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__default__">
+                        Default camera
+                      </SelectItem>
+                      {state.controls.availableVideoInputs.map((device) => (
+                        <SelectItem
+                          key={device.deviceId}
+                          value={device.deviceId}
+                        >
+                          {device.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Select
+                    value={selectedMicValue}
+                    onValueChange={(value) => {
+                      void gatewayActions.setSelectedAudioInput(value)
+                    }}
+                    disabled={state.controls.switchingAudioInput}
+                  >
+                    <SelectTrigger
+                      className="h-8 w-44 bg-black/30 px-2 text-xs"
+                      size="sm"
+                    >
+                      <SelectValue placeholder="Microphone" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__default__">
+                        Default microphone
+                      </SelectItem>
+                      {state.controls.availableAudioInputs.map((device) => (
+                        <SelectItem
+                          key={device.deviceId}
+                          value={device.deviceId}
+                        >
+                          {device.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              ) : null}
+            </div>
           ) : null}
 
           <Button
