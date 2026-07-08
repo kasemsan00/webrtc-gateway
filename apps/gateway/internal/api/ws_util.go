@@ -222,3 +222,36 @@ func (s *Server) broadcastSessionStream(payload []byte) {
 		}
 	}
 }
+
+func (s *Server) subscribeWSClientStream() (int, chan []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.wsClientStreamSeq++
+	id := s.wsClientStreamSeq
+	ch := make(chan []byte, 32)
+	s.wsClientStreams[id] = ch
+	return id, ch
+}
+
+func (s *Server) unsubscribeWSClientStream(id int) {
+	s.mu.Lock()
+	delete(s.wsClientStreams, id)
+	s.mu.Unlock()
+}
+
+func (s *Server) broadcastWSClientStream(payload []byte) {
+	s.mu.RLock()
+	streams := make([]chan []byte, 0, len(s.wsClientStreams))
+	for _, ch := range s.wsClientStreams {
+		streams = append(streams, ch)
+	}
+	s.mu.RUnlock()
+
+	for _, ch := range streams {
+		select {
+		case ch <- payload:
+		default:
+		}
+	}
+}

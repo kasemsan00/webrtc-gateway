@@ -43,6 +43,8 @@ type Server struct {
 	trunkStreamSeq    int
 	sessionStreams    map[int]chan []byte
 	sessionStreamSeq  int
+	wsClientStreams   map[int]chan []byte
+	wsClientStreamSeq int
 	incomingCounters  map[string]int64
 	diagnosticLimits  map[string]*diagnosticRateState
 	startTime         time.Time
@@ -189,6 +191,7 @@ func NewServer(cfg config.APIConfig, turnCfg config.TURNConfig, gatewayCfg confi
 		wsConnections:    make(map[*WSClient]struct{}),
 		trunkStreams:     make(map[int]chan []byte),
 		sessionStreams:   make(map[int]chan []byte),
+		wsClientStreams:  make(map[int]chan []byte),
 		incomingCounters: make(map[string]int64),
 		diagnosticLimits: make(map[string]*diagnosticRateState),
 		startTime:        time.Now(),
