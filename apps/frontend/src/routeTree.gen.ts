@@ -9,6 +9,7 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as WsClientsRouteImport } from './routes/ws-clients'
 import { Route as TrunksRouteImport } from './routes/trunks'
 import { Route as SessionsRouteImport } from './routes/sessions'
 import { Route as SessionDirectoryRouteImport } from './routes/session-directory'
@@ -22,6 +23,11 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as SessionsIndexRouteImport } from './routes/sessions.index'
 import { Route as SessionsSessionIdRouteImport } from './routes/sessions.$sessionId'
 
+const WsClientsRoute = WsClientsRouteImport.update({
+  id: '/ws-clients',
+  path: '/ws-clients',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const TrunksRoute = TrunksRouteImport.update({
   id: '/trunks',
   path: '/trunks',
@@ -94,6 +100,7 @@ export interface FileRoutesByFullPath {
   '/session-directory': typeof SessionDirectoryRoute
   '/sessions': typeof SessionsRouteWithChildren
   '/trunks': typeof TrunksRoute
+  '/ws-clients': typeof WsClientsRoute
   '/sessions/$sessionId': typeof SessionsSessionIdRoute
   '/sessions/': typeof SessionsIndexRoute
 }
@@ -107,6 +114,7 @@ export interface FileRoutesByTo {
   '/public-accounts': typeof PublicAccountsRoute
   '/session-directory': typeof SessionDirectoryRoute
   '/trunks': typeof TrunksRoute
+  '/ws-clients': typeof WsClientsRoute
   '/sessions/$sessionId': typeof SessionsSessionIdRoute
   '/sessions': typeof SessionsIndexRoute
 }
@@ -122,6 +130,7 @@ export interface FileRoutesById {
   '/session-directory': typeof SessionDirectoryRoute
   '/sessions': typeof SessionsRouteWithChildren
   '/trunks': typeof TrunksRoute
+  '/ws-clients': typeof WsClientsRoute
   '/sessions/$sessionId': typeof SessionsSessionIdRoute
   '/sessions/': typeof SessionsIndexRoute
 }
@@ -138,6 +147,7 @@ export interface FileRouteTypes {
     | '/session-directory'
     | '/sessions'
     | '/trunks'
+    | '/ws-clients'
     | '/sessions/$sessionId'
     | '/sessions/'
   fileRoutesByTo: FileRoutesByTo
@@ -151,6 +161,7 @@ export interface FileRouteTypes {
     | '/public-accounts'
     | '/session-directory'
     | '/trunks'
+    | '/ws-clients'
     | '/sessions/$sessionId'
     | '/sessions'
   id:
@@ -165,6 +176,7 @@ export interface FileRouteTypes {
     | '/session-directory'
     | '/sessions'
     | '/trunks'
+    | '/ws-clients'
     | '/sessions/$sessionId'
     | '/sessions/'
   fileRoutesById: FileRoutesById
@@ -180,10 +192,18 @@ export interface RootRouteChildren {
   SessionDirectoryRoute: typeof SessionDirectoryRoute
   SessionsRoute: typeof SessionsRouteWithChildren
   TrunksRoute: typeof TrunksRoute
+  WsClientsRoute: typeof WsClientsRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/ws-clients': {
+      id: '/ws-clients'
+      path: '/ws-clients'
+      fullPath: '/ws-clients'
+      preLoaderRoute: typeof WsClientsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/trunks': {
       id: '/trunks'
       path: '/trunks'
@@ -296,6 +316,7 @@ const rootRouteChildren: RootRouteChildren = {
   SessionDirectoryRoute: SessionDirectoryRoute,
   SessionsRoute: SessionsRouteWithChildren,
   TrunksRoute: TrunksRoute,
+  WsClientsRoute: WsClientsRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
