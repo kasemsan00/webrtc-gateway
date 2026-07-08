@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 
 	"k2-gateway/internal/auth"
@@ -88,6 +89,7 @@ func (s *Server) handleWebSocketConn(w http.ResponseWriter, r *http.Request, pub
 
 	client := &WSClient{
 		conn:         conn,
+		clientID:     uuid.NewString(),
 		send:         make(chan []byte, 256),
 		availability: clientAvailabilityIdle,
 		callState:    string(session.StateNew),

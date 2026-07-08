@@ -100,6 +100,7 @@ type SIPCallMaker interface {
 // WSClient represents a WebSocket client connection
 type WSClient struct {
 	conn            *websocket.Conn
+	clientID        string // UUID assigned at connect, stable across session assignment
 	sessionID       string
 	trunkResolved   bool
 	resolvedTrunkID int64

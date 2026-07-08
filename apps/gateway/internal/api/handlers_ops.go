@@ -102,7 +102,8 @@ type DashboardSummaryResponse struct {
 
 // WSClientResponse represents a connected WebSocket client
 type WSClientResponse struct {
-	SessionID             string `json:"sessionId"`
+	ClientID              string `json:"clientId"`
+	SessionID             string `json:"sessionId,omitempty"`
 	ConnectedAt           string `json:"connectedAt"`
 	TrunkResolved         bool   `json:"trunkResolved"`
 	ResolvedTrunkID       int64  `json:"resolvedTrunkId,omitempty"`
@@ -110,6 +111,7 @@ type WSClientResponse struct {
 	Availability          string `json:"availability,omitempty"`
 	CallState             string `json:"callState,omitempty"`
 	AuthSubject           string `json:"authSubject,omitempty"`
+	PublicOnly            bool   `json:"publicOnly,omitempty"`
 }
 
 // --- Ops Handlers ---
@@ -256,18 +258,22 @@ func (s *Server) handleListPublicAccounts(w http.ResponseWriter, r *http.Request
 	s.respondJSON(w, http.StatusOK, response)
 }
 
-// handleListWSClients returns all connected WebSocket clients
+// handleListWSClients returns all connected WebSocket clients (including idle)
 func (s *Server) handleListWSClients(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
-	clients := make([]WSClientResponse, 0, len(s.wsClients))
-	for sessionID, client := range s.wsClients {
+	clients := make([]WSClientResponse, 0, len(s.wsConnections))
+	for client := range s.wsConnections {
 		resp := WSClientResponse{
-			SessionID:       sessionID,
+			ClientID:        client.clientID,
 			ConnectedAt:     client.ConnectedAt.Format(time.RFC3339),
 			TrunkResolved:   client.trunkResolved,
 			ResolvedTrunkID: client.resolvedTrunkID,
 			Availability:    client.availability,
 			CallState:       client.callState,
+			PublicOnly:      client.publicOnly,
+		}
+		if client.sessionID != "" {
+			resp.SessionID = client.sessionID
 		}
 		if client.authClaims != nil {
 			resp.AuthSubject = client.authClaims.Subject

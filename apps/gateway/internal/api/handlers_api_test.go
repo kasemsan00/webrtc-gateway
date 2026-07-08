@@ -1204,44 +1204,71 @@ func TestHandleDashboardSummary_NegativePaths(t *testing.T) {
 }
 
 func TestHandleListWSClients_IncludesResolvedTrunkAndClientState(t *testing.T) {
-	now := time.Now().UTC()
-	trunks := &apiHandlerTrunkManagerStub{
-		byID: map[int64]*sip.Trunk{
-			42: {
-				ID:       42,
-				PublicID: "11111111-1111-4111-8111-111111111111",
-			},
-		},
-	}
-	srv, _ := newAPIHandlerTestServer(t, trunks, nil, nil)
-	srv.mu.Lock()
-	srv.wsClients["ws-1"] = &WSClient{
-		sessionID:       "ws-1",
+	srv, _ := newAPIHandlerTestServer(t, nil, nil, nil)
+	now := time.Now()
+	client := &WSClient{
+		clientID:        "ws-1",
+		ConnectedAt:     now,
 		trunkResolved:   true,
 		resolvedTrunkID: 42,
 		availability:    "busy",
 		callState:       "incall",
-		ConnectedAt:     now,
-		authClaims:      &auth.VerifiedClaims{Subject: "user-1"},
 	}
-	srv.mu.Unlock()
+	srv.wsConnections[client] = struct{}{}
 
 	rr := doRequest(t, srv.handleListWSClients, http.MethodGet, "/ws-clients", "", nil)
 	resp := assertJSONDecode[[]WSClientResponse](t, rr, http.StatusOK)
 	if len(resp) != 1 {
-		t.Fatalf("expected 1 ws client, got %+v", resp)
+		t.Fatalf("expected 1 client, got %d", len(resp))
 	}
-	got := resp[0]
-	if got.SessionID != "ws-1" || !got.TrunkResolved || got.ResolvedTrunkID != 42 {
-		t.Fatalf("unexpected ws client identity: %+v", got)
+	if resp[0].ClientID != "ws-1" || !resp[0].TrunkResolved || resp[0].ResolvedTrunkID != 42 {
+		t.Fatalf("unexpected client: %+v", resp[0])
 	}
-	if got.ResolvedTrunkPublicID != "11111111-1111-4111-8111-111111111111" {
-		t.Fatalf("expected resolved trunk public id, got %+v", got)
+}
+
+func TestHandleListWSClients_IncludesIdleAndClientID(t *testing.T) {
+	srv, _ := newAPIHandlerTestServer(t, nil, nil, nil)
+
+	idle := &WSClient{
+		clientID:        "idle-uuid-1",
+		ConnectedAt:     time.Now(),
+		availability:    clientAvailabilityIdle,
+		callState:       string(session.StateNew),
+		trunkResolved:   true,
+		resolvedTrunkID: 7,
 	}
-	if got.Availability != "busy" || got.CallState != "incall" || got.AuthSubject != "user-1" {
-		t.Fatalf("unexpected live client state: %+v", got)
+	srv.wsConnections[idle] = struct{}{}
+
+	active := &WSClient{
+		clientID:     "active-uuid-2",
+		sessionID:    "sess-active",
+		ConnectedAt:  time.Now(),
+		availability: clientAvailabilityBusy,
+		callState:    "incall",
 	}
-	if got.ConnectedAt == "" {
-		t.Fatalf("expected connectedAt to be populated")
+	srv.wsConnections[active] = struct{}{}
+	srv.wsClients["sess-active"] = active
+
+	rr := doRequest(t, srv.handleListWSClients, http.MethodGet, "/ws-clients", "", nil)
+	resp := assertJSONDecode[[]WSClientResponse](t, rr, http.StatusOK)
+
+	if len(resp) != 2 {
+		t.Fatalf("expected 2 ws clients (idle + active), got %d", len(resp))
+	}
+
+	var idleResp, activeResp *WSClientResponse
+	for i := range resp {
+		if resp[i].ClientID == "idle-uuid-1" {
+			idleResp = &resp[i]
+		}
+		if resp[i].ClientID == "active-uuid-2" {
+			activeResp = &resp[i]
+		}
+	}
+	if idleResp == nil || !idleResp.TrunkResolved || idleResp.SessionID != "" {
+		t.Fatalf("expected idle client with empty sessionID and trunkResolved, got %+v", idleResp)
+	}
+	if activeResp == nil || activeResp.SessionID != "sess-active" {
+		t.Fatalf("expected active client with sess-active, got %+v", activeResp)
 	}
 }
