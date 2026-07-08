@@ -25,6 +25,10 @@ Gateway process logs:
 - `GET /api/logs/{name}?tail=500` reads a selected gateway log file tail.
 - These read endpoints are intentionally available without a bearer token, even when API auth is enabled.
 
+WebSocket clients real-time stream:
+
+- `GET /api/ws-clients/stream` — SSE stream of WS client connect/disconnect/update events (each event carries the full `WSClientResponse`).
+
 Softphone mobile diagnostics uploaded to gateway:
 
 - `POST /api/client-diagnostics` accepts authenticated mobile uploads, max 100 events/request.

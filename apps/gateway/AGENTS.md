@@ -97,7 +97,7 @@ apps/gateway/
 | `handlers_trunk.go` | trunk CRUD, register/unregister, heartbeat |
 | `handlers_session.go` | session history, events, payloads, dialogs, stats |
 | `handlers_ops.go` | dashboard, instances, ws-clients, public accounts |
-| `handlers_sse.go` | trunk/session SSE streams |
+| `handlers_sse.go` | trunk/session/ws-client SSE streams |
 | `handlers_log.go` | `/api/logs/*` |
 
 ---
