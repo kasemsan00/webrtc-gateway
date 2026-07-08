@@ -308,8 +308,10 @@ func (s *Server) handleWSCall(client *WSClient, msg WSMessage) {
 			return
 		}
 		if validation.reason != "" {
+			s.mu.Lock()
 			client.trunkResolved = false
 			client.resolvedTrunkID = 0
+			s.mu.Unlock()
 			s.notifyWSClientChanged("updated", client)
 			s.sendWSMessage(client, WSMessage{Type: "trunk_not_ready", Reason: validation.reason})
 			s.sendWSError(client, msg.SessionID, fmt.Sprintf("Trunk not ready: %s", validation.reason))

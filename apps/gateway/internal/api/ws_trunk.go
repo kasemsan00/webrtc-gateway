@@ -229,8 +229,10 @@ func (s *Server) handleWSTrunkResolve(client *WSClient, msg WSMessage) {
 	}
 
 	if *leaseOwner == s.gatewayConfig.InstanceID {
+		s.mu.Lock()
 		client.trunkResolved = true
 		client.resolvedTrunkID = trunkID
+		s.mu.Unlock()
 		s.notifyWSClientChanged("updated", client)
 
 		// Persist Keycloak sub (UUID) for offline push notifications.
