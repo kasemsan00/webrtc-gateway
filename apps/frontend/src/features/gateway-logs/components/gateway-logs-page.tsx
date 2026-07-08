@@ -5,7 +5,7 @@ import {
   RiRefreshLine,
   RiSunLine,
 } from '@remixicon/react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import type { LogFile } from '@/features/gateway-logs/types'
 
@@ -21,6 +21,7 @@ import {
 } from '@/features/gateway-logs/services/gateway-logs-api'
 
 const TAIL_OPTIONS = [100, 500, 1000, 2000] as const
+const REFRESH_INTERVALS = [2, 5, 10] as const
 
 function formatFileSize(size: number) {
   if (size < 1024) return `${size} B`
@@ -32,14 +33,19 @@ export function GatewayLogsPage() {
   const { theme, toggleTheme } = useTheme()
   const [files, setFiles] = useState<Array<LogFile>>([])
   const [selectedName, setSelectedName] = useState<string | null>(null)
-  const [tailSize, setTailSize] =
-    useState<(typeof TAIL_OPTIONS)[number]>(500)
+  const [tailSize, setTailSize] = useState<(typeof TAIL_OPTIONS)[number]>(500)
   const [lines, setLines] = useState<Array<string>>([])
   const [truncated, setTruncated] = useState(false)
   const [loadingFiles, setLoadingFiles] = useState(false)
   const [loadingTail, setLoadingTail] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [autoRefresh, setAutoRefresh] = useState(false)
+  const [refreshIntervalSec, setRefreshIntervalSec] =
+    useState<(typeof REFRESH_INTERVALS)[number]>(5)
+  const logScrollRef = useRef<HTMLDivElement>(null)
+  const logEndRef = useRef<HTMLDivElement>(null)
+  const stickToBottomRef = useRef(true)
+  const didAutoEnableLiveRef = useRef(false)
 
   const selectedFile = useMemo(
     () => files.find((file) => file.name === selectedName) ?? null,
@@ -76,13 +82,18 @@ export function GatewayLogsPage() {
       })
       setLines(response.lines)
       setTruncated(response.truncated)
+      if (autoRefresh && stickToBottomRef.current) {
+        requestAnimationFrame(() => {
+          logEndRef.current?.scrollIntoView({ block: 'end' })
+        })
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch log tail')
       setLines([])
     } finally {
       setLoadingTail(false)
     }
-  }, [selectedName, tailSize])
+  }, [autoRefresh, selectedName, tailSize])
 
   useEffect(() => {
     void loadFiles()
@@ -100,10 +111,18 @@ export function GatewayLogsPage() {
       if (document.visibilityState === 'visible') {
         void loadTail()
       }
-    }, 5000)
+    }, refreshIntervalSec * 1000)
 
     return () => clearInterval(timer)
-  }, [autoRefresh, loadTail])
+  }, [autoRefresh, loadTail, refreshIntervalSec])
+
+  useEffect(() => {
+    if (didAutoEnableLiveRef.current) return
+    if (selectedFile?.current) {
+      setAutoRefresh(true)
+      didAutoEnableLiveRef.current = true
+    }
+  }, [selectedFile?.current, selectedFile?.name])
 
   const logText = lines.join('\n')
 
@@ -141,8 +160,19 @@ export function GatewayLogsPage() {
             className="h-7 px-2 text-xs"
             onClick={() => setAutoRefresh((value) => !value)}
           >
-            Auto 5s
+            Live
           </Button>
+          {REFRESH_INTERVALS.map((sec) => (
+            <Button
+              key={sec}
+              size="sm"
+              variant={refreshIntervalSec === sec ? 'secondary' : 'ghost'}
+              className="h-7 px-2 text-xs"
+              onClick={() => setRefreshIntervalSec(sec)}
+            >
+              {sec}s
+            </Button>
+          ))}
           <Button
             size="sm"
             variant="outline"
@@ -254,7 +284,17 @@ export function GatewayLogsPage() {
             </div>
           ) : null}
 
-          <div className="relative min-h-0 flex-1 overflow-auto bg-muted/20 p-3">
+          <div
+            ref={logScrollRef}
+            className="relative min-h-0 flex-1 overflow-auto bg-muted/20 p-3"
+            onScroll={() => {
+              const el = logScrollRef.current
+              if (!el) return
+              const nearBottom =
+                el.scrollHeight - el.scrollTop - el.clientHeight < 48
+              stickToBottomRef.current = nearBottom
+            }}
+          >
             {loadingTail ? (
               <div className="flex justify-center py-10">
                 <RiLoader4Line className="size-6 animate-spin text-muted-foreground" />
@@ -262,9 +302,12 @@ export function GatewayLogsPage() {
             ) : lines.length === 0 ? (
               <p className="text-sm text-muted-foreground">No log lines.</p>
             ) : (
-              <pre className="font-mono text-xs leading-5 whitespace-pre-wrap break-all">
-                {logText}
-              </pre>
+              <>
+                <pre className="font-mono text-xs leading-5 whitespace-pre-wrap break-all">
+                  {logText}
+                </pre>
+                <div ref={logEndRef} aria-hidden />
+              </>
             )}
           </div>
         </section>

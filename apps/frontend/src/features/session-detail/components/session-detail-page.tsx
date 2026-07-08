@@ -38,8 +38,14 @@ import {
   fetchSessionPayloads,
   fetchSessionStats,
 } from '@/features/session-detail/services/session-detail-api'
+import { ClientDiagnosticsTab } from '@/features/session-detail/components/client-diagnostics-tab'
 
-type TabType = 'events' | 'payloads' | 'dialogs' | 'stats'
+type TabType =
+  | 'events'
+  | 'payloads'
+  | 'dialogs'
+  | 'stats'
+  | 'client-diagnostics'
 type EventQuickFilter =
   | 'all'
   | 'sip'
@@ -140,21 +146,29 @@ export function SessionDetailPage() {
 
       {/* Tabs */}
       <div className="flex gap-0.5 border-b border-border px-4 pt-2">
-        {(['events', 'payloads', 'dialogs', 'stats'] as Array<TabType>).map(
-          (t) => (
-            <button
-              key={t}
-              onClick={() => setTab(t)}
-              className={`rounded-t-md px-3 py-1.5 text-xs font-medium transition-colors ${
-                tab === t
-                  ? 'border-b-2 border-cyan-500 text-cyan-600 dark:text-cyan-400'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              {t.charAt(0).toUpperCase() + t.slice(1)}
-            </button>
-          ),
-        )}
+        {(
+          [
+            'events',
+            'payloads',
+            'dialogs',
+            'stats',
+            'client-diagnostics',
+          ] as Array<TabType>
+        ).map((t) => (
+          <button
+            key={t}
+            onClick={() => setTab(t)}
+            className={`rounded-t-md px-3 py-1.5 text-xs font-medium transition-colors ${
+              tab === t
+                ? 'border-b-2 border-cyan-500 text-cyan-600 dark:text-cyan-400'
+                : 'text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            {t === 'client-diagnostics'
+              ? 'Client diagnostics'
+              : t.charAt(0).toUpperCase() + t.slice(1)}
+          </button>
+        ))}
       </div>
 
       {/* Tab content */}
@@ -163,6 +177,9 @@ export function SessionDetailPage() {
         {tab === 'payloads' && <PayloadsTab sessionId={sessionId} />}
         {tab === 'dialogs' && <DialogsTab sessionId={sessionId} />}
         {tab === 'stats' && <StatsTab sessionId={sessionId} />}
+        {tab === 'client-diagnostics' && (
+          <ClientDiagnosticsTab sessionId={sessionId} />
+        )}
       </div>
     </div>
   )

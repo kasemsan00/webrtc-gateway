@@ -45,6 +45,7 @@ Single-test examples:
 - Keep trunk API compatibility for both `trunkId` (numeric) and `trunkPublicId` (UUID).
 - For `/api/trunks`, server-side sorting does not support `activeCallCount`; sort that field client-side only.
 - If backend WS/REST contracts change, update this app and affected mobile clients together.
+- Active Sessions supports admin REST hangup/DTMF; session detail includes a Client diagnostics tab (mobile uploads).
 
 ## Cursor Rule
 

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   fetchClientDiagnosticPayload,
+  fetchClientDiagnosticSessionEvents,
   fetchClientDiagnostics,
 } from './client-diagnostics-api'
 
@@ -66,6 +67,25 @@ describe('client-diagnostics-api', () => {
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining('/client-diagnostics/payloads/42'),
       expect.any(Object),
+    )
+  })
+
+  it('fetches session-scoped client diagnostic events', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers({ 'content-type': 'application/json' }),
+      json: () => ({ items: [], total: 0, page: 1, pageSize: 50 }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await fetchClientDiagnosticSessionEvents('sess-abc', {
+      page: 1,
+      pageSize: 50,
+    })
+
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain(
+      '/client-diagnostics/sessions/sess-abc/events',
     )
   })
 })

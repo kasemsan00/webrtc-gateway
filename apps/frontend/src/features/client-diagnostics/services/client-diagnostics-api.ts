@@ -2,7 +2,11 @@ import type {
   ClientDiagnosticListParams,
   ClientDiagnosticListResponse,
 } from '../types'
-import type { SessionPayload } from '@/features/session-detail/types'
+import type {
+  SessionEventListResponse,
+  SessionPayload,
+  SessionPayloadListResponse,
+} from '@/features/session-detail/types'
 import { fetchJson, resolveGatewayApiBaseUrl } from '@/lib/http-client'
 import { appendQuery } from '@/lib/http-query'
 
@@ -29,4 +33,26 @@ export async function fetchClientDiagnosticPayload(
   return fetchJson<SessionPayload>(
     `${API_BASE}/client-diagnostics/payloads/${payloadId}`,
   )
+}
+
+export async function fetchClientDiagnosticSessionEvents(
+  sessionId: string,
+  params: { page?: number; pageSize?: number; name?: string } = {},
+): Promise<SessionEventListResponse> {
+  const url = appendQuery(
+    `${API_BASE}/client-diagnostics/sessions/${encodeURIComponent(sessionId)}/events`,
+    { page: params.page, pageSize: params.pageSize, name: params.name },
+  )
+  return fetchJson<SessionEventListResponse>(url)
+}
+
+export async function fetchClientDiagnosticSessionPayloads(
+  sessionId: string,
+  params: { page?: number; pageSize?: number } = {},
+): Promise<SessionPayloadListResponse> {
+  const url = appendQuery(
+    `${API_BASE}/client-diagnostics/sessions/${encodeURIComponent(sessionId)}/payloads`,
+    { page: params.page, pageSize: params.pageSize },
+  )
+  return fetchJson<SessionPayloadListResponse>(url)
 }
