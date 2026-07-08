@@ -1,4 +1,4 @@
-$branch = $env:BRANCH ?? "1.3.0"
+$branch = $env:BRANCH ?? "1.3.1"
 $registry = $env:REGISTRY ?? "registry.kasemsan.com"
 
 if ($env:RUN_MIGRATIONS -eq "true") {
