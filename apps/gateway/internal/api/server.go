@@ -272,6 +272,7 @@ func (s *Server) Start(ctx context.Context) error {
 		api.HandleFunc("/session-directory", s.handleListSessionDirectory).Methods("GET", "OPTIONS")
 		api.HandleFunc("/public-accounts", s.handleListPublicAccounts).Methods("GET", "OPTIONS")
 		api.HandleFunc("/ws-clients", s.handleListWSClients).Methods("GET", "OPTIONS")
+		api.HandleFunc("/ws-clients/stream", s.handleWSClientsStream).Methods("GET", "OPTIONS")
 		api.HandleFunc("/dashboard", s.handleDashboard).Methods("GET", "OPTIONS")
 		api.HandleFunc("/dashboard/summary", s.handleDashboardSummary).Methods("GET", "OPTIONS")
 		api.HandleFunc("/client-diagnostics", s.handleClientDiagnostics).Methods("POST", "OPTIONS")

@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"k2-gateway/internal/logstore"
-	"k2-gateway/internal/sip"
 )
 
 // PublicAccountResponse represents a public SIP account for REST responses
@@ -263,37 +262,9 @@ func (s *Server) handleListWSClients(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	clients := make([]WSClientResponse, 0, len(s.wsConnections))
 	for client := range s.wsConnections {
-		resp := WSClientResponse{
-			ClientID:        client.clientID,
-			ConnectedAt:     client.ConnectedAt.Format(time.RFC3339),
-			TrunkResolved:   client.trunkResolved,
-			ResolvedTrunkID: client.resolvedTrunkID,
-			Availability:    client.availability,
-			CallState:       client.callState,
-			PublicOnly:      client.publicOnly,
-		}
-		if client.sessionID != "" {
-			resp.SessionID = client.sessionID
-		}
-		if client.authClaims != nil {
-			resp.AuthSubject = client.authClaims.Subject
-		}
-		clients = append(clients, resp)
+		clients = append(clients, s.buildWSClientResponse(client))
 	}
 	s.mu.RUnlock()
-
-	if s.trunkManager != nil {
-		for idx := range clients {
-			if clients[idx].ResolvedTrunkID <= 0 {
-				continue
-			}
-			if trunkRaw, ok := s.trunkManager.GetTrunkByID(clients[idx].ResolvedTrunkID); ok {
-				if trunk, ok := trunkRaw.(*sip.Trunk); ok && trunk.PublicID != "" {
-					clients[idx].ResolvedTrunkPublicID = trunk.PublicID
-				}
-			}
-		}
-	}
 
 	s.respondJSON(w, http.StatusOK, clients)
 }

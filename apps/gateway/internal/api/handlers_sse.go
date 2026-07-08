@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+
+	"k2-gateway/internal/sip"
 )
 
 type TrunkStreamEvent struct {
@@ -17,6 +19,13 @@ type SessionStreamEvent struct {
 	Type      string  `json:"type"`
 	SessionID *string `json:"sessionId,omitempty"`
 	At        string  `json:"at"`
+}
+
+type WSClientStreamEvent struct {
+	Type     string            `json:"type"`
+	ClientID string            `json:"clientId"`
+	At       string            `json:"at"`
+	Client   *WSClientResponse `json:"client,omitempty"`
 }
 
 func (s *Server) notifyTrunkListChanged(eventType string, trunkID *int64) {
@@ -41,6 +50,49 @@ func (s *Server) notifySessionListChanged(eventType string, sessionID *string) {
 		return
 	}
 	s.broadcastSessionStream(payload)
+}
+
+func (s *Server) notifyWSClientChanged(eventType string, client *WSClient) {
+	if client == nil {
+		return
+	}
+	resp := s.buildWSClientResponse(client)
+	payload, err := json.Marshal(WSClientStreamEvent{
+		Type:     eventType,
+		ClientID: client.clientID,
+		At:       time.Now().Format(time.RFC3339Nano),
+		Client:   &resp,
+	})
+	if err != nil {
+		return
+	}
+	s.broadcastWSClientStream(payload)
+}
+
+func (s *Server) buildWSClientResponse(client *WSClient) WSClientResponse {
+	resp := WSClientResponse{
+		ClientID:        client.clientID,
+		ConnectedAt:     client.ConnectedAt.Format(time.RFC3339),
+		TrunkResolved:   client.trunkResolved,
+		ResolvedTrunkID: client.resolvedTrunkID,
+		Availability:    client.availability,
+		CallState:       client.callState,
+		PublicOnly:      client.publicOnly,
+	}
+	if client.sessionID != "" {
+		resp.SessionID = client.sessionID
+	}
+	if client.authClaims != nil {
+		resp.AuthSubject = client.authClaims.Subject
+	}
+	if s.trunkManager != nil && client.resolvedTrunkID > 0 {
+		if trunkRaw, ok := s.trunkManager.GetTrunkByID(client.resolvedTrunkID); ok {
+			if trunk, ok := trunkRaw.(*sip.Trunk); ok && trunk.PublicID != "" {
+				resp.ResolvedTrunkPublicID = trunk.PublicID
+			}
+		}
+	}
+	return resp
 }
 
 func (s *Server) writeSSE(w http.ResponseWriter, eventName string, payload []byte) error {
@@ -138,6 +190,52 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request) {
 			}
 		case <-heartbeat.C:
 			heartbeatPayload, _ := json.Marshal(SessionStreamEvent{
+				Type: "heartbeat",
+				At:   time.Now().Format(time.RFC3339Nano),
+			})
+			if err := s.writeSSE(w, "heartbeat", heartbeatPayload); err != nil {
+				return
+			}
+		}
+	}
+}
+
+func (s *Server) handleWSClientsStream(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		s.respondError(w, http.StatusInternalServerError, "Streaming unsupported")
+		return
+	}
+
+	id, ch := s.subscribeWSClientStream()
+	defer s.unsubscribeWSClientStream(id)
+
+	connectedPayload, _ := json.Marshal(WSClientStreamEvent{
+		Type: "connected",
+		At:   time.Now().Format(time.RFC3339Nano),
+	})
+	if err := s.writeSSE(w, "connected", connectedPayload); err != nil {
+		return
+	}
+
+	heartbeat := time.NewTicker(25 * time.Second)
+	defer heartbeat.Stop()
+
+	flusher.Flush()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case payload := <-ch:
+			if err := s.writeSSE(w, "ws-client", payload); err != nil {
+				return
+			}
+		case <-heartbeat.C:
+			heartbeatPayload, _ := json.Marshal(WSClientStreamEvent{
 				Type: "heartbeat",
 				At:   time.Now().Format(time.RFC3339Nano),
 			})

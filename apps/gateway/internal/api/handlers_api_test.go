@@ -1272,3 +1272,38 @@ func TestHandleListWSClients_IncludesIdleAndClientID(t *testing.T) {
 		t.Fatalf("expected active client with sess-active, got %+v", activeResp)
 	}
 }
+
+func TestHandleWSClientsStream_Contract(t *testing.T) {
+	srv, _ := newAPIHandlerTestServer(t, nil, nil, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req := httptest.NewRequest(http.MethodGet, "/ws-clients/stream", nil).WithContext(ctx)
+	writer := &flushRecorder{}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		srv.handleWSClientsStream(writer, req)
+	}()
+
+	deadline := time.Now().Add(750 * time.Millisecond)
+	for {
+		writer.mu.Lock()
+		wroteConnected := strings.Contains(writer.body.String(), "event: connected")
+		writer.mu.Unlock()
+		if wroteConnected {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("ws-client stream did not write connected event in time")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(1 * time.Second):
+		t.Fatal("ws-client stream handler did not stop after context cancellation")
+	}
+}
