@@ -83,7 +83,7 @@ func (s *Server) allowPublicWSMessage(client *WSClient, msg WSMessage) (bool, st
 		return s.publicClientOwnsSession(client, msg, false)
 	case "renegotiate_answer":
 		return s.publicClientOwnsSession(client, msg, true)
-	case "translate", "translate_stop":
+	case "translate", "translate_stop", "send_message":
 		return s.publicClientOwnsSession(client, msg, true)
 	case "resume":
 		return s.publicClientCanResume(client, msg)

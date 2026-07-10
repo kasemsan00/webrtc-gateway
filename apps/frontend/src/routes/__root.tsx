@@ -21,12 +21,12 @@ export const Route = createRootRoute({
         content: 'width=device-width, initial-scale=1',
       },
       {
-        title: 'WebRTC Gateway — SIP/WebRTC Console',
+        title: 'WebRTC Gateway — Dashboard',
       },
       {
         name: 'description',
         content:
-          'WebRTC Gateway test console for SIP and WebRTC calls, messaging, and trunk management.',
+          'WebRTC Gateway operations dashboard for call analytics, trunk health, and system status.',
       },
     ],
   }),

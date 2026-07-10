@@ -338,6 +338,69 @@ func TestHandleWSMessage_PublicOnlyAllowsTranslateStopForPublicSession(t *testin
 	}
 }
 
+func TestHandleWSMessage_PublicOnlyAllowsSendMessageForPublicSession(t *testing.T) {
+	mgr := newTestSessionManager()
+	sess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+	sess.SetSIPAuthContext("public", "userA@example.com", 0, "example.com", "userA", "secret", 5060)
+
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, nil, nil, nil, nil)
+	client := &WSClient{send: make(chan []byte, 8), publicOnly: true, sessionID: sess.ID}
+
+	srv.handleWSMessage(client, []byte(`{"type":"send_message","sessionId":"`+sess.ID+`","body":"hello"}`))
+
+	msgs := readWSMessages(t, client.send)
+	if len(msgs) != 1 || msgs[0].Type != "messageSent" || msgs[0].Body != "hello" {
+		t.Fatalf("expected send_message handler to run for public session, got %+v", msgs)
+	}
+	if strings.Contains(msgs[0].Error, "requires authenticated WebSocket") {
+		t.Fatalf("did not expect authenticated websocket guard error, got %+v", msgs)
+	}
+}
+
+func TestHandleWSMessage_PublicOnlyRejectsSendMessageForNonPublicSession(t *testing.T) {
+	mgr := newTestSessionManager()
+	sess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, nil, nil, nil, nil)
+	client := &WSClient{send: make(chan []byte, 8), publicOnly: true, sessionID: sess.ID}
+
+	srv.handleWSMessage(client, []byte(`{"type":"send_message","sessionId":"`+sess.ID+`","body":"hello"}`))
+
+	msgs := readWSMessages(t, client.send)
+	if len(msgs) != 1 || msgs[0].Type != "error" || !strings.Contains(msgs[0].Error, "public SIP sessions") {
+		t.Fatalf("expected public session guard error, got %+v", msgs)
+	}
+}
+
+func TestHandleWSMessage_PublicOnlyRejectsSendMessageBeforeOwnSession(t *testing.T) {
+	mgr := newTestSessionManager()
+	sess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+	sess.SetSIPAuthContext("public", "userA@example.com", 0, "example.com", "userA", "secret", 5060)
+
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, nil, nil, nil, nil)
+	client := &WSClient{send: make(chan []byte, 8), publicOnly: true}
+
+	srv.handleWSMessage(client, []byte(`{"type":"send_message","sessionId":"`+sess.ID+`","body":"hello"}`))
+
+	msgs := readWSMessages(t, client.send)
+	if len(msgs) != 1 || msgs[0].Type != "error" {
+		t.Fatalf("expected error before own session is established, got %+v", msgs)
+	}
+	if !strings.Contains(msgs[0].Error, "Public WebSocket session is not established") &&
+		!strings.Contains(msgs[0].Error, "Session ID required") {
+		t.Fatalf("expected session ownership guard error, got %+v", msgs)
+	}
+}
+
 func TestHandleTranslationCaptionSendsOnlyOwningSessionClient(t *testing.T) {
 	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, nil, nil, nil, nil, nil)
 	owner := &WSClient{send: make(chan []byte, 8), sessionID: "session-1"}

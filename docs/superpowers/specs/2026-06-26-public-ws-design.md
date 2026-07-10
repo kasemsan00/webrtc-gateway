@@ -39,6 +39,7 @@ Unauthenticated clients on `/ws-public` may use only the public outgoing call li
 - `renegotiate_answer`, only for the same public session
 - `translate`, only for the same public session
 - `translate_stop`, only for the same public session
+- `send_message`, only for the same public session
 - `resume`, only when the target session exists and its auth mode is `public`
 
 All other messages are rejected with a WebSocket error response. In particular, public clients cannot use:

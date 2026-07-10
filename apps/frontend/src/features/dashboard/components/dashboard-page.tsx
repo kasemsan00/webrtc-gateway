@@ -87,19 +87,19 @@ const STATE_COLORS: Record<string, string> = {
 
 const SUCCESS_COLOR = '#22c55e'
 const FAILURE_COLOR = '#ef4444'
+const IN_PROGRESS_COLOR = '#f59e0b'
 const LINE_COLOR = '#06b6d4'
 const PREV_LINE_COLOR = '#06b6d480'
 const BAR_COLOR = '#0ea5e9'
 
 const SUCCESS_STATES = new Set(['ended', 'active'])
-const FAILURE_STATES = new Set([
-  'failed',
+const FAILURE_STATES = new Set(['failed', 'unknown'])
+const IN_PROGRESS_STATES = new Set([
   'connecting',
   'new',
   'incoming',
   'ringing',
   'reconnecting',
-  'unknown',
 ])
 
 type Accent = 'cyan' | 'emerald' | 'amber' | 'violet' | 'sky' | 'rose' | 'slate'
@@ -151,6 +151,21 @@ function formatDuration(seconds: number | undefined | null): string {
   const h = Math.floor(seconds / 3600)
   const m = Math.floor((seconds % 3600) / 60)
   return `${h}h ${m}m`
+}
+
+function formatBangkokDateTime(iso: string) {
+  return new Date(iso).toLocaleString('en-GB', {
+    timeZone: 'Asia/Bangkok',
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  })
+}
+
+function getStateOutcomeColor(state: string): string {
+  if (SUCCESS_STATES.has(state)) return SUCCESS_COLOR
+  if (FAILURE_STATES.has(state)) return FAILURE_COLOR
+  if (IN_PROGRESS_STATES.has(state)) return IN_PROGRESS_COLOR
+  return STATE_COLORS[state] ?? STATE_COLORS.unknown
 }
 
 function previousAnchorDate(
@@ -294,6 +309,8 @@ function KpiCard({
   accent = 'slate',
   trend,
   progress,
+  to,
+  hint,
 }: {
   icon: React.ReactNode
   label: string
@@ -307,19 +324,38 @@ function KpiCard({
     neutral?: boolean
   }
   progress?: number
+  to?: string
+  hint?: string
 }) {
-  return (
+  const card = (
     <Card
       className={cn(
         'border-l-2 transition-all hover:-translate-y-0.5 hover:shadow-sm',
         ACCENT_BORDER[accent],
+        to && 'cursor-pointer hover:border-l-opacity-80',
       )}
     >
       <CardContent className="p-4">
         <div className="flex items-start justify-between gap-2">
-          <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
-            {label}
-          </p>
+          <div className="flex items-center gap-1">
+            <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
+              {label}
+            </p>
+            {hint ? (
+              <UITooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    className="text-muted-foreground hover:text-foreground"
+                    onClick={(e) => e.preventDefault()}
+                  >
+                    <RiInformationLine className="size-3" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent className="max-w-xs">{hint}</TooltipContent>
+              </UITooltip>
+            ) : null}
+          </div>
           <span className={cn('shrink-0', ACCENT_ICON[accent])}>{icon}</span>
         </div>
         <p className="mt-2 text-2xl font-semibold tabular-nums leading-none">
@@ -344,6 +380,16 @@ function KpiCard({
       </CardContent>
     </Card>
   )
+
+  if (to) {
+    return (
+      <Link to={to} className="block">
+        {card}
+      </Link>
+    )
+  }
+
+  return card
 }
 
 function SectionHeading({
@@ -424,14 +470,62 @@ function ChartSkeleton() {
   )
 }
 
+function formatUptimeSeconds(seconds: number) {
+  const total = Math.max(0, Math.floor(seconds))
+  const hours = Math.floor(total / 3600)
+  const minutes = Math.floor((total % 3600) / 60)
+  const remain = total % 60
+  return `${hours}h ${minutes}m ${remain}s`
+}
+
+function HealthStripSkeleton() {
+  return (
+    <div className="grid gap-3 sm:grid-cols-3">
+      <Skeleton className="h-8 w-full" />
+      <Skeleton className="h-8 w-full" />
+      <Skeleton className="h-8 w-full" />
+    </div>
+  )
+}
+
+function HealthStrip({ health }: { health: GatewayDashboard }) {
+  return (
+    <div className="flex flex-col gap-3 text-xs sm:flex-row sm:items-center sm:justify-between">
+      <div className="grid flex-1 gap-3 sm:grid-cols-3">
+        <div>
+          <p className="text-muted-foreground">Instance</p>
+          <p className="font-mono">{health.instanceId}</p>
+        </div>
+        <div>
+          <p className="text-muted-foreground">Uptime</p>
+          <p>{formatUptimeSeconds(health.uptimeSeconds)}</p>
+        </div>
+        <div>
+          <p className="text-muted-foreground">Database</p>
+          <Badge variant={health.dbConnected ? 'success' : 'destructive'}>
+            {health.dbConnected ? 'Connected' : 'Unavailable'}
+          </Badge>
+        </div>
+      </div>
+      <Button asChild variant="outline" size="sm" className="h-7 shrink-0 text-xs">
+        <Link to="/instances">View instances</Link>
+      </Button>
+    </div>
+  )
+}
+
 // ── System Status Hero ──────────────────────────────────────────────────────
 
 function SystemStatusHero({
   summary,
   prevSummary,
+  health,
+  healthLoading,
 }: {
   summary: DashboardSummaryResponse | null
   prevSummary: DashboardSummaryResponse | null
+  health: GatewayDashboard | null
+  healthLoading: boolean
 }) {
   const status = computeSystemStatus(summary?.metrics)
   const tone = TONE[status.tone]
@@ -559,6 +653,15 @@ function SystemStatusHero({
           </div>
         </CardContent>
       </div>
+      {healthLoading || health ? (
+        <div className="border-t border-border/60 px-5 py-3">
+          {healthLoading && !health ? (
+            <HealthStripSkeleton />
+          ) : health ? (
+            <HealthStrip health={health} />
+          ) : null}
+        </div>
+      ) : null}
     </Card>
   )
 }
@@ -638,54 +741,6 @@ function BarTooltip({
   )
 }
 
-function formatUptimeSeconds(seconds: number) {
-  const total = Math.max(0, Math.floor(seconds))
-  const hours = Math.floor(total / 3600)
-  const minutes = Math.floor((total % 3600) / 60)
-  const remain = total % 60
-  return `${hours}h ${minutes}m ${remain}s`
-}
-
-function GatewayHealthCard({ health }: { health: GatewayDashboard }) {
-  return (
-    <Card className="mb-4">
-      <CardHeader className="pb-2">
-        <CardTitle className="flex items-center justify-between text-sm">
-          <span>Gateway health</span>
-          <Link to="/instances">
-            <Button size="sm" variant="ghost" className="h-7 text-xs">
-              Instances
-            </Button>
-          </Link>
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="grid gap-2 text-xs sm:grid-cols-2 lg:grid-cols-4">
-        <div>
-          <p className="text-muted-foreground">Instance</p>
-          <p className="font-mono">{health.instanceId}</p>
-        </div>
-        <div>
-          <p className="text-muted-foreground">Uptime</p>
-          <p>{formatUptimeSeconds(health.uptimeSeconds)}</p>
-        </div>
-        <div>
-          <p className="text-muted-foreground">Database</p>
-          <Badge variant={health.dbConnected ? 'success' : 'destructive'}>
-            {health.dbConnected ? 'Connected' : 'Unavailable'}
-          </Badge>
-        </div>
-        <div>
-          <p className="text-muted-foreground">Live</p>
-          <p>
-            {health.activeSessions} sessions · {health.wsClients} WS ·{' '}
-            {health.registeredTrunks}/{health.enabledTrunks} trunks
-          </p>
-        </div>
-      </CardContent>
-    </Card>
-  )
-}
-
 // ── Main Dashboard Component ───────────────────────────────────────────────
 
 export function DashboardPage() {
@@ -699,10 +754,12 @@ export function DashboardPage() {
   const [error, setError] = useState<string | null>(null)
   const [lastUpdated, setLastUpdated] = useState<number | null>(null)
   const [health, setHealth] = useState<GatewayDashboard | null>(null)
+  const [healthLoading, setHealthLoading] = useState(true)
   const [healthError, setHealthError] = useState<string | null>(null)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const loadHealth = useCallback(async () => {
+    setHealthLoading(true)
     try {
       const data = await fetchGatewayHealth()
       setHealth(data)
@@ -711,6 +768,8 @@ export function DashboardPage() {
       setHealthError(
         err instanceof Error ? err.message : 'Failed to load gateway health',
       )
+    } finally {
+      setHealthLoading(false)
     }
   }, [])
 
@@ -854,7 +913,7 @@ export function DashboardPage() {
   return (
     <div className="flex h-screen flex-col bg-background text-foreground">
       <Header>
-        <div className="flex items-center gap-2 text-xs">
+        <div className="flex flex-wrap items-center justify-end gap-2 text-xs">
           <Tabs
             value={period}
             onValueChange={(v) => setPeriod(v as DashboardPeriod)}
@@ -873,13 +932,13 @@ export function DashboardPage() {
           </Tabs>
 
           <Input
-            className="h-7 w-40 text-xs"
+            className="hidden h-7 w-36 text-xs sm:block md:w-40"
             type="date"
             value={anchorDate}
             onChange={(event) => setAnchorDate(event.target.value)}
           />
 
-          <Separator orientation="vertical" className="h-4" />
+          <Separator orientation="vertical" className="hidden h-4 sm:block" />
 
           <Button
             size="sm"
@@ -893,10 +952,10 @@ export function DashboardPage() {
             <RiRefreshLine
               className={`size-3.5 ${loading ? 'animate-spin' : ''}`}
             />
-            Refresh
+            <span className="hidden sm:inline">Refresh</span>
           </Button>
 
-          <Separator orientation="vertical" className="h-4" />
+          <Separator orientation="vertical" className="hidden h-4 sm:block" />
 
           <Button
             size="icon"
@@ -934,8 +993,9 @@ export function DashboardPage() {
           {/* Range + last updated indicator */}
           {summary ? (
             <p className="mb-4 text-[11px] text-muted-foreground">
-              Range: {new Date(summary.rangeStart).toLocaleString()} —{' '}
-              {new Date(summary.rangeEnd).toLocaleString()}
+              Range: {formatBangkokDateTime(summary.rangeStart)} —{' '}
+              {formatBangkokDateTime(summary.rangeEnd)}
+              {' · Asia/Bangkok (ICT)'}
               {lastUpdatedLabel ? ` · Updated ${lastUpdatedLabel}` : ''}
               {' · Auto-refresh every 30s'}
             </p>
@@ -947,8 +1007,30 @@ export function DashboardPage() {
             </div>
           ) : null}
 
-          {health ? <GatewayHealthCard health={health} /> : null}
-
+          {error && !summary && !showSkeletons ? (
+            <div className="flex flex-col items-center justify-center gap-4 py-20 text-center">
+              <RiInboxLine className="size-10 text-muted-foreground/40" />
+              <div className="space-y-1">
+                <p className="text-sm font-medium">Failed to load dashboard</p>
+                <p className="max-w-md text-xs text-muted-foreground">{error}</p>
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                className="gap-1.5"
+                onClick={() => {
+                  void loadSummary()
+                }}
+                disabled={loading}
+              >
+                <RiRefreshLine
+                  className={`size-3.5 ${loading ? 'animate-spin' : ''}`}
+                />
+                Retry
+              </Button>
+            </div>
+          ) : (
+            <>
           {/* System Status Hero */}
           {showSkeletons ? (
             <Card className="mb-6 overflow-hidden">
@@ -958,11 +1040,19 @@ export function DashboardPage() {
                   <Skeleton className="h-10 w-32" />
                   <Skeleton className="h-10 w-32" />
                 </div>
+                <div className="mt-4 border-t border-border/60 pt-3">
+                  <HealthStripSkeleton />
+                </div>
               </CardContent>
             </Card>
           ) : (
             <div className="mb-6">
-              <SystemStatusHero summary={summary} prevSummary={prevSummary} />
+              <SystemStatusHero
+                summary={summary}
+                prevSummary={prevSummary}
+                health={health}
+                healthLoading={healthLoading}
+              />
             </div>
           )}
 
@@ -985,6 +1075,7 @@ export function DashboardPage() {
                   icon={<RiHistoryLine className="size-4" />}
                   label="Call Sessions"
                   accent="cyan"
+                  to="/sessions"
                   value={formatNumber(summary.metrics.periodSessions)}
                   trend={{
                     current: summary.metrics.periodSessions,
@@ -995,6 +1086,7 @@ export function DashboardPage() {
                   icon={<RiPulseLine className="size-4" />}
                   label="Active Sessions"
                   accent="emerald"
+                  to="/active-sessions"
                   value={formatNumber(summary.metrics.activeSessions)}
                   sub="live right now"
                 />
@@ -1002,6 +1094,7 @@ export function DashboardPage() {
                   icon={<RiServerLine className="size-4" />}
                   label="Trunks"
                   accent="sky"
+                  to="/trunks"
                   value={formatNumber(summary.metrics.registeredTrunks)}
                   sub={
                     <>
@@ -1014,14 +1107,27 @@ export function DashboardPage() {
                   icon={<RiCheckboxCircleLine className="size-4" />}
                   label="Public Accounts"
                   accent="violet"
+                  to="/public-accounts"
                   value={formatNumber(summary.metrics.publicAccounts)}
                 />
                 <KpiCard
                   icon={<RiRouteLine className="size-4" />}
                   label="Session Directory"
                   accent="amber"
+                  to="/session-directory"
                   value={formatNumber(summary.metrics.sessionDirectoryNow)}
-                  sub={`WS Clients: ${formatNumber(summary.metrics.wsClients)}`}
+                  sub={
+                    <>
+                      WS Clients:{' '}
+                      <Link
+                        to="/ws-clients"
+                        className="underline-offset-2 hover:underline"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {formatNumber(summary.metrics.wsClients)}
+                      </Link>
+                    </>
+                  }
                 />
               </div>
             ) : null}
@@ -1067,15 +1173,16 @@ export function DashboardPage() {
                 />
                 <KpiCard
                   icon={<RiCheckboxCircleLine className="size-4" />}
-                  label="Success Rate"
+                  label="Completed Rate"
                   accent="emerald"
+                  hint="Share of completed sessions (ended or active) versus failed or unknown. In-progress states are excluded."
                   value={
                     successRate != null ? `${successRate.toFixed(1)}%` : 'N/A'
                   }
                   sub={
                     <>
-                      Success: {formatNumber(successFailure.success)} · Failed:{' '}
-                      {formatNumber(successFailure.failure)}
+                      Completed: {formatNumber(successFailure.success)} ·
+                      Failed: {formatNumber(successFailure.failure)}
                     </>
                   }
                   progress={successRate ?? undefined}
@@ -1246,12 +1353,15 @@ export function DashboardPage() {
                   </CardContent>
                 </Card>
 
-                {/* Success / Failure Stacked Bar */}
+                {/* Session outcome by state */}
                 <Card className="xl:col-span-2">
                   <CardHeader className="pb-0">
                     <CardTitle className="text-sm">
-                      Success vs Failure by State
+                      Session Outcome by State
                     </CardTitle>
+                    <p className="text-[11px] text-muted-foreground">
+                      Green = completed · Red = failed · Amber = in progress
+                    </p>
                   </CardHeader>
                   <CardContent className="pt-3">
                     {stateChartData.length === 0 ? (
@@ -1266,9 +1376,7 @@ export function DashboardPage() {
                             data={stateChartData.map((s) => ({
                               name: s.state,
                               count: s.count,
-                              fill: SUCCESS_STATES.has(s.state)
-                                ? SUCCESS_COLOR
-                                : FAILURE_COLOR,
+                              fill: getStateOutcomeColor(s.state),
                             }))}
                             layout="vertical"
                           >
@@ -1289,11 +1397,7 @@ export function DashboardPage() {
                               {stateChartData.map((entry) => (
                                 <Cell
                                   key={`sf-${entry.state}`}
-                                  fill={
-                                    SUCCESS_STATES.has(entry.state)
-                                      ? SUCCESS_COLOR
-                                      : FAILURE_COLOR
-                                  }
+                                  fill={getStateOutcomeColor(entry.state)}
                                 />
                               ))}
                             </Bar>
@@ -1523,6 +1627,8 @@ export function DashboardPage() {
               </div>
             ) : null}
           </section>
+            </>
+          )}
         </div>
       </TooltipProvider>
     </div>
