@@ -138,7 +138,52 @@ func (s *Session) SendBrowserRecoveryToAsterisk(trigger string) string {
 	return "pli"
 }
 
+func (s *Session) MarkPendingBrowserKeyframeRequest() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.PendingBrowserKeyframeRequest = true
+	s.PendingBrowserKeyframeRequestAt = time.Now()
+}
+
+func (s *Session) HasPendingBrowserKeyframeRequest() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.PendingBrowserKeyframeRequest
+}
+
+func (s *Session) clearPendingBrowserKeyframeRequestLocked() {
+	s.PendingBrowserKeyframeRequest = false
+	s.PendingBrowserKeyframeRequestAt = time.Time{}
+}
+
+func (s *Session) ClearPendingBrowserKeyframeRequest() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.clearPendingBrowserKeyframeRequestLocked()
+}
+
+// FlushPendingBrowserKeyframeRequest sends SIP-directed recovery if a client
+// keyframe request was deferred. Returns action from SendBrowserRecoveryToAsterisk,
+// or "none" if nothing was pending.
+func (s *Session) FlushPendingBrowserKeyframeRequest(reason string) string {
+	s.mu.Lock()
+	if !s.PendingBrowserKeyframeRequest {
+		s.mu.Unlock()
+		return "none"
+	}
+	s.clearPendingBrowserKeyframeRequestLocked()
+	s.mu.Unlock()
+
+	action := s.SendBrowserRecoveryToAsterisk("ws-request_keyframe")
+	fmt.Printf("[%s] 📈 request_keyframe_flushed reason=%s action=%s\n", s.ID, reason, action)
+	return action
+}
+
 func (s *Session) deferBrowserRecoveryToWebRTC(trigger, reason string, burstActive bool, keyframeAge time.Duration, remoteVideoSSRC uint32) {
+	if trigger == "ws-request_keyframe" {
+		s.MarkPendingBrowserKeyframeRequest()
+	}
+
 	if trigger == "browser-fir" {
 		s.SendFIRToWebRTC()
 	} else {

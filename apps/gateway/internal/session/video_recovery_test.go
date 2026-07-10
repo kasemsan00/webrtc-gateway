@@ -358,3 +358,74 @@ func TestSendBrowserRecoveryToAsterisk_DefersToWebRTCWhenSIPSSRCMissing(t *testi
 		t.Fatalf("expected SIP PLI timestamp to remain unset when recovery is deferred")
 	}
 }
+
+func TestPendingBrowserKeyframe_MarkedWhenSSRCMissing(t *testing.T) {
+	sess := newBurstTestSession("pending-missing-ssrc")
+	// Ready addr/conn but SSRC=0 so recovery defers
+	conn, port := newUDPConn(t)
+	t.Cleanup(func() { _ = conn.Close() })
+	sess.VideoRTCPConn = conn
+	sess.AsteriskVideoAddr = &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: port}
+	sess.RemoteVideoSSRC = 0
+
+	action := sess.SendBrowserRecoveryToAsterisk("ws-request_keyframe")
+	if action != "webrtc" {
+		t.Fatalf("expected deferred action=webrtc, got %s", action)
+	}
+	if !sess.HasPendingBrowserKeyframeRequest() {
+		t.Fatalf("expected pending browser keyframe request after missing-ssrc defer")
+	}
+}
+
+func TestPendingBrowserKeyframe_FlushOnSSRCReady(t *testing.T) {
+	sess := newBurstTestSession("pending-flush-ssrc")
+	conn, port := newUDPConn(t)
+	t.Cleanup(func() { _ = conn.Close() })
+	sess.VideoRTCPConn = conn
+	sess.AsteriskVideoAddr = &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: port}
+	sess.RemoteVideoSSRC = 0
+	sess.StartVideoRecoveryBurst("unit-test")
+
+	_ = sess.SendBrowserRecoveryToAsterisk("ws-request_keyframe")
+	if !sess.HasPendingBrowserKeyframeRequest() {
+		t.Fatalf("expected pending before flush")
+	}
+
+	sess.RemoteVideoSSRC = 1234
+	flushed := sess.FlushPendingBrowserKeyframeRequest("ssrc-learn")
+	if flushed != "both" && flushed != "pli" && flushed != "fir" {
+		t.Fatalf("expected SIP-directed flush action, got %s", flushed)
+	}
+	if sess.HasPendingBrowserKeyframeRequest() {
+		t.Fatalf("expected pending cleared after flush")
+	}
+}
+
+func TestPendingBrowserKeyframe_FlushOnSwitchStart(t *testing.T) {
+	sess := newBurstTestSession("pending-flush-switch")
+	makeSIPVideoRecoveryReady(t, sess)
+	sess.MarkPendingBrowserKeyframeRequest()
+
+	sess.StartSwitchVideoRecovery(5*time.Second, 750*time.Millisecond)
+	// StartSwitchVideoRecovery must flush pending when SIP target is ready
+	if sess.HasPendingBrowserKeyframeRequest() {
+		t.Fatalf("expected pending flushed when switch recovery starts")
+	}
+}
+
+func TestPendingBrowserKeyframe_ClearedOnResetMediaState(t *testing.T) {
+	sess := newBurstTestSession("pending-clear-reset")
+	sess.MarkPendingBrowserKeyframeRequest()
+	sess.ResetMediaState()
+	if sess.HasPendingBrowserKeyframeRequest() {
+		t.Fatalf("expected pending cleared on ResetMediaState")
+	}
+}
+
+func TestFlushPendingBrowserKeyframe_NoopWhenEmpty(t *testing.T) {
+	sess := newBurstTestSession("pending-noop")
+	makeSIPVideoRecoveryReady(t, sess)
+	if got := sess.FlushPendingBrowserKeyframeRequest("ssrc-learn"); got != "none" {
+		t.Fatalf("expected none when no pending, got %s", got)
+	}
+}
