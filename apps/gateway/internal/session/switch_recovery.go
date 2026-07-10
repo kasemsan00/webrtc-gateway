@@ -138,6 +138,7 @@ func (s *Session) StartSwitchVideoRecovery(maxWindow, stableWindow time.Duration
 		s.ID, until.Format(time.RFC3339Nano), stableWindow)
 	fmt.Printf("[%s] 📈 video_recovery_window_start reason=switch until=%s\n", s.ID, until.Format(time.RFC3339Nano))
 	fmt.Printf("[%s] 📈 recovery_policy interval=%s stale=%s firStale=%s\n", s.ID, interval, stale, firStale)
+	_ = s.FlushPendingBrowserKeyframeRequest("switch")
 }
 
 func (s *Session) isSwitchVideoRecoveryActiveLocked(now time.Time) bool {
