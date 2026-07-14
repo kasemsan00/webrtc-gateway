@@ -36,6 +36,7 @@ type Server struct {
 	gatewayConfig     config.GatewayConfig
 	translatorCfg     config.TranslatorConfig
 	translatorClient  *translator.Client
+	runtimeConfig     *config.Config
 	upgrader          websocket.Upgrader
 	wsClients         map[string]*WSClient
 	wsConnections     map[*WSClient]struct{}
@@ -223,6 +224,11 @@ func (s *Server) SetMobileSIPProvisioner(provisioner MobileSIPProvisioner) {
 	s.mobileProvisioner = provisioner
 }
 
+// SetRuntimeConfig exposes the loaded gateway configuration for read-only inspection.
+func (s *Server) SetRuntimeConfig(cfg *config.Config) {
+	s.runtimeConfig = cfg
+}
+
 // Start starts the HTTP server with graceful shutdown support
 func (s *Server) Start(ctx context.Context) error {
 	router := mux.NewRouter()
@@ -275,6 +281,7 @@ func (s *Server) Start(ctx context.Context) error {
 		api.HandleFunc("/ws-clients/stream", s.handleWSClientsStream).Methods("GET", "OPTIONS")
 		api.HandleFunc("/dashboard", s.handleDashboard).Methods("GET", "OPTIONS")
 		api.HandleFunc("/dashboard/summary", s.handleDashboardSummary).Methods("GET", "OPTIONS")
+		api.HandleFunc("/config", s.handleGetConfig).Methods("GET", "OPTIONS")
 		api.HandleFunc("/client-diagnostics", s.handleClientDiagnostics).Methods("POST", "OPTIONS")
 		api.HandleFunc("/trunks", s.handleListTrunks).Methods("GET", "OPTIONS")
 		api.HandleFunc("/trunks/stream", s.handleTrunkStream).Methods("GET", "OPTIONS")

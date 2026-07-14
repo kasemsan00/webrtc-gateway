@@ -26,6 +26,16 @@ Checkpoints:
 
 - transport consistency matters; requests explicitly set transport to avoid digest retry switching transports.
 
+## Remote video is black on mobile web after queue-to-agent switch
+
+Correlate browser inbound RTP diagnostics with Gateway logs by `sessionId`:
+
+- Look for `request_keyframe_handled` when the client sends a legacy keyframe request.
+- Confirm switch recovery reaches `h264_au_normalized status=complete-idr` and ends through Gateway RTP stability or its bounded timeout.
+- Confirm startup prints `SIP Video H264 AU Normalization: true`. Every 300 SIP video packets, inspect `h264_au_stats` for `emitted`, `dropped_incomplete`, `dropped_overflow`, and `pending_packets`.
+- A `h264_au_normalized status=complete-idr` line now means the marker and all FU-A fragments were complete; a bare IDR/FU-A start no longer counts as successful keyframe delivery.
+- If normalization itself is suspected, temporarily set `SIP_VIDEO_AU_NORMALIZE_ENABLE=false` and restart the gateway. This restores the legacy raw reordered path and should be used only as a bounded comparison because incomplete frames can poison strict mobile decoders.
+
 ## 401 Unauthorized on API/WS
 
 Checkpoints:

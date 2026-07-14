@@ -20,6 +20,7 @@ describe('gateway smoke route and action contracts', () => {
     expect(routeTreeContent.includes("'/sessions/$sessionId'")).toBe(true)
     expect(routeTreeContent.includes("'/logs'")).toBe(true)
     expect(routeTreeContent.includes("'/client-diagnostics'")).toBe(true)
+    expect(routeTreeContent.includes("'/settings'")).toBe(true)
   })
 
   it('keeps trunks and sessions API action wiring', async () => {
@@ -31,6 +32,8 @@ describe('gateway smoke route and action contracts', () => {
       await import('@/features/gateway-logs/services/gateway-logs-api')
     const { fetchClientDiagnostics } =
       await import('@/features/client-diagnostics/services/client-diagnostics-api')
+    const { fetchGatewayConfig } =
+      await import('@/features/gateway-config/services/gateway-config-api')
 
     fetchJsonMock.mockResolvedValueOnce({
       items: [],
@@ -79,5 +82,13 @@ describe('gateway smoke route and action contracts', () => {
         '/client-diagnostics?page=1&pageSize=20&level=error',
       ),
     )
+
+    fetchJsonMock.mockResolvedValueOnce({
+      instanceId: 'gw-test',
+      source: 'env',
+      sections: {},
+    })
+    await fetchGatewayConfig()
+    expect(fetchJsonMock).toHaveBeenCalledWith('http://gateway.local/api/config')
   })
 })

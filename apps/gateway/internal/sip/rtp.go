@@ -360,20 +360,65 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 		LocalPwd:   sess.ICEPwd,
 	}
 
-	// Create reorder buffer for SIP→WebRTC video.
-	// Buffers out-of-order packets (64-slot window, 25ms timeout) and flushes
-	// in sequence order to prevent H.264 decoder poisoning from network jitter.
+	// Reorder packets first, then (by default) emit only complete H.264 access
+	// units. Strict mobile decoders can remain black after receiving one broken
+	// FU-A chain even though RTP bytes continue to arrive.
+	var auNormalizer *session.H264AccessUnitNormalizer
+	if sess.VideoAUNormalizeEnabled {
+		auNormalizer = session.NewH264AccessUnitNormalizer(session.H264AccessUnitNormalizerConfig{}, func(au session.NormalizedH264AccessUnit) {
+			if sess.VideoTrack == nil {
+				return
+			}
+			for _, packet := range au.Packets {
+				data, marshalErr := packet.Marshal()
+				if marshalErr != nil {
+					fmt.Printf("[%s] h264_au_write_error stage=marshal seq=%d error=%v\n", sess.ID, packet.SequenceNumber, marshalErr)
+					return
+				}
+				sess.CacheVideoRTPPacket(packet.SequenceNumber, data)
+				if _, writeErr := sess.VideoTrack.Write(data); writeErr != nil {
+					fmt.Printf("[%s] h264_au_write_error stage=track seq=%d error=%v\n", sess.ID, packet.SequenceNumber, writeErr)
+					return
+				}
+			}
+			if au.IsIDR {
+				now := time.Now()
+				isPLIResponse, responseTime, pliSent, pliResponse := sess.RecordKeyframe()
+				sess.MarkSwitchVideoKeyframe(now)
+				sess.MarkSwitchVideoProgress(now, false)
+				fmt.Printf("[%s] h264_au_normalized status=complete-idr packets=%d injected_parameter_sets=%v source_timestamp=%d pli_response=%v response_time=%v pli_sent=%d pli_responses=%d\n",
+					sess.ID, len(au.Packets), au.InjectedParameterSets, au.SourceTimestamp,
+					isPLIResponse, responseTime, pliSent, pliResponse)
+			}
+		})
+		if sps, pps, ok := sess.GetSIPCachedSPSPPS(); ok {
+			auNormalizer.SetParameterSets(sps, pps)
+		}
+	}
 	reorderBuf := session.NewVideoReorderBuffer(sess.ID, func(data []byte, isKeyframe bool) {
 		if sess.VideoTrack == nil {
 			return
 		}
-		// SPS/PPS flows naturally from Linphone as regular RTP packets (NAL types 7/8)
-		// with correct sequence numbers. No synthetic injection needed here —
-		// buildParamSetRTPPacket produced Seq=0 packets that pion passed through unchanged,
-		// corrupting the browser's jitter buffer and causing video freeze after ~7 minutes.
-		sess.VideoTrack.Write(data)
+		if auNormalizer != nil {
+			packet := &rtp.Packet{}
+			if err := packet.Unmarshal(data); err != nil {
+				fmt.Printf("[%s] h264_au_drop reason=rtp-unmarshal error=%v\n", sess.ID, err)
+				return
+			}
+			auNormalizer.Push(packet)
+			return
+		}
+		// Explicit rollback path: preserve the legacy raw reordered stream.
+		sess.CacheVideoRTPPacket(uint16(data[2])<<8|uint16(data[3]), data)
+		_, _ = sess.VideoTrack.Write(data)
 	})
-	defer reorderBuf.Drain()
+	lastSwitchGeneration := sess.GetSwitchGeneration()
+	defer func() {
+		reorderBuf.Drain()
+		if auNormalizer != nil {
+			auNormalizer.Drain()
+		}
+	}()
 	buildVideoSummary := func(keyframeAge time.Duration) session.VideoRecoverySummary {
 		rBuf, rRel, rDrop, rTO := reorderBuf.GetStats()
 		return session.VideoRecoverySummary{
@@ -469,6 +514,13 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 			previousSSRC := sess.RemoteVideoSSRC
 
 			if previousSSRC == 0 || previousSSRC != ssrc {
+				if previousSSRC != 0 {
+					reorderBuf.Reset()
+					if auNormalizer != nil {
+						auNormalizer.ResetSource()
+					}
+					fmt.Printf("[%s] h264_au_source_reset reason=ssrc-change previous_ssrc=%d ssrc=%d\n", sess.ID, previousSSRC, ssrc)
+				}
 				sess.SetRemoteVideoSSRC(ssrc)
 				fmt.Printf("[%s] Learned Remote Video SSRC: %d (previous: %d)\n", sess.ID, ssrc, previousSSRC)
 				fmt.Printf("[%s] 📈 sip_video_ssrc_learned ssrc=%d previous=%d\n", sess.ID, ssrc, previousSSRC)
@@ -551,25 +603,26 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 					rBuf, rRel, rDrop, rTO, rPend, keyframeAge)
 				summary := updateSwitchSummary(keyframeAgeDuration)
 				sess.ObserveSIPVideoRTPDisorder(summary, time.Now())
+				if auNormalizer != nil {
+					auStats := auNormalizer.Stats()
+					fmt.Printf("[%s] h264_au_stats emitted=%d dropped_incomplete=%d dropped_overflow=%d pending_packets=%d\n",
+						sess.ID, auStats.Emitted, auStats.DroppedIncomplete, auStats.DroppedOverflow, auStats.PendingPackets)
+				}
 			}
 
-			// Cache RTP packet for possible retransmission to WebRTC (NACK handling)
-			sess.CacheVideoRTPPacket(packet.Header.SequenceNumber, buffer[:n])
+			// With normalization enabled, cache the rewritten outbound packet in the
+			// normalizer callback so browser NACK sequence numbers remain aligned.
+			if auNormalizer == nil {
+				sess.CacheVideoRTPPacket(packet.Header.SequenceNumber, buffer[:n])
+			}
 
 			if len(packet.Payload) > 0 {
 				nalType := packet.Payload[0] & 0x1F
 				switch nalType {
 				case 5:
-					// Keyframe (IDR) detected - Use exported method
+					// Preliminary IDR detection is only for transition hold. Successful
+					// keyframe accounting happens after a complete normalized AU flush.
 					isKeyframe = true
-					isPLIResponse, responseTime, pliSent, pliResponse := sess.RecordKeyframe()
-					sess.MarkSwitchVideoKeyframe(time.Now())
-					if isPLIResponse {
-						fmt.Printf("[%s] ✅ Keyframe received! PLI response time: %v (Sent: %d, Response: %d)\n",
-							sess.ID, responseTime, pliSent, pliResponse)
-					} else {
-						fmt.Printf("[%s] 🔑 Keyframe (IDR) detected in packet #%d\n", sess.ID, packetCount)
-					}
 				case 7:
 					// SPS (Sequence Parameter Set) - cache for SIP→WebRTC injection and log
 					sess.CacheSIPSPS(packet.Payload)
@@ -588,19 +641,17 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 						startBit := (fuHeader >> 7) & 0x01
 						fuNalType := fuHeader & 0x1F
 						if fuNalType == 5 && startBit == 1 {
-							// Keyframe fragment start detected - Use exported method
+							// Preliminary FU-A start detection is only for transition hold.
 							isKeyframe = true
-							isPLIResponse, responseTime, pliSent, pliResponse := sess.RecordKeyframe()
-							sess.MarkSwitchVideoKeyframe(time.Now())
-							if isPLIResponse {
-								fmt.Printf("[%s] ✅ Keyframe fragment start! PLI response time: %v (Sent: %d, Response: %d)\n",
-									sess.ID, responseTime, pliSent, pliResponse)
-							} else {
-								fmt.Printf("[%s] 🔑 Keyframe fragment start in packet #%d\n", sess.ID, packetCount)
-							}
 						}
 					}
 				}
+			}
+			if isKeyframe && auNormalizer == nil {
+				isPLIResponse, responseTime, pliSent, pliResponse := sess.RecordKeyframe()
+				sess.MarkSwitchVideoKeyframe(time.Now())
+				fmt.Printf("[%s] h264_au_normalized status=legacy-keyframe-start packet=%d pli_response=%v response_time=%v pli_sent=%d pli_responses=%d\n",
+					sess.ID, packetCount, isPLIResponse, responseTime, pliSent, pliResponse)
 			}
 
 			if sess.ShouldHoldSwitchVideoPacket(time.Now(), isKeyframe) {
@@ -612,10 +663,22 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 				keyframeAgeDuration = time.Since(lastKeyframe)
 			}
 			updateSwitchSummary(keyframeAgeDuration)
-			sess.MarkSwitchVideoProgress(time.Now(), isKeyframe)
+			// Do not let a bare IDR/FU-A start satisfy switch recovery. The
+			// normalizer callback marks the keyframe only after the AU is complete.
+			sess.MarkSwitchVideoProgress(time.Now(), auNormalizer == nil && isKeyframe)
 
-			// Push into reorder buffer (handles sequencing + SPS/PPS injection at flush time)
+			// Push into sequence reorder; complete-AU validation follows at flush.
 			if sess.VideoTrack != nil {
+				currentGeneration := sess.GetSwitchGeneration()
+				if currentGeneration != lastSwitchGeneration {
+					reorderBuf.Reset()
+					if auNormalizer != nil {
+						auNormalizer.ResetSource()
+					}
+					fmt.Printf("[%s] h264_au_source_reset reason=switch-generation previous_generation=%d generation=%d\n",
+						sess.ID, lastSwitchGeneration, currentGeneration)
+					lastSwitchGeneration = currentGeneration
+				}
 				reorderBuf.Push(seq, buffer[:n], isKeyframe)
 			} else if packetCount == 1 {
 				fmt.Printf("[%s] WARNING: VideoTrack is nil, cannot forward video RTP!\n", sess.ID)
@@ -655,8 +718,8 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 				}
 			}
 
-			// Fallback: write unparseable packet directly (bypasses reorder buffer)
-			if sess.VideoTrack != nil {
+			// The normalized path must never bypass validation with malformed RTP.
+			if sess.VideoTrack != nil && auNormalizer == nil {
 				sess.VideoTrack.Write(buffer[:n])
 			}
 		}

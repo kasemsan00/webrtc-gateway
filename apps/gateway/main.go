@@ -199,6 +199,7 @@ func runAPIMode(ctx context.Context, cfg *config.Config, unicastAddress string, 
 		trunkMgrInterface = trunkManager
 	}
 	apiServer := api.NewServer(cfg.API, cfg.TURN, cfg.Gateway, cfg.Translator, sessionMgr, sipServer, publicRegistry, trunkMgrInterface, store)
+	apiServer.SetRuntimeConfig(cfg)
 	if cfg.API.MobileSIPAuthRegisterURL != "" {
 		if trunkManager == nil {
 			log.Printf("⚠️ Warning: Mobile SIP provisioning disabled — trunk manager is not available")

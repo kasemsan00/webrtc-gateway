@@ -237,6 +237,21 @@ func TestVideoReorderBuffer_SeqWrap(t *testing.T) {
 	}
 }
 
+func TestVideoReorderBuffer_ResetAcceptsNewMediaGeneration(t *testing.T) {
+	var flushed []uint16
+	buf := NewVideoReorderBuffer("test", func(data []byte, _ bool) {
+		flushed = append(flushed, uint16(data[2])<<8|uint16(data[3]))
+	})
+
+	buf.Push(30000, makeMinimalRTP(30000), false)
+	buf.Reset()
+	buf.Push(1000, makeMinimalRTP(1000), false)
+
+	if len(flushed) != 2 || flushed[0] != 30000 || flushed[1] != 1000 {
+		t.Fatalf("expected reset source sequence to establish a new baseline, got %v", flushed)
+	}
+}
+
 func TestVideoReorderBuffer_Drain(t *testing.T) {
 	var mu sync.Mutex
 	var flushed []uint16

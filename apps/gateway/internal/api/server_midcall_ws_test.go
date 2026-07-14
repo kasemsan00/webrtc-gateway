@@ -56,6 +56,43 @@ func TestWSMessageMidCallRenegotiationContract(t *testing.T) {
 	}
 }
 
+func TestWSMessageIgnoresObsoleteRemoteVideoRecoveryContext(t *testing.T) {
+	var msg WSMessage
+	if err := json.Unmarshal([]byte(`{"type":"request_keyframe","sessionId":"sess-1","reason":"decoder-stalled","recoveryEpoch":"epoch-2","attempt":2,"framesDecoded":1,"bytesReceived":4096}`), &msg); err != nil {
+		t.Fatalf("unmarshal contextual keyframe: %v", err)
+	}
+	encoded, err := json.Marshal(msg)
+	if err != nil {
+		t.Fatalf("marshal keyframe: %v", err)
+	}
+	var roundTrip map[string]interface{}
+	if err := json.Unmarshal(encoded, &roundTrip); err != nil {
+		t.Fatalf("unmarshal keyframe map: %v", err)
+	}
+	for _, key := range []string{"recoveryEpoch", "attempt", "framesDecoded", "bytesReceived"} {
+		if _, ok := roundTrip[key]; ok {
+			t.Fatalf("expected obsolete field %q to be ignored, got %s", key, string(encoded))
+		}
+	}
+}
+
+func TestHandleWSMediaHealthReturnsUnknownWithoutEndingPublicSession(t *testing.T) {
+	mgr := newTestSessionManager()
+	sess := createActiveSession(t, mgr)
+	server := &Server{sessionMgr: mgr}
+	client := &WSClient{sessionID: sess.ID, publicOnly: true, send: make(chan []byte, 2)}
+
+	server.handleWSMessage(client, []byte(`{"type":"media_health","sessionId":"`+sess.ID+`","stage":"inbound_video","status":"stalled","recoveryEpoch":"epoch-2","framesDecoded":1,"bytesReceived":4096}`))
+
+	msg := readWSTestMessage(t, client)
+	if msg.Type != "error" || msg.Error != "Unknown message type" {
+		t.Fatalf("unexpected media-health response: %#v", msg)
+	}
+	if _, ok := mgr.GetSession(sess.ID); !ok {
+		t.Fatal("expected obsolete media health not to end session")
+	}
+}
+
 func TestHandleWSRenegotiateAnswerCompletesPendingOperation(t *testing.T) {
 	mgr := newTestSessionManager()
 	sess := createActiveSession(t, mgr)

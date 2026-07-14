@@ -37,6 +37,7 @@ Auth behavior:
 - `trunk_resolve` -> requires `sipDomain`, `sipUsername`, `sipPassword`, optional `sipPort` (resolve-only; no auto-create)
   - Mobile clients may include `devicePlatform` (`ios` or `android`) so the gateway can persist the latest online platform for incoming push routing.
 - `ping` -> keepalive
+- `request_keyframe` -> requires `sessionId` (or the connection's active session) and uses bounded legacy SIP-directed recovery.
 
 ### Server -> Client message types
 

@@ -25,6 +25,13 @@ Gateway process logs:
 - `GET /api/logs/{name}?tail=500` reads a selected gateway log file tail.
 - These read endpoints are intentionally available without a bearer token, even when API auth is enabled.
 
+Runtime configuration (read-only):
+
+- `GET /api/config` returns the effective gateway configuration loaded from environment variables at startup.
+- Sensitive values (passwords, DSN credentials, push credential file paths, OAuth client secrets) are redacted in the response.
+- Requires the same bearer JWT auth as other `/api/*` ops endpoints when `AUTH_ENABLE=true`.
+- The frontend ops UI exposes this at `/settings`.
+
 WebSocket clients real-time stream:
 
 - `GET /api/ws-clients/stream` — SSE stream of WS client connect/disconnect/update events (each event carries the full `WSClientResponse`).

@@ -79,7 +79,7 @@ func (s *Server) allowPublicWSMessage(client *WSClient, msg WSMessage) (bool, st
 			return false, "Public SIP credentials required on public WebSocket"
 		}
 		return s.publicClientOwnsSession(client, msg, false)
-	case "ice", "hangup", "dtmf", "request_keyframe":
+	case "ice", "hangup", "dtmf", "request_keyframe", "media_health":
 		return s.publicClientOwnsSession(client, msg, false)
 	case "renegotiate_answer":
 		return s.publicClientOwnsSession(client, msg, true)

@@ -245,6 +245,21 @@ func (b *VideoReorderBuffer) Pending() int {
 	return len(b.packets)
 }
 
+// Reset drops packets pending from the previous SIP media generation and lets
+// the next packet establish a fresh source sequence baseline.
+func (b *VideoReorderBuffer) Reset() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.timer != nil {
+		b.timer.Stop()
+		b.timer = nil
+	}
+	for seq := range b.packets {
+		delete(b.packets, seq)
+	}
+	b.hasBase = false
+}
+
 // Drain flushes all remaining buffered packets and stops the timer.
 // Called on session teardown.
 func (b *VideoReorderBuffer) Drain() {

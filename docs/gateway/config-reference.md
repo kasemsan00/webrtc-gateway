@@ -50,6 +50,7 @@ When `AUTH_ENABLE=true`:
 - `SIP_VIDEO_USE_AVPF` (default `false`)
 - `SIP_VIDEO_FEEDBACK_TRANSPORT` (default `auto`; `auto|rtp|rtcp|dual`)
 - `SIP_VIDEO_PRESERVE_STAPA` (default `false`)
+- `SIP_VIDEO_AU_NORMALIZE_ENABLE` (default `true`; validates complete timestamp-grouped H.264 access units, rewrites outbound RTP continuity, and injects cached SPS/PPS before IDR when absent; set `false` for the legacy raw reordered path)
 - `SIP_VIDEO_KEYFRAME_WATCHDOG` (default `true`)
 - `SIP_VIDEO_KEYFRAME_WATCHDOG_INTERVAL_MS` (default `1000`)
 - `SIP_VIDEO_KEYFRAME_STALE_MS` (default `2500`)

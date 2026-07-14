@@ -104,6 +104,16 @@ func TestSendBrowserRecoveryToAsterisk_DoesNotSuppressFreshWSKeyframeInBurst(t *
 	}
 }
 
+func TestSendBrowserRecoveryToAsterisk_LegacyFreshRequestRemainsSuppressedOutsideBurst(t *testing.T) {
+	sess := newBurstTestSession("legacy-fresh-keyframe")
+	makeSIPVideoRecoveryReady(t, sess)
+	sess.LastKeyframe = time.Now()
+
+	if action := sess.SendBrowserRecoveryToAsterisk("ws-request_keyframe"); action != "none" {
+		t.Fatalf("expected legacy fresh request to keep existing action=none behavior, got %s", action)
+	}
+}
+
 func TestSendBrowserRecoveryToAsterisk_DoesNotSuppressFreshBrowserPLIInBurst(t *testing.T) {
 	sess := newBurstTestSession("burst-fresh-browser-pli")
 	makeSIPVideoRecoveryReady(t, sess)

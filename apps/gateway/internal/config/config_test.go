@@ -94,3 +94,27 @@ func TestPublicWebSocketConfigCanBeEnabled(t *testing.T) {
 		t.Fatalf("expected public WebSocket endpoint to be enabled by env")
 	}
 }
+
+func TestVideoAUNormalizationConfigDefaultsEnabled(t *testing.T) {
+	t.Setenv("SIP_VIDEO_AU_NORMALIZE_ENABLE", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.SIP.VideoAUNormalizeEnabled {
+		t.Fatal("expected SIP video AU normalization to be enabled by default")
+	}
+}
+
+func TestVideoAUNormalizationConfigCanBeDisabled(t *testing.T) {
+	t.Setenv("SIP_VIDEO_AU_NORMALIZE_ENABLE", "false")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.SIP.VideoAUNormalizeEnabled {
+		t.Fatal("expected SIP video AU normalization rollback switch to disable the path")
+	}
+}

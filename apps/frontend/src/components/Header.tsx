@@ -17,6 +17,7 @@ import {
   RiRouteLine,
   RiRouterLine,
   RiServerLine,
+  RiSettings3Line,
 } from '@remixicon/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
@@ -278,6 +279,18 @@ export default function Header({ children }: { children?: React.ReactNode }) {
                 >
                   <RiComputerLine size={16} />
                   <span className="font-medium">Instances</span>
+                </Link>
+                <Link
+                  to="/settings"
+                  onClick={close}
+                  className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors hover:bg-muted"
+                  activeProps={{
+                    className:
+                      'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm bg-cyan-600/10 text-cyan-700 dark:bg-cyan-600/20 dark:text-cyan-300 hover:bg-cyan-600/20 dark:hover:bg-cyan-600/30 transition-colors',
+                  }}
+                >
+                  <RiSettings3Line size={16} />
+                  <span className="font-medium">Settings</span>
                 </Link>
                 <Link
                   to="/session-directory"

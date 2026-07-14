@@ -131,6 +131,7 @@ type Session struct {
 	VideoRTPDisorderLogInterval          time.Duration        `json:"-"`
 	VideoRTPDisorderContainmentEnabled   bool                 `json:"-"`
 	VideoRTPDisorderContainmentDuration  time.Duration        `json:"-"`
+	VideoAUNormalizeEnabled              bool                 `json:"-"`
 	VideoRTPDisorderLastSummary          VideoRecoverySummary `json:"-"`
 	VideoRTPDisorderLastSummaryAt        time.Time            `json:"-"`
 	VideoRTPDisorderConsecutiveBad       int                  `json:"-"`
@@ -431,6 +432,7 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 		VideoRTPDisorderLogInterval:          time.Duration(cfg.SIP.VideoRTPDisorderLogIntervalMS) * time.Millisecond,
 		VideoRTPDisorderContainmentEnabled:   cfg.SIP.VideoRTPDisorderContainmentEnabled,
 		VideoRTPDisorderContainmentDuration:  time.Duration(cfg.SIP.VideoRTPDisorderContainmentMS) * time.Millisecond,
+		VideoAUNormalizeEnabled:              cfg.SIP.VideoAUNormalizeEnabled,
 	}
 	session.initVideoRTPHistory()
 	session.ctx, session.cancel = context.WithCancel(context.Background())

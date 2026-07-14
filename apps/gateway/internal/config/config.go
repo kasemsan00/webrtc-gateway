@@ -125,6 +125,7 @@ type SIPConfig struct {
 	VideoRTPDisorderLogIntervalMS        int    // Minimum sustained disorder log interval in ms (default: 5000)
 	VideoRTPDisorderContainmentEnabled   bool   // Enable bounded session-scoped disorder containment diagnostics (default: false)
 	VideoRTPDisorderContainmentMS        int    // Bounded containment duration in ms (default: 10000)
+	VideoAUNormalizeEnabled              bool   // Normalize SIP->WebRTC H.264 into complete access units (default: true)
 	AudioUseAVPF                         bool   // Use RTP/AVPF profile for audio with RTCP feedback (default: false)
 	VideoUseAVPF                         bool   // Use RTP/AVPF profile for video with RTCP feedback (PLI/FIR/NACK) (default: true)
 	// SIP-side transport target for outbound video feedback packets (PLI/FIR/NACK): auto|rtp|rtcp|dual
@@ -288,6 +289,7 @@ func Load() (*Config, error) {
 			VideoRTPDisorderLogIntervalMS:        getEnvAsInt("SIP_VIDEO_RTP_DISORDER_LOG_INTERVAL_MS", 5000),
 			VideoRTPDisorderContainmentEnabled:   getEnvAsBool("SIP_VIDEO_RTP_DISORDER_CONTAINMENT_ENABLED", false),
 			VideoRTPDisorderContainmentMS:        getEnvAsInt("SIP_VIDEO_RTP_DISORDER_CONTAINMENT_MS", 10000),
+			VideoAUNormalizeEnabled:              getEnvAsBool("SIP_VIDEO_AU_NORMALIZE_ENABLE", true),
 			AudioUseAVPF:                         getEnvAsBool("SIP_AUDIO_USE_AVPF", false),
 			VideoUseAVPF:                         getEnvAsBool("SIP_VIDEO_USE_AVPF", true),
 			VideoFeedbackTransport:               getSIPVideoFeedbackTransport(),
@@ -496,6 +498,7 @@ func (c *Config) Display() {
 		c.SIP.VideoRTPDisorderContainmentEnabled,
 		c.SIP.VideoRTPDisorderContainmentMS,
 	)
+	fmt.Printf("  SIP Video H264 AU Normalization: %v\n", c.SIP.VideoAUNormalizeEnabled)
 
 	// Display API Configuration
 	fmt.Println("\nAPI Configuration:")
