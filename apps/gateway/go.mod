@@ -1,6 +1,6 @@
 module k2-gateway
 
-go 1.26.2
+go 1.26.5
 
 require (
 	github.com/emiago/sipgo v1.3.0
@@ -14,6 +14,8 @@ require (
 	github.com/pion/stun v0.6.1
 	github.com/pion/webrtc/v4 v4.2.11
 	golang.org/x/oauth2 v0.36.0
+	google.golang.org/grpc v1.80.0
+	google.golang.org/protobuf v1.36.11
 )
 
 require (
@@ -21,8 +23,6 @@ require (
 	github.com/pion/transport/v4 v4.0.1 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260120221211-b8f7ae30c516 // indirect
-	google.golang.org/grpc v1.80.0 // indirect
-	google.golang.org/protobuf v1.36.11 // indirect
 )
 
 require (
