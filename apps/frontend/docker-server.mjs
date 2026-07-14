@@ -1,7 +1,7 @@
 import { createServer } from 'node:http'
 import { createReadStream } from 'node:fs'
 import { stat } from 'node:fs/promises'
-import { extname, join, resolve } from 'node:path'
+import { extname, resolve } from 'node:path'
 import { Readable } from 'node:stream'
 
 import app from './dist/server/server.js'
@@ -18,7 +18,20 @@ const runtimeEnvKeys = [
   'VITE_KEYCLOAK_REALM',
   'VITE_KEYCLOAK_CLIENT',
   'VITE_CONFIG_AUTORECORD',
+  'VITE_BASE_PATH',
 ]
+
+const normalizeBasePath = (raw) => {
+  const trimmed = (raw ?? '').trim()
+  if (!trimmed || trimmed === '/') return '/'
+  const withLeadingSlash = trimmed.startsWith('/') ? trimmed : `/${trimmed}`
+  return withLeadingSlash.replace(/\/+$/, '') || '/'
+}
+
+const basePath = normalizeBasePath(
+  process.env.VITE_BASE_PATH ?? process.env.BASE_PATH,
+)
+const basePathPrefix = basePath === '/' ? '' : basePath
 
 const mimeTypes = {
   '.css': 'text/css; charset=utf-8',
@@ -32,6 +45,15 @@ const mimeTypes = {
 
 const getMimeType = (filePath) =>
   mimeTypes[extname(filePath).toLowerCase()] ?? 'application/octet-stream'
+
+const stripBasePath = (pathname) => {
+  if (!basePathPrefix) return pathname
+  if (pathname === basePathPrefix) return '/'
+  if (pathname.startsWith(`${basePathPrefix}/`)) {
+    return pathname.slice(basePathPrefix.length) || '/'
+  }
+  return null
+}
 
 const toStaticPath = (pathname) => {
   const relativePath = pathname.replace(/^\/+/, '')
@@ -58,6 +80,10 @@ const buildRuntimeEnvScript = () => {
     }
   }
 
+  if (!runtimeEnv.VITE_BASE_PATH && basePathPrefix) {
+    runtimeEnv.VITE_BASE_PATH = `${basePathPrefix}/`
+  }
+
   const serialized = escapeInlineScriptJson(JSON.stringify(runtimeEnv))
   return `<script>window.__APP_RUNTIME_ENV__=${serialized};</script>`
 }
@@ -70,11 +96,11 @@ const injectRuntimeEnvIntoHtml = (html) => {
   return `${script}${html}`
 }
 
-const serveStaticFile = async (req, res, url) => {
+const serveStaticFile = async (req, res, pathname) => {
   if (req.method !== 'GET' && req.method !== 'HEAD') return false
-  if (url.pathname === '/' || url.pathname.endsWith('/')) return false
+  if (pathname === '/' || pathname.endsWith('/')) return false
 
-  const filePath = toStaticPath(url.pathname)
+  const filePath = toStaticPath(pathname)
   if (!filePath) return false
 
   try {
@@ -83,7 +109,7 @@ const serveStaticFile = async (req, res, url) => {
 
     res.statusCode = 200
     res.setHeader('content-type', getMimeType(filePath))
-    if (url.pathname.startsWith('/assets/')) {
+    if (pathname.startsWith('/assets/')) {
       res.setHeader('cache-control', 'public, max-age=31536000, immutable')
     }
 
@@ -99,50 +125,79 @@ const serveStaticFile = async (req, res, url) => {
   }
 }
 
+const writeFetchResponse = async (req, res, url) => {
+  const hasBody = req.method !== 'GET' && req.method !== 'HEAD'
+  const request = new Request(url, {
+    method: req.method,
+    headers: req.headers,
+    body: hasBody ? req : undefined,
+    duplex: hasBody ? 'half' : undefined,
+  })
+
+  const response = await app.fetch(request)
+  const contentType = response.headers.get('content-type') ?? ''
+  const isHtmlResponse = contentType.includes('text/html')
+
+  if (isHtmlResponse) {
+    const html = await response.text()
+    const injectedHtml = injectRuntimeEnvIntoHtml(html)
+
+    res.statusCode = response.status
+    response.headers.forEach((value, key) => {
+      if (key.toLowerCase() === 'content-length') return
+      res.setHeader(key, value)
+    })
+    res.end(injectedHtml)
+    return
+  }
+
+  res.statusCode = response.status
+  response.headers.forEach((value, key) => {
+    res.setHeader(key, value)
+  })
+
+  if (!response.body) {
+    res.end()
+    return
+  }
+
+  Readable.fromWeb(response.body).pipe(res)
+}
+
 createServer(async (req, res) => {
   try {
     const origin = `http://${req.headers.host ?? `localhost:${port}`}`
     const url = new URL(req.url ?? '/', origin)
 
-    const staticServed = await serveStaticFile(req, res, url)
+    if (basePathPrefix) {
+      if (url.pathname === basePathPrefix) {
+        res.statusCode = 302
+        res.setHeader('location', `${basePathPrefix}/`)
+        res.end()
+        return
+      }
+
+      const stripped = stripBasePath(url.pathname)
+      if (stripped === null) {
+        res.statusCode = 404
+        res.setHeader('content-type', 'text/plain; charset=utf-8')
+        res.end('Not Found')
+        return
+      }
+
+      // Static assets are stored without the public base prefix on disk.
+      const staticServed = await serveStaticFile(req, res, stripped)
+      if (staticServed) return
+
+      // Keep the public URL (with base path) for the SSR router.
+      await writeFetchResponse(req, res, url)
+      return
+    }
+
+    const staticServed = await serveStaticFile(req, res, url.pathname)
     if (staticServed) return
 
-    const hasBody = req.method !== 'GET' && req.method !== 'HEAD'
-    const request = new Request(url, {
-      method: req.method,
-      headers: req.headers,
-      body: hasBody ? req : undefined,
-      duplex: hasBody ? 'half' : undefined,
-    })
-
-    const response = await app.fetch(request)
-    const contentType = response.headers.get('content-type') ?? ''
-    const isHtmlResponse = contentType.includes('text/html')
-
-    if (isHtmlResponse) {
-      const html = await response.text()
-      const injectedHtml = injectRuntimeEnvIntoHtml(html)
-
-      res.statusCode = response.status
-      response.headers.forEach((value, key) => {
-        if (key.toLowerCase() === 'content-length') return
-        res.setHeader(key, value)
-      })
-      res.end(injectedHtml)
-      return
-    }
-
-    res.statusCode = response.status
-    response.headers.forEach((value, key) => {
-      res.setHeader(key, value)
-    })
-
-    if (!response.body) {
-      res.end()
-      return
-    }
-
-    Readable.fromWeb(response.body).pipe(res)
+    await writeFetchResponse(req, res, url)
   } catch (error) {
     res.statusCode = 500
     res.setHeader('content-type', 'text/plain; charset=utf-8')
@@ -150,5 +205,6 @@ createServer(async (req, res) => {
     console.error(error)
   }
 }).listen(port, host, () => {
-  console.log(`Server listening on http://${host}:${port}`)
+  const publicBase = basePathPrefix || '/'
+  console.log(`Server listening on http://${host}:${port}${publicBase}`)
 })

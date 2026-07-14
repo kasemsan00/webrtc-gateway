@@ -8,10 +8,14 @@ import viteTsConfigPaths from 'vite-tsconfig-paths'
 import tailwindcss from '@tailwindcss/vite'
 import netlify from '@netlify/vite-plugin-tanstack-start'
 
+import { viteBaseFromEnv } from './src/lib/base-path'
+
 const isNetlifyBuild = process.env.NETLIFY === 'true'
 const isVitest = process.env.VITEST === 'true'
+const base = viteBaseFromEnv(process.env.VITE_BASE_PATH)
 
 const config = defineConfig({
+  base,
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),

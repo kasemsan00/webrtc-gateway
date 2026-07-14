@@ -1,0 +1,100 @@
+# k2-stack: gateway + frontend + internal nginx in one image.
+# Build from repo root: docker build -f deploy/Dockerfile.unified .
+
+# --- Gateway build ---
+FROM golang:1.26.5-alpine AS gateway-build
+
+RUN apk add --no-cache git gcc musl-dev opus-dev pkgconf
+
+WORKDIR /build
+COPY apps/gateway/go.mod apps/gateway/go.sum ./
+RUN go mod download
+RUN go install github.com/pressly/goose/v3/cmd/goose@v3.24.1
+COPY apps/gateway/ .
+RUN CGO_ENABLED=1 GOOS=linux go build -ldflags="-w -s" -o k2-gateway .
+
+# --- Frontend deps ---
+FROM node:22-alpine AS frontend-base
+ENV PNPM_HOME="/pnpm"
+ENV PATH="$PNPM_HOME:$PATH"
+RUN corepack enable && corepack prepare pnpm@10.32.1 --activate
+
+FROM frontend-base AS frontend-deps
+WORKDIR /app
+COPY pnpm-lock.yaml ./
+COPY pnpm-workspace.yaml ./
+COPY apps/frontend/package.json ./
+RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
+    pnpm install --no-frozen-lockfile
+
+FROM frontend-base AS frontend-build
+WORKDIR /app
+ARG VITE_GATEWAY_URL
+ARG VITE_TURN_URL
+ARG VITE_TURN_USERNAME
+ARG VITE_KEYCLOAK_URL
+ARG VITE_KEYCLOAK_REALM
+ARG VITE_KEYCLOAK_CLIENT
+ARG VITE_CONFIG_AUTORECORD
+ARG VITE_BASE_PATH=/admin/
+ENV VITE_GATEWAY_URL=${VITE_GATEWAY_URL}
+ENV VITE_TURN_URL=${VITE_TURN_URL}
+ENV VITE_TURN_USERNAME=${VITE_TURN_USERNAME}
+ENV VITE_KEYCLOAK_URL=${VITE_KEYCLOAK_URL}
+ENV VITE_KEYCLOAK_REALM=${VITE_KEYCLOAK_REALM}
+ENV VITE_KEYCLOAK_CLIENT=${VITE_KEYCLOAK_CLIENT}
+ENV VITE_CONFIG_AUTORECORD=${VITE_CONFIG_AUTORECORD}
+ENV VITE_BASE_PATH=${VITE_BASE_PATH}
+COPY --from=frontend-deps /app/node_modules ./node_modules
+COPY apps/frontend .
+RUN pnpm run build
+
+# --- Runtime stack ---
+FROM alpine:latest AS runtime
+
+RUN apk add --no-cache \
+    ca-certificates \
+    opus \
+    nginx \
+    nodejs \
+    gettext \
+    tini \
+    wget \
+    su-exec
+
+RUN addgroup -g 1000 k2 && adduser -D -u 1000 -G k2 k2
+
+WORKDIR /app/gateway
+COPY --from=gateway-build /build/k2-gateway ./k2-gateway
+COPY --from=gateway-build /go/bin/goose ./goose
+COPY --from=gateway-build /build/migrations ./migrations
+COPY apps/gateway/scripts/docker-entrypoint.sh ./docker-entrypoint.sh
+RUN chmod +x docker-entrypoint.sh && chown -R k2:k2 /app/gateway
+
+WORKDIR /app/frontend
+COPY --from=frontend-deps /app/node_modules ./node_modules
+COPY --from=frontend-build /app/dist/server ./dist/server
+COPY --from=frontend-build /app/dist/client ./dist/client
+COPY apps/frontend/docker-server.mjs ./docker-server.mjs
+COPY apps/frontend/package.json ./package.json
+
+COPY deploy/nginx.conf.template /etc/nginx/nginx.conf.template
+COPY deploy/stack-entrypoint.sh /app/stack-entrypoint.sh
+RUN chmod +x /app/stack-entrypoint.sh
+
+ENV NODE_ENV=production
+ENV VITE_BASE_PATH=/admin/
+ENV STACK_PROXY_PORT=8088
+ENV API_PORT=8080
+ENV FRONTEND_PORT=4173
+
+EXPOSE 8088/tcp
+EXPOSE 8080/tcp
+EXPOSE 4173/tcp
+EXPOSE 5060/udp
+EXPOSE 10500-10600/udp
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD wget -q --spider http://127.0.0.1:8088/ || exit 1
+
+ENTRYPOINT ["/sbin/tini", "--", "/app/stack-entrypoint.sh"]

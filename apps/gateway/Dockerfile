@@ -2,7 +2,7 @@
 # Multi-stage build for smaller image size
 
 # Stage 1: Build
-FROM golang:1.26.2-alpine AS builder
+FROM golang:1.26.5-alpine AS builder
 
 # Install build dependencies (opus-dev required for CGO inbound audio gain)
 RUN apk add --no-cache git gcc musl-dev opus-dev pkgconf

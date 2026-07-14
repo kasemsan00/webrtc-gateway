@@ -28,6 +28,7 @@ pnpm test
 ตั้งค่าใน `.env` (หรือคัดลอกจาก `.env.example`):
 
 - `VITE_GATEWAY_URL`
+- `VITE_BASE_PATH` (optional; production single-domain default `/admin/`, see `../../deploy/README.md`)
 - `VITE_TURN_URL`
 - `VITE_TURN_USERNAME`
 - `VITE_TURN_CREDENTIAL`
@@ -38,6 +39,8 @@ pnpm test
 
 > สำหรับ deployment ด้วย Docker/Coolify: ค่ากลุ่ม `VITE_*` รองรับทั้งตอน build และตอน runtime ของ container
 > (ตั้งใน Coolify Environment Variables ได้โดยไม่ต้อง rebuild image)
+>
+> Single-domain deploy (`k2-gateway.kasemsan.com/admin`): see [`deploy/README.md`](../../deploy/README.md) — **split** (2 containers + external path routing) or **unified** (`k2-stack`, one external upstream → `:8088`).
 
 ## Supported Operation Flows
 
