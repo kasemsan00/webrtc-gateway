@@ -261,7 +261,7 @@ type Session struct {
 	inboundGainProc    *audio.InboundGainProcessor `json:"-"`
 	ctx                context.Context             `json:"-"`
 	cancel             context.CancelFunc          `json:"-"`
-	videoRTPHistoryMu  sync.Mutex
+	videoRTPHistoryMu  sync.RWMutex
 	mu                 sync.RWMutex
 }
 

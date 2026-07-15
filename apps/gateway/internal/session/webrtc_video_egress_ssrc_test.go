@@ -109,6 +109,43 @@ func TestGetCachedVideoRTPPacketRejectsHistoryFromStaleEgressSSRC(t *testing.T) 
 	}
 }
 
+func TestRetransmitVideoNACKRejectsStaleSSRCAfterRemap(t *testing.T) {
+	sess := &Session{ID: "egress-nack-toctou"}
+	sess.initVideoRTPHistory()
+	oldSSRC := sess.EnsureWebRTCVideoEgressSSRC(1111)
+	track, err := webrtc.NewTrackLocalStaticRTP(
+		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264},
+		"video",
+		"test",
+	)
+	if err != nil {
+		t.Fatalf("new video track: %v", err)
+	}
+	sess.VideoTrack = track
+
+	packet := &rtp.Packet{Header: rtp.Header{Version: 2, SSRC: oldSSRC, SequenceNumber: 42}}
+	data, err := packet.Marshal()
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	sess.CacheVideoRTPPacket(packet.SequenceNumber, data)
+
+	newSSRC := sess.RemapWebRTCVideoEgressSSRC("accepted-switch")
+	if newSSRC == oldSSRC {
+		t.Fatal("expected different SSRC after remap")
+	}
+
+	// Simulate stale history left from a pre-fix TOCTOU window.
+	index := int(packet.SequenceNumber % uint16(sess.VideoRTPHistorySize))
+	sess.VideoRTPHistoryPackets[index] = data
+	sess.VideoRTPHistorySeq[index] = packet.SequenceNumber
+
+	sent, missing := sess.RetransmitVideoNACK([]rtcp.NackPair{{PacketID: packet.SequenceNumber}})
+	if sent != 0 || missing != 1 {
+		t.Fatalf("stale retransmit after remap sent=%d missing=%d, want 0/1", sent, missing)
+	}
+}
+
 func TestApplyWebRTCVideoEgressSSRCRewritesPacket(t *testing.T) {
 	sess := &Session{ID: "egress-apply"}
 	sess.EnsureWebRTCVideoEgressSSRC(5555)

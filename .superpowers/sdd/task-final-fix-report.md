@@ -34,3 +34,21 @@
 - PASS: `go test ./internal/sip ./internal/session -run "TestWriteNormalizedVideoAccessUnitUsesSingleWebRTCEgressSSRC|TestVideoRTPHistoryRejectsPacketFromStaleEgressSSRC|TestGetCachedVideoRTPPacketRejectsHistoryFromStaleEgressSSRC|TestRemapWebRTCVideoEgressSSRCClearsRTPHistory"`.
 - PASS: `go test ./...` from `apps/gateway`.
 - PASS: IDE lint diagnostics for the three changed Go files.
+
+### NACK retransmit TOCTOU follow-up
+
+#### Changes
+
+- Changed `videoRTPHistoryMu` to `sync.RWMutex`; `RetransmitVideoNACK` now holds `mu.RLock` + `videoRTPHistoryMu.RLock` from cache lookup and egress SSRC validation through `VideoTrack.Write`.
+- `ClearVideoRTPHistory` keeps exclusive `Lock`, so remap blocks until an in-flight retransmit finishes and cannot clear history mid-write.
+- Documented lock ordering in `RetransmitVideoNACK`; `getCachedVideoRTPPacket` uses `RLock` for read-only lookups.
+
+#### Tests
+
+- PASS: `go test ./internal/session -run "TestRetransmitVideoNACK|TestGetCachedVideoRTPPacket|TestRemapWebRTCVideoEgressSSRCClearsRTPHistory|TestVideoRTPHistory"`.
+- PASS: `go test ./...` from `apps/gateway`.
+- Added `TestRetransmitVideoNACKRejectsStaleSSRCAfterRemap` for sequential stale-history-after-remap coverage.
+
+#### Commits
+
+- `d7757a3` fix(gateway): serialize NACK retransmit against SSRC remap

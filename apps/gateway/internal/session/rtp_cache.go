@@ -57,20 +57,20 @@ func (s *Session) getCachedVideoRTPPacket(seq uint16) []byte {
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	s.videoRTPHistoryMu.Lock()
+	s.videoRTPHistoryMu.RLock()
 	if s.VideoRTPHistorySeq[index] != seq || len(s.VideoRTPHistoryPackets[index]) == 0 {
-		s.videoRTPHistoryMu.Unlock()
+		s.videoRTPHistoryMu.RUnlock()
 		return nil
 	}
 	original := s.VideoRTPHistoryPackets[index]
 	packetSSRC, ok := videoRTPPacketSSRC(original)
 	if !ok || packetSSRC != s.WebRTCVideoEgressSSRC {
-		s.videoRTPHistoryMu.Unlock()
+		s.videoRTPHistoryMu.RUnlock()
 		return nil
 	}
 	copyBuf := make([]byte, len(original))
 	copy(copyBuf, original)
-	s.videoRTPHistoryMu.Unlock()
+	s.videoRTPHistoryMu.RUnlock()
 
 	return copyBuf
 }
@@ -87,6 +87,11 @@ func videoRTPPacketSSRC(data []byte) (uint32, bool) {
 
 // RetransmitVideoNACK attempts to resend cached RTP packets in response to NACKs.
 // Returns (sent, missing).
+//
+// Lock ordering: mu.RLock then videoRTPHistoryMu.RLock, held from cache lookup
+// and egress SSRC validation through VideoTrack.Write. Remap takes mu.Lock then
+// videoRTPHistoryMu.Lock (ClearVideoRTPHistory), so it blocks until retransmit
+// finishes and cannot interleave a history clear mid-write.
 func (s *Session) RetransmitVideoNACK(nacks []rtcp.NackPair) (int, int) {
 	if s.VideoTrack == nil || len(nacks) == 0 {
 		return 0, len(nacks)
@@ -104,17 +109,33 @@ func (s *Session) RetransmitVideoNACK(nacks []rtcp.NackPair) (int, int) {
 		}
 
 		for _, seq := range seqs {
-			packet := s.getCachedVideoRTPPacket(seq)
-			if packet == nil {
+			if s.VideoRTPHistorySize == 0 {
 				missing++
 				continue
 			}
-			packetSSRC, ok := videoRTPPacketSSRC(packet)
-			if !ok || packetSSRC != s.GetWebRTCVideoEgressSSRC() {
-				missing++
-				continue
+
+			index := int(seq % uint16(s.VideoRTPHistorySize))
+
+			s.mu.RLock()
+			s.videoRTPHistoryMu.RLock()
+
+			wrote := false
+			if s.VideoRTPHistorySeq[index] == seq && len(s.VideoRTPHistoryPackets[index]) > 0 {
+				original := s.VideoRTPHistoryPackets[index]
+				packetSSRC, ok := videoRTPPacketSSRC(original)
+				if ok && packetSSRC == s.WebRTCVideoEgressSSRC {
+					packet := make([]byte, len(original))
+					copy(packet, original)
+					if _, err := s.VideoTrack.Write(packet); err == nil {
+						wrote = true
+					}
+				}
 			}
-			if _, err := s.VideoTrack.Write(packet); err == nil {
+
+			s.videoRTPHistoryMu.RUnlock()
+			s.mu.RUnlock()
+
+			if wrote {
 				sent++
 			} else {
 				missing++
