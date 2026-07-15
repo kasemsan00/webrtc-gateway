@@ -126,6 +126,7 @@ func (s *Session) AbortSwitchVideoGateRelease(generation int, reason string) boo
 func (s *Session) StartSwitchVideoGate(generation int, now time.Time, reason string) bool {
 	s.mu.Lock()
 	if !s.VideoAUNormalizeEnabled ||
+		generation != s.SwitchGeneration ||
 		generation < s.SwitchVideoGateAcceptedGeneration ||
 		(s.SwitchVideoGateActive && generation < s.SwitchVideoGateGeneration) {
 		s.mu.Unlock()

@@ -30,7 +30,7 @@ func TestSwitchVideoGateInactivePassThroughRejectsOnlyAcceptedStaleGeneration(t 
 
 func TestSwitchVideoGateReadyIDRReservesUntilCommit(t *testing.T) {
 	start := time.Unix(1_700_000_000, 0)
-	sess := &Session{VideoAUNormalizeEnabled: true}
+	sess := &Session{VideoAUNormalizeEnabled: true, SwitchGeneration: 4}
 	if !sess.StartSwitchVideoGate(4, start, "agent-switch") {
 		t.Fatal("gate did not start")
 	}
@@ -68,7 +68,7 @@ func TestSwitchVideoGateReadyIDRReservesUntilCommit(t *testing.T) {
 
 func TestSwitchVideoGateAbortReturnsToAwaitingAndLaterIDRCanReserve(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
-	sess := &Session{VideoAUNormalizeEnabled: true}
+	sess := &Session{VideoAUNormalizeEnabled: true, SwitchGeneration: 2}
 	sess.StartSwitchVideoGate(2, now, "switch")
 	first := sess.EvaluateSwitchVideoAccessUnit(gateTestAU(2, true, true, 1), now)
 	if !first.Emit {
@@ -94,7 +94,7 @@ func TestSwitchVideoGateAbortReturnsToAwaitingAndLaterIDRCanReserve(t *testing.T
 
 func TestSwitchVideoGateRejectsUnsafeAndStaleAccessUnitsWithoutTimeoutFailOpen(t *testing.T) {
 	start := time.Unix(1_700_000_000, 0)
-	sess := &Session{VideoAUNormalizeEnabled: true}
+	sess := &Session{VideoAUNormalizeEnabled: true, SwitchGeneration: 10}
 	sess.StartSwitchVideoGate(10, start, "switch")
 
 	tests := []struct {
@@ -123,7 +123,7 @@ func TestSwitchVideoGateRejectsUnsafeAndStaleAccessUnitsWithoutTimeoutFailOpen(t
 
 func TestSwitchVideoGateSameSSRCDoesNotOverrideGeneration(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
-	sess := &Session{VideoAUNormalizeEnabled: true}
+	sess := &Session{VideoAUNormalizeEnabled: true, SwitchGeneration: 10}
 	sess.StartSwitchVideoGate(10, now, "switch")
 
 	stale := sess.EvaluateSwitchVideoAccessUnit(gateTestAU(9, true, true, 4242), now)
@@ -138,8 +138,12 @@ func TestSwitchVideoGateSameSSRCDoesNotOverrideGeneration(t *testing.T) {
 
 func TestSwitchVideoGateStaleStartAndStopCannotAffectNewerGeneration(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
-	sess := &Session{VideoAUNormalizeEnabled: true, PLISent: 8}
-	if !sess.StartSwitchVideoGate(1, now, "first") || !sess.StartSwitchVideoGate(2, now.Add(time.Second), "second") {
+	sess := &Session{VideoAUNormalizeEnabled: true, SwitchGeneration: 1, PLISent: 8}
+	if !sess.StartSwitchVideoGate(1, now, "first") {
+		t.Fatal("first valid gate start failed")
+	}
+	sess.SwitchGeneration = 2
+	if !sess.StartSwitchVideoGate(2, now.Add(time.Second), "second") {
 		t.Fatal("valid gate start failed")
 	}
 	if sess.StartSwitchVideoGate(1, now.Add(2*time.Second), "stale") {
@@ -161,9 +165,30 @@ func TestSwitchVideoGateStaleStartAndStopCannotAffectNewerGeneration(t *testing.
 	}
 }
 
+func TestSwitchVideoGateStartRequiresAuthoritativeSessionGeneration(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	sess := &Session{VideoAUNormalizeEnabled: true, SwitchGeneration: 2}
+	if !sess.StartSwitchVideoGate(2, now, "current") {
+		t.Fatal("authoritative generation did not start")
+	}
+	if !sess.StopSwitchVideoGate(2, now, "ordinary-stop") {
+		t.Fatal("authoritative generation did not stop")
+	}
+	if sess.StartSwitchVideoGate(1, now, "delayed-old") || sess.IsSwitchVideoGateActive() {
+		t.Fatal("delayed older generation restarted inactive gate")
+	}
+	if sess.StartSwitchVideoGate(3, now, "impossible-future") || sess.IsSwitchVideoGateActive() {
+		t.Fatal("future generation started before session authority advanced")
+	}
+	sess.SwitchGeneration = 3
+	if !sess.StartSwitchVideoGate(3, now, "advanced") {
+		t.Fatal("generation did not start after session authority advanced")
+	}
+}
+
 func TestSwitchVideoGateAcceptedGenerationSurvivesStopAndForceStopResetsIt(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
-	sess := &Session{VideoAUNormalizeEnabled: true}
+	sess := &Session{VideoAUNormalizeEnabled: true, SwitchGeneration: 5}
 	sess.StartSwitchVideoGate(5, now, "switch")
 	sess.EvaluateSwitchVideoAccessUnit(gateTestAU(5, true, true, 1), now)
 	sess.CommitSwitchVideoGateRelease(5, now)
@@ -188,7 +213,7 @@ func TestSwitchVideoGateAcceptedGenerationSurvivesStopAndForceStopResetsIt(t *te
 
 func TestSwitchVideoGateStartRequiresNormalizationAndPreservesAudioState(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
-	sess := &Session{AudioSSRC: 11, RemoteAudioSSRC: 22, AudioSeq: 33}
+	sess := &Session{SwitchGeneration: 3, AudioSSRC: 11, RemoteAudioSSRC: 22, AudioSeq: 33}
 	if sess.StartSwitchVideoGate(3, now, "disabled") || sess.IsSwitchVideoGateActive() {
 		t.Fatal("gate started while normalization disabled")
 	}
@@ -204,7 +229,7 @@ func TestSwitchVideoGateStartRequiresNormalizationAndPreservesAudioState(t *test
 
 func TestSwitchVideoGateConcurrentEvaluateCreatesOneReservation(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
-	sess := &Session{VideoAUNormalizeEnabled: true}
+	sess := &Session{VideoAUNormalizeEnabled: true, SwitchGeneration: 7}
 	sess.StartSwitchVideoGate(7, now, "switch")
 	au := gateTestAU(7, true, true, 1)
 
@@ -227,7 +252,7 @@ func TestSwitchVideoGateConcurrentEvaluateCreatesOneReservation(t *testing.T) {
 
 func TestSwitchVideoGateGloballyThrottlesAlternatingReasons(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
-	sess := &Session{VideoAUNormalizeEnabled: true}
+	sess := &Session{VideoAUNormalizeEnabled: true, SwitchGeneration: 6}
 	sess.StartSwitchVideoGate(6, now, "switch")
 	sess.EvaluateSwitchVideoAccessUnit(gateTestAU(5, true, true, 1), now)
 	sess.mu.RLock()
