@@ -385,7 +385,6 @@ func (s *Session) ResetMediaState() {
 	s.VideoSeq = 0
 	s.VideoSSRC = 0
 	s.RemoteVideoSSRC = 0
-	s.WebRTCVideoEgressSSRC = 0
 	s.PendingBrowserKeyframeRequest = false
 	s.PendingBrowserKeyframeRequestAt = time.Time{}
 	s.PendingBrowserKeyframeRequestEpoch = 0
@@ -523,9 +522,13 @@ func (s *Session) CacheSIPSPS(sps []byte) {
 		return
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.SIPCachedSPS = make([]byte, len(sps))
 	copy(s.SIPCachedSPS, sps)
+	seeder, seedSPS, seedPPS := s.maybeSeedH264AUNormalizerFromSIPCacheLocked()
+	s.mu.Unlock()
+	if seeder != nil {
+		seeder(seedSPS, seedPPS)
+	}
 }
 
 // CacheSIPPPS caches a PPS NAL unit received from the SIP-side RTP stream.
@@ -535,9 +538,13 @@ func (s *Session) CacheSIPPPS(pps []byte) {
 		return
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.SIPCachedPPS = make([]byte, len(pps))
 	copy(s.SIPCachedPPS, pps)
+	seeder, seedSPS, seedPPS := s.maybeSeedH264AUNormalizerFromSIPCacheLocked()
+	s.mu.Unlock()
+	if seeder != nil {
+		seeder(seedSPS, seedPPS)
+	}
 }
 
 // ClearSIPVideoParameterSets clears parameter sets learned from SIP-side RTP

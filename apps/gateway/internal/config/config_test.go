@@ -11,7 +11,7 @@ func TestNormalizeSwitchVideoTransitionMode(t *testing.T) {
 		{name: "preserve", value: "preserve", want: SIPSwitchVideoTransitionPreserve},
 		{name: "blackout", value: "blackout", want: SIPSwitchVideoTransitionBlackout},
 		{name: "trim and lower", value: " Preserve ", want: SIPSwitchVideoTransitionPreserve},
-		{name: "invalid falls back", value: "disabled", want: SIPSwitchVideoTransitionPreserve},
+		{name: "invalid falls back", value: "disabled", want: SIPSwitchVideoTransitionBlackout},
 	}
 
 	for _, tt := range tests {

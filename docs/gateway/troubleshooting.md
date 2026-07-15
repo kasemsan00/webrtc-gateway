@@ -34,17 +34,26 @@ Correlate browser inbound RTP diagnostics with Gateway logs by `sessionId`:
 - Confirm switch recovery reaches `h264_au_normalized status=complete-idr` and ends through Gateway RTP stability or its bounded timeout.
 - Confirm startup prints `SIP Video H264 AU Normalization: true`. Every 300 SIP video packets, inspect `h264_au_stats` for `emitted`, `dropped_incomplete`, `dropped_overflow`, and `pending_packets`.
 - A `h264_au_normalized status=complete-idr` line now means the marker and all FU-A fragments were complete; a bare IDR/FU-A start no longer counts as successful keyframe delivery.
-- `switch_webrtc_ssrc_remap` means the gateway allocated a new WebRTC-visible
-  video SSRC for an accepted `@switch` so clients reset decoders even when
-  RTPengine preserved the SIP SSRC. `old`/`new` are egress values; `sipSsrc`
-  remains the SIP-learned media SSRC used for FIR/PLI/NACK toward Asterisk.
+- Accepted `@switch` transitions use **blackout-until-safe-IDR** by default
+  (`SIP_SWITCH_VIDEO_TRANSITION_MODE=blackout`): the complete-IDR gate drops all
+  SIP→WebRTC video until a decoder-safe IDR with fresh parameter sets is ready,
+  then `switch_video_gate_release` opens the path. Pion keeps the negotiated
+  WebRTC binding SSRC unchanged on the wire — egress packet SSRC rewrite does
+  not reset client decoders.
+- `switch_transition_hold_start mode=blackout` plus
+  `switch_video_gate_reject reason=blackout-hold` means the minimum blackout
+  window has not elapsed yet. `switch_transition_hold_end reason=gate-released`
+  means the gate committed the first safe Linphone IDR.
 - If normalization itself is suspected, temporarily set `SIP_VIDEO_AU_NORMALIZE_ENABLE=false` and restart the gateway. This restores the legacy raw reordered path and should be used only as a bounded comparison because incomplete frames can poison strict mobile decoders.
 
 ## Queue-to-agent video is blocky or has incorrect colors
 
-With `SIP_VIDEO_AU_NORMALIZE_ENABLE=true`, an accepted `@switch` keeps the
-previous decoded frame visible until the Gateway writes fresh SPS/PPS and a
-complete IDR for the new switch generation. Audio continues independently.
+With `SIP_VIDEO_AU_NORMALIZE_ENABLE=true`, an accepted `@switch` holds SIP→WebRTC
+video until the Gateway writes fresh SPS/PPS and a complete IDR for the new
+switch generation. Default `blackout` mode intentionally freezes the last frame
+until release; set `SIP_SWITCH_VIDEO_TRANSITION_MODE=preserve` only as a bounded
+rollback if you need the queue still visible during the unsafe window. Audio
+continues independently.
 
 - `switch_video_gate_activation outcome=active` means the new media generation is gated.
 - `switch_video_au_rejected` identifies an unsafe AU; inspect `reason` for a

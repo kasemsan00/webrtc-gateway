@@ -12,6 +12,14 @@ import (
 	"k2-gateway/internal/session"
 )
 
+// normalizedVideoWriteResult reports whether an access unit was emitted and
+// whether it committed @switch video gate release.
+type normalizedVideoWriteResult struct {
+	emitted      bool
+	gateReleased bool
+	generation   int
+}
+
 // writeNormalizedVideoAccessUnit is the single owner of gate evaluation,
 // packet writes, and release commit/abort for one normalized access unit.
 // Callers must serialize invocations so a later AU cannot overtake a reserved
@@ -21,10 +29,10 @@ func writeNormalizedVideoAccessUnit(
 	au session.NormalizedH264AccessUnit,
 	now time.Time,
 	write func([]byte) (int, error),
-) bool {
+) normalizedVideoWriteResult {
 	decision := sess.EvaluateSwitchVideoAccessUnit(au, now)
 	if !decision.Emit {
-		return false
+		return normalizedVideoWriteResult{}
 	}
 
 	abort := func(reason string) {
@@ -34,40 +42,41 @@ func writeNormalizedVideoAccessUnit(
 	}
 	if len(au.Packets) == 0 {
 		abort("empty-access-unit")
-		return false
+		return normalizedVideoWriteResult{}
 	}
 
-	packetSSRC := uint32(0)
-	if au.Packets[0] != nil {
-		packetSSRC = au.Packets[0].SSRC
-	}
-	egressSSRC := sess.SnapshotWebRTCVideoEgressSSRC(packetSSRC)
 	for _, packet := range au.Packets {
-		packet.SSRC = egressSSRC
 		data, err := packet.Marshal()
 		if err != nil {
 			fmt.Printf("[%s] h264_au_write_error stage=marshal seq=%d error=%v\n", sess.ID, packet.SequenceNumber, err)
 			abort("marshal-failed")
-			return false
+			return normalizedVideoWriteResult{}
 		}
 		if _, err := write(data); err != nil {
 			fmt.Printf("[%s] h264_au_write_error stage=track seq=%d error=%v\n", sess.ID, packet.SequenceNumber, err)
 			abort("track-write-failed")
-			return false
+			return normalizedVideoWriteResult{}
 		}
 		sess.CacheVideoRTPPacket(packet.SequenceNumber, data)
 	}
 
-	if decision.Reservation != 0 && !sess.CommitSwitchVideoGateRelease(
-		au.Generation,
-		decision.Reservation,
-		now,
-	) {
-		fmt.Printf("[%s] h264_au_write_error stage=gate-commit generation=%d reservation=%d\n",
-			sess.ID, au.Generation, decision.Reservation)
-		return false
+	if decision.Reservation != 0 {
+		if !sess.CommitSwitchVideoGateRelease(
+			au.Generation,
+			decision.Reservation,
+			now,
+		) {
+			fmt.Printf("[%s] h264_au_write_error stage=gate-commit generation=%d reservation=%d\n",
+				sess.ID, au.Generation, decision.Reservation)
+			return normalizedVideoWriteResult{}
+		}
+		return normalizedVideoWriteResult{
+			emitted:      true,
+			gateReleased: true,
+			generation:   au.Generation,
+		}
 	}
-	return true
+	return normalizedVideoWriteResult{emitted: true}
 }
 
 // startRTPListener starts an RTP listener and returns the port
@@ -428,8 +437,12 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 				return
 			}
 			now := time.Now()
-			if !writeNormalizedVideoAccessUnit(sess, au, now, sess.VideoTrack.Write) {
+			result := writeNormalizedVideoAccessUnit(sess, au, now, sess.VideoTrack.Write)
+			if !result.emitted {
 				return
+			}
+			if result.gateReleased && s.switchRenegotiationStarter != nil {
+				s.switchRenegotiationStarter.StartSwitchVideoRenegotiation(sess.ID, result.generation)
 			}
 			if au.IsIDR {
 				isPLIResponse, responseTime, pliSent, pliResponse := sess.RecordKeyframe()
@@ -443,6 +456,8 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 		if sps, pps, ok := sess.GetSIPCachedSPSPPS(); ok {
 			auNormalizer.SetParameterSets(sps, pps)
 		}
+		sess.BindH264AUParameterSetSeeder(auNormalizer.SetParameterSets)
+		defer sess.BindH264AUParameterSetSeeder(nil)
 	}
 	reorderBuf := session.NewVideoReorderBuffer(sess.ID, func(data []byte, isKeyframe bool) {
 		if sess.VideoTrack == nil {
@@ -460,11 +475,8 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 		// Explicit rollback path: preserve the legacy raw reordered stream.
 		packet := &rtp.Packet{}
 		if err := packet.Unmarshal(data); err == nil {
-			sess.ApplyWebRTCVideoEgressSSRC(packet)
-			if out, err := packet.Marshal(); err == nil {
-				sess.CacheVideoRTPPacket(packet.SequenceNumber, out)
-				_, _ = sess.VideoTrack.Write(out)
-			}
+			sess.CacheVideoRTPPacket(packet.SequenceNumber, data)
+			_, _ = sess.VideoTrack.Write(data)
 		}
 	})
 	lastSwitchGeneration := sess.GetSwitchGeneration()
@@ -691,11 +703,7 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 			// normalizer callback so browser NACK sequence numbers remain aligned.
 			egressData := buffer[:n]
 			if auNormalizer == nil {
-				sess.ApplyWebRTCVideoEgressSSRC(packet)
-				if out, err := packet.Marshal(); err == nil {
-					egressData = out
-					sess.CacheVideoRTPPacket(packet.SequenceNumber, out)
-				}
+				sess.CacheVideoRTPPacket(packet.SequenceNumber, egressData)
 			}
 
 			if len(packet.Payload) > 0 {
@@ -790,16 +798,9 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 				}
 			}
 
-			// The normalized path must never bypass validation with malformed RTP.
 			if sess.VideoTrack != nil && auNormalizer == nil {
-				packet := &rtp.Packet{}
-				if err := packet.Unmarshal(buffer[:n]); err == nil {
-					sess.ApplyWebRTCVideoEgressSSRC(packet)
-					if out, err := packet.Marshal(); err == nil {
-						sess.CacheVideoRTPPacket(packet.SequenceNumber, out)
-						_, _ = sess.VideoTrack.Write(out)
-					}
-				}
+				sess.CacheVideoRTPPacket(packet.SequenceNumber, buffer[:n])
+				_, _ = sess.VideoTrack.Write(buffer[:n])
 			}
 		}
 	}

@@ -1,66 +1,52 @@
-# Task 2 Report — Gateway: SSE subscribe/broadcast helpers for ws-client stream
+# Task 2 Report — Remap on accepted `@switch` only
 
 ## What I implemented
 
-Three changes verbatim from the task brief:
+Two files changed per the task brief:
 
-1. **`apps/gateway/internal/api/server.go` (struct fields)** — Added `wsClientStreams map[int]chan []byte` and `wsClientStreamSeq int` after `sessionStreamSeq` on the `Server` struct.
+1. **`apps/gateway/internal/session/switch_target.go`** — In `PrepareAndActivateSwitchVideoTarget`, after accepted-switch mutations (`SwitchGeneration++`, target fields, duplicate count reset) and before `clearSIPVideoParameterSetsLocked`, call `s.remapWebRTCVideoEgressSSRCLocked("accepted-switch")` while already holding `s.mu.Lock()`. Duplicate-ignore early return is unchanged.
 
-2. **`apps/gateway/internal/api/server.go` (NewServer init)** — Added `wsClientStreams: make(map[int]chan []byte),` after `sessionStreams: make(...)` in the `NewServer` constructor.
+2. **`apps/gateway/internal/session/switch_target_test.go`** — Added `TestPrepareSwitchVideoTargetRemapsWebRTCEgressSSRC` verifying:
+   - Accepted switch remaps `WebRTCVideoEgressSSRC` away from the pre-switch value
+   - `RemoteVideoSSRC` (SIP) stays unchanged
+   - Duplicate `@switch` inside debounce does not remap again
 
-3. **`apps/gateway/internal/api/ws_util.go` (helpers)** — Appended three methods after `broadcastSessionStream`, mirroring the existing trunk/session stream pattern (`ws_util.go:160-224`):
-   - `subscribeWSClientStream() (int, chan []byte)` — allocates id + buffered(32) chan under `s.mu` write lock
-   - `unsubscribeWSClientStream(id int)` — removes entry under write lock
-   - `broadcastWSClientStream(payload []byte)` — snapshots channels under `s.mu.RLock`, then non-blocking send to each (drops on full buffer, preserving the "no panics in hot paths" invariant)
+No changes to SIP `RemoteVideoSSRC`, audio SSRC, or WS contracts.
 
-The helpers are intentionally unused in this task — Task 3 wires them into the SSE handler.
+## TDD evidence
 
-## Verification
+### RED — Step 2 (egress SSRC not remapped yet)
 
-### Build
 ```
-$ go build ./...
-(no output — success)
-```
-
-### go vet
-```
-$ go vet ./internal/api/...
-(no output — clean)
+$ go test ./internal/session -run TestPrepareSwitchVideoTargetRemapsWebRTCEgressSSRC -count=1
+--- FAIL: TestPrepareSwitchVideoTargetRemapsWebRTCEgressSSRC (0.00s)
+    switch_target_test.go:173: expected remapped egress SSRC, got 2222
+FAIL	k2-gateway/internal/session	1.081s
+FAIL
 ```
 
-### Targeted test (per brief Step 4)
-```
-$ go test ./internal/api -run "TestHandleSSEStreams" -v
-=== RUN   TestHandleSSEStreams_Contract
---- PASS: TestHandleSSEStreams_Contract (0.01s)
-PASS
-ok      k2-gateway/internal/api  1.424s
-```
+### GREEN — Step 4 (all PrepareSwitchVideoTarget tests)
 
-### Full internal/api suite (regression check)
 ```
-$ go test ./internal/api/...
-ok      k2-gateway/internal/api  2.683s
+$ go test ./internal/session -run "TestPrepareSwitchVideoTarget" -count=1
+ok  	k2-gateway/internal/session	1.175s
 ```
-
-All green. No regressions.
 
 ## Commits
 
-- `2ba1e00` feat(gateway): add ws-client SSE stream subscribe/broadcast helpers
-  - 2 files changed, 36 insertions(+)
+- `250f99e` feat(gateway): remap WebRTC egress SSRC on accepted @switch
+  - 2 files changed (switch_target.go, switch_target_test.go)
 
-Only the two files specified by the brief were staged (`server.go`, `ws_util.go`). A pre-existing unstaged change to `docs/superpowers/plans/2026-07-08-ws-clients-realtime.md` and other untracked files were intentionally left out of the commit.
+Only the two brief-listed files were staged.
 
 ## Self-review
 
-- ✅ Code is verbatim from the brief (whitespace and structure match the trunk/session stream pattern).
-- ✅ Field alignment: `wsClientStreams`/`wsClientStreamSeq` placed in the SSE-streams region of the struct alongside `trunkStreams`/`sessionStreams`.
-- ✅ Lock discipline mirrors existing pattern: write lock for subscribe/unsubscribe (mutates map + seq), read lock for broadcast snapshot, no I/O under lock.
-- ✅ Non-blocking send in broadcast (`select` with `default`) upholds "no panics / no blocking in hot paths" rule from gateway AGENTS.md.
-- ✅ Unused fields/methods expected for this task — Task 3 will wire them into the SSE handler. `go vet` does not flag them (methods on `*Server` are exported, so no unused-symbol errors).
-- ✅ No wire/API contract changes in this task.
+- Remap runs on every accepted `@switch` path (new-target, debounce-expired, media-generation-changed, debounce-disabled) — all share the post-generation-bump block.
+- Duplicate-ignore path returns early before remap; test confirms SSRC stability on duplicate.
+- Uses `remapWebRTCVideoEgressSSRCLocked` (not `RemapWebRTCVideoEgressSSRC`) to avoid double-lock.
+- Placement after generation bump ensures remap log includes correct `SwitchGeneration`.
+- `RemoteVideoSSRC` untouched; only WebRTC egress SSRC changes.
+- Existing duplicate/debounce/atomic/gate tests still pass.
 
 ## Concerns
 

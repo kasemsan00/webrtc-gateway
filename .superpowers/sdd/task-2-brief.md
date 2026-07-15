@@ -1,79 +1,79 @@
-### Task 2: Gateway — SSE subscribe/broadcast helpers for ws-client stream
+### Task 2: Remap on accepted `@switch` only
 
 **Files:**
-- Modify: `apps/gateway/internal/api/server.go:40-50` (fields), `apps/gateway/internal/api/server.go:185-190` (NewServer init)
-- Modify: `apps/gateway/internal/api/ws_util.go:224` (append helpers)
+- Modify: `apps/gateway/internal/session/switch_target.go`
+- Modify: `apps/gateway/internal/session/switch_target_test.go`
 
 **Interfaces:**
-- Consumes: nothing new
-- Produces: `s.subscribeWSClientStream() (int, chan []byte)`, `s.unsubscribeWSClientStream(id int)`, `s.broadcastWSClientStream(payload []byte)`
+- Consumes: `remapWebRTCVideoEgressSSRCLocked(reason string) uint32`
+- Produces: accepted switch always changes `WebRTCVideoEgressSSRC`; duplicate ignore does not
 
-- [ ] **Step 1: Add stream fields to Server**
+- [ ] **Step 1: Write failing tests**
 
-In `apps/gateway/internal/api/server.go`, after `sessionStreamSeq` (line 45):
-
-```go
-	wsClientStreams   map[int]chan []byte
-	wsClientStreamSeq int
-```
-
-- [ ] **Step 2: Init in NewServer**
-
-In `apps/gateway/internal/api/server.go`, in `NewServer` (after `sessionStreams: make(...)`):
+Append to `switch_target_test.go`:
 
 ```go
-		wsClientStreams:   make(map[int]chan []byte),
-```
+func TestPrepareSwitchVideoTargetRemapsWebRTCEgressSSRC(t *testing.T) {
+	sess := newBurstTestSession("switch-egress-remap")
+	now := time.Now()
+	sess.RemoteVideoSSRC = 1111
+	sess.SIPVideoRTPSource = "203.0.113.10:4000"
+	sess.WebRTCVideoEgressSSRC = 2222
 
-- [ ] **Step 3: Add subscribe/broadcast helpers**
-
-Append to `apps/gateway/internal/api/ws_util.go` (after `broadcastSessionStream`):
-
-```go
-func (s *Server) subscribeWSClientStream() (int, chan []byte) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	s.wsClientStreamSeq++
-	id := s.wsClientStreamSeq
-	ch := make(chan []byte, 32)
-	s.wsClientStreams[id] = ch
-	return id, ch
-}
-
-func (s *Server) unsubscribeWSClientStream(id int) {
-	s.mu.Lock()
-	delete(s.wsClientStreams, id)
-	s.mu.Unlock()
-}
-
-func (s *Server) broadcastWSClientStream(payload []byte) {
-	s.mu.RLock()
-	streams := make([]chan []byte, 0, len(s.wsClientStreams))
-	for _, ch := range s.wsClientStreams {
-		streams = append(streams, ch)
+	first, _ := sess.PrepareAndActivateSwitchVideoTarget("14131", "00025", now, time.Minute, true)
+	if first.Ignore {
+		t.Fatal("expected first switch honored")
 	}
-	s.mu.RUnlock()
+	if sess.GetWebRTCVideoEgressSSRC() == 0 || sess.GetWebRTCVideoEgressSSRC() == 2222 {
+		t.Fatalf("expected remapped egress SSRC, got %d", sess.GetWebRTCVideoEgressSSRC())
+	}
+	if sess.RemoteVideoSSRC != 1111 {
+		t.Fatalf("SIP RemoteVideoSSRC must stay 1111, got %d", sess.RemoteVideoSSRC)
+	}
+	afterFirst := sess.GetWebRTCVideoEgressSSRC()
 
-	for _, ch := range streams {
-		select {
-		case ch <- payload:
-		default:
-		}
+	dup, _ := sess.PrepareAndActivateSwitchVideoTarget("14131", "00025", now.Add(30*time.Second), time.Minute, true)
+	if !dup.Ignore {
+		t.Fatal("expected duplicate ignored")
+	}
+	if sess.GetWebRTCVideoEgressSSRC() != afterFirst {
+		t.Fatalf("duplicate must not remap egress SSRC, before=%d after=%d", afterFirst, sess.GetWebRTCVideoEgressSSRC())
 	}
 }
 ```
 
-- [ ] **Step 4: Run gateway tests**
+- [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd apps/gateway && go test ./internal/api -run "TestHandleSSEStreams" -v`
+```bash
+go test ./internal/session -run TestPrepareSwitchVideoTargetRemapsWebRTCEgressSSRC -count=1
+```
 
-Expected: PASS (no regression; new helpers are unused yet)
+Expected: FAIL (egress SSRC still 2222)
+
+- [ ] **Step 3: Remap inside accepted path**
+
+In `PrepareAndActivateSwitchVideoTarget`, after generation bump / before returning activation (still under `s.mu.Lock()`), call:
+
+```go
+s.remapWebRTCVideoEgressSSRCLocked("accepted-switch")
+```
+
+Place it with the other accepted-switch mutations (after `s.SwitchGeneration++` and target fields are set, before `clearSIPVideoParameterSetsLocked` / gate start is fine). Do **not** call it on the duplicate-ignore return path.
+
+- [ ] **Step 4: Run tests**
+
+```bash
+go test ./internal/session -run "TestPrepareSwitchVideoTarget" -count=1
+```
+
+Expected: PASS (including existing duplicate/debounce tests)
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd E:\dev\webrtc-gateway
-git add apps/gateway/internal/api/server.go apps/gateway/internal/api/ws_util.go
-git commit -m "feat(gateway): add ws-client SSE stream subscribe/broadcast helpers"
+git add apps/gateway/internal/session/switch_target.go apps/gateway/internal/session/switch_target_test.go
+git commit -m "feat(gateway): remap WebRTC egress SSRC on accepted @switch"
 ```
+
+---
+

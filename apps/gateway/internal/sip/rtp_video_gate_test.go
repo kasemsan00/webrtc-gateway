@@ -41,13 +41,16 @@ func TestWriteNormalizedVideoAccessUnitCommitsGateAfterAllPackets(t *testing.T) 
 	}
 
 	writes := 0
-	written := writeNormalizedVideoAccessUnit(sess, normalizedVideoAU(3, true, true, 3), now.Add(time.Second), func([]byte) (int, error) {
+	result := writeNormalizedVideoAccessUnit(sess, normalizedVideoAU(3, true, true, 3), now.Add(time.Second), func([]byte) (int, error) {
 		writes++
 		return 1, nil
 	})
 
-	if !written || writes != 3 {
-		t.Fatalf("written=%v writes=%d, want true/3", written, writes)
+	if !result.emitted || writes != 3 {
+		t.Fatalf("emitted=%v writes=%d, want true/3", result.emitted, writes)
+	}
+	if !result.gateReleased {
+		t.Fatal("expected gate release")
 	}
 	if sess.IsSwitchVideoGateActive() || sess.SwitchVideoGateAcceptedGeneration != 3 {
 		t.Fatalf("gate active=%v accepted=%d", sess.IsSwitchVideoGateActive(), sess.SwitchVideoGateAcceptedGeneration)
@@ -60,7 +63,7 @@ func TestWriteNormalizedVideoAccessUnitAbortsReservationOnWriteFailure(t *testin
 	sess.StartSwitchVideoGate(4, now, "test")
 
 	writes := 0
-	written := writeNormalizedVideoAccessUnit(sess, normalizedVideoAU(4, true, true, 3), now.Add(time.Second), func([]byte) (int, error) {
+	result := writeNormalizedVideoAccessUnit(sess, normalizedVideoAU(4, true, true, 3), now.Add(time.Second), func([]byte) (int, error) {
 		writes++
 		if writes == 2 {
 			return 0, errors.New("track failed")
@@ -68,23 +71,22 @@ func TestWriteNormalizedVideoAccessUnitAbortsReservationOnWriteFailure(t *testin
 		return 1, nil
 	})
 
-	if written || writes != 2 || !sess.IsSwitchVideoGateActive() || sess.SwitchVideoGateReleasing {
-		t.Fatalf("written=%v writes=%d active=%v releasing=%v", written, writes, sess.IsSwitchVideoGateActive(), sess.SwitchVideoGateReleasing)
+	if result.emitted || writes != 2 || !sess.IsSwitchVideoGateActive() || sess.SwitchVideoGateReleasing {
+		t.Fatalf("emitted=%v writes=%d active=%v releasing=%v", result.emitted, writes, sess.IsSwitchVideoGateActive(), sess.SwitchVideoGateReleasing)
 	}
 
 	writes = 0
 	if writeNormalizedVideoAccessUnit(sess, normalizedVideoAU(4, false, true, 1), now.Add(2*time.Second), func([]byte) (int, error) {
 		writes++
 		return 1, nil
-	}) || writes != 0 {
+	}).emitted || writes != 0 {
 		t.Fatalf("P-frame passed after failed IDR: writes=%d", writes)
 	}
 }
 
-func TestWriteNormalizedVideoAccessUnitUsesSingleWebRTCEgressSSRC(t *testing.T) {
+func TestWriteNormalizedVideoAccessUnitPreservesPacketSSRC(t *testing.T) {
 	now := time.Unix(300, 0)
-	sess := &session.Session{ID: "egress-write", VideoAUNormalizeEnabled: true, SwitchGeneration: 1}
-	sess.WebRTCVideoEgressSSRC = 7777
+	sess := &session.Session{ID: "gate-ssrc", VideoAUNormalizeEnabled: true, SwitchGeneration: 1}
 	sess.VideoRTPHistorySize = 1024
 	sess.VideoRTPHistoryPackets = make([][]byte, sess.VideoRTPHistorySize)
 	sess.VideoRTPHistorySeq = make([]uint16, sess.VideoRTPHistorySize)
@@ -93,38 +95,23 @@ func TestWriteNormalizedVideoAccessUnitUsesSingleWebRTCEgressSSRC(t *testing.T) 
 	}
 
 	var gotSSRCs []uint32
-	written := writeNormalizedVideoAccessUnit(sess, normalizedVideoAU(1, true, true, 3), now.Add(time.Second), func(b []byte) (int, error) {
+	result := writeNormalizedVideoAccessUnit(sess, normalizedVideoAU(1, true, true, 3), now.Add(time.Second), func(b []byte) (int, error) {
 		pkt := &rtp.Packet{}
 		if err := pkt.Unmarshal(b); err != nil {
 			t.Fatalf("unmarshal: %v", err)
 		}
 		gotSSRCs = append(gotSSRCs, pkt.SSRC)
-		if len(gotSSRCs) == 1 {
-			sess.RemapWebRTCVideoEgressSSRC("concurrent-switch")
-		}
 		return len(b), nil
 	})
-	if !written {
+	if !result.emitted {
 		t.Fatal("expected write success")
 	}
 	if len(gotSSRCs) != 3 {
 		t.Fatalf("expected 3 packets, got %d", len(gotSSRCs))
 	}
 	for i, gotSSRC := range gotSSRCs {
-		if gotSSRC != 7777 {
-			t.Fatalf("packet %d: expected snapshotted egress SSRC 7777, got %d", i, gotSSRC)
-		}
-	}
-	for i, data := range sess.VideoRTPHistoryPackets {
-		if len(data) == 0 {
-			continue
-		}
-		packet := &rtp.Packet{}
-		if err := packet.Unmarshal(data); err != nil {
-			t.Fatalf("history packet %d: unmarshal: %v", i, err)
-		}
-		if packet.SSRC == 7777 {
-			t.Fatalf("history packet %d retained stale egress SSRC %d after remap", i, packet.SSRC)
+		if gotSSRC != 4242 {
+			t.Fatalf("packet %d: expected original SSRC 4242, got %d", i, gotSSRC)
 		}
 	}
 }
@@ -133,7 +120,7 @@ func TestWriteNormalizedVideoAccessUnitRejectsStaleGenerationAfterRelease(t *tes
 	now := time.Unix(300, 0)
 	sess := &session.Session{ID: "gate-stale", VideoAUNormalizeEnabled: true, SwitchGeneration: 5}
 	sess.StartSwitchVideoGate(5, now, "test")
-	if !writeNormalizedVideoAccessUnit(sess, normalizedVideoAU(5, true, true, 1), now, func([]byte) (int, error) { return 1, nil }) {
+	if !writeNormalizedVideoAccessUnit(sess, normalizedVideoAU(5, true, true, 1), now, func([]byte) (int, error) { return 1, nil }).gateReleased {
 		t.Fatal("expected generation 5 release")
 	}
 
@@ -141,7 +128,7 @@ func TestWriteNormalizedVideoAccessUnitRejectsStaleGenerationAfterRelease(t *tes
 	if writeNormalizedVideoAccessUnit(sess, normalizedVideoAU(4, true, true, 1), now, func([]byte) (int, error) {
 		writes++
 		return 1, nil
-	}) || writes != 0 {
+	}).emitted || writes != 0 {
 		t.Fatalf("stale generation passed after release: writes=%d", writes)
 	}
 }

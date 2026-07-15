@@ -8,6 +8,8 @@ import (
 const (
 	defaultSwitchRecoveryWindow = 5 * time.Second
 	defaultSwitchStableWindow   = 750 * time.Millisecond
+	postGateRecoveryStableWindow = 300 * time.Millisecond
+	postGateRTPMinPacketDelta    = 15
 
 	defaultSwitchRTPMinPacketDelta         = 30
 	defaultSwitchRTPMaxGapDelta            = 12
@@ -166,6 +168,20 @@ func (s *Session) isSwitchVideoRecoveryActiveLocked(now time.Time) bool {
 	return !s.SwitchVideoRecoveryUntil.IsZero() && now.Before(s.SwitchVideoRecoveryUntil)
 }
 
+func (s *Session) applyPostGateRecoverySofteningLocked(now time.Time) {
+	if !s.isSwitchVideoRecoveryActiveLocked(now) {
+		return
+	}
+	softened := postGateRecoveryStableWindow
+	if s.SwitchVideoRecoveryStableWindow > softened {
+		s.SwitchVideoRecoveryStableWindow = softened
+	}
+	if s.SwitchVideoRTPMinPacketDelta > postGateRTPMinPacketDelta {
+		s.SwitchVideoRTPMinPacketDelta = postGateRTPMinPacketDelta
+	}
+	s.SwitchVideoGateReleasedAt = now
+}
+
 func (s *Session) finishSwitchVideoRecoveryLocked(now time.Time, reason string) {
 	if s.SwitchVideoRecoveryStartedAt.IsZero() && s.SwitchVideoRecoveryUntil.IsZero() {
 		return
@@ -184,6 +200,7 @@ func (s *Session) finishSwitchVideoRecoveryLocked(now time.Time, reason string) 
 	s.SwitchVideoRecoveryRTPBaselineAt = time.Time{}
 	s.SwitchVideoRecoveryLastUnstableLog = time.Time{}
 	s.SwitchVideoRecoveryUnstableCount = 0
+	s.SwitchVideoGateReleasedAt = time.Time{}
 
 	recoveryMS := int64(-1)
 	firstKeyframeMS := int64(-1)

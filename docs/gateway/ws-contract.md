@@ -44,8 +44,8 @@ Auth behavior:
 - `answer`, `state`, `incoming`
 - `message`, `messageSent`, `dtmf`
 - `renegotiate`, `renegotiate_result`
-  - `renegotiate` is additive mid-call WebRTC assistance for SIP re-INVITE/UPDATE media changes. It includes `sessionId`, `renegotiationId`, optional `sdp`, `reason`, `mediaDirection`, `hasVideo`, and `requiresAnswer`.
-  - Clients that support it respond with `renegotiate_answer` (`sessionId`, `renegotiationId`, optional `sdp`, `status`, optional `reason`).
+  - `renegotiate` is additive mid-call WebRTC assistance for SIP re-INVITE/UPDATE media changes and for `@switch` gate release (`reason=agent_switch`). It includes `sessionId`, `renegotiationId`, optional `sdp`, `reason`, `mediaDirection`, `hasVideo`, and `requiresAnswer`.
+  - Clients that support it respond with `renegotiate_answer` (`sessionId`, `renegotiationId`, optional `sdp`, `status`, optional `reason`). For `agent_switch`, the gateway applies the answer SDP to its active PeerConnection.
 - `resumed`, `resume_failed`, `resume_redirect`
 - `trunk_resolved`, `trunk_redirect`, `trunk_not_found`, `trunk_not_ready`
   - `trunk_resolved` now returns both `trunkId` and `trunkPublicId`

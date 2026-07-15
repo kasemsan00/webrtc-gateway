@@ -163,13 +163,56 @@ func normalizeSwitchVideoTransitionMode(mode string) string {
 	switch mode {
 	case config.SIPSwitchVideoTransitionBlackout:
 		return config.SIPSwitchVideoTransitionBlackout
-	default:
+	case config.SIPSwitchVideoTransitionPreserve:
 		return config.SIPSwitchVideoTransitionPreserve
+	default:
+		return config.SIPSwitchVideoTransitionBlackout
 	}
 }
 
 func isSwitchVideoTransitionActiveLocked(s *Session) bool {
 	return !s.SwitchVideoBlackoutUntil.IsZero() || !s.SwitchVideoBlackoutMaxWait.IsZero()
+}
+
+// switchVideoTransitionBlocksGateReleaseLocked reports whether the normalize-path
+// complete-IDR gate must keep dropping AUs until the blackout minimum elapses.
+func switchVideoTransitionBlocksGateReleaseLocked(s *Session, now time.Time) bool {
+	if !isSwitchVideoTransitionActiveLocked(s) {
+		return false
+	}
+	mode := normalizeSwitchVideoTransitionMode(s.SwitchVideoTransitionMode)
+	if mode != config.SIPSwitchVideoTransitionBlackout {
+		return false
+	}
+	return now.Before(s.SwitchVideoBlackoutUntil)
+}
+
+func (s *Session) stopSwitchVideoBlackoutAfterGateRelease(reason string) {
+	now := time.Now()
+	s.mu.Lock()
+	wasActive := isSwitchVideoTransitionActiveLocked(s)
+	if !wasActive {
+		s.mu.Unlock()
+		return
+	}
+	startedAt := s.SwitchVideoBlackoutStarted
+	if startedAt.IsZero() {
+		startedAt = now
+	}
+	mode := s.SwitchVideoTransitionMode
+	firstKeyframeMs := elapsedMs(startedAt, s.SwitchVideoFirstKeyframeAt)
+	s.SwitchVideoBlackoutUntil = time.Time{}
+	s.SwitchVideoBlackoutMaxWait = time.Time{}
+	s.SwitchVideoBlackoutStarted = time.Time{}
+	s.SwitchVideoFirstKeyframeAt = time.Time{}
+	s.mu.Unlock()
+
+	heldMs := now.Sub(startedAt).Milliseconds()
+	if heldMs < 0 {
+		heldMs = 0
+	}
+	fmt.Printf("[%s] switch_transition_hold_end mode=%s reason=%s heldMs=%d firstKeyframeMs=%d\n",
+		s.ID, normalizeSwitchVideoTransitionMode(mode), reason, heldMs, firstKeyframeMs)
 }
 
 func elapsedMs(start, end time.Time) int64 {

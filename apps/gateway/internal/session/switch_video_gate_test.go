@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/pion/rtp"
+
+	"k2-gateway/internal/config"
 )
 
 func TestSwitchVideoGateInactivePassThroughRejectsOnlyAcceptedStaleGeneration(t *testing.T) {
@@ -395,6 +397,57 @@ func TestSwitchVideoGateStallSnapshotIsDelayedAndThrottled(t *testing.T) {
 	}
 	if _, ok := sess.ObserveSwitchVideoGateStall(now.Add(4*time.Second), summary); !ok {
 		t.Fatal("expected later stall report")
+	}
+}
+
+func TestSwitchVideoGateBlocksReleaseDuringBlackoutMinimum(t *testing.T) {
+	start := time.Now()
+	sess := &Session{
+		VideoAUNormalizeEnabled:    true,
+		SwitchGeneration:           4,
+		SwitchVideoBlackoutEnabled: true,
+		SwitchVideoTransitionMode:  config.SIPSwitchVideoTransitionBlackout,
+	}
+	sess.StartSwitchVideoTransitionHold(config.SIPSwitchVideoTransitionBlackout, 300*time.Millisecond, 1200*time.Millisecond, "switch")
+	if !sess.StartSwitchVideoGate(4, start, "agent-switch") {
+		t.Fatal("gate did not start")
+	}
+
+	ready := gateTestAU(4, true, true, 1)
+	blocked := sess.EvaluateSwitchVideoAccessUnit(ready, start.Add(100*time.Millisecond))
+	if blocked.Emit || blocked.Reason != "blackout-hold" {
+		t.Fatalf("expected blackout hold before minimum elapsed, got %+v", blocked)
+	}
+
+	released := sess.EvaluateSwitchVideoAccessUnit(ready, start.Add(400*time.Millisecond))
+	if !released.Emit || released.Reason != "complete-idr-reserved" {
+		t.Fatalf("expected release after blackout minimum, got %+v", released)
+	}
+}
+
+func TestSwitchVideoGateCommitStopsTransitionHold(t *testing.T) {
+	start := time.Now()
+	sess := &Session{
+		ID:                         "gate-hold-stop",
+		VideoAUNormalizeEnabled:    true,
+		SwitchGeneration:           3,
+		SwitchVideoBlackoutEnabled: true,
+		SwitchVideoTransitionMode:  config.SIPSwitchVideoTransitionBlackout,
+	}
+	sess.StartSwitchVideoTransitionHold(config.SIPSwitchVideoTransitionBlackout, 300*time.Millisecond, 1200*time.Millisecond, "switch")
+	sess.StartSwitchVideoGate(3, start, "switch")
+	reserved := sess.EvaluateSwitchVideoAccessUnit(gateTestAU(3, true, true, 1), start.Add(400*time.Millisecond))
+	if !reserved.Emit {
+		t.Fatalf("expected reservation, got %+v", reserved)
+	}
+	if !sess.CommitSwitchVideoGateRelease(3, reserved.Reservation, start.Add(500*time.Millisecond)) {
+		t.Fatal("commit failed")
+	}
+	sess.mu.RLock()
+	holdActive := isSwitchVideoTransitionActiveLocked(sess)
+	sess.mu.RUnlock()
+	if holdActive {
+		t.Fatal("expected transition hold cleared on gate release")
 	}
 }
 

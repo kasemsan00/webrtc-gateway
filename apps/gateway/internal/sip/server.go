@@ -25,6 +25,12 @@ type MidCallRenegotiationNotifier interface {
 	NotifyMidCallRenegotiation(sessionID string, renegotiation session.MidCallRenegotiationSnapshot, validation session.MidCallSDPValidation)
 }
 
+// SwitchVideoRenegotiationStarter starts client-assisted WebRTC renegotiation
+// after @switch video gate release.
+type SwitchVideoRenegotiationStarter interface {
+	StartSwitchVideoRenegotiation(sessionID string, generation int)
+}
+
 // IncomingCallNotifier interface for notifying about incoming calls
 type IncomingCallNotifier interface {
 	NotifyIncomingCall(sessionID, from, to string, trunkID int64)
@@ -68,8 +74,9 @@ type Server struct {
 	sessionMgr       SessionManager // For finding sessions by Call-ID
 	sessionCreator   SessionCreator // For creating sessions for incoming calls
 	stateNotifier    StateNotifier  // For notifying WebSocket clients
-	midCallNotifier  MidCallRenegotiationNotifier
-	incomingNotifier IncomingCallNotifier // For notifying incoming calls
+	midCallNotifier              MidCallRenegotiationNotifier
+	switchRenegotiationStarter   SwitchVideoRenegotiationStarter
+	incomingNotifier             IncomingCallNotifier // For notifying incoming calls
 	messageNotifier  MessageNotifier      // For notifying incoming SIP messages
 	dtmfNotifier     DTMFNotifier         // For notifying received DTMF
 	logStore         logstore.LogStore
@@ -139,6 +146,10 @@ func (s *Server) SetStateNotifier(notifier StateNotifier) {
 
 func (s *Server) SetMidCallRenegotiationNotifier(notifier MidCallRenegotiationNotifier) {
 	s.midCallNotifier = notifier
+}
+
+func (s *Server) SetSwitchVideoRenegotiationStarter(starter SwitchVideoRenegotiationStarter) {
+	s.switchRenegotiationStarter = starter
 }
 
 func (s *Server) notifySessionStateChange(sess *session.Session, state session.SessionState) {

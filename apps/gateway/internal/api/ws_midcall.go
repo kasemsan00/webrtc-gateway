@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"k2-gateway/internal/logstore"
+	"k2-gateway/internal/session"
 )
 
 const (
@@ -42,9 +43,40 @@ func (s *Server) handleWSRenegotiateAnswer(client *WSClient, msg WSMessage) {
 		status = "ok"
 	}
 
+	pending, hasPending := sess.GetPendingMidCallRenegotiation()
+	if !hasPending || pending.ID != msg.RenegotiationID {
+		s.sendWSError(client, sessionID, "Renegotiation not pending or mismatched")
+		return
+	}
+
 	var completed bool
 	switch status {
 	case "ok":
+		if pending.Source == session.MidCallRenegotiationSourceSwitchGateRelease {
+			if err := sess.ApplyPeerConnectionAnswer(msg.SDP); err != nil {
+				_ = sess.FailMidCallRenegotiation(msg.RenegotiationID, 488, err.Error())
+				s.sendWSMessage(client, WSMessage{
+					Type:            "renegotiate_result",
+					SessionID:       sessionID,
+					RenegotiationID: msg.RenegotiationID,
+					Status:          "failed",
+					Reason:          err.Error(),
+				})
+				s.logEvent(&logstore.Event{
+					Timestamp: time.Now(),
+					SessionID: sessionID,
+					Category:  "ws",
+					Name:      "ws_midcall_renegotiation_answer",
+					Data: map[string]interface{}{
+						"renegotiationId": msg.RenegotiationID,
+						"status":          "failed",
+						"reason":          err.Error(),
+						"source":          pending.Source,
+					},
+				})
+				return
+			}
+		}
 		completed = sess.CompleteMidCallRenegotiation(msg.RenegotiationID, msg.SDP)
 	case "failed":
 		completed = sess.FailMidCallRenegotiation(msg.RenegotiationID, 488, msg.Reason)

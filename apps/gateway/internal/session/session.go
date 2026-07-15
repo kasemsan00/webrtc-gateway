@@ -149,6 +149,7 @@ type Session struct {
 	SwitchVideoGateReservedPackets       int                  `json:"-"`
 	SwitchVideoGateReservedSSRC          uint32               `json:"-"`
 	SwitchVideoGateReservedInjection     bool                 `json:"-"`
+	SwitchVideoGateReleasedAt            time.Time            `json:"-"`
 	VideoRTPDisorderLastSummary          VideoRecoverySummary `json:"-"`
 	VideoRTPDisorderLastSummaryAt        time.Time            `json:"-"`
 	VideoRTPDisorderConsecutiveBad       int                  `json:"-"`
@@ -157,14 +158,15 @@ type Session struct {
 	VideoRTPDisorderContainmentStartedAt time.Time            `json:"-"`
 	VideoRTPDisorderContainmentReason    string               `json:"-"`
 	VideoRTPDisorderContainmentSummary   VideoRecoverySummary `json:"-"`
-	// @switch transition hold (SIP->WebRTC): preserve holds unsafe packets until keyframe;
-	// blackout is legacy and intentionally keeps the screen black briefly.
+	// @switch transition hold (SIP->WebRTC): blackout (default) blocks gate release
+	// until minimum elapsed; preserve is rollback that keeps last frame visible.
 	SwitchVideoTransitionMode  string    `json:"-"`
 	SwitchVideoBlackoutEnabled bool      `json:"-"`
 	SwitchVideoBlackoutStarted time.Time `json:"-"`
 	SwitchVideoBlackoutUntil   time.Time `json:"-"`
 	SwitchVideoBlackoutMaxWait time.Time `json:"-"`
-	SwitchVideoFirstKeyframeAt time.Time `json:"-"`
+	SwitchVideoFirstKeyframeAt         time.Time `json:"-"`
+	SwitchVideoRenegotiateGeneration int       `json:"-"`
 	// RTP State for re-packetization
 	AudioSeq        uint16 `json:"-"`
 	AudioSSRC       uint32 `json:"-"`
@@ -172,7 +174,6 @@ type Session struct {
 	VideoSSRC       uint32 `json:"-"`
 	RemoteAudioSSRC uint32 `json:"-"`
 	RemoteVideoSSRC       uint32 `json:"-"`
-	WebRTCVideoEgressSSRC uint32 `json:"-"` // SIP→WebRTC rewritten video SSRC
 	// PendingBrowserKeyframeRequest is set when a client ws-request_keyframe
 	// arrives before SIP video SSRC/addr/conn are ready. Flushed on ssrc-learn / @switch.
 	PendingBrowserKeyframeRequest      bool      `json:"-"`
@@ -186,6 +187,7 @@ type Session struct {
 	// Used to inject parameter sets before keyframes forwarded to browser for decoder recovery.
 	SIPCachedSPS []byte `json:"-"`
 	SIPCachedPPS []byte `json:"-"`
+	h264AUParameterSetSeeder func(sps, pps []byte) `json:"-"`
 	// @switch controlled SPS/PPS injection (inject 3 copies before each of first 3 IDRs after @switch)
 	SwitchSPSPPSInjectRemaining int       `json:"-"` // Number of IDR frames left to inject SPS/PPS (0 = disabled, 3 = inject next 3 IDRs)
 	SwitchReceivedAt            time.Time `json:"-"` // Timestamp when @switch message was received (for debugging)

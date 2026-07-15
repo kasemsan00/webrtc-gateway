@@ -158,43 +158,38 @@ func TestPrepareAndActivateSwitchVideoTargetHasNoPublishedGenerationWithoutGate(
 	}
 }
 
-func TestPrepareSwitchVideoTargetRemapsWebRTCEgressSSRC(t *testing.T) {
-	sess := newBurstTestSession("switch-egress-remap")
+func TestPrepareSwitchVideoTargetDoesNotRemapSIPSSRC(t *testing.T) {
+	sess := newBurstTestSession("switch-no-remap")
+	sess.VideoAUNormalizeEnabled = true
 	now := time.Now()
 	sess.RemoteVideoSSRC = 1111
 	sess.SIPVideoRTPSource = "203.0.113.10:4000"
-	sess.WebRTCVideoEgressSSRC = 2222
 
 	first, _ := sess.PrepareAndActivateSwitchVideoTarget("14131", "00025", now, time.Minute, true)
 	if first.Ignore {
 		t.Fatal("expected first switch honored")
 	}
-	if sess.GetWebRTCVideoEgressSSRC() == 0 || sess.GetWebRTCVideoEgressSSRC() == 2222 {
-		t.Fatalf("expected remapped egress SSRC, got %d", sess.GetWebRTCVideoEgressSSRC())
-	}
 	if sess.RemoteVideoSSRC != 1111 {
 		t.Fatalf("SIP RemoteVideoSSRC must stay 1111, got %d", sess.RemoteVideoSSRC)
 	}
-	afterFirst := sess.GetWebRTCVideoEgressSSRC()
+	if !sess.SwitchVideoGateActive {
+		t.Fatal("expected complete-IDR gate active after accepted switch")
+	}
 
 	dup, _ := sess.PrepareAndActivateSwitchVideoTarget("14131", "00025", now.Add(30*time.Second), time.Minute, true)
 	if !dup.Ignore {
 		t.Fatal("expected duplicate ignored")
 	}
-	if sess.GetWebRTCVideoEgressSSRC() != afterFirst {
-		t.Fatalf("duplicate must not remap egress SSRC, before=%d after=%d", afterFirst, sess.GetWebRTCVideoEgressSSRC())
+	if sess.RemoteVideoSSRC != 1111 {
+		t.Fatalf("SIP RemoteVideoSSRC must stay 1111 after duplicate, got %d", sess.RemoteVideoSSRC)
 	}
 
 	second, _ := sess.PrepareAndActivateSwitchVideoTarget("14131", "00025", now.Add(61*time.Second), time.Minute, true)
 	if second.Ignore || second.Reason != "debounce-window-expired" {
 		t.Fatalf("expected second switch after debounce honored, got %+v", second)
 	}
-	afterSecond := sess.GetWebRTCVideoEgressSSRC()
-	if afterSecond == 0 || afterSecond == afterFirst {
-		t.Fatalf("second accepted switch did not remap egress SSRC, first=%d second=%d", afterFirst, afterSecond)
-	}
 	if sess.RemoteVideoSSRC != 1111 {
-		t.Fatalf("SIP RemoteVideoSSRC must stay 1111, got %d", sess.RemoteVideoSSRC)
+		t.Fatalf("SIP RemoteVideoSSRC must stay 1111 after second switch, got %d", sess.RemoteVideoSSRC)
 	}
 }
 

@@ -98,6 +98,9 @@ func TestHandleSwitchMessage_StartsVideoRecoveryBurst(t *testing.T) {
 	if _, _, ok := sess.GetSIPCachedSPSPPS(); ok {
 		t.Fatalf("expected accepted switch to clear stale SIP-side parameter sets")
 	}
+	if sess.SwitchSPSPPSInjectRemaining != 3 {
+		t.Fatalf("expected uplink SPS/PPS inject armed to 3, got %d", sess.SwitchSPSPPSInjectRemaining)
+	}
 }
 
 func TestHandleSwitchMessage_IgnoresDuplicateTargetInsideDebounce(t *testing.T) {

@@ -1245,6 +1245,9 @@ func (s *Server) handleSwitchMessage(body string, callerURI string) {
 				sess.ID, switchDecision.Generation, switchDecision.MediaEpoch)
 			return
 		}
+		if !sess.ArmSwitchSPSPPSInjectIfAuthoritative(switchDecision.Generation, switchDecision.MediaEpoch, 3) {
+			return
+		}
 	}
 
 	recoveryWindow := time.Duration(s.config.SwitchVideoRecoveryWindowMS) * time.Millisecond

@@ -146,7 +146,8 @@ type SIPConfig struct {
 	VideoRecoveryBurstIntervalMS int  // Burst watchdog interval in ms (default: 800)
 	VideoRecoveryBurstStaleMS    int  // Burst stale threshold for PLI in ms (default: 1200)
 	VideoRecoveryBurstFIRStaleMS int  // Burst stale threshold for FIR in ms (default: 2500)
-	MidCallRenegotiationEnable   bool // Enable SIP mid-call re-INVITE/UPDATE negotiation (default: true)
+	MidCallRenegotiationEnable    bool // Enable SIP mid-call re-INVITE/UPDATE negotiation (default: true)
+	SwitchVideoRenegotiateEnable  bool // Send WebRTC renegotiate after @switch gate release (default: true)
 	// Inbound audio gain (SIP → WebRTC): decode Opus, apply PCM gain, re-encode Opus
 	AudioInboundGainEnable bool    // Enable inbound gain processing (default: false)
 	AudioInboundGain       float32 // Linear gain multiplier (default: 1.0)
@@ -160,7 +161,7 @@ const (
 	SIPVideoFeedbackTransportDual = "dual"
 
 	SIPSwitchVideoTransitionPreserve = "preserve"
-	SIPSwitchVideoTransitionBlackout = "blackout"
+	SIPSwitchVideoTransitionBlackout = "blackout" // default: blackout-until-safe-IDR on normalize path
 )
 
 // DBConfig holds PostgreSQL database configuration
@@ -264,7 +265,7 @@ func Load() (*Config, error) {
 			DebugSIPMessage:                      getEnvAsBool("DEBUG_SIP_MESSAGE", false),
 			DebugSIPInvite:                       getEnvAsBool("DEBUG_SIP_INVITE", false),
 			SwitchPLIDelayMS:                     getEnvAsInt("SWITCH_PLI_DELAY_MS", 0),
-			SwitchVideoTransitionMode:            normalizeSwitchVideoTransitionMode(getEnvWithDefault("SIP_SWITCH_VIDEO_TRANSITION_MODE", SIPSwitchVideoTransitionPreserve)),
+			SwitchVideoTransitionMode:            normalizeSwitchVideoTransitionMode(getEnvWithDefault("SIP_SWITCH_VIDEO_TRANSITION_MODE", SIPSwitchVideoTransitionBlackout)),
 			SwitchVideoBlackoutEnabled:           getEnvAsBool("SIP_SWITCH_VIDEO_BLACKOUT_ENABLED", true),
 			SwitchVideoBlackoutMS:                getEnvAsInt("SIP_SWITCH_VIDEO_BLACKOUT_MS", 300),
 			SwitchVideoBlackoutMaxWaitMS:         getEnvAsInt("SIP_SWITCH_VIDEO_BLACKOUT_MAX_WAIT_MS", 1200),
@@ -304,6 +305,7 @@ func Load() (*Config, error) {
 			VideoRecoveryBurstStaleMS:            getEnvAsInt("SIP_VIDEO_RECOVERY_BURST_STALE_MS", 1200),
 			VideoRecoveryBurstFIRStaleMS:         getEnvAsInt("SIP_VIDEO_RECOVERY_BURST_FIR_STALE_MS", 2500),
 			MidCallRenegotiationEnable:           getEnvAsBool("SIP_MIDCALL_RENEGOTIATION_ENABLE", true),
+			SwitchVideoRenegotiateEnable:         getEnvAsBool("SIP_SWITCH_VIDEO_RENEGOTIATE_ENABLE", true),
 			AudioInboundGainEnable:               getEnvAsBool("SIP_AUDIO_INBOUND_GAIN_ENABLE", false),
 			AudioInboundGain:                     clampInboundGain(getEnvAsFloat32("SIP_AUDIO_INBOUND_GAIN", 1.0), getEnvAsFloat32("SIP_AUDIO_INBOUND_GAIN_MAX", 3.0)),
 			AudioInboundGainMax:                  getEnvAsFloat32("SIP_AUDIO_INBOUND_GAIN_MAX", 3.0),
@@ -639,8 +641,8 @@ func normalizeSwitchVideoTransitionMode(value string) string {
 	case SIPSwitchVideoTransitionPreserve, SIPSwitchVideoTransitionBlackout:
 		return normalized
 	default:
-		fmt.Printf("Warning: invalid SIP_SWITCH_VIDEO_TRANSITION_MODE=%q, using %q\n", value, SIPSwitchVideoTransitionPreserve)
-		return SIPSwitchVideoTransitionPreserve
+		fmt.Printf("Warning: invalid SIP_SWITCH_VIDEO_TRANSITION_MODE=%q, using %q\n", value, SIPSwitchVideoTransitionBlackout)
+		return SIPSwitchVideoTransitionBlackout
 	}
 }
 

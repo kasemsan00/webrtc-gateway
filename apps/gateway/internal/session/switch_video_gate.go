@@ -94,6 +94,8 @@ func (s *Session) EvaluateSwitchVideoAccessUnit(au NormalizedH264AccessUnit, now
 	generation := s.SwitchVideoGateGeneration
 	reason := ""
 	switch {
+	case switchVideoTransitionBlocksGateReleaseLocked(s, now):
+		reason = "blackout-hold"
 	case s.SwitchVideoGateReleasing:
 		reason = "release-in-progress"
 	case au.Generation != generation:
@@ -168,8 +170,11 @@ func (s *Session) CommitSwitchVideoGateRelease(generation int, reservation uint6
 	if generation > s.SwitchVideoGateAcceptedGeneration {
 		s.SwitchVideoGateAcceptedGeneration = generation
 	}
+	s.applyPostGateRecoverySofteningLocked(now)
 	s.clearSwitchVideoGateLocked()
 	s.mu.Unlock()
+
+	s.stopSwitchVideoBlackoutAfterGateRelease("gate-released")
 
 	fmt.Printf("[%s] switch_video_gate_release generation=%d waitMs=%d ssrc=%d packets=%d injection=%v rejected=%d feedback=%d\n",
 		id, generation, wait.Milliseconds(), ssrc, packetCount, injected, rejected, feedback)
