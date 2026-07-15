@@ -385,6 +385,7 @@ func (s *Session) ResetMediaState() {
 	s.VideoSeq = 0
 	s.VideoSSRC = 0
 	s.RemoteVideoSSRC = 0
+	s.WebRTCVideoEgressSSRC = 0
 	s.PendingBrowserKeyframeRequest = false
 	s.PendingBrowserKeyframeRequestAt = time.Time{}
 	s.PendingBrowserKeyframeRequestEpoch = 0

@@ -171,7 +171,8 @@ type Session struct {
 	VideoSeq        uint16 `json:"-"`
 	VideoSSRC       uint32 `json:"-"`
 	RemoteAudioSSRC uint32 `json:"-"`
-	RemoteVideoSSRC uint32 `json:"-"`
+	RemoteVideoSSRC       uint32 `json:"-"`
+	WebRTCVideoEgressSSRC uint32 `json:"-"` // SIP→WebRTC rewritten video SSRC
 	// PendingBrowserKeyframeRequest is set when a client ws-request_keyframe
 	// arrives before SIP video SSRC/addr/conn are ready. Flushed on ssrc-learn / @switch.
 	PendingBrowserKeyframeRequest      bool      `json:"-"`
