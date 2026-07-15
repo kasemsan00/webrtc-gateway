@@ -99,8 +99,21 @@ func nonNegativeDeltaInt64(current, baseline int64) int64 {
 // SIP @switch transition. It also activates the existing recovery-burst policy
 // with a shorter switch-specific max window.
 func (s *Session) StartSwitchVideoRecovery(maxWindow, stableWindow time.Duration) {
+	s.startSwitchVideoRecovery(0, 0, false, maxWindow, stableWindow)
+}
+
+// StartSwitchVideoRecoveryIfAuthoritative starts recovery only if the switch
+// token still belongs to the current call and latest accepted generation.
+func (s *Session) StartSwitchVideoRecoveryIfAuthoritative(generation int, mediaEpoch uint64, maxWindow, stableWindow time.Duration) bool {
+	return s.startSwitchVideoRecovery(generation, mediaEpoch, true, maxWindow, stableWindow)
+}
+
+func (s *Session) startSwitchVideoRecovery(generation int, mediaEpoch uint64, requireAuthority bool, maxWindow, stableWindow time.Duration) bool {
 	if !s.VideoRecoveryBurstEnabled {
-		return
+		if requireAuthority {
+			return s.IsSwitchVideoAuthority(generation, mediaEpoch)
+		}
+		return true
 	}
 
 	now := time.Now()
@@ -108,6 +121,10 @@ func (s *Session) StartSwitchVideoRecovery(maxWindow, stableWindow time.Duration
 	stableWindow = normalizePositiveDuration(stableWindow, defaultSwitchStableWindow)
 
 	s.mu.Lock()
+	if requireAuthority && (s.MediaEpoch != mediaEpoch || s.SwitchGeneration != generation) {
+		s.mu.Unlock()
+		return false
+	}
 	s.SwitchReceivedAt = now
 	s.SwitchVideoRecoveryStartedAt = now
 	s.SwitchVideoRecoveryUntil = now.Add(maxWindow)
@@ -138,7 +155,11 @@ func (s *Session) StartSwitchVideoRecovery(maxWindow, stableWindow time.Duration
 		s.ID, until.Format(time.RFC3339Nano), stableWindow)
 	fmt.Printf("[%s] 📈 video_recovery_window_start reason=switch until=%s\n", s.ID, until.Format(time.RFC3339Nano))
 	fmt.Printf("[%s] 📈 recovery_policy interval=%s stale=%s firStale=%s\n", s.ID, interval, stale, firStale)
+	if requireAuthority && !s.IsSwitchVideoAuthority(generation, mediaEpoch) {
+		return false
+	}
 	_ = s.FlushPendingBrowserKeyframeRequest("switch")
+	return true
 }
 
 func (s *Session) isSwitchVideoRecoveryActiveLocked(now time.Time) bool {

@@ -148,6 +148,7 @@ func TestResetMediaStateClearsSIPParameterSetsAndSwitchGateWithoutReusingLease(t
 		SwitchVideoGateReservedPackets:    3,
 		SwitchVideoGateReservedSSRC:       1234,
 		SwitchVideoGateReservedInjection:  true,
+		MediaEpoch:                        9,
 	}
 
 	sess.ResetMediaState()
@@ -169,6 +170,9 @@ func TestResetMediaStateClearsSIPParameterSetsAndSwitchGateWithoutReusingLease(t
 	}
 	if sess.SwitchVideoGateLeaseNonce != 41 {
 		t.Fatalf("expected lease nonce preserved at 41, got %d", sess.SwitchVideoGateLeaseNonce)
+	}
+	if sess.MediaEpoch != 10 {
+		t.Fatalf("expected media epoch to advance to 10, got %d", sess.MediaEpoch)
 	}
 
 	sess.VideoAUNormalizeEnabled = true

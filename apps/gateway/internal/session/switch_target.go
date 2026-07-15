@@ -11,6 +11,7 @@ type SwitchTargetDecision struct {
 	Ignore          bool
 	Reason          string
 	Generation      int
+	MediaEpoch      uint64
 	Queue           string
 	Agent           string
 	MediaSSRC       uint32
@@ -22,13 +23,14 @@ type SwitchTargetDecision struct {
 }
 
 func (s SwitchTargetDecision) LogFields() string {
-	return fmt.Sprintf("queue=%s agent=%s generation=%d reason=%s ssrc=%d source=%s duplicateCount=%d debounceMs=%d",
-		s.Queue, s.Agent, s.Generation, s.Reason, s.MediaSSRC, s.MediaSource, s.DuplicateCount, s.DebounceWindow.Milliseconds())
+	return fmt.Sprintf("queue=%s agent=%s generation=%d mediaEpoch=%d reason=%s ssrc=%d source=%s duplicateCount=%d debounceMs=%d",
+		s.Queue, s.Agent, s.Generation, s.MediaEpoch, s.Reason, s.MediaSSRC, s.MediaSource, s.DuplicateCount, s.DebounceWindow.Milliseconds())
 }
 
-// PrepareSwitchVideoTarget decides whether an incoming @switch target should
-// start a fresh recovery generation or be treated as a duplicate retry.
-func (s *Session) PrepareSwitchVideoTarget(queue, agent string, now time.Time, debounceWindow time.Duration, debounceEnabled bool) SwitchTargetDecision {
+// PrepareAndActivateSwitchVideoTarget atomically decides whether an incoming
+// @switch target is accepted and, when normalization is enabled, publishes its
+// generation only together with an active complete-IDR gate.
+func (s *Session) PrepareAndActivateSwitchVideoTarget(queue, agent string, now time.Time, debounceWindow time.Duration, debounceEnabled bool) (SwitchTargetDecision, SwitchVideoGateActivation) {
 	debounceWindow = normalizePositiveDuration(debounceWindow, defaultSwitchDuplicateDebounce)
 
 	s.mu.Lock()
@@ -44,6 +46,7 @@ func (s *Session) PrepareSwitchVideoTarget(queue, agent string, now time.Time, d
 		Queue:          queue,
 		Agent:          agent,
 		Generation:     s.SwitchGeneration,
+		MediaEpoch:     s.MediaEpoch,
 		MediaSSRC:      currentSSRC,
 		MediaSource:    currentSource,
 		DebounceWindow: debounceWindow,
@@ -64,7 +67,11 @@ func (s *Session) PrepareSwitchVideoTarget(queue, agent string, now time.Time, d
 		decision.Reason = "duplicate-target"
 		decision.Generation = s.SwitchGeneration
 		decision.DuplicateCount = s.SwitchDuplicateCount
-		return decision
+		return decision, SwitchVideoGateActivation{
+			Active: s.SwitchVideoGateActive, Outcome: SwitchVideoGateActivationUnchanged,
+			Generation: s.SwitchVideoGateGeneration, StartedAt: s.SwitchVideoGateStartedAt,
+			FeedbackBaseline: s.SwitchVideoGateFeedbackBaseline,
+		}
 	}
 
 	reason := "new-target"
@@ -89,11 +96,21 @@ func (s *Session) PrepareSwitchVideoTarget(queue, agent string, now time.Time, d
 	decision.Generation = s.SwitchGeneration
 	decision.DuplicateCount = 0
 	decision.MediaGeneration = fmt.Sprintf("ssrc=%d source=%s", currentSSRC, currentSource)
-	return decision
+	s.clearSIPVideoParameterSetsLocked()
+	activation := s.startSwitchVideoGateLocked(decision.Generation, now, "agent-switch")
+	return decision, activation
 }
 
 func (s *Session) GetSwitchGeneration() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.SwitchGeneration
+}
+
+// IsSwitchVideoAuthority reports whether a handler token still belongs to the
+// current call media epoch and latest accepted switch generation.
+func (s *Session) IsSwitchVideoAuthority(generation int, mediaEpoch uint64) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.MediaEpoch == mediaEpoch && s.SwitchGeneration == generation
 }

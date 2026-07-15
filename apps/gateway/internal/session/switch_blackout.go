@@ -19,8 +19,21 @@ func (s *Session) StartSwitchVideoBlackout(blackout, maxWait time.Duration, reas
 // previous rendered frame eligible to remain visible. Blackout mode keeps the
 // legacy minimum all-packet hold before keyframe release.
 func (s *Session) StartSwitchVideoTransitionHold(mode string, blackout, maxWait time.Duration, reason string) {
+	s.startSwitchVideoTransitionHold(0, 0, false, mode, blackout, maxWait, reason)
+}
+
+// StartSwitchVideoTransitionHoldIfAuthoritative starts the transition hold
+// only while the supplied switch token remains current.
+func (s *Session) StartSwitchVideoTransitionHoldIfAuthoritative(generation int, mediaEpoch uint64, mode string, blackout, maxWait time.Duration, reason string) bool {
+	return s.startSwitchVideoTransitionHold(generation, mediaEpoch, true, mode, blackout, maxWait, reason)
+}
+
+func (s *Session) startSwitchVideoTransitionHold(generation int, mediaEpoch uint64, requireAuthority bool, mode string, blackout, maxWait time.Duration, reason string) bool {
 	if !s.SwitchVideoBlackoutEnabled {
-		return
+		if requireAuthority {
+			return s.IsSwitchVideoAuthority(generation, mediaEpoch)
+		}
+		return true
 	}
 	mode = normalizeSwitchVideoTransitionMode(mode)
 	if blackout <= 0 {
@@ -37,6 +50,10 @@ func (s *Session) StartSwitchVideoTransitionHold(mode string, blackout, maxWait 
 	}
 
 	s.mu.Lock()
+	if requireAuthority && (s.MediaEpoch != mediaEpoch || s.SwitchGeneration != generation) {
+		s.mu.Unlock()
+		return false
+	}
 	s.SwitchVideoTransitionMode = mode
 	s.SwitchVideoBlackoutStarted = now
 	s.SwitchVideoBlackoutUntil = holdUntil
@@ -53,6 +70,7 @@ func (s *Session) StartSwitchVideoTransitionHold(mode string, blackout, maxWait 
 		until.Format(time.RFC3339Nano),
 		maxUntil.Format(time.RFC3339Nano),
 	)
+	return true
 }
 
 // StopSwitchVideoBlackout ends the temporary @switch blackout hold.

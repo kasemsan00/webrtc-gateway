@@ -7,6 +7,25 @@ import (
 
 const switchVideoGateRejectLogInterval = time.Second
 
+const (
+	SwitchVideoGateActivationActive    = "active"
+	SwitchVideoGateActivationDisabled  = "disabled"
+	SwitchVideoGateActivationRejected  = "rejected"
+	SwitchVideoGateActivationUnchanged = "unchanged"
+)
+
+// SwitchVideoGateActivation is a lock-consistent snapshot of a gate-start
+// attempt. Callers may safely log it after the session lock is released.
+type SwitchVideoGateActivation struct {
+	Active           bool
+	Outcome          string
+	Generation       int
+	StartedAt        time.Time
+	FeedbackBaseline int
+	RejectReason     string
+	NewStart         bool
+}
+
 // SwitchVideoGateDecision describes whether a normalized video access unit may
 // be emitted and identifies a reserved gated release when present.
 type SwitchVideoGateDecision struct {
@@ -141,30 +160,48 @@ func (s *Session) AbortSwitchVideoGateRelease(generation int, reservation uint64
 // a duplicate start for the active generation is idempotent.
 func (s *Session) StartSwitchVideoGate(generation int, now time.Time, reason string) bool {
 	s.mu.Lock()
-	if !s.VideoAUNormalizeEnabled ||
-		generation != s.SwitchGeneration ||
-		generation < s.SwitchVideoGateAcceptedGeneration ||
-		(s.SwitchVideoGateActive && generation < s.SwitchVideoGateGeneration) {
-		s.mu.Unlock()
-		return false
+	activation := s.startSwitchVideoGateLocked(generation, now, reason)
+	id := s.ID
+	s.mu.Unlock()
+
+	if activation.NewStart {
+		fmt.Printf("[%s] switch_video_gate_start generation=%d reason=%s feedbackBaseline=%d\n",
+			id, activation.Generation, reason, activation.FeedbackBaseline)
+	}
+	return activation.Outcome == SwitchVideoGateActivationActive
+}
+
+func (s *Session) startSwitchVideoGateLocked(generation int, now time.Time, reason string) SwitchVideoGateActivation {
+	if !s.VideoAUNormalizeEnabled {
+		s.clearSwitchVideoGateLocked()
+		return SwitchVideoGateActivation{Outcome: SwitchVideoGateActivationDisabled, Generation: generation}
+	}
+	if generation != s.SwitchGeneration {
+		return SwitchVideoGateActivation{Outcome: SwitchVideoGateActivationRejected, Generation: generation, RejectReason: "non-authoritative-generation"}
+	}
+	if generation < s.SwitchVideoGateAcceptedGeneration {
+		return SwitchVideoGateActivation{Outcome: SwitchVideoGateActivationRejected, Generation: generation, RejectReason: "stale-accepted-generation"}
+	}
+	if s.SwitchVideoGateActive && generation < s.SwitchVideoGateGeneration {
+		return SwitchVideoGateActivation{Outcome: SwitchVideoGateActivationRejected, Generation: generation, RejectReason: "stale-active-generation"}
 	}
 	if s.SwitchVideoGateActive && generation == s.SwitchVideoGateGeneration {
-		s.mu.Unlock()
-		return true
+		return SwitchVideoGateActivation{
+			Active: true, Outcome: SwitchVideoGateActivationActive, Generation: generation,
+			StartedAt: s.SwitchVideoGateStartedAt, FeedbackBaseline: s.SwitchVideoGateFeedbackBaseline,
+		}
 	}
+
 	s.clearSwitchVideoGateLocked()
 	s.SwitchVideoGateActive = true
 	s.SwitchVideoGateGeneration = generation
 	s.SwitchVideoGateStartedAt = now
 	s.SwitchVideoGateStartReason = reason
 	s.SwitchVideoGateFeedbackBaseline = s.PLISent
-	id := s.ID
-	feedbackBaseline := s.SwitchVideoGateFeedbackBaseline
-	s.mu.Unlock()
-
-	fmt.Printf("[%s] switch_video_gate_start generation=%d reason=%s feedbackBaseline=%d\n",
-		id, generation, reason, feedbackBaseline)
-	return true
+	return SwitchVideoGateActivation{
+		Active: true, Outcome: SwitchVideoGateActivationActive, Generation: generation,
+		StartedAt: now, FeedbackBaseline: s.SwitchVideoGateFeedbackBaseline, NewStart: true,
+	}
 }
 
 // StopSwitchVideoGate clears only the matching active generation.

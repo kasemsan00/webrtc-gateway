@@ -198,3 +198,153 @@ func TestHandleSwitchMessage_MalformedForcePathDoesNotStartVideoGate(t *testing.
 			sess.SwitchVideoGateActive, sess.SwitchVideoGateGeneration, sess.GetSwitchGeneration())
 	}
 }
+
+func TestHandleSwitchMessage_StaleGenerationAbortsBeforeRecoveryFeedbackOrHold(t *testing.T) {
+	cfg := switchStaleHandlerTestConfig(true)
+	mgr := session.NewManager(cfg)
+	sess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+	t.Cleanup(func() { mgr.DeleteSession(sess.ID) })
+	sess.SetCallInfo("outbound", "sip:0900200002@example.com", "1002", "call-1")
+	sess.SetState(session.StateActive)
+
+	accepted := make(chan struct{})
+	resume := make(chan struct{})
+	stages := make(chan string, 16)
+	srv := &Server{config: cfg.SIP, rtpConfig: cfg.RTP, sessionMgr: mgr}
+	srv.switchHandlerTestHook = func(stage string, decision session.SwitchTargetDecision) {
+		if stage == "accepted" && decision.Generation == 1 {
+			close(accepted)
+			<-resume
+			return
+		}
+		stages <- stage
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		srv.handleSwitchMessage("@switch:14131|00025", "sip:0900200002@example.com")
+	}()
+	<-accepted
+
+	newer, activation := sess.PrepareAndActivateSwitchVideoTarget("14131", "00026", time.Now(), time.Minute, true)
+	if newer.Generation != 2 || !activation.Active {
+		t.Fatalf("failed to accept newer switch: decision=%+v activation=%+v", newer, activation)
+	}
+	sess.CacheSIPSPS([]byte{0x67, 0x64, 0x00, 0x29})
+	sess.CacheSIPPPS([]byte{0x68, 0xee, 0x3c, 0x81})
+	gateStartedAt := sess.SwitchVideoGateStartedAt
+	close(resume)
+	<-done
+
+	select {
+	case stage := <-stages:
+		t.Fatalf("stale handler entered stage %q", stage)
+	default:
+	}
+	if sess.IsSwitchVideoRecoveryActive() || !sess.SwitchVideoBlackoutUntil.IsZero() {
+		t.Fatalf("stale handler mutated recovery/hold state")
+	}
+	if sess.SwitchVideoGateGeneration != newer.Generation || !sess.SwitchVideoGateStartedAt.Equal(gateStartedAt) {
+		t.Fatalf("stale handler mutated newer gate")
+	}
+	if _, _, ok := sess.GetSIPCachedSPSPPS(); !ok {
+		t.Fatalf("stale handler cleared newer SIP parameter sets")
+	}
+}
+
+func TestHandleSwitchMessage_ResetEpochAbortsBeforeRecoveryFeedbackOrHold(t *testing.T) {
+	cfg := switchStaleHandlerTestConfig(true)
+	mgr := session.NewManager(cfg)
+	sess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+	t.Cleanup(func() { mgr.DeleteSession(sess.ID) })
+	sess.SetCallInfo("outbound", "sip:0900200002@example.com", "1002", "call-1")
+	sess.SetState(session.StateActive)
+
+	accepted := make(chan struct{})
+	resume := make(chan struct{})
+	stages := make(chan string, 16)
+	srv := &Server{config: cfg.SIP, rtpConfig: cfg.RTP, sessionMgr: mgr}
+	srv.switchHandlerTestHook = func(stage string, decision session.SwitchTargetDecision) {
+		if stage == "accepted" {
+			close(accepted)
+			<-resume
+			return
+		}
+		stages <- stage
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		srv.handleSwitchMessage("@switch:14131|00025", "sip:0900200002@example.com")
+	}()
+	<-accepted
+
+	sess.ResetMediaState()
+	sess.CacheSIPSPS([]byte{0x67, 0x64, 0x00, 0x2a})
+	sess.CacheSIPPPS([]byte{0x68, 0xee, 0x3c, 0x82})
+	close(resume)
+	<-done
+
+	select {
+	case stage := <-stages:
+		t.Fatalf("reset-invalidated handler entered stage %q", stage)
+	default:
+	}
+	if sess.IsSwitchVideoRecoveryActive() || !sess.SwitchVideoBlackoutUntil.IsZero() || sess.SwitchVideoGateActive {
+		t.Fatalf("reset-invalidated handler mutated new-call media state")
+	}
+	if _, _, ok := sess.GetSIPCachedSPSPPS(); !ok {
+		t.Fatalf("reset-invalidated handler cleared new-call SIP parameter sets")
+	}
+}
+
+func TestHandleSwitchMessage_NormalizationDisabledKeepsLegacyRecovery(t *testing.T) {
+	cfg := switchStaleHandlerTestConfig(false)
+	mgr := session.NewManager(cfg)
+	sess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+	t.Cleanup(func() { mgr.DeleteSession(sess.ID) })
+	sess.SetCallInfo("outbound", "sip:0900200002@example.com", "1002", "call-1")
+	sess.SetState(session.StateActive)
+
+	srv := &Server{config: cfg.SIP, rtpConfig: cfg.RTP, sessionMgr: mgr}
+	srv.handleSwitchMessage("@switch:14131|00025", "sip:0900200002@example.com")
+
+	if sess.SwitchVideoGateActive {
+		t.Fatalf("normalization-disabled legacy path activated gate")
+	}
+	if !sess.IsSwitchVideoRecoveryActive() {
+		t.Fatalf("normalization-disabled legacy path skipped recovery")
+	}
+}
+
+func switchStaleHandlerTestConfig(normalize bool) *config.Config {
+	return &config.Config{
+		SIP: config.SIPConfig{
+			VideoAUNormalizeEnabled:        normalize,
+			SwitchPLIDelayMS:               0,
+			SwitchVideoTransitionMode:      config.SIPSwitchVideoTransitionPreserve,
+			SwitchVideoBlackoutEnabled:     true,
+			SwitchVideoBlackoutMS:          300,
+			SwitchVideoBlackoutMaxWaitMS:   1200,
+			SwitchVideoRecoveryWindowMS:    5000,
+			SwitchVideoRecoveryStableMS:    750,
+			SwitchDuplicateDebounceEnabled: true,
+			SwitchDuplicateDebounceMS:      60000,
+			VideoRecoveryBurstEnabled:      true,
+			VideoRecoveryBurstWindowMS:     12000,
+			VideoRecoveryBurstIntervalMS:   800,
+			VideoRecoveryBurstStaleMS:      1200,
+			VideoRecoveryBurstFIRStaleMS:   2500,
+		},
+		RTP: config.RTPConfig{BufferSize: 1500},
+	}
+}

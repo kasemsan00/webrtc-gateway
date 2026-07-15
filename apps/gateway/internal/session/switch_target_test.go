@@ -1,6 +1,8 @@
 package session
 
 import (
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 )
@@ -11,7 +13,7 @@ func TestPrepareSwitchVideoTargetIgnoresDuplicateInsideDebounce(t *testing.T) {
 	sess.RemoteVideoSSRC = 1111
 	sess.SIPVideoRTPSource = "203.0.113.10:4000"
 
-	first := sess.PrepareSwitchVideoTarget("14131", "00025", now, time.Minute, true)
+	first, _ := sess.PrepareAndActivateSwitchVideoTarget("14131", "00025", now, time.Minute, true)
 	if first.Ignore {
 		t.Fatalf("expected first switch to be honored")
 	}
@@ -19,7 +21,7 @@ func TestPrepareSwitchVideoTargetIgnoresDuplicateInsideDebounce(t *testing.T) {
 		t.Fatalf("expected first generation 1, got %d", first.Generation)
 	}
 
-	dup := sess.PrepareSwitchVideoTarget("14131", "00025", now.Add(30*time.Second), time.Minute, true)
+	dup, _ := sess.PrepareAndActivateSwitchVideoTarget("14131", "00025", now.Add(30*time.Second), time.Minute, true)
 	if !dup.Ignore {
 		t.Fatalf("expected duplicate switch to be ignored")
 	}
@@ -37,8 +39,8 @@ func TestPrepareSwitchVideoTargetHonorsAfterDebounce(t *testing.T) {
 	sess.RemoteVideoSSRC = 1111
 	sess.SIPVideoRTPSource = "203.0.113.10:4000"
 
-	first := sess.PrepareSwitchVideoTarget("14131", "00025", now, time.Minute, true)
-	next := sess.PrepareSwitchVideoTarget("14131", "00025", now.Add(61*time.Second), time.Minute, true)
+	first, _ := sess.PrepareAndActivateSwitchVideoTarget("14131", "00025", now, time.Minute, true)
+	next, _ := sess.PrepareAndActivateSwitchVideoTarget("14131", "00025", now.Add(61*time.Second), time.Minute, true)
 
 	if next.Ignore {
 		t.Fatalf("expected switch after debounce window to be honored")
@@ -57,10 +59,10 @@ func TestPrepareSwitchVideoTargetHonorsMediaGenerationChange(t *testing.T) {
 	sess.RemoteVideoSSRC = 1111
 	sess.SIPVideoRTPSource = "203.0.113.10:4000"
 
-	first := sess.PrepareSwitchVideoTarget("14131", "00025", now, time.Minute, true)
+	first, _ := sess.PrepareAndActivateSwitchVideoTarget("14131", "00025", now, time.Minute, true)
 	sess.RemoteVideoSSRC = 2222
 	sess.SIPVideoRTPSource = "203.0.113.10:4010"
-	next := sess.PrepareSwitchVideoTarget("14131", "00025", now.Add(30*time.Second), time.Minute, true)
+	next, _ := sess.PrepareAndActivateSwitchVideoTarget("14131", "00025", now.Add(30*time.Second), time.Minute, true)
 
 	if next.Ignore {
 		t.Fatalf("expected same target with changed media generation to be honored")
@@ -70,5 +72,102 @@ func TestPrepareSwitchVideoTargetHonorsMediaGenerationChange(t *testing.T) {
 	}
 	if next.Reason != "media-generation-changed" {
 		t.Fatalf("expected media-generation-changed reason, got %q", next.Reason)
+	}
+}
+
+func TestPrepareAndActivateSwitchVideoTargetPublishesGateAndClearsSIPCacheAtomically(t *testing.T) {
+	sess := newBurstTestSession("switch-target-atomic")
+	sess.VideoAUNormalizeEnabled = true
+	sess.CacheSIPSPS([]byte{0x67, 0x64, 0x00, 0x28})
+	sess.CacheSIPPPS([]byte{0x68, 0xee, 0x3c, 0x80})
+
+	decision, activation := sess.PrepareAndActivateSwitchVideoTarget("14131", "00025", time.Now(), time.Minute, true)
+
+	if decision.Ignore || decision.Generation != 1 {
+		t.Fatalf("unexpected decision: %+v", decision)
+	}
+	if !activation.Active || activation.Outcome != SwitchVideoGateActivationActive {
+		t.Fatalf("expected active gate result, got %+v", activation)
+	}
+	if !sess.IsSwitchVideoAuthority(decision.Generation, decision.MediaEpoch) {
+		t.Fatalf("accepted token is not authoritative: %+v", decision)
+	}
+	sess.mu.RLock()
+	defer sess.mu.RUnlock()
+	if sess.SwitchGeneration != decision.Generation || !sess.SwitchVideoGateActive ||
+		sess.SwitchVideoGateGeneration != decision.Generation {
+		t.Fatalf("generation published without matching active gate: switch=%d active=%v gate=%d",
+			sess.SwitchGeneration, sess.SwitchVideoGateActive, sess.SwitchVideoGateGeneration)
+	}
+	if len(sess.SIPCachedSPS) != 0 || len(sess.SIPCachedPPS) != 0 {
+		t.Fatalf("accepted switch retained SIP cache: SPS=%x PPS=%x", sess.SIPCachedSPS, sess.SIPCachedPPS)
+	}
+}
+
+func TestPrepareAndActivateSwitchVideoTargetHasNoPublishedGenerationWithoutGate(t *testing.T) {
+	sess := newBurstTestSession("switch-target-publication")
+	sess.VideoAUNormalizeEnabled = true
+	stop := make(chan struct{})
+	start := make(chan struct{})
+	errCh := make(chan string, 1)
+	var readers sync.WaitGroup
+	var ready sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		readers.Add(1)
+		ready.Add(1)
+		go func() {
+			defer readers.Done()
+			ready.Done()
+			<-start
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				sess.mu.RLock()
+				generation := sess.SwitchGeneration
+				active := sess.SwitchVideoGateActive
+				gateGeneration := sess.SwitchVideoGateGeneration
+				sess.mu.RUnlock()
+				if generation > 0 && (!active || gateGeneration != generation) {
+					select {
+					case errCh <- fmt.Sprintf("switch=%d active=%v gate=%d", generation, active, gateGeneration):
+					default:
+					}
+					return
+				}
+			}
+		}()
+	}
+	ready.Wait()
+	close(start)
+
+	for generation := 1; generation <= 100; generation++ {
+		decision, activation := sess.PrepareAndActivateSwitchVideoTarget("14131", fmt.Sprintf("%05d", generation), time.Now(), time.Minute, true)
+		if decision.Generation != generation || !activation.Active {
+			t.Fatalf("transition %d failed: decision=%+v activation=%+v", generation, decision, activation)
+		}
+	}
+	close(stop)
+	readers.Wait()
+	select {
+	case observation := <-errCh:
+		t.Fatalf("observed non-atomic publication: %s", observation)
+	default:
+	}
+}
+
+func TestPrepareAndActivateSwitchVideoTargetNormalizationDisabledUsesLegacyOutcome(t *testing.T) {
+	sess := newBurstTestSession("switch-target-disabled")
+	sess.VideoAUNormalizeEnabled = false
+
+	decision, activation := sess.PrepareAndActivateSwitchVideoTarget("14131", "00025", time.Now(), time.Minute, true)
+
+	if decision.Ignore || activation.Active || activation.Outcome != SwitchVideoGateActivationDisabled {
+		t.Fatalf("expected accepted legacy outcome, decision=%+v activation=%+v", decision, activation)
+	}
+	if !sess.IsSwitchVideoAuthority(decision.Generation, decision.MediaEpoch) {
+		t.Fatalf("disabled-normalization switch token should remain authoritative")
 	}
 }

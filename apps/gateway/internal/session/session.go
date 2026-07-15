@@ -116,6 +116,7 @@ type Session struct {
 	SwitchTargetQueue                    string               `json:"-"`
 	SwitchTargetAgent                    string               `json:"-"`
 	SwitchTargetReceivedAt               time.Time            `json:"-"`
+	MediaEpoch                           uint64               `json:"-"`
 	SwitchGeneration                     int                  `json:"-"`
 	SwitchMediaSSRC                      uint32               `json:"-"`
 	SwitchMediaSource                    string               `json:"-"`

@@ -81,6 +81,9 @@ type Server struct {
 	trunkManager   *TrunkManager
 	// Static registration state (ensures single refresh goroutine)
 	regState *registrationState
+	// switchHandlerTestHook is nil in production. Tests use it to pause a
+	// handler after atomic acceptance and observe stale-token cancellation.
+	switchHandlerTestHook func(stage string, decision session.SwitchTargetDecision)
 }
 
 // NewServer creates a new SIP server

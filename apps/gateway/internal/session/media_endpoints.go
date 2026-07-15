@@ -372,6 +372,9 @@ func (s *Session) SetRemoteVideoSSRC(ssrc uint32) {
 func (s *Session) ResetMediaState() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.MediaEpoch != ^uint64(0) {
+		s.MediaEpoch++
+	}
 
 	// Reset audio RTP state
 	s.AudioSeq = 0

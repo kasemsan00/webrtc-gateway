@@ -1210,39 +1210,76 @@ func (s *Server) handleSwitchMessage(body string, callerURI string) {
 
 	fmt.Printf("📍 Found session %s for caller %s (queue: %s, agent: %s)\n", sess.ID, callerUsername, queueNumber, agentUsername)
 
-	acceptedSwitchGeneration := 0
+	var switchDecision session.SwitchTargetDecision
+	var gateActivation session.SwitchVideoGateActivation
+	genuineSwitch := queueNumber != "force send PLI"
+	switchAuthorized := func() bool {
+		return !genuineSwitch || sess.IsSwitchVideoAuthority(switchDecision.Generation, switchDecision.MediaEpoch)
+	}
 	if queueNumber != "force send PLI" {
 		debounce := time.Duration(s.config.SwitchDuplicateDebounceMS) * time.Millisecond
-		decision := sess.PrepareSwitchVideoTarget(queueNumber, agentUsername, time.Now(), debounce, s.config.SwitchDuplicateDebounceEnabled)
-		if decision.Ignore {
-			fmt.Printf("[%s] switch_duplicate_ignored %s\n", sess.ID, decision.LogFields())
+		switchDecision, gateActivation = sess.PrepareAndActivateSwitchVideoTarget(queueNumber, agentUsername, time.Now(), debounce, s.config.SwitchDuplicateDebounceEnabled)
+		if switchDecision.Ignore {
+			fmt.Printf("[%s] switch_duplicate_ignored %s\n", sess.ID, switchDecision.LogFields())
 			return
 		}
-		if decision.Reason == "media-generation-changed" {
-			fmt.Printf("[%s] switch_duplicate_honored %s mediaGeneration=%s\n", sess.ID, decision.LogFields(), decision.MediaGeneration)
+		if switchDecision.Reason == "media-generation-changed" {
+			fmt.Printf("[%s] switch_duplicate_honored %s mediaGeneration=%s\n", sess.ID, switchDecision.LogFields(), switchDecision.MediaGeneration)
 		} else {
-			fmt.Printf("[%s] switch_target_honored %s mediaGeneration=%s\n", sess.ID, decision.LogFields(), decision.MediaGeneration)
+			fmt.Printf("[%s] switch_target_honored %s mediaGeneration=%s\n", sess.ID, switchDecision.LogFields(), switchDecision.MediaGeneration)
 		}
-		acceptedSwitchGeneration = decision.Generation
+		fmt.Printf("[%s] switch_video_gate_activation generation=%d mediaEpoch=%d outcome=%s active=%v feedbackBaseline=%d rejectReason=%s\n",
+			sess.ID, switchDecision.Generation, switchDecision.MediaEpoch, gateActivation.Outcome,
+			gateActivation.Active, gateActivation.FeedbackBaseline, gateActivation.RejectReason)
+		if gateActivation.Outcome == session.SwitchVideoGateActivationRejected {
+			return
+		}
+		s.runSwitchHandlerTestHook("accepted", switchDecision)
+		if !sess.IsSwitchVideoAuthority(switchDecision.Generation, switchDecision.MediaEpoch) {
+			fmt.Printf("[%s] switch_workflow_stale generation=%d mediaEpoch=%d stage=before-recovery\n",
+				sess.ID, switchDecision.Generation, switchDecision.MediaEpoch)
+			return
+		}
 	}
 
 	recoveryWindow := time.Duration(s.config.SwitchVideoRecoveryWindowMS) * time.Millisecond
 	stableWindow := time.Duration(s.config.SwitchVideoRecoveryStableMS) * time.Millisecond
-	sess.StartSwitchVideoRecovery(recoveryWindow, stableWindow)
-	if acceptedSwitchGeneration != 0 {
-		sess.ClearSIPVideoParameterSets()
-		if !sess.StartSwitchVideoGate(acceptedSwitchGeneration, time.Now(), "agent-switch") {
-			fmt.Printf("[%s] switch_video_gate_start_rejected generation=%d authoritativeGeneration=%d normalizeEnabled=%v\n",
-				sess.ID, acceptedSwitchGeneration, sess.GetSwitchGeneration(), s.config.VideoAUNormalizeEnabled)
+	if genuineSwitch {
+		s.runSwitchHandlerTestHook("recovery", switchDecision)
+		if !sess.StartSwitchVideoRecoveryIfAuthoritative(switchDecision.Generation, switchDecision.MediaEpoch, recoveryWindow, stableWindow) {
+			return
 		}
+	} else {
+		sess.StartSwitchVideoRecovery(recoveryWindow, stableWindow)
 	}
 
 	// 3. Immediate fast-start kick before any optional delay.
 	// Send FIR + PLI once to both endpoints to reduce first-keyframe latency.
+	if genuineSwitch {
+		if !sess.IsSwitchVideoAuthority(switchDecision.Generation, switchDecision.MediaEpoch) {
+			return
+		}
+		s.runSwitchHandlerTestHook("feedback", switchDecision)
+		if !sess.IsSwitchVideoAuthority(switchDecision.Generation, switchDecision.MediaEpoch) {
+			return
+		}
+	}
 	fmt.Printf("[%s] 🔀 Sending @switch: immediate FIR + PLI kick to both endpoints\n", sess.ID)
-	sess.SendFIRToWebRTC()   // FIR to browser
+	if !switchAuthorized() {
+		return
+	}
+	sess.SendFIRToWebRTC() // FIR to browser
+	if !switchAuthorized() {
+		return
+	}
 	sess.SendFIRToAsterisk() // FIR to Asterisk
-	sess.SendPLItoWebRTC()   // PLI to browser
+	if !switchAuthorized() {
+		return
+	}
+	sess.SendPLItoWebRTC() // PLI to browser
+	if !switchAuthorized() {
+		return
+	}
 	sess.SendPLIToAsteriskForced("switch")
 
 	// 3.1 Enable temporary @switch transition hold on SIP->WebRTC video path (if enabled).
@@ -1257,7 +1294,17 @@ func (s *Server) handleSwitchMessage(body string, callerURI string) {
 		if maxWait < blackout {
 			maxWait = blackout
 		}
-		sess.StartSwitchVideoTransitionHold(s.config.SwitchVideoTransitionMode, blackout, maxWait, "switch")
+		if genuineSwitch {
+			if !sess.IsSwitchVideoAuthority(switchDecision.Generation, switchDecision.MediaEpoch) {
+				return
+			}
+			s.runSwitchHandlerTestHook("hold", switchDecision)
+			if !sess.StartSwitchVideoTransitionHoldIfAuthoritative(switchDecision.Generation, switchDecision.MediaEpoch, s.config.SwitchVideoTransitionMode, blackout, maxWait, "switch") {
+				return
+			}
+		} else {
+			sess.StartSwitchVideoTransitionHold(s.config.SwitchVideoTransitionMode, blackout, maxWait, "switch")
+		}
 	}
 
 	if queueNumber != "force send PLI" {
@@ -1270,28 +1317,58 @@ func (s *Server) handleSwitchMessage(body string, callerURI string) {
 	}
 
 	// 4. Send FIR burst (6x, 50ms) to request keyframe with SPS/PPS quickly.
-	fmt.Printf("[%s] 🔀 Sending @switch: FIR burst (6x @ 50ms)\n", sess.ID)
-	for i := 0; i < 6; i++ {
-		if sess.GetState() == session.StateEnded {
+	if genuineSwitch {
+		if !sess.IsSwitchVideoAuthority(switchDecision.Generation, switchDecision.MediaEpoch) {
 			return
 		}
-		sess.SendFIRToWebRTC()   // FIR to browser
+		s.runSwitchHandlerTestHook("fir-burst", switchDecision)
+		if !sess.IsSwitchVideoAuthority(switchDecision.Generation, switchDecision.MediaEpoch) {
+			return
+		}
+	}
+	fmt.Printf("[%s] 🔀 Sending @switch: FIR burst (6x @ 50ms)\n", sess.ID)
+	for i := 0; i < 6; i++ {
+		if sess.GetState() == session.StateEnded || !switchAuthorized() {
+			return
+		}
+		sess.SendFIRToWebRTC() // FIR to browser
+		if !switchAuthorized() {
+			return
+		}
 		sess.SendFIRToAsterisk() // FIR to Asterisk
 		time.Sleep(50 * time.Millisecond)
 	}
 
 	// 5. Send PLI burst (6x, 50ms) for redundancy and faster stabilization.
+	if genuineSwitch {
+		if !sess.IsSwitchVideoAuthority(switchDecision.Generation, switchDecision.MediaEpoch) {
+			return
+		}
+		s.runSwitchHandlerTestHook("pli-burst", switchDecision)
+		if !sess.IsSwitchVideoAuthority(switchDecision.Generation, switchDecision.MediaEpoch) {
+			return
+		}
+	}
 	fmt.Printf("[%s] 🔀 Sending @switch: PLI burst (6x @ 50ms)\n", sess.ID)
 	for i := 0; i < 6; i++ {
-		if sess.GetState() == session.StateEnded {
+		if sess.GetState() == session.StateEnded || !switchAuthorized() {
 			return
 		}
 		sess.SendPLItoWebRTC() // PLI to browser
+		if !switchAuthorized() {
+			return
+		}
 		sess.SendPLIToAsteriskForced("switch")
 		time.Sleep(50 * time.Millisecond)
 	}
 
 	fmt.Printf("✅ Sent @switch immediate kick + FIR/PLI bursts (Browser + Asterisk) for session: %s\n", sess.ID)
+}
+
+func (s *Server) runSwitchHandlerTestHook(stage string, decision session.SwitchTargetDecision) {
+	if s.switchHandlerTestHook != nil {
+		s.switchHandlerTestHook(stage, decision)
+	}
 }
 
 // TriggerSwitchMessage triggers @switch handling from external callers (e.g. REST API).
