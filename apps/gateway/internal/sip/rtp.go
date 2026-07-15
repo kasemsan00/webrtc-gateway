@@ -38,6 +38,7 @@ func writeNormalizedVideoAccessUnit(
 	}
 
 	for _, packet := range au.Packets {
+		sess.ApplyWebRTCVideoEgressSSRC(packet)
 		data, err := packet.Marshal()
 		if err != nil {
 			fmt.Printf("[%s] h264_au_write_error stage=marshal seq=%d error=%v\n", sess.ID, packet.SequenceNumber, err)
@@ -452,8 +453,14 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 			return
 		}
 		// Explicit rollback path: preserve the legacy raw reordered stream.
-		sess.CacheVideoRTPPacket(uint16(data[2])<<8|uint16(data[3]), data)
-		_, _ = sess.VideoTrack.Write(data)
+		packet := &rtp.Packet{}
+		if err := packet.Unmarshal(data); err == nil {
+			sess.ApplyWebRTCVideoEgressSSRC(packet)
+			if out, err := packet.Marshal(); err == nil {
+				sess.CacheVideoRTPPacket(packet.SequenceNumber, out)
+				_, _ = sess.VideoTrack.Write(out)
+			}
+		}
 	})
 	lastSwitchGeneration := sess.GetSwitchGeneration()
 	defer func() {
@@ -677,8 +684,13 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 
 			// With normalization enabled, cache the rewritten outbound packet in the
 			// normalizer callback so browser NACK sequence numbers remain aligned.
+			egressData := buffer[:n]
 			if auNormalizer == nil {
-				sess.CacheVideoRTPPacket(packet.Header.SequenceNumber, buffer[:n])
+				sess.ApplyWebRTCVideoEgressSSRC(packet)
+				if out, err := packet.Marshal(); err == nil {
+					egressData = out
+					sess.CacheVideoRTPPacket(packet.SequenceNumber, out)
+				}
 			}
 
 			if len(packet.Payload) > 0 {
@@ -734,7 +746,7 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 
 			// Push into sequence reorder; complete-AU validation follows at flush.
 			if sess.VideoTrack != nil {
-				reorderBuf.Push(seq, buffer[:n], isKeyframe)
+				reorderBuf.Push(seq, egressData, isKeyframe)
 			} else if packetCount == 1 {
 				fmt.Printf("[%s] WARNING: VideoTrack is nil, cannot forward video RTP!\n", sess.ID)
 			}
@@ -775,7 +787,14 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 
 			// The normalized path must never bypass validation with malformed RTP.
 			if sess.VideoTrack != nil && auNormalizer == nil {
-				sess.VideoTrack.Write(buffer[:n])
+				packet := &rtp.Packet{}
+				if err := packet.Unmarshal(buffer[:n]); err == nil {
+					sess.ApplyWebRTCVideoEgressSSRC(packet)
+					if out, err := packet.Marshal(); err == nil {
+						sess.CacheVideoRTPPacket(packet.SequenceNumber, out)
+						_, _ = sess.VideoTrack.Write(out)
+					}
+				}
 			}
 		}
 	}
