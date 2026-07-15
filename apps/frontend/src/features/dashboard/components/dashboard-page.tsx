@@ -330,7 +330,7 @@ function KpiCard({
   const card = (
     <Card
       className={cn(
-        'border-l-2 transition-all hover:-translate-y-0.5 hover:shadow-sm',
+        'h-full min-h-36 border-l-2 transition-all hover:-translate-y-0.5 hover:shadow-sm',
         ACCENT_BORDER[accent],
         to && 'cursor-pointer hover:border-l-opacity-80',
       )}
@@ -383,7 +383,7 @@ function KpiCard({
 
   if (to) {
     return (
-      <Link to={to} className="block">
+      <Link to={to} className="block h-full">
         {card}
       </Link>
     )
@@ -444,7 +444,7 @@ function EmptyState({
 
 function KpiSkeleton() {
   return (
-    <Card className="border-l-2 border-l-transparent">
+    <Card className="h-full min-h-36 border-l-2 border-l-transparent">
       <CardContent className="p-4">
         <div className="flex items-start justify-between">
           <Skeleton className="h-3 w-20" />
@@ -1191,7 +1191,7 @@ export function DashboardPage() {
                     previous: prevSuccessRate ?? undefined,
                   }}
                 />
-                <Card className="border-l-2 border-l-slate-500/50 transition-all hover:-translate-y-0.5 hover:shadow-sm">
+                <Card className="h-full min-h-36 border-l-2 border-l-slate-500/50 transition-all hover:-translate-y-0.5 hover:shadow-sm">
                   <CardContent className="p-4">
                     <div className="flex items-start justify-between gap-2">
                       <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
