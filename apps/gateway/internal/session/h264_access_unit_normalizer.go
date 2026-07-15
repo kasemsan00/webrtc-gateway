@@ -224,12 +224,8 @@ func (n *H264AccessUnitNormalizer) finishLocked() NormalizedH264AccessUnit {
 	packets := n.packets
 	sourceTimestamp := n.sourceTS
 	hasSPS, hasPPS, isIDR := inspectAccessUnit(packets)
-	if hasSPS {
-		n.cachedSPS = cacheNALFromPackets(n.cachedSPS, packets, 7)
-	}
-	if hasPPS {
-		n.cachedPPS = cacheNALFromPackets(n.cachedPPS, packets, 8)
-	}
+	n.cachedSPS = updateCachedNALFromPackets(n.cachedSPS, packets, 7)
+	n.cachedPPS = updateCachedNALFromPackets(n.cachedPPS, packets, 8)
 	parameterSetsReady := len(n.cachedSPS) > 0 && len(n.cachedPPS) > 0
 
 	injected := false
@@ -405,10 +401,24 @@ func inspectSTAPA(payload []byte) (hasSPS, hasPPS, isIDR, valid bool) {
 	return hasSPS, hasPPS, isIDR, true
 }
 
-func cacheNALFromPackets(current []byte, packets []*rtp.Packet, nalType byte) []byte {
+func updateCachedNALFromPackets(current []byte, packets []*rtp.Packet, nalType byte) []byte {
+	nal, present, cacheable := cacheableNALFromPackets(packets, nalType)
+	if !present {
+		return current
+	}
+	if !cacheable {
+		return nil
+	}
+	return append(current[:0], nal...)
+}
+
+func cacheableNALFromPackets(packets []*rtp.Packet, nalType byte) (nal []byte, present, cacheable bool) {
 	for i, packet := range packets {
 		if isSingleNALType(packet.Payload, nalType) {
-			return append(current[:0], packet.Payload...)
+			nal = packet.Payload
+			present = true
+			cacheable = true
+			continue
 		}
 		if len(packet.Payload) > 0 && packet.Payload[0]&0x1f == 24 {
 			for offset := 1; offset+2 <= len(packet.Payload); {
@@ -417,18 +427,28 @@ func cacheNALFromPackets(current []byte, packets []*rtp.Packet, nalType byte) []
 				if size == 0 || offset+size > len(packet.Payload) {
 					break
 				}
-				nal := packet.Payload[offset : offset+size]
-				if isSingleNALType(nal, nalType) {
-					return append(current[:0], nal...)
+				candidate := packet.Payload[offset : offset+size]
+				if isSingleNALType(candidate, nalType) {
+					nal = candidate
+					present = true
+					cacheable = true
+					break
 				}
 				offset += size
 			}
 		}
-		if nal := reassembleFUAParameterSet(packets[i:], nalType); len(nal) > 0 {
-			return append(current[:0], nal...)
+		payload := packet.Payload
+		if len(payload) >= 2 && payload[0]&0x1f == 28 && payload[1]&0x80 != 0 && payload[1]&0x1f == nalType {
+			present = true
+			reassembled := reassembleFUAParameterSet(packets[i:], nalType)
+			if len(reassembled) == 0 {
+				return nil, true, false
+			}
+			nal = reassembled
+			cacheable = true
 		}
 	}
-	return current
+	return nal, present, cacheable
 }
 
 func reassembleFUAParameterSet(packets []*rtp.Packet, nalType byte) []byte {

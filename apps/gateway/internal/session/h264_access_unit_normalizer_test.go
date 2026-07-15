@@ -314,6 +314,74 @@ func TestH264AccessUnitNormalizerDoesNotCacheOversizedFUAParameterSetForInjectio
 	}
 }
 
+func TestH264AccessUnitNormalizerInvalidatesCachedSPSOnOversizedFUAReplacement(t *testing.T) {
+	var emitted []NormalizedH264AccessUnit
+	n := NewH264AccessUnitNormalizer(H264AccessUnitNormalizerConfig{}, func(au NormalizedH264AccessUnit) {
+		emitted = append(emitted, au)
+	})
+	n.ResetForSwitch(22)
+	n.SetParameterSets([]byte{0x67, 0x42, 0x00, 0x1f}, []byte{0x68, 0xce, 0x06, 0xe2})
+
+	spsStart := append([]byte{0x7c, 0x87}, make([]byte, 700)...)
+	spsEnd := append([]byte{0x7c, 0x47}, make([]byte, 600)...)
+	n.Push(h264Packet(400, 36000, false, spsStart))
+	n.Push(h264Packet(401, 36000, true, spsEnd))
+	n.Push(h264Packet(402, 39000, true, []byte{0x65, 0xaa}))
+
+	if len(emitted) != 2 {
+		t.Fatalf("expected replacement SPS and IDR access units, got %d", len(emitted))
+	}
+	idr := emitted[1]
+	if idr.ParameterSetsReady {
+		t.Fatalf("expected oversized replacement SPS to invalidate readiness, got %+v", idr)
+	}
+	assertH264NALTypeAbsent(t, idr.Packets, 7)
+}
+
+func TestH264AccessUnitNormalizerInvalidatesCachedPPSOnFNRIMismatchedFUAReplacement(t *testing.T) {
+	var emitted []NormalizedH264AccessUnit
+	n := NewH264AccessUnitNormalizer(H264AccessUnitNormalizerConfig{}, func(au NormalizedH264AccessUnit) {
+		emitted = append(emitted, au)
+	})
+	n.ResetForSwitch(23)
+	n.SetParameterSets([]byte{0x67, 0x42, 0x00, 0x1f}, []byte{0x68, 0xce, 0x06, 0xe2})
+
+	n.Push(h264Packet(500, 42000, false, []byte{0x7c, 0x88, 0xce, 0x06}))
+	n.Push(h264Packet(501, 42000, true, []byte{0x5c, 0x48, 0xe2}))
+	n.Push(h264Packet(502, 45000, true, []byte{0x65, 0xaa}))
+
+	if len(emitted) != 2 {
+		t.Fatalf("expected replacement PPS and IDR access units, got %d", len(emitted))
+	}
+	idr := emitted[1]
+	if idr.ParameterSetsReady {
+		t.Fatalf("expected invalid replacement PPS to invalidate readiness, got %+v", idr)
+	}
+	assertH264NALTypeAbsent(t, idr.Packets, 8)
+}
+
+func TestH264AccessUnitNormalizerUnrelatedFUADoesNotInvalidateParameterSets(t *testing.T) {
+	var emitted []NormalizedH264AccessUnit
+	n := NewH264AccessUnitNormalizer(H264AccessUnitNormalizerConfig{}, func(au NormalizedH264AccessUnit) {
+		emitted = append(emitted, au)
+	})
+	n.ResetForSwitch(24)
+	n.SetParameterSets([]byte{0x67, 0x42, 0x00, 0x1f}, []byte{0x68, 0xce, 0x06, 0xe2})
+
+	// An SEI FU-A with mismatched F/NRI is unrelated to the SPS/PPS caches.
+	n.Push(h264Packet(600, 48000, false, []byte{0x7c, 0x86, 0x01}))
+	n.Push(h264Packet(601, 48000, true, []byte{0x5c, 0x46, 0x02}))
+	n.Push(h264Packet(602, 51000, true, []byte{0x65, 0xaa}))
+
+	if len(emitted) != 2 {
+		t.Fatalf("expected unrelated FU-A and IDR access units, got %d", len(emitted))
+	}
+	idr := emitted[1]
+	if !idr.ParameterSetsReady || !idr.InjectedParameterSets {
+		t.Fatalf("expected unrelated FU-A not to invalidate parameter sets, got %+v", idr)
+	}
+}
+
 func TestH264AccessUnitNormalizerDropsOverflowAndResyncs(t *testing.T) {
 	var emitted []NormalizedH264AccessUnit
 	n := NewH264AccessUnitNormalizer(H264AccessUnitNormalizerConfig{MaxPackets: 2}, func(au NormalizedH264AccessUnit) {
@@ -380,6 +448,15 @@ func assertPayloadEqual(t *testing.T, got, want []byte) {
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("payload byte %d mismatch: got %#x, want %#x", i, got[i], want[i])
+		}
+	}
+}
+
+func assertH264NALTypeAbsent(t *testing.T, packets []*rtp.Packet, nalType byte) {
+	t.Helper()
+	for _, packet := range packets {
+		if len(packet.Payload) > 0 && packet.Payload[0]&0x1f == nalType {
+			t.Fatalf("unexpected NAL type %d payload in emitted access unit", nalType)
 		}
 	}
 }
