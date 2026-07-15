@@ -12,6 +12,58 @@ import (
 	"k2-gateway/internal/session"
 )
 
+// writeNormalizedVideoAccessUnit is the single owner of gate evaluation,
+// packet writes, and release commit/abort for one normalized access unit.
+// Callers must serialize invocations so a later AU cannot overtake a reserved
+// IDR while it is being written.
+func writeNormalizedVideoAccessUnit(
+	sess *session.Session,
+	au session.NormalizedH264AccessUnit,
+	now time.Time,
+	write func([]byte) (int, error),
+) bool {
+	decision := sess.EvaluateSwitchVideoAccessUnit(au, now)
+	if !decision.Emit {
+		return false
+	}
+
+	abort := func(reason string) {
+		if decision.Reservation != 0 {
+			sess.AbortSwitchVideoGateRelease(au.Generation, decision.Reservation, reason)
+		}
+	}
+	if len(au.Packets) == 0 {
+		abort("empty-access-unit")
+		return false
+	}
+
+	for _, packet := range au.Packets {
+		data, err := packet.Marshal()
+		if err != nil {
+			fmt.Printf("[%s] h264_au_write_error stage=marshal seq=%d error=%v\n", sess.ID, packet.SequenceNumber, err)
+			abort("marshal-failed")
+			return false
+		}
+		if _, err := write(data); err != nil {
+			fmt.Printf("[%s] h264_au_write_error stage=track seq=%d error=%v\n", sess.ID, packet.SequenceNumber, err)
+			abort("track-write-failed")
+			return false
+		}
+		sess.CacheVideoRTPPacket(packet.SequenceNumber, data)
+	}
+
+	if decision.Reservation != 0 && !sess.CommitSwitchVideoGateRelease(
+		au.Generation,
+		decision.Reservation,
+		now,
+	) {
+		fmt.Printf("[%s] h264_au_write_error stage=gate-commit generation=%d reservation=%d\n",
+			sess.ID, au.Generation, decision.Reservation)
+		return false
+	}
+	return true
+}
+
 // startRTPListener starts an RTP listener and returns the port
 // Uses configurable port range from environment variables
 func (s *Server) startRTPListener() (int, error) {
@@ -369,20 +421,11 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 			if sess.VideoTrack == nil {
 				return
 			}
-			for _, packet := range au.Packets {
-				data, marshalErr := packet.Marshal()
-				if marshalErr != nil {
-					fmt.Printf("[%s] h264_au_write_error stage=marshal seq=%d error=%v\n", sess.ID, packet.SequenceNumber, marshalErr)
-					return
-				}
-				sess.CacheVideoRTPPacket(packet.SequenceNumber, data)
-				if _, writeErr := sess.VideoTrack.Write(data); writeErr != nil {
-					fmt.Printf("[%s] h264_au_write_error stage=track seq=%d error=%v\n", sess.ID, packet.SequenceNumber, writeErr)
-					return
-				}
+			now := time.Now()
+			if !writeNormalizedVideoAccessUnit(sess, au, now, sess.VideoTrack.Write) {
+				return
 			}
 			if au.IsIDR {
-				now := time.Now()
 				isPLIResponse, responseTime, pliSent, pliResponse := sess.RecordKeyframe()
 				sess.MarkSwitchVideoKeyframe(now)
 				sess.MarkSwitchVideoProgress(now, false)
@@ -491,6 +534,21 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 				fmt.Printf("[%s] ⏭️ Skipping non-RTP packet #%d (%d bytes) - version=%d (expected 2)\n", sess.ID, packetCount, n, version)
 			}
 			continue
+		}
+
+		// A switch generation is authoritative even when RTPengine preserves the
+		// SIP-side SSRC. Reset queued/source-specific state before classifying or
+		// caching the first packet of the new generation.
+		currentGeneration := sess.GetSwitchGeneration()
+		if currentGeneration != lastSwitchGeneration {
+			reorderBuf.Reset()
+			haveLastSeq = false
+			if auNormalizer != nil {
+				auNormalizer.ResetForSwitch(currentGeneration)
+			}
+			fmt.Printf("[%s] h264_au_source_reset reason=switch-generation previous_generation=%d generation=%d\n",
+				sess.ID, lastSwitchGeneration, currentGeneration)
+			lastSwitchGeneration = currentGeneration
 		}
 
 		// Learn symmetric RTP endpoint from actual RTP source (for NAT/symmetric RTP handling)
@@ -603,6 +661,13 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 					rBuf, rRel, rDrop, rTO, rPend, keyframeAge)
 				summary := updateSwitchSummary(keyframeAgeDuration)
 				sess.ObserveSIPVideoRTPDisorder(summary, time.Now())
+				if stall, ok := sess.ObserveSwitchVideoGateStall(time.Now(), summary); ok {
+					fmt.Printf("[%s] switch_video_gate_stalled generation=%d elapsed_ms=%d rejected_aus=%d packets=%d gaps=%d missing=%d ooo=%d reorder_timeout=%d pending=%d feedback=%s\n",
+						sess.ID, stall.Generation, stall.Elapsed.Milliseconds(), stall.RejectedAUs,
+						stall.Summary.Packets, stall.Summary.Gaps, stall.Summary.Missing,
+						stall.Summary.OutOfOrder, stall.Summary.ReorderTimedOut,
+						stall.Summary.ReorderPending, sess.GetVideoFeedbackTransport())
+				}
 				if auNormalizer != nil {
 					auStats := auNormalizer.Stats()
 					fmt.Printf("[%s] h264_au_stats emitted=%d dropped_incomplete=%d dropped_overflow=%d pending_packets=%d\n",
@@ -654,7 +719,7 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 					sess.ID, packetCount, isPLIResponse, responseTime, pliSent, pliResponse)
 			}
 
-			if sess.ShouldHoldSwitchVideoPacket(time.Now(), isKeyframe) {
+			if auNormalizer == nil && sess.ShouldHoldSwitchVideoPacket(time.Now(), isKeyframe) {
 				continue
 			}
 			lastKeyframe, _ := sess.GetKeyframeTimes()
@@ -669,16 +734,6 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 
 			// Push into sequence reorder; complete-AU validation follows at flush.
 			if sess.VideoTrack != nil {
-				currentGeneration := sess.GetSwitchGeneration()
-				if currentGeneration != lastSwitchGeneration {
-					reorderBuf.Reset()
-					if auNormalizer != nil {
-						auNormalizer.ResetSource()
-					}
-					fmt.Printf("[%s] h264_au_source_reset reason=switch-generation previous_generation=%d generation=%d\n",
-						sess.ID, lastSwitchGeneration, currentGeneration)
-					lastSwitchGeneration = currentGeneration
-				}
 				reorderBuf.Push(seq, buffer[:n], isKeyframe)
 			} else if packetCount == 1 {
 				fmt.Printf("[%s] WARNING: VideoTrack is nil, cannot forward video RTP!\n", sess.ID)

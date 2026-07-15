@@ -143,6 +143,7 @@ func TestResetMediaStateClearsSIPParameterSetsAndSwitchGateWithoutReusingLease(t
 		SwitchVideoGateRejectedCount:      3,
 		SwitchVideoGateLastRejectReason:   "non-idr",
 		SwitchVideoGateLastRejectLogAt:    time.Now(),
+		SwitchVideoGateLastStallLogAt:     time.Now(),
 		SwitchVideoGateLeaseNonce:         41,
 		SwitchVideoGateReservation:        41,
 		SwitchVideoGateReservedPackets:    3,
@@ -163,7 +164,8 @@ func TestResetMediaStateClearsSIPParameterSetsAndSwitchGateWithoutReusingLease(t
 		sess.SwitchVideoGateAcceptedGeneration != 0 || !sess.SwitchVideoGateStartedAt.IsZero() ||
 		sess.SwitchVideoGateStartReason != "" || sess.SwitchVideoGateFeedbackBaseline != 0 ||
 		sess.SwitchVideoGateRejectedCount != 0 || sess.SwitchVideoGateLastRejectReason != "" ||
-		!sess.SwitchVideoGateLastRejectLogAt.IsZero() || sess.SwitchVideoGateReservation != 0 ||
+		!sess.SwitchVideoGateLastRejectLogAt.IsZero() || !sess.SwitchVideoGateLastStallLogAt.IsZero() ||
+		sess.SwitchVideoGateReservation != 0 ||
 		sess.SwitchVideoGateReservedPackets != 0 || sess.SwitchVideoGateReservedSSRC != 0 ||
 		sess.SwitchVideoGateReservedInjection {
 		t.Fatalf("expected complete switch gate reset, got %+v", sess)

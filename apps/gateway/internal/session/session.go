@@ -143,6 +143,7 @@ type Session struct {
 	SwitchVideoGateRejectedCount         int                  `json:"-"`
 	SwitchVideoGateLastRejectReason      string               `json:"-"`
 	SwitchVideoGateLastRejectLogAt       time.Time            `json:"-"`
+	SwitchVideoGateLastStallLogAt        time.Time            `json:"-"`
 	SwitchVideoGateLeaseNonce            uint64               `json:"-"`
 	SwitchVideoGateReservation           uint64               `json:"-"`
 	SwitchVideoGateReservedPackets       int                  `json:"-"`

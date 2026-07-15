@@ -377,6 +377,27 @@ func TestSwitchVideoGateClockRegressionStartsFreshLogWindow(t *testing.T) {
 	}
 }
 
+func TestSwitchVideoGateStallSnapshotIsDelayedAndThrottled(t *testing.T) {
+	now := time.Unix(900, 0)
+	sess := &Session{ID: "gate-stall", VideoAUNormalizeEnabled: true, SwitchGeneration: 9}
+	sess.StartSwitchVideoGate(9, now, "switch")
+	summary := VideoRecoverySummary{Packets: 300, Gaps: 4, Missing: 9, OutOfOrder: 3, ReorderTimedOut: 2}
+
+	if _, ok := sess.ObserveSwitchVideoGateStall(now.Add(time.Second), summary); ok {
+		t.Fatal("stall reported before two-second threshold")
+	}
+	first, ok := sess.ObserveSwitchVideoGateStall(now.Add(2*time.Second), summary)
+	if !ok || first.Generation != 9 || first.Summary.Missing != 9 || first.Elapsed != 2*time.Second {
+		t.Fatalf("unexpected first stall snapshot: %+v ok=%v", first, ok)
+	}
+	if _, ok := sess.ObserveSwitchVideoGateStall(now.Add(3*time.Second), summary); ok {
+		t.Fatal("stall report was not throttled")
+	}
+	if _, ok := sess.ObserveSwitchVideoGateStall(now.Add(4*time.Second), summary); !ok {
+		t.Fatal("expected later stall report")
+	}
+}
+
 func gateTestAU(generation int, idr, parameterSetsReady bool, ssrc uint32) NormalizedH264AccessUnit {
 	return NormalizedH264AccessUnit{
 		Packets:            []*rtp.Packet{{Header: rtp.Header{SSRC: ssrc}}},

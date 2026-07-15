@@ -8,6 +8,11 @@ import (
 const switchVideoGateRejectLogInterval = time.Second
 
 const (
+	switchVideoGateStallThreshold = 2 * time.Second
+	switchVideoGateStallInterval  = 2 * time.Second
+)
+
+const (
 	SwitchVideoGateActivationActive    = "active"
 	SwitchVideoGateActivationDisabled  = "disabled"
 	SwitchVideoGateActivationRejected  = "rejected"
@@ -33,6 +38,41 @@ type SwitchVideoGateDecision struct {
 	Reason      string
 	Generation  int
 	Reservation uint64
+}
+
+type SwitchVideoGateStall struct {
+	Generation  int
+	Elapsed     time.Duration
+	RejectedAUs int
+	Summary     VideoRecoverySummary
+}
+
+// ObserveSwitchVideoGateStall returns a bounded diagnostic snapshot. It does
+// not change gate or recovery state and is intended for the existing sampled
+// RTP statistics cadence rather than per-packet use.
+func (s *Session) ObserveSwitchVideoGateStall(now time.Time, summary VideoRecoverySummary) (SwitchVideoGateStall, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.SwitchVideoGateActive {
+		return SwitchVideoGateStall{}, false
+	}
+	elapsed := switchVideoGateElapsed(s.SwitchVideoGateStartedAt, now)
+	if elapsed < switchVideoGateStallThreshold {
+		return SwitchVideoGateStall{}, false
+	}
+	if !s.SwitchVideoGateLastStallLogAt.IsZero() &&
+		!now.Before(s.SwitchVideoGateLastStallLogAt) &&
+		now.Sub(s.SwitchVideoGateLastStallLogAt) < switchVideoGateStallInterval {
+		return SwitchVideoGateStall{}, false
+	}
+	s.SwitchVideoGateLastStallLogAt = now
+	return SwitchVideoGateStall{
+		Generation:  s.SwitchVideoGateGeneration,
+		Elapsed:     elapsed,
+		RejectedAUs: s.SwitchVideoGateRejectedCount,
+		Summary:     summary,
+	}, true
 }
 
 // EvaluateSwitchVideoAccessUnit reserves the first decoder-safe access unit for
@@ -258,6 +298,7 @@ func (s *Session) clearSwitchVideoGateLocked() {
 	s.SwitchVideoGateRejectedCount = 0
 	s.SwitchVideoGateLastRejectReason = ""
 	s.SwitchVideoGateLastRejectLogAt = time.Time{}
+	s.SwitchVideoGateLastStallLogAt = time.Time{}
 	s.clearSwitchVideoGateReservationLocked()
 }
 
