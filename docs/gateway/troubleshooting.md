@@ -36,6 +36,24 @@ Correlate browser inbound RTP diagnostics with Gateway logs by `sessionId`:
 - A `h264_au_normalized status=complete-idr` line now means the marker and all FU-A fragments were complete; a bare IDR/FU-A start no longer counts as successful keyframe delivery.
 - If normalization itself is suspected, temporarily set `SIP_VIDEO_AU_NORMALIZE_ENABLE=false` and restart the gateway. This restores the legacy raw reordered path and should be used only as a bounded comparison because incomplete frames can poison strict mobile decoders.
 
+## Queue-to-agent video is blocky or has incorrect colors
+
+With `SIP_VIDEO_AU_NORMALIZE_ENABLE=true`, an accepted `@switch` keeps the
+previous decoded frame visible until the Gateway writes fresh SPS/PPS and a
+complete IDR for the new switch generation. Audio continues independently.
+
+- `switch_video_gate_start` means the new media generation is gated.
+- `switch_video_au_rejected` identifies an unsafe AU; inspect `reason` for a
+  stale generation, non-IDR frame, or missing fresh parameter sets.
+- `switch_video_gate_release` reports the clean release latency in `wait_ms`.
+- `switch_video_gate_stalled` reports packet gaps, missing/out-of-order RTP,
+  reorder timeouts, rejected AUs, and the active feedback transport.
+
+For RTPengine deployments, capture both media legs—Asterisk to RTPengine and
+RTPengine to Gateway. Compare the first fresh SPS/PPS, first complete IDR, RTP
+sequence gaps/order/timestamps, and whether Gateway FIR/PLI reaches Asterisk.
+Do not bypass RTPengine in production for this diagnosis.
+
 ## 401 Unauthorized on API/WS
 
 Checkpoints:
