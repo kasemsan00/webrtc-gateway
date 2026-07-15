@@ -8,17 +8,19 @@ import (
 const switchVideoGateRejectLogInterval = time.Second
 
 // SwitchVideoGateDecision describes whether a normalized video access unit may
-// be emitted and whether an active switch gate has already been committed.
+// be emitted and identifies a reserved gated release when present.
 type SwitchVideoGateDecision struct {
-	Emit       bool
-	Released   bool
-	Reason     string
-	Generation int
+	Emit        bool
+	Reason      string
+	Generation  int
+	Reservation uint64
 }
 
 // EvaluateSwitchVideoAccessUnit reserves the first decoder-safe access unit for
 // the active generation. The caller must commit only after every packet write
-// succeeds, or abort the reservation after a failed write.
+// succeeds, or abort the reservation after a failed write. Task 4's single
+// media owner must serialize evaluate, packet writes, and commit/abort as one
+// operation; the session lock protects gate state but is never held for writes.
 func (s *Session) EvaluateSwitchVideoAccessUnit(au NormalizedH264AccessUnit, now time.Time) SwitchVideoGateDecision {
 	s.mu.Lock()
 	if !s.SwitchVideoGateActive {
@@ -41,13 +43,15 @@ func (s *Session) EvaluateSwitchVideoAccessUnit(au NormalizedH264AccessUnit, now
 		reason = "non-idr"
 	case !au.ParameterSetsReady:
 		reason = "parameter-sets-not-ready"
+	case s.SwitchVideoGateLeaseNonce == ^uint64(0):
+		reason = "reservation-exhausted"
 	}
 
 	if reason != "" {
 		s.SwitchVideoGateRejectedCount++
 		rejected := s.SwitchVideoGateRejectedCount
 		elapsed := switchVideoGateElapsed(s.SwitchVideoGateStartedAt, now)
-		shouldLog := s.SwitchVideoGateLastRejectLogAt.IsZero() ||
+		shouldLog := s.SwitchVideoGateLastRejectLogAt.IsZero() || now.Before(s.SwitchVideoGateLastRejectLogAt) ||
 			now.Sub(s.SwitchVideoGateLastRejectLogAt) >= switchVideoGateRejectLogInterval
 		s.SwitchVideoGateLastRejectReason = reason
 		if shouldLog {
@@ -63,22 +67,31 @@ func (s *Session) EvaluateSwitchVideoAccessUnit(au NormalizedH264AccessUnit, now
 	}
 
 	s.SwitchVideoGateReleasing = true
+	s.SwitchVideoGateLeaseNonce++
+	s.SwitchVideoGateReservation = s.SwitchVideoGateLeaseNonce
 	s.SwitchVideoGateReservedPackets = len(au.Packets)
 	s.SwitchVideoGateReservedSSRC = 0
 	if len(au.Packets) > 0 && au.Packets[0] != nil {
 		s.SwitchVideoGateReservedSSRC = au.Packets[0].SSRC
 	}
 	s.SwitchVideoGateReservedInjection = au.InjectedParameterSets
+	reservation := s.SwitchVideoGateReservation
 	s.mu.Unlock()
 
-	return SwitchVideoGateDecision{Emit: true, Reason: "complete-idr-reserved", Generation: generation}
+	return SwitchVideoGateDecision{
+		Emit: true, Reason: "complete-idr-reserved", Generation: generation,
+		Reservation: reservation,
+	}
 }
 
 // CommitSwitchVideoGateRelease opens the gate only after the reserved access
-// unit has been completely written by the caller.
-func (s *Session) CommitSwitchVideoGateRelease(generation int, now time.Time) bool {
+// unit has been completely written by the single media owner. Callers must use
+// the exact reservation returned by EvaluateSwitchVideoAccessUnit.
+func (s *Session) CommitSwitchVideoGateRelease(generation int, reservation uint64, now time.Time) bool {
 	s.mu.Lock()
-	if !s.SwitchVideoGateActive || !s.SwitchVideoGateReleasing || s.SwitchVideoGateGeneration != generation {
+	if !s.SwitchVideoGateActive || !s.SwitchVideoGateReleasing ||
+		s.SwitchVideoGateGeneration != generation || reservation == 0 ||
+		s.SwitchVideoGateReservation != reservation {
 		s.mu.Unlock()
 		return false
 	}
@@ -106,9 +119,11 @@ func (s *Session) CommitSwitchVideoGateRelease(generation int, now time.Time) bo
 
 // AbortSwitchVideoGateRelease returns a matching reservation to the awaiting
 // state so a later complete IDR can be attempted without failing open.
-func (s *Session) AbortSwitchVideoGateRelease(generation int, reason string) bool {
+func (s *Session) AbortSwitchVideoGateRelease(generation int, reservation uint64, reason string) bool {
 	s.mu.Lock()
-	if !s.SwitchVideoGateActive || !s.SwitchVideoGateReleasing || s.SwitchVideoGateGeneration != generation {
+	if !s.SwitchVideoGateActive || !s.SwitchVideoGateReleasing ||
+		s.SwitchVideoGateGeneration != generation || reservation == 0 ||
+		s.SwitchVideoGateReservation != reservation {
 		s.mu.Unlock()
 		return false
 	}
@@ -122,7 +137,8 @@ func (s *Session) AbortSwitchVideoGateRelease(generation int, reason string) boo
 }
 
 // StartSwitchVideoGate replaces an older active generation with an explicit
-// generation token. Accepted or active newer generations cannot be superseded.
+// generation token. Accepted or active newer generations cannot be superseded;
+// a duplicate start for the active generation is idempotent.
 func (s *Session) StartSwitchVideoGate(generation int, now time.Time, reason string) bool {
 	s.mu.Lock()
 	if !s.VideoAUNormalizeEnabled ||
@@ -131,6 +147,10 @@ func (s *Session) StartSwitchVideoGate(generation int, now time.Time, reason str
 		(s.SwitchVideoGateActive && generation < s.SwitchVideoGateGeneration) {
 		s.mu.Unlock()
 		return false
+	}
+	if s.SwitchVideoGateActive && generation == s.SwitchVideoGateGeneration {
+		s.mu.Unlock()
+		return true
 	}
 	s.clearSwitchVideoGateLocked()
 	s.SwitchVideoGateActive = true
@@ -201,6 +221,7 @@ func (s *Session) clearSwitchVideoGateLocked() {
 }
 
 func (s *Session) clearSwitchVideoGateReservationLocked() {
+	s.SwitchVideoGateReservation = 0
 	s.SwitchVideoGateReservedPackets = 0
 	s.SwitchVideoGateReservedSSRC = 0
 	s.SwitchVideoGateReservedInjection = false

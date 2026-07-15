@@ -20,10 +20,10 @@ func TestSwitchVideoGateInactivePassThroughRejectsOnlyAcceptedStaleGeneration(t 
 	if stale.Emit || stale.Reason != "stale-accepted-generation" || stale.Generation != 7 {
 		t.Fatalf("stale inactive decision = %+v", stale)
 	}
-	if !current.Emit || current.Released || current.Reason != "inactive" {
+	if !current.Emit || current.Reason != "inactive" {
 		t.Fatalf("current inactive decision = %+v", current)
 	}
-	if !newer.Emit || newer.Released || newer.Reason != "inactive" {
+	if !newer.Emit || newer.Reason != "inactive" {
 		t.Fatalf("newer inactive decision = %+v", newer)
 	}
 }
@@ -38,7 +38,7 @@ func TestSwitchVideoGateReadyIDRReservesUntilCommit(t *testing.T) {
 	ready := gateTestAU(4, true, true, 99)
 	ready.InjectedParameterSets = true
 	reserved := sess.EvaluateSwitchVideoAccessUnit(ready, start.Add(time.Second))
-	if !reserved.Emit || reserved.Released || reserved.Reason != "complete-idr-reserved" || reserved.Generation != 4 {
+	if !reserved.Emit || reserved.Reason != "complete-idr-reserved" || reserved.Generation != 4 || reserved.Reservation == 0 {
 		t.Fatalf("reservation decision = %+v", reserved)
 	}
 	if !sess.IsSwitchVideoGateActive() {
@@ -49,13 +49,13 @@ func TestSwitchVideoGateReadyIDRReservesUntilCommit(t *testing.T) {
 	if blocked.Emit || blocked.Reason != "release-in-progress" {
 		t.Fatalf("P-frame passed before commit: %+v", blocked)
 	}
-	if sess.CommitSwitchVideoGateRelease(3, start.Add(3*time.Second)) {
+	if sess.CommitSwitchVideoGateRelease(3, reserved.Reservation, start.Add(3*time.Second)) {
 		t.Fatal("wrong generation committed reservation")
 	}
 	if !sess.IsSwitchVideoGateActive() {
 		t.Fatal("wrong commit cleared gate")
 	}
-	if !sess.CommitSwitchVideoGateRelease(4, start.Add(3*time.Second)) {
+	if !sess.CommitSwitchVideoGateRelease(4, reserved.Reservation, start.Add(3*time.Second)) {
 		t.Fatal("correct generation failed to commit")
 	}
 	if sess.IsSwitchVideoGateActive() {
@@ -74,13 +74,13 @@ func TestSwitchVideoGateAbortReturnsToAwaitingAndLaterIDRCanReserve(t *testing.T
 	if !first.Emit {
 		t.Fatalf("first IDR did not reserve: %+v", first)
 	}
-	if sess.AbortSwitchVideoGateRelease(1, "wrong-generation") {
+	if sess.AbortSwitchVideoGateRelease(1, first.Reservation, "wrong-generation") {
 		t.Fatal("wrong generation aborted reservation")
 	}
 	if blocked := sess.EvaluateSwitchVideoAccessUnit(gateTestAU(2, true, true, 1), now); blocked.Emit {
 		t.Fatalf("wrong abort opened reservation: %+v", blocked)
 	}
-	if !sess.AbortSwitchVideoGateRelease(2, "write-failed") {
+	if !sess.AbortSwitchVideoGateRelease(2, first.Reservation, "write-failed") {
 		t.Fatal("correct generation failed to abort")
 	}
 	if pframe := sess.EvaluateSwitchVideoAccessUnit(gateTestAU(2, false, true, 1), now); pframe.Emit {
@@ -109,7 +109,7 @@ func TestSwitchVideoGateRejectsUnsafeAndStaleAccessUnitsWithoutTimeoutFailOpen(t
 	for i, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			decision := sess.EvaluateSwitchVideoAccessUnit(tt.au, start.Add(time.Duration(i)*time.Second))
-			if decision.Emit || decision.Released || decision.Reason != tt.reason || decision.Generation != 10 {
+			if decision.Emit || decision.Reason != tt.reason || decision.Generation != 10 {
 				t.Fatalf("decision = %+v, want blocked reason %q", decision, tt.reason)
 			}
 		})
@@ -190,8 +190,8 @@ func TestSwitchVideoGateAcceptedGenerationSurvivesStopAndForceStopResetsIt(t *te
 	now := time.Unix(1_700_000_000, 0)
 	sess := &Session{VideoAUNormalizeEnabled: true, SwitchGeneration: 5}
 	sess.StartSwitchVideoGate(5, now, "switch")
-	sess.EvaluateSwitchVideoAccessUnit(gateTestAU(5, true, true, 1), now)
-	sess.CommitSwitchVideoGateRelease(5, now)
+	reserved := sess.EvaluateSwitchVideoAccessUnit(gateTestAU(5, true, true, 1), now)
+	sess.CommitSwitchVideoGateRelease(5, reserved.Reservation, now)
 	if !sess.StartSwitchVideoGate(5, now, "same-generation") || !sess.StopSwitchVideoGate(5, now, "ordinary-stop") {
 		t.Fatal("same accepted generation could not start and stop")
 	}
@@ -209,6 +209,13 @@ func TestSwitchVideoGateAcceptedGenerationSurvivesStopAndForceStopResetsIt(t *te
 	if sess.SwitchVideoGateAcceptedGeneration != 0 {
 		t.Fatalf("force stop retained accepted generation %d", sess.SwitchVideoGateAcceptedGeneration)
 	}
+	if !sess.StartSwitchVideoGate(5, now, "after-reset") {
+		t.Fatal("gate did not start after force reset")
+	}
+	afterReset := sess.EvaluateSwitchVideoAccessUnit(gateTestAU(5, true, true, 1), now)
+	if afterReset.Reservation <= reserved.Reservation {
+		t.Fatalf("force reset reused reservation: before=%d after=%d", reserved.Reservation, afterReset.Reservation)
+	}
 }
 
 func TestSwitchVideoGateStartRequiresNormalizationAndPreservesAudioState(t *testing.T) {
@@ -220,8 +227,8 @@ func TestSwitchVideoGateStartRequiresNormalizationAndPreservesAudioState(t *test
 	sess.VideoAUNormalizeEnabled = true
 	sess.StartSwitchVideoGate(3, now, "enabled")
 	sess.EvaluateSwitchVideoAccessUnit(gateTestAU(3, false, true, 1), now)
-	sess.EvaluateSwitchVideoAccessUnit(gateTestAU(3, true, true, 1), now)
-	sess.CommitSwitchVideoGateRelease(3, now)
+	reserved := sess.EvaluateSwitchVideoAccessUnit(gateTestAU(3, true, true, 1), now)
+	sess.CommitSwitchVideoGateRelease(3, reserved.Reservation, now)
 	if sess.AudioSSRC != 11 || sess.RemoteAudioSSRC != 22 || sess.AudioSeq != 33 {
 		t.Fatalf("audio changed: local=%d remote=%d seq=%d", sess.AudioSSRC, sess.RemoteAudioSSRC, sess.AudioSeq)
 	}
@@ -247,6 +254,70 @@ func TestSwitchVideoGateConcurrentEvaluateCreatesOneReservation(t *testing.T) {
 	wg.Wait()
 	if got := reservations.Load(); got != 1 {
 		t.Fatalf("reservations = %d, want one", got)
+	}
+}
+
+func TestSwitchVideoGateReservationTokenPreventsSameGenerationABA(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	sess := &Session{VideoAUNormalizeEnabled: true, SwitchGeneration: 5, PLISent: 3}
+	sess.StartSwitchVideoGate(5, now, "switch")
+	a := sess.EvaluateSwitchVideoAccessUnit(gateTestAU(5, true, true, 1), now)
+	if a.Reservation == 0 {
+		t.Fatal("reservation A has zero token")
+	}
+
+	if !sess.StartSwitchVideoGate(5, now.Add(time.Second), "duplicate-start") {
+		t.Fatal("same-generation idempotent start returned false")
+	}
+	sess.mu.RLock()
+	activeAfterStart := sess.SwitchVideoGateReservation
+	startedAt := sess.SwitchVideoGateStartedAt
+	baseline := sess.SwitchVideoGateFeedbackBaseline
+	sess.mu.RUnlock()
+	if activeAfterStart != a.Reservation || !startedAt.Equal(now) || baseline != 3 {
+		t.Fatalf("same-generation start mutated lease: reservation=%d startedAt=%s baseline=%d", activeAfterStart, startedAt, baseline)
+	}
+
+	if !sess.AbortSwitchVideoGateRelease(5, a.Reservation, "retry") {
+		t.Fatal("exact reservation A abort failed")
+	}
+	b := sess.EvaluateSwitchVideoAccessUnit(gateTestAU(5, true, true, 1), now.Add(2*time.Second))
+	if b.Reservation == 0 || b.Reservation == a.Reservation {
+		t.Fatalf("reservation B token=%d, A=%d", b.Reservation, a.Reservation)
+	}
+	if sess.CommitSwitchVideoGateRelease(5, a.Reservation, now.Add(3*time.Second)) {
+		t.Fatal("stale reservation A committed reservation B")
+	}
+	if sess.AbortSwitchVideoGateRelease(5, a.Reservation, "stale") {
+		t.Fatal("stale reservation A aborted reservation B")
+	}
+	if !sess.CommitSwitchVideoGateRelease(5, b.Reservation, now.Add(3*time.Second)) {
+		t.Fatal("exact reservation B commit failed")
+	}
+}
+
+func TestSwitchVideoGateNewGenerationInvalidatesOlderReservation(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	sess := &Session{VideoAUNormalizeEnabled: true, SwitchGeneration: 5}
+	sess.StartSwitchVideoGate(5, now, "first")
+	a := sess.EvaluateSwitchVideoAccessUnit(gateTestAU(5, true, true, 1), now)
+
+	sess.SwitchGeneration = 6
+	if !sess.StartSwitchVideoGate(6, now.Add(time.Second), "newer") {
+		t.Fatal("newer generation did not supersede reserved gate")
+	}
+	b := sess.EvaluateSwitchVideoAccessUnit(gateTestAU(6, true, true, 1), now.Add(time.Second))
+	if b.Reservation == 0 || b.Reservation == a.Reservation {
+		t.Fatalf("new generation reservation B=%d A=%d", b.Reservation, a.Reservation)
+	}
+	if sess.CommitSwitchVideoGateRelease(5, a.Reservation, now.Add(2*time.Second)) {
+		t.Fatal("superseded generation committed")
+	}
+	if sess.AbortSwitchVideoGateRelease(5, a.Reservation, "stale") {
+		t.Fatal("superseded generation aborted current reservation")
+	}
+	if !sess.CommitSwitchVideoGateRelease(6, b.Reservation, now.Add(2*time.Second)) {
+		t.Fatal("current generation exact reservation did not commit")
 	}
 }
 
@@ -286,6 +357,23 @@ func TestSwitchVideoGateElapsedClampsTimeRegression(t *testing.T) {
 	start := time.Unix(1_700_000_001, 0)
 	if elapsed := switchVideoGateElapsed(start, start.Add(-time.Second)); elapsed != 0 {
 		t.Fatalf("regressed elapsed = %s, want zero", elapsed)
+	}
+}
+
+func TestSwitchVideoGateClockRegressionStartsFreshLogWindow(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	sess := &Session{VideoAUNormalizeEnabled: true, SwitchGeneration: 6}
+	sess.StartSwitchVideoGate(6, now, "switch")
+	au := gateTestAU(6, false, true, 1)
+	sess.EvaluateSwitchVideoAccessUnit(au, now)
+
+	regressed := now.Add(-time.Second)
+	sess.EvaluateSwitchVideoAccessUnit(au, regressed)
+	sess.mu.RLock()
+	lastLogAt := sess.SwitchVideoGateLastRejectLogAt
+	sess.mu.RUnlock()
+	if !lastLogAt.Equal(regressed) {
+		t.Fatalf("regressed clock did not open fresh log window: %s", lastLogAt)
 	}
 }
 
