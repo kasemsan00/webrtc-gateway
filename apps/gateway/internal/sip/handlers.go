@@ -1210,6 +1210,7 @@ func (s *Server) handleSwitchMessage(body string, callerURI string) {
 
 	fmt.Printf("📍 Found session %s for caller %s (queue: %s, agent: %s)\n", sess.ID, callerUsername, queueNumber, agentUsername)
 
+	acceptedSwitchGeneration := 0
 	if queueNumber != "force send PLI" {
 		debounce := time.Duration(s.config.SwitchDuplicateDebounceMS) * time.Millisecond
 		decision := sess.PrepareSwitchVideoTarget(queueNumber, agentUsername, time.Now(), debounce, s.config.SwitchDuplicateDebounceEnabled)
@@ -1222,11 +1223,19 @@ func (s *Server) handleSwitchMessage(body string, callerURI string) {
 		} else {
 			fmt.Printf("[%s] switch_target_honored %s mediaGeneration=%s\n", sess.ID, decision.LogFields(), decision.MediaGeneration)
 		}
+		acceptedSwitchGeneration = decision.Generation
 	}
 
 	recoveryWindow := time.Duration(s.config.SwitchVideoRecoveryWindowMS) * time.Millisecond
 	stableWindow := time.Duration(s.config.SwitchVideoRecoveryStableMS) * time.Millisecond
 	sess.StartSwitchVideoRecovery(recoveryWindow, stableWindow)
+	if acceptedSwitchGeneration != 0 {
+		sess.ClearSIPVideoParameterSets()
+		if !sess.StartSwitchVideoGate(acceptedSwitchGeneration, time.Now(), "agent-switch") {
+			fmt.Printf("[%s] switch_video_gate_start_rejected generation=%d authoritativeGeneration=%d normalizeEnabled=%v\n",
+				sess.ID, acceptedSwitchGeneration, sess.GetSwitchGeneration(), s.config.VideoAUNormalizeEnabled)
+		}
+	}
 
 	// 3. Immediate fast-start kick before any optional delay.
 	// Send FIR + PLI once to both endpoints to reduce first-keyframe latency.

@@ -407,6 +407,8 @@ func (s *Session) ResetMediaState() {
 	s.SwitchMediaSource = ""
 	s.SwitchDuplicateCount = 0
 	s.SIPVideoRTPSource = ""
+	s.clearSIPVideoParameterSetsLocked()
+	s.resetSwitchVideoGateLocked()
 	s.VideoRTPDisorderLastSummary = VideoRecoverySummary{}
 	s.VideoRTPDisorderLastSummaryAt = time.Time{}
 	s.VideoRTPDisorderConsecutiveBad = 0
@@ -531,6 +533,19 @@ func (s *Session) CacheSIPPPS(pps []byte) {
 	defer s.mu.Unlock()
 	s.SIPCachedPPS = make([]byte, len(pps))
 	copy(s.SIPCachedPPS, pps)
+}
+
+// ClearSIPVideoParameterSets clears parameter sets learned from SIP-side RTP
+// without affecting the WebRTC-to-SIP SDP/RTP fallback cache.
+func (s *Session) ClearSIPVideoParameterSets() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.clearSIPVideoParameterSetsLocked()
+}
+
+func (s *Session) clearSIPVideoParameterSetsLocked() {
+	s.SIPCachedSPS = nil
+	s.SIPCachedPPS = nil
 }
 
 // GetSIPCachedSPSPPS returns copies of SIP-side cached SPS/PPS (thread-safe).

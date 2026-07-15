@@ -191,8 +191,7 @@ func (s *Session) ForceStopSwitchVideoGate(now time.Time, reason string) {
 	generation := s.SwitchVideoGateGeneration
 	wait := switchVideoGateElapsed(s.SwitchVideoGateStartedAt, now)
 	id := s.ID
-	s.clearSwitchVideoGateLocked()
-	s.SwitchVideoGateAcceptedGeneration = 0
+	s.resetSwitchVideoGateLocked()
 	s.mu.Unlock()
 
 	fmt.Printf("[%s] switch_video_gate_force_stop generation=%d reason=%s waitMs=%d\n",
@@ -205,6 +204,11 @@ func (s *Session) IsSwitchVideoGateActive() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.SwitchVideoGateActive
+}
+
+func (s *Session) resetSwitchVideoGateLocked() {
+	s.clearSwitchVideoGateLocked()
+	s.SwitchVideoGateAcceptedGeneration = 0
 }
 
 func (s *Session) clearSwitchVideoGateLocked() {

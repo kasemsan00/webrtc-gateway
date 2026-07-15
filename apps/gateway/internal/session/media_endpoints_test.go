@@ -104,3 +104,80 @@ func TestResetMediaStateClearsSIPEndpointsKeepsCachedSPSPPS(t *testing.T) {
 		t.Fatalf("cached PPS changed unexpectedly")
 	}
 }
+
+func TestClearSIPVideoParameterSetsPreservesWebRTCToSIPCache(t *testing.T) {
+	sess := &Session{
+		CachedSPS:    []byte{0x67, 0x42, 0x00, 0x1f},
+		CachedPPS:    []byte{0x68, 0xce, 0x06, 0xe2},
+		SIPCachedSPS: []byte{0x67, 0x64, 0x00, 0x28},
+		SIPCachedPPS: []byte{0x68, 0xee, 0x3c, 0x80},
+	}
+
+	sess.ClearSIPVideoParameterSets()
+
+	if len(sess.SIPCachedSPS) != 0 || len(sess.SIPCachedPPS) != 0 {
+		t.Fatalf("expected SIP-side parameter sets cleared, got SPS=%x PPS=%x", sess.SIPCachedSPS, sess.SIPCachedPPS)
+	}
+	if string(sess.CachedSPS) != string([]byte{0x67, 0x42, 0x00, 0x1f}) ||
+		string(sess.CachedPPS) != string([]byte{0x68, 0xce, 0x06, 0xe2}) {
+		t.Fatalf("expected WebRTC-to-SIP parameter sets preserved, got SPS=%x PPS=%x", sess.CachedSPS, sess.CachedPPS)
+	}
+}
+
+func TestResetMediaStateClearsSIPParameterSetsAndSwitchGateWithoutReusingLease(t *testing.T) {
+	sess := &Session{
+		ID:                                "test-reset-switch-gate",
+		VideoAUNormalizeEnabled:           true,
+		SwitchGeneration:                  7,
+		SIPCachedSPS:                      []byte{0x67, 0x64, 0x00, 0x28},
+		SIPCachedPPS:                      []byte{0x68, 0xee, 0x3c, 0x80},
+		CachedSPS:                         []byte{0x67, 0x42, 0x00, 0x1f},
+		CachedPPS:                         []byte{0x68, 0xce, 0x06, 0xe2},
+		SwitchVideoGateActive:             true,
+		SwitchVideoGateReleasing:          true,
+		SwitchVideoGateGeneration:         7,
+		SwitchVideoGateAcceptedGeneration: 6,
+		SwitchVideoGateStartedAt:          time.Now(),
+		SwitchVideoGateStartReason:        "agent-switch",
+		SwitchVideoGateFeedbackBaseline:   9,
+		SwitchVideoGateRejectedCount:      3,
+		SwitchVideoGateLastRejectReason:   "non-idr",
+		SwitchVideoGateLastRejectLogAt:    time.Now(),
+		SwitchVideoGateLeaseNonce:         41,
+		SwitchVideoGateReservation:        41,
+		SwitchVideoGateReservedPackets:    3,
+		SwitchVideoGateReservedSSRC:       1234,
+		SwitchVideoGateReservedInjection:  true,
+	}
+
+	sess.ResetMediaState()
+
+	if len(sess.SIPCachedSPS) != 0 || len(sess.SIPCachedPPS) != 0 {
+		t.Fatalf("expected SIP-side parameter sets cleared, got SPS=%x PPS=%x", sess.SIPCachedSPS, sess.SIPCachedPPS)
+	}
+	if len(sess.CachedSPS) == 0 || len(sess.CachedPPS) == 0 {
+		t.Fatalf("expected WebRTC-to-SIP parameter sets preserved")
+	}
+	if sess.SwitchVideoGateActive || sess.SwitchVideoGateReleasing || sess.SwitchVideoGateGeneration != 0 ||
+		sess.SwitchVideoGateAcceptedGeneration != 0 || !sess.SwitchVideoGateStartedAt.IsZero() ||
+		sess.SwitchVideoGateStartReason != "" || sess.SwitchVideoGateFeedbackBaseline != 0 ||
+		sess.SwitchVideoGateRejectedCount != 0 || sess.SwitchVideoGateLastRejectReason != "" ||
+		!sess.SwitchVideoGateLastRejectLogAt.IsZero() || sess.SwitchVideoGateReservation != 0 ||
+		sess.SwitchVideoGateReservedPackets != 0 || sess.SwitchVideoGateReservedSSRC != 0 ||
+		sess.SwitchVideoGateReservedInjection {
+		t.Fatalf("expected complete switch gate reset, got %+v", sess)
+	}
+	if sess.SwitchVideoGateLeaseNonce != 41 {
+		t.Fatalf("expected lease nonce preserved at 41, got %d", sess.SwitchVideoGateLeaseNonce)
+	}
+
+	sess.VideoAUNormalizeEnabled = true
+	sess.SwitchGeneration = 1
+	if !sess.StartSwitchVideoGate(1, time.Now(), "after-reset") {
+		t.Fatalf("expected gate to start after reset")
+	}
+	decision := sess.EvaluateSwitchVideoAccessUnit(gateTestAU(1, true, true, 1), time.Now())
+	if decision.Reservation != 42 {
+		t.Fatalf("expected monotonic reservation 42 after reset, got %d", decision.Reservation)
+	}
+}
