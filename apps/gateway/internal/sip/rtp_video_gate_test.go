@@ -85,6 +85,9 @@ func TestWriteNormalizedVideoAccessUnitUsesSingleWebRTCEgressSSRC(t *testing.T) 
 	now := time.Unix(300, 0)
 	sess := &session.Session{ID: "egress-write", VideoAUNormalizeEnabled: true, SwitchGeneration: 1}
 	sess.WebRTCVideoEgressSSRC = 7777
+	sess.VideoRTPHistorySize = 1024
+	sess.VideoRTPHistoryPackets = make([][]byte, sess.VideoRTPHistorySize)
+	sess.VideoRTPHistorySeq = make([]uint16, sess.VideoRTPHistorySize)
 	if !sess.StartSwitchVideoGate(1, now, "test") {
 		t.Fatal("expected gate start")
 	}
@@ -110,6 +113,18 @@ func TestWriteNormalizedVideoAccessUnitUsesSingleWebRTCEgressSSRC(t *testing.T) 
 	for i, gotSSRC := range gotSSRCs {
 		if gotSSRC != 7777 {
 			t.Fatalf("packet %d: expected snapshotted egress SSRC 7777, got %d", i, gotSSRC)
+		}
+	}
+	for i, data := range sess.VideoRTPHistoryPackets {
+		if len(data) == 0 {
+			continue
+		}
+		packet := &rtp.Packet{}
+		if err := packet.Unmarshal(data); err != nil {
+			t.Fatalf("history packet %d: unmarshal: %v", i, err)
+		}
+		if packet.SSRC == 7777 {
+			t.Fatalf("history packet %d retained stale egress SSRC %d after remap", i, packet.SSRC)
 		}
 	}
 }

@@ -15,8 +15,18 @@ func (s *Session) CacheVideoRTPPacket(seq uint16, data []byte) {
 	if len(data) == 0 || s.VideoRTPHistorySize == 0 {
 		return
 	}
+	packetSSRC, ok := videoRTPPacketSSRC(data)
+	if !ok {
+		return
+	}
 
 	index := int(seq % uint16(s.VideoRTPHistorySize))
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if packetSSRC != s.WebRTCVideoEgressSSRC {
+		return
+	}
 
 	s.videoRTPHistoryMu.Lock()
 	if cap(s.VideoRTPHistoryPackets[index]) < len(data) {
@@ -45,17 +55,34 @@ func (s *Session) getCachedVideoRTPPacket(seq uint16) []byte {
 
 	index := int(seq % uint16(s.VideoRTPHistorySize))
 
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	s.videoRTPHistoryMu.Lock()
 	if s.VideoRTPHistorySeq[index] != seq || len(s.VideoRTPHistoryPackets[index]) == 0 {
 		s.videoRTPHistoryMu.Unlock()
 		return nil
 	}
 	original := s.VideoRTPHistoryPackets[index]
+	packetSSRC, ok := videoRTPPacketSSRC(original)
+	if !ok || packetSSRC != s.WebRTCVideoEgressSSRC {
+		s.videoRTPHistoryMu.Unlock()
+		return nil
+	}
 	copyBuf := make([]byte, len(original))
 	copy(copyBuf, original)
 	s.videoRTPHistoryMu.Unlock()
 
 	return copyBuf
+}
+
+func videoRTPPacketSSRC(data []byte) (uint32, bool) {
+	if len(data) < 12 || data[0]>>6 != 2 {
+		return 0, false
+	}
+	return uint32(data[8])<<24 |
+		uint32(data[9])<<16 |
+		uint32(data[10])<<8 |
+		uint32(data[11]), true
 }
 
 // RetransmitVideoNACK attempts to resend cached RTP packets in response to NACKs.
@@ -79,6 +106,11 @@ func (s *Session) RetransmitVideoNACK(nacks []rtcp.NackPair) (int, int) {
 		for _, seq := range seqs {
 			packet := s.getCachedVideoRTPPacket(seq)
 			if packet == nil {
+				missing++
+				continue
+			}
+			packetSSRC, ok := videoRTPPacketSSRC(packet)
+			if !ok || packetSSRC != s.GetWebRTCVideoEgressSSRC() {
 				missing++
 				continue
 			}
