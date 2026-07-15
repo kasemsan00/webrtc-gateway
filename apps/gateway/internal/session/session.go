@@ -133,13 +133,18 @@ type Session struct {
 	VideoRTPDisorderContainmentDuration  time.Duration        `json:"-"`
 	VideoAUNormalizeEnabled              bool                 `json:"-"`
 	SwitchVideoGateActive                bool                 `json:"-"`
+	SwitchVideoGateReleasing             bool                 `json:"-"`
 	SwitchVideoGateGeneration            int                  `json:"-"`
+	SwitchVideoGateAcceptedGeneration    int                  `json:"-"`
 	SwitchVideoGateStartedAt             time.Time            `json:"-"`
 	SwitchVideoGateStartReason           string               `json:"-"`
-	SwitchVideoGatePLIBaseline           int                  `json:"-"`
+	SwitchVideoGateFeedbackBaseline      int                  `json:"-"`
 	SwitchVideoGateRejectedCount         int                  `json:"-"`
 	SwitchVideoGateLastRejectReason      string               `json:"-"`
 	SwitchVideoGateLastRejectLogAt       time.Time            `json:"-"`
+	SwitchVideoGateReservedPackets       int                  `json:"-"`
+	SwitchVideoGateReservedSSRC          uint32               `json:"-"`
+	SwitchVideoGateReservedInjection     bool                 `json:"-"`
 	VideoRTPDisorderLastSummary          VideoRecoverySummary `json:"-"`
 	VideoRTPDisorderLastSummaryAt        time.Time            `json:"-"`
 	VideoRTPDisorderConsecutiveBad       int                  `json:"-"`
