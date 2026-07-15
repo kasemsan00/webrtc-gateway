@@ -91,6 +91,8 @@ func (s *Session) PrepareAndActivateSwitchVideoTarget(queue, agent string, now t
 	s.SwitchMediaSource = currentSource
 	s.SwitchDuplicateCount = 0
 
+	s.remapWebRTCVideoEgressSSRCLocked("accepted-switch")
+
 	decision.Ignore = false
 	decision.Reason = reason
 	decision.Generation = s.SwitchGeneration

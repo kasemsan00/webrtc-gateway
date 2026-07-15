@@ -158,6 +158,34 @@ func TestPrepareAndActivateSwitchVideoTargetHasNoPublishedGenerationWithoutGate(
 	}
 }
 
+func TestPrepareSwitchVideoTargetRemapsWebRTCEgressSSRC(t *testing.T) {
+	sess := newBurstTestSession("switch-egress-remap")
+	now := time.Now()
+	sess.RemoteVideoSSRC = 1111
+	sess.SIPVideoRTPSource = "203.0.113.10:4000"
+	sess.WebRTCVideoEgressSSRC = 2222
+
+	first, _ := sess.PrepareAndActivateSwitchVideoTarget("14131", "00025", now, time.Minute, true)
+	if first.Ignore {
+		t.Fatal("expected first switch honored")
+	}
+	if sess.GetWebRTCVideoEgressSSRC() == 0 || sess.GetWebRTCVideoEgressSSRC() == 2222 {
+		t.Fatalf("expected remapped egress SSRC, got %d", sess.GetWebRTCVideoEgressSSRC())
+	}
+	if sess.RemoteVideoSSRC != 1111 {
+		t.Fatalf("SIP RemoteVideoSSRC must stay 1111, got %d", sess.RemoteVideoSSRC)
+	}
+	afterFirst := sess.GetWebRTCVideoEgressSSRC()
+
+	dup, _ := sess.PrepareAndActivateSwitchVideoTarget("14131", "00025", now.Add(30*time.Second), time.Minute, true)
+	if !dup.Ignore {
+		t.Fatal("expected duplicate ignored")
+	}
+	if sess.GetWebRTCVideoEgressSSRC() != afterFirst {
+		t.Fatalf("duplicate must not remap egress SSRC, before=%d after=%d", afterFirst, sess.GetWebRTCVideoEgressSSRC())
+	}
+}
+
 func TestPrepareAndActivateSwitchVideoTargetNormalizationDisabledUsesLegacyOutcome(t *testing.T) {
 	sess := newBurstTestSession("switch-target-disabled")
 	sess.VideoAUNormalizeEnabled = false
