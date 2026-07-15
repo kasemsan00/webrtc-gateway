@@ -13,6 +13,9 @@ const (
 	defaultH264AUMaxAge           = 500 * time.Millisecond
 	defaultH264TimestampStep      = uint32(3000)
 	maxReasonableH264TimestampGap = uint32(900000)
+	// Reassembled parameter sets are reinjected as one RTP payload, so keep
+	// them below the common WebRTC path-MTU-safe payload size.
+	maxCachedFUAParameterSetPayload = 1200
 )
 
 // H264AccessUnitNormalizerConfig bounds memory and latency while an H.264
@@ -54,10 +57,11 @@ type H264AccessUnitNormalizer struct {
 	fuOpen      bool
 	fuNALType   uint8
 
-	haveOutput   bool
-	nextSeq      uint16
-	outputTS     uint32
-	lastSourceTS uint32
+	haveOutput               bool
+	nextSeq                  uint16
+	outputTS                 uint32
+	lastSourceTS             uint32
+	stepTimestampAfterSwitch bool
 
 	cachedSPS  []byte
 	cachedPPS  []byte
@@ -264,6 +268,13 @@ func (n *H264AccessUnitNormalizer) mapTimestampLocked(source uint32) uint32 {
 		n.nextSeq = n.packets[0].SequenceNumber
 		n.outputTS = source
 		n.lastSourceTS = source
+		n.stepTimestampAfterSwitch = false
+		return n.outputTS
+	}
+	if n.stepTimestampAfterSwitch {
+		n.outputTS += defaultH264TimestampStep
+		n.lastSourceTS = source
+		n.stepTimestampAfterSwitch = false
 		return n.outputTS
 	}
 	delta := source - n.lastSourceTS
@@ -331,6 +342,7 @@ func (n *H264AccessUnitNormalizer) ResetForSwitch(generation int) {
 	n.cachedSPS = nil
 	n.cachedPPS = nil
 	n.generation = generation
+	n.stepTimestampAfterSwitch = true
 }
 
 func inspectAccessUnit(packets []*rtp.Packet) (hasSPS, hasPPS, isIDR bool) {
@@ -352,8 +364,15 @@ func inspectAccessUnit(packets []*rtp.Packet) (hasSPS, hasPPS, isIDR bool) {
 			hasPPS = hasPPS || pps
 			isIDR = isIDR || idr
 		case 28:
-			if len(payload) > 1 && payload[1]&0x80 != 0 && payload[1]&0x1f == 5 {
-				isIDR = true
+			if len(payload) > 1 && payload[1]&0x80 != 0 {
+				switch payload[1] & 0x1f {
+				case 5:
+					isIDR = true
+				case 7:
+					hasSPS = true
+				case 8:
+					hasPPS = true
+				}
 			}
 		}
 	}
@@ -387,7 +406,7 @@ func inspectSTAPA(payload []byte) (hasSPS, hasPPS, isIDR, valid bool) {
 }
 
 func cacheNALFromPackets(current []byte, packets []*rtp.Packet, nalType byte) []byte {
-	for _, packet := range packets {
+	for i, packet := range packets {
 		if isSingleNALType(packet.Payload, nalType) {
 			return append(current[:0], packet.Payload...)
 		}
@@ -405,8 +424,45 @@ func cacheNALFromPackets(current []byte, packets []*rtp.Packet, nalType byte) []
 				offset += size
 			}
 		}
+		if nal := reassembleFUAParameterSet(packets[i:], nalType); len(nal) > 0 {
+			return append(current[:0], nal...)
+		}
 	}
 	return current
+}
+
+func reassembleFUAParameterSet(packets []*rtp.Packet, nalType byte) []byte {
+	if len(packets) == 0 || len(packets[0].Payload) < 3 {
+		return nil
+	}
+	first := packets[0]
+	if first.Payload[0]&0x1f != 28 || first.Payload[1]&0x80 == 0 || first.Payload[1]&0x40 != 0 || first.Payload[1]&0x1f != nalType {
+		return nil
+	}
+
+	nal := make([]byte, 1, maxCachedFUAParameterSetPayload)
+	nal[0] = first.Payload[0]&0xe0 | nalType
+	nal = append(nal, first.Payload[2:]...)
+	if len(nal) > maxCachedFUAParameterSetPayload {
+		return nil
+	}
+	lastSeq := first.SequenceNumber
+	for _, packet := range packets[1:] {
+		payload := packet.Payload
+		if len(payload) < 3 || packet.SequenceNumber != lastSeq+1 || payload[0]&0x1f != 28 ||
+			payload[0]&0xe0 != first.Payload[0]&0xe0 || payload[1]&0x80 != 0 || payload[1]&0x1f != nalType {
+			return nil
+		}
+		if len(nal)+len(payload)-2 > maxCachedFUAParameterSetPayload {
+			return nil
+		}
+		nal = append(nal, payload[2:]...)
+		lastSeq = packet.SequenceNumber
+		if payload[1]&0x40 != 0 {
+			return nal
+		}
+	}
+	return nil
 }
 
 func isSingleNALType(payload []byte, nalType byte) bool {

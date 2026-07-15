@@ -82,6 +82,50 @@ func TestH264AccessUnitNormalizerRewritesContinuityAcrossSourceReset(t *testing.
 	}
 }
 
+func TestH264AccessUnitNormalizerResetSourcePreservesParameterSetsAndGeneration(t *testing.T) {
+	var emitted []NormalizedH264AccessUnit
+	n := NewH264AccessUnitNormalizer(H264AccessUnitNormalizerConfig{}, func(au NormalizedH264AccessUnit) {
+		emitted = append(emitted, au)
+	})
+	n.ResetForSwitch(17)
+	n.SetParameterSets([]byte{0x67, 0x42, 0x00, 0x1f}, []byte{0x68, 0xce, 0x06, 0xe2})
+
+	n.Push(h264Packet(100, 9000, true, []byte{0x41, 0x01}))
+	n.ResetSource()
+	n.Push(h264Packet(7, 1000, true, []byte{0x65, 0xaa}))
+
+	if len(emitted) != 2 {
+		t.Fatalf("expected access units before and after source reset, got %d", len(emitted))
+	}
+	got := emitted[1]
+	if !got.ParameterSetsReady || got.Generation != 17 {
+		t.Fatalf("expected source reset to preserve generation-scoped parameter sets, got %+v", got)
+	}
+	if !got.InjectedParameterSets || len(got.Packets) != 3 {
+		t.Fatalf("expected preserved SPS/PPS to be injected after source reset, got %+v", got)
+	}
+}
+
+func TestH264AccessUnitNormalizerUsesDefaultTimestampStepForFirstAUAfterSwitch(t *testing.T) {
+	var emitted []NormalizedH264AccessUnit
+	n := NewH264AccessUnitNormalizer(H264AccessUnitNormalizerConfig{}, func(au NormalizedH264AccessUnit) {
+		emitted = append(emitted, au)
+	})
+
+	n.Push(h264Packet(100, 10000, true, []byte{0x41, 0x01}))
+	n.ResetForSwitch(18)
+	n.Push(h264Packet(7, 500000, true, []byte{0x41, 0x02}))
+
+	if len(emitted) != 2 {
+		t.Fatalf("expected two access units, got %d", len(emitted))
+	}
+	firstTimestamp := emitted[0].Packets[0].Timestamp
+	secondTimestamp := emitted[1].Packets[0].Timestamp
+	if got := secondTimestamp - firstTimestamp; got != defaultH264TimestampStep {
+		t.Fatalf("expected first post-switch timestamp step %d, got %d", defaultH264TimestampStep, got)
+	}
+}
+
 func TestH264AccessUnitNormalizerResetForSwitchRequiresFreshParameterSetsAndPreservesTimeline(t *testing.T) {
 	var emitted []NormalizedH264AccessUnit
 	n := NewH264AccessUnitNormalizer(H264AccessUnitNormalizerConfig{}, func(au NormalizedH264AccessUnit) {
@@ -192,6 +236,84 @@ func TestH264AccessUnitNormalizerCachesParameterSetsFromSTAPA(t *testing.T) {
 	}
 }
 
+func TestH264AccessUnitNormalizerCachesCompleteFUAParameterSets(t *testing.T) {
+	var emitted []NormalizedH264AccessUnit
+	n := NewH264AccessUnitNormalizer(H264AccessUnitNormalizerConfig{}, func(au NormalizedH264AccessUnit) {
+		emitted = append(emitted, au)
+	})
+	n.ResetForSwitch(19)
+
+	n.Push(h264Packet(100, 9000, false, []byte{0x7c, 0x87, 0x42, 0x00}))
+	n.Push(h264Packet(101, 9000, true, []byte{0x7c, 0x47, 0x1f}))
+	n.Push(h264Packet(102, 12000, false, []byte{0x7c, 0x88, 0xce, 0x06}))
+	n.Push(h264Packet(103, 12000, true, []byte{0x7c, 0x48, 0xe2}))
+	n.Push(h264Packet(104, 15000, true, []byte{0x65, 0xaa}))
+
+	if len(emitted) != 3 {
+		t.Fatalf("expected SPS, PPS, and IDR access units, got %d", len(emitted))
+	}
+	idr := emitted[2]
+	if !idr.ParameterSetsReady || idr.Generation != 19 {
+		t.Fatalf("expected fragmented parameter sets ready in generation 19, got %+v", idr)
+	}
+	if !idr.InjectedParameterSets || len(idr.Packets) != 3 {
+		t.Fatalf("expected reconstructed SPS/PPS injection before IDR, got %+v", idr)
+	}
+	assertPayloadEqual(t, idr.Packets[0].Payload, []byte{0x67, 0x42, 0x00, 0x1f})
+	assertPayloadEqual(t, idr.Packets[1].Payload, []byte{0x68, 0xce, 0x06, 0xe2})
+}
+
+func TestH264AccessUnitNormalizerDoesNotCacheInvalidFUAParameterSets(t *testing.T) {
+	var emitted []NormalizedH264AccessUnit
+	n := NewH264AccessUnitNormalizer(H264AccessUnitNormalizerConfig{}, func(au NormalizedH264AccessUnit) {
+		emitted = append(emitted, au)
+	})
+	n.ResetForSwitch(20)
+
+	// Missing SPS fragment (sequence gap), followed by a PPS chain whose type changes.
+	n.Push(h264Packet(200, 18000, false, []byte{0x7c, 0x87, 0x42}))
+	n.Push(h264Packet(202, 18000, true, []byte{0x7c, 0x47, 0x1f}))
+	n.Push(h264Packet(203, 21000, false, []byte{0x7c, 0x88, 0xce}))
+	n.Push(h264Packet(204, 21000, true, []byte{0x7c, 0x47, 0x06}))
+	n.Push(h264Packet(205, 24000, true, []byte{0x65, 0xaa}))
+
+	if len(emitted) != 1 {
+		t.Fatalf("expected only the IDR after invalid parameter-set chains, got %d access units", len(emitted))
+	}
+	idr := emitted[0]
+	if idr.ParameterSetsReady || idr.InjectedParameterSets || len(idr.Packets) != 1 {
+		t.Fatalf("expected invalid fragmented parameter sets not to be cached, got %+v", idr)
+	}
+}
+
+func TestH264AccessUnitNormalizerDoesNotCacheOversizedFUAParameterSetForInjection(t *testing.T) {
+	var emitted []NormalizedH264AccessUnit
+	n := NewH264AccessUnitNormalizer(H264AccessUnitNormalizerConfig{}, func(au NormalizedH264AccessUnit) {
+		emitted = append(emitted, au)
+	})
+	n.ResetForSwitch(21)
+
+	spsStart := append([]byte{0x7c, 0x87}, make([]byte, 700)...)
+	spsEnd := append([]byte{0x7c, 0x47}, make([]byte, 600)...)
+	n.Push(h264Packet(300, 27000, false, spsStart))
+	n.Push(h264Packet(301, 27000, true, spsEnd))
+	n.Push(h264Packet(302, 30000, true, []byte{0x68, 0xce, 0x06, 0xe2}))
+	n.Push(h264Packet(303, 33000, true, []byte{0x65, 0xaa}))
+
+	if len(emitted) != 3 {
+		t.Fatalf("expected oversized SPS, PPS, and IDR access units, got %d", len(emitted))
+	}
+	idr := emitted[2]
+	if idr.ParameterSetsReady {
+		t.Fatalf("expected oversized reconstructed SPS not to become injection-ready, got %+v", idr)
+	}
+	for _, packet := range idr.Packets {
+		if packet.Payload[0]&0x1f == 7 {
+			t.Fatalf("expected no oversized single-packet SPS injection, got payload length %d", len(packet.Payload))
+		}
+	}
+}
+
 func TestH264AccessUnitNormalizerDropsOverflowAndResyncs(t *testing.T) {
 	var emitted []NormalizedH264AccessUnit
 	n := NewH264AccessUnitNormalizer(H264AccessUnitNormalizerConfig{MaxPackets: 2}, func(au NormalizedH264AccessUnit) {
@@ -246,6 +368,18 @@ func assertContinuousH264Output(t *testing.T, packets []*rtp.Packet) {
 		}
 		if packets[i].Timestamp != packets[0].Timestamp {
 			t.Fatalf("access-unit timestamps differ: %d and %d", packets[0].Timestamp, packets[i].Timestamp)
+		}
+	}
+}
+
+func assertPayloadEqual(t *testing.T, got, want []byte) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("payload length mismatch: got %d, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("payload byte %d mismatch: got %#x, want %#x", i, got[i], want[i])
 		}
 	}
 }
