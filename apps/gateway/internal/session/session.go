@@ -173,8 +173,9 @@ type Session struct {
 	RemoteVideoSSRC uint32 `json:"-"`
 	// PendingBrowserKeyframeRequest is set when a client ws-request_keyframe
 	// arrives before SIP video SSRC/addr/conn are ready. Flushed on ssrc-learn / @switch.
-	PendingBrowserKeyframeRequest   bool      `json:"-"`
-	PendingBrowserKeyframeRequestAt time.Time `json:"-"`
+	PendingBrowserKeyframeRequest      bool      `json:"-"`
+	PendingBrowserKeyframeRequestAt    time.Time `json:"-"`
+	PendingBrowserKeyframeRequestEpoch uint64    `json:"-"`
 	// Cached SPS/PPS for video injection (WebRTC→SIP direction, from browser's encoder)
 	CachedSPS               []byte    `json:"-"`
 	CachedPPS               []byte    `json:"-"`

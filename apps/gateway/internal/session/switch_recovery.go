@@ -155,8 +155,8 @@ func (s *Session) startSwitchVideoRecovery(generation int, mediaEpoch uint64, re
 		s.ID, until.Format(time.RFC3339Nano), stableWindow)
 	fmt.Printf("[%s] 📈 video_recovery_window_start reason=switch until=%s\n", s.ID, until.Format(time.RFC3339Nano))
 	fmt.Printf("[%s] 📈 recovery_policy interval=%s stale=%s firStale=%s\n", s.ID, interval, stale, firStale)
-	if requireAuthority && !s.IsSwitchVideoAuthority(generation, mediaEpoch) {
-		return false
+	if requireAuthority {
+		return s.FlushPendingBrowserKeyframeRequestForSwitch(generation, mediaEpoch, "switch")
 	}
 	_ = s.FlushPendingBrowserKeyframeRequest("switch")
 	return true

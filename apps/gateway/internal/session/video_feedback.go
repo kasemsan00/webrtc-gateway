@@ -96,6 +96,10 @@ func (s *Session) shouldSuppressNACKHandledLog(signature string, retransmit, mis
 }
 
 func (s *Session) getVideoFeedbackTargets(destAddr, learnedAddr *net.UDPAddr, useFallback bool) []videoFeedbackTarget {
+	return buildVideoFeedbackTargets(s.GetVideoFeedbackTransport(), destAddr, learnedAddr, useFallback)
+}
+
+func buildVideoFeedbackTargets(mode string, destAddr, learnedAddr *net.UDPAddr, useFallback bool) []videoFeedbackTarget {
 	if destAddr == nil || destAddr.IP == nil {
 		return nil
 	}
@@ -124,7 +128,7 @@ func (s *Session) getVideoFeedbackTargets(destAddr, learnedAddr *net.UDPAddr, us
 		targets = append(targets, target)
 	}
 
-	switch s.GetVideoFeedbackTransport() {
+	switch mode {
 	case config.SIPVideoFeedbackTransportRTP:
 		add(videoFeedbackTarget{Addr: rtpAddr, Kind: "rtp", Label: "RTP port", IsPrimary: true})
 	case config.SIPVideoFeedbackTransportRTCP:

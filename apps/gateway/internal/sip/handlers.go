@@ -1260,27 +1260,19 @@ func (s *Server) handleSwitchMessage(body string, callerURI string) {
 			return
 		}
 		s.runSwitchHandlerTestHook("feedback", switchDecision)
-		if !sess.IsSwitchVideoAuthority(switchDecision.Generation, switchDecision.MediaEpoch) {
+		if !sess.SendSwitchFIRToWebRTC(switchDecision.Generation, switchDecision.MediaEpoch) ||
+			!sess.SendSwitchFIRToAsterisk(switchDecision.Generation, switchDecision.MediaEpoch) ||
+			!sess.SendSwitchPLIToWebRTC(switchDecision.Generation, switchDecision.MediaEpoch) ||
+			!sess.SendSwitchPLIToAsteriskForced(switchDecision.Generation, switchDecision.MediaEpoch, "switch") {
 			return
 		}
+	} else {
+		sess.SendFIRToWebRTC()
+		sess.SendFIRToAsterisk()
+		sess.SendPLItoWebRTC()
+		sess.SendPLIToAsteriskForced("switch")
 	}
-	fmt.Printf("[%s] 🔀 Sending @switch: immediate FIR + PLI kick to both endpoints\n", sess.ID)
-	if !switchAuthorized() {
-		return
-	}
-	sess.SendFIRToWebRTC() // FIR to browser
-	if !switchAuthorized() {
-		return
-	}
-	sess.SendFIRToAsterisk() // FIR to Asterisk
-	if !switchAuthorized() {
-		return
-	}
-	sess.SendPLItoWebRTC() // PLI to browser
-	if !switchAuthorized() {
-		return
-	}
-	sess.SendPLIToAsteriskForced("switch")
+	fmt.Printf("[%s] 🔀 Sent @switch: immediate FIR + PLI kick to both endpoints\n", sess.ID)
 
 	// 3.1 Enable temporary @switch transition hold on SIP->WebRTC video path (if enabled).
 	// Preserve mode avoids forcing a black screen by gating only unsafe packets
@@ -1331,11 +1323,16 @@ func (s *Server) handleSwitchMessage(body string, callerURI string) {
 		if sess.GetState() == session.StateEnded || !switchAuthorized() {
 			return
 		}
-		sess.SendFIRToWebRTC() // FIR to browser
-		if !switchAuthorized() {
-			return
+		if genuineSwitch {
+			s.runSwitchHandlerTestHook("fir-send", switchDecision)
+			if !sess.SendSwitchFIRToWebRTC(switchDecision.Generation, switchDecision.MediaEpoch) ||
+				!sess.SendSwitchFIRToAsterisk(switchDecision.Generation, switchDecision.MediaEpoch) {
+				return
+			}
+		} else {
+			sess.SendFIRToWebRTC()
+			sess.SendFIRToAsterisk()
 		}
-		sess.SendFIRToAsterisk() // FIR to Asterisk
 		time.Sleep(50 * time.Millisecond)
 	}
 
@@ -1354,11 +1351,16 @@ func (s *Server) handleSwitchMessage(body string, callerURI string) {
 		if sess.GetState() == session.StateEnded || !switchAuthorized() {
 			return
 		}
-		sess.SendPLItoWebRTC() // PLI to browser
-		if !switchAuthorized() {
-			return
+		if genuineSwitch {
+			s.runSwitchHandlerTestHook("pli-send", switchDecision)
+			if !sess.SendSwitchPLIToWebRTC(switchDecision.Generation, switchDecision.MediaEpoch) ||
+				!sess.SendSwitchPLIToAsteriskForced(switchDecision.Generation, switchDecision.MediaEpoch, "switch") {
+				return
+			}
+		} else {
+			sess.SendPLItoWebRTC()
+			sess.SendPLIToAsteriskForced("switch")
 		}
-		sess.SendPLIToAsteriskForced("switch")
 		time.Sleep(50 * time.Millisecond)
 	}
 

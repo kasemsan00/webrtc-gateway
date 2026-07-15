@@ -326,6 +326,55 @@ func TestHandleSwitchMessage_NormalizationDisabledKeepsLegacyRecovery(t *testing
 	}
 }
 
+func TestHandleSwitchMessage_StaleFeedbackTokenStopsFIRBurst(t *testing.T) {
+	cfg := switchStaleHandlerTestConfig(true)
+	mgr := session.NewManager(cfg)
+	sess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+	t.Cleanup(func() { mgr.DeleteSession(sess.ID) })
+	sess.SetCallInfo("outbound", "sip:0900200002@example.com", "1002", "call-1")
+	sess.SetState(session.StateActive)
+
+	paused := make(chan struct{})
+	resume := make(chan struct{})
+	stages := make(chan string, 16)
+	srv := &Server{config: cfg.SIP, rtpConfig: cfg.RTP, sessionMgr: mgr}
+	srv.switchHandlerTestHook = func(stage string, decision session.SwitchTargetDecision) {
+		if stage == "fir-send" && decision.Generation == 1 {
+			close(paused)
+			<-resume
+			return
+		}
+		stages <- stage
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		srv.handleSwitchMessage("@switch:14131|00025", "sip:0900200002@example.com")
+	}()
+	<-paused
+
+	newer, activation := sess.PrepareAndActivateSwitchVideoTarget("14131", "00026", time.Now(), time.Minute, true)
+	if newer.Generation != 2 || !activation.Active {
+		t.Fatalf("failed to accept newer switch: decision=%+v activation=%+v", newer, activation)
+	}
+	close(resume)
+	<-done
+
+	for {
+		select {
+		case stage := <-stages:
+			if stage == "pli-burst" {
+				t.Fatalf("stale FIR feedback token did not stop remaining bursts")
+			}
+		default:
+			return
+		}
+	}
+}
+
 func switchStaleHandlerTestConfig(normalize bool) *config.Config {
 	return &config.Config{
 		SIP: config.SIPConfig{
