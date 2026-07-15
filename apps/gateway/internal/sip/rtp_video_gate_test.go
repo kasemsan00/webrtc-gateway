@@ -81,7 +81,7 @@ func TestWriteNormalizedVideoAccessUnitAbortsReservationOnWriteFailure(t *testin
 	}
 }
 
-func TestWriteNormalizedVideoAccessUnitUsesWebRTCEgressSSRC(t *testing.T) {
+func TestWriteNormalizedVideoAccessUnitUsesSingleWebRTCEgressSSRC(t *testing.T) {
 	now := time.Unix(300, 0)
 	sess := &session.Session{ID: "egress-write", VideoAUNormalizeEnabled: true, SwitchGeneration: 1}
 	sess.WebRTCVideoEgressSSRC = 7777
@@ -89,20 +89,28 @@ func TestWriteNormalizedVideoAccessUnitUsesWebRTCEgressSSRC(t *testing.T) {
 		t.Fatal("expected gate start")
 	}
 
-	var gotSSRC uint32
-	written := writeNormalizedVideoAccessUnit(sess, normalizedVideoAU(1, true, true, 1), now.Add(time.Second), func(b []byte) (int, error) {
+	var gotSSRCs []uint32
+	written := writeNormalizedVideoAccessUnit(sess, normalizedVideoAU(1, true, true, 3), now.Add(time.Second), func(b []byte) (int, error) {
 		pkt := &rtp.Packet{}
 		if err := pkt.Unmarshal(b); err != nil {
 			t.Fatalf("unmarshal: %v", err)
 		}
-		gotSSRC = pkt.SSRC
+		gotSSRCs = append(gotSSRCs, pkt.SSRC)
+		if len(gotSSRCs) == 1 {
+			sess.RemapWebRTCVideoEgressSSRC("concurrent-switch")
+		}
 		return len(b), nil
 	})
 	if !written {
 		t.Fatal("expected write success")
 	}
-	if gotSSRC != 7777 {
-		t.Fatalf("expected egress SSRC 7777, got %d", gotSSRC)
+	if len(gotSSRCs) != 3 {
+		t.Fatalf("expected 3 packets, got %d", len(gotSSRCs))
+	}
+	for i, gotSSRC := range gotSSRCs {
+		if gotSSRC != 7777 {
+			t.Fatalf("packet %d: expected snapshotted egress SSRC 7777, got %d", i, gotSSRC)
+		}
 	}
 }
 

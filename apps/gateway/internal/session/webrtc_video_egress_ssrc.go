@@ -13,6 +13,13 @@ func (s *Session) GetWebRTCVideoEgressSSRC() uint32 {
 }
 
 func (s *Session) EnsureWebRTCVideoEgressSSRC(packetSSRC uint32) uint32 {
+	return s.SnapshotWebRTCVideoEgressSSRC(packetSSRC)
+}
+
+// SnapshotWebRTCVideoEgressSSRC returns the current egress SSRC, initializing
+// it from packetSSRC when necessary. Callers can retain the returned value for
+// an entire access unit so a concurrent remap cannot split that unit.
+func (s *Session) SnapshotWebRTCVideoEgressSSRC(packetSSRC uint32) uint32 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.WebRTCVideoEgressSSRC != 0 {
@@ -50,6 +57,7 @@ func (s *Session) remapWebRTCVideoEgressSSRCLocked(reason string) uint32 {
 		}
 	}
 	s.WebRTCVideoEgressSSRC = next
+	s.ClearVideoRTPHistory()
 	fmt.Printf("[%s] switch_webrtc_ssrc_remap generation=%d mediaEpoch=%d old=%d new=%d sipSsrc=%d reason=%s\n",
 		s.ID, s.SwitchGeneration, s.MediaEpoch, old, next, s.RemoteVideoSSRC, reason)
 	return next

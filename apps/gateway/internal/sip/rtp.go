@@ -37,8 +37,13 @@ func writeNormalizedVideoAccessUnit(
 		return false
 	}
 
+	packetSSRC := uint32(0)
+	if au.Packets[0] != nil {
+		packetSSRC = au.Packets[0].SSRC
+	}
+	egressSSRC := sess.SnapshotWebRTCVideoEgressSSRC(packetSSRC)
 	for _, packet := range au.Packets {
-		sess.ApplyWebRTCVideoEgressSSRC(packet)
+		packet.SSRC = egressSSRC
 		data, err := packet.Marshal()
 		if err != nil {
 			fmt.Printf("[%s] h264_au_write_error stage=marshal seq=%d error=%v\n", sess.ID, packet.SequenceNumber, err)

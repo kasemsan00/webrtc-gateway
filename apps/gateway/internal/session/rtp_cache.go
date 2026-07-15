@@ -29,6 +29,15 @@ func (s *Session) CacheVideoRTPPacket(seq uint16, data []byte) {
 	s.videoRTPHistoryMu.Unlock()
 }
 
+// ClearVideoRTPHistory invalidates packets cached under the previous egress
+// SSRC so a later NACK cannot retransmit them after an SSRC remap.
+func (s *Session) ClearVideoRTPHistory() {
+	s.videoRTPHistoryMu.Lock()
+	clear(s.VideoRTPHistoryPackets)
+	clear(s.VideoRTPHistorySeq)
+	s.videoRTPHistoryMu.Unlock()
+}
+
 func (s *Session) getCachedVideoRTPPacket(seq uint16) []byte {
 	if s.VideoRTPHistorySize == 0 {
 		return nil

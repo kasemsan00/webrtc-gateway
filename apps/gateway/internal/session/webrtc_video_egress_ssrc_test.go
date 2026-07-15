@@ -37,6 +37,21 @@ func TestRemapWebRTCVideoEgressSSRCChangesValue(t *testing.T) {
 	}
 }
 
+func TestRemapWebRTCVideoEgressSSRCClearsRTPHistory(t *testing.T) {
+	sess := &Session{ID: "egress-remap-cache"}
+	sess.initVideoRTPHistory()
+	sess.CacheVideoRTPPacket(42, []byte{1, 2, 3})
+	if got := sess.getCachedVideoRTPPacket(42); got == nil {
+		t.Fatal("expected packet to be cached before remap")
+	}
+
+	sess.RemapWebRTCVideoEgressSSRC("accepted-switch")
+
+	if got := sess.getCachedVideoRTPPacket(42); got != nil {
+		t.Fatalf("expected remap to clear cached packet, got %v", got)
+	}
+}
+
 func TestApplyWebRTCVideoEgressSSRCRewritesPacket(t *testing.T) {
 	sess := &Session{ID: "egress-apply"}
 	sess.EnsureWebRTCVideoEgressSSRC(5555)

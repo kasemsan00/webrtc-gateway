@@ -184,6 +184,18 @@ func TestPrepareSwitchVideoTargetRemapsWebRTCEgressSSRC(t *testing.T) {
 	if sess.GetWebRTCVideoEgressSSRC() != afterFirst {
 		t.Fatalf("duplicate must not remap egress SSRC, before=%d after=%d", afterFirst, sess.GetWebRTCVideoEgressSSRC())
 	}
+
+	second, _ := sess.PrepareAndActivateSwitchVideoTarget("14131", "00025", now.Add(61*time.Second), time.Minute, true)
+	if second.Ignore || second.Reason != "debounce-window-expired" {
+		t.Fatalf("expected second switch after debounce honored, got %+v", second)
+	}
+	afterSecond := sess.GetWebRTCVideoEgressSSRC()
+	if afterSecond == 0 || afterSecond == afterFirst {
+		t.Fatalf("second accepted switch did not remap egress SSRC, first=%d second=%d", afterFirst, afterSecond)
+	}
+	if sess.RemoteVideoSSRC != 1111 {
+		t.Fatalf("SIP RemoteVideoSSRC must stay 1111, got %d", sess.RemoteVideoSSRC)
+	}
 }
 
 func TestPrepareAndActivateSwitchVideoTargetNormalizationDisabledUsesLegacyOutcome(t *testing.T) {
