@@ -34,6 +34,10 @@ Correlate browser inbound RTP diagnostics with Gateway logs by `sessionId`:
 - Confirm switch recovery reaches `h264_au_normalized status=complete-idr` and ends through Gateway RTP stability or its bounded timeout.
 - Confirm startup prints `SIP Video H264 AU Normalization: true`. Every 300 SIP video packets, inspect `h264_au_stats` for `emitted`, `dropped_incomplete`, `dropped_overflow`, and `pending_packets`.
 - A `h264_au_normalized status=complete-idr` line now means the marker and all FU-A fragments were complete; a bare IDR/FU-A start no longer counts as successful keyframe delivery.
+- `switch_webrtc_ssrc_remap` means the gateway allocated a new WebRTC-visible
+  video SSRC for an accepted `@switch` so clients reset decoders even when
+  RTPengine preserved the SIP SSRC. `old`/`new` are egress values; `sipSsrc`
+  remains the SIP-learned media SSRC used for FIR/PLI/NACK toward Asterisk.
 - If normalization itself is suspected, temporarily set `SIP_VIDEO_AU_NORMALIZE_ENABLE=false` and restart the gateway. This restores the legacy raw reordered path and should be used only as a bounded comparison because incomplete frames can poison strict mobile decoders.
 
 ## Queue-to-agent video is blocky or has incorrect colors
