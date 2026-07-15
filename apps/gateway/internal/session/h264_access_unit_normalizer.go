@@ -29,6 +29,8 @@ type NormalizedH264AccessUnit struct {
 	Packets               []*rtp.Packet
 	IsIDR                 bool
 	InjectedParameterSets bool
+	ParameterSetsReady    bool
+	Generation            int
 	SourceTimestamp       uint32
 }
 
@@ -57,8 +59,9 @@ type H264AccessUnitNormalizer struct {
 	outputTS     uint32
 	lastSourceTS uint32
 
-	cachedSPS []byte
-	cachedPPS []byte
+	cachedSPS  []byte
+	cachedPPS  []byte
+	generation int
 
 	droppedIncomplete uint64
 	droppedOverflow   uint64
@@ -223,6 +226,7 @@ func (n *H264AccessUnitNormalizer) finishLocked() NormalizedH264AccessUnit {
 	if hasPPS {
 		n.cachedPPS = cacheNALFromPackets(n.cachedPPS, packets, 8)
 	}
+	parameterSetsReady := len(n.cachedSPS) > 0 && len(n.cachedPPS) > 0
 
 	injected := false
 	if isIDR {
@@ -249,7 +253,8 @@ func (n *H264AccessUnitNormalizer) finishLocked() NormalizedH264AccessUnit {
 	n.emitted++
 	n.resetCurrentLocked()
 	return NormalizedH264AccessUnit{
-		Packets: packets, IsIDR: isIDR, InjectedParameterSets: injected, SourceTimestamp: sourceTimestamp,
+		Packets: packets, IsIDR: isIDR, InjectedParameterSets: injected,
+		ParameterSetsReady: parameterSetsReady, Generation: n.generation, SourceTimestamp: sourceTimestamp,
 	}
 }
 
@@ -315,6 +320,17 @@ func (n *H264AccessUnitNormalizer) ResetSource() {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.dropCurrentLocked(false)
+}
+
+// ResetForSwitch drops source-specific state while preserving the continuous
+// outbound sequence/timestamp timeline.
+func (n *H264AccessUnitNormalizer) ResetForSwitch(generation int) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.dropCurrentLocked(false)
+	n.cachedSPS = nil
+	n.cachedPPS = nil
+	n.generation = generation
 }
 
 func inspectAccessUnit(packets []*rtp.Packet) (hasSPS, hasPPS, isIDR bool) {

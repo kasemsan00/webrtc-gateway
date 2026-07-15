@@ -82,6 +82,59 @@ func TestH264AccessUnitNormalizerRewritesContinuityAcrossSourceReset(t *testing.
 	}
 }
 
+func TestH264AccessUnitNormalizerResetForSwitchRequiresFreshParameterSetsAndPreservesTimeline(t *testing.T) {
+	var emitted []NormalizedH264AccessUnit
+	n := NewH264AccessUnitNormalizer(H264AccessUnitNormalizerConfig{}, func(au NormalizedH264AccessUnit) {
+		emitted = append(emitted, au)
+	})
+	n.SetParameterSets([]byte{0x67, 0x42, 0x00, 0x1f}, []byte{0x68, 0xce, 0x06, 0xe2})
+
+	n.Push(h264Packet(300, 24000, true, []byte{0x65, 0x99}))
+	n.Push(h264Packet(301, 25000, false, []byte{0x41, 0x01}))
+	n.ResetForSwitch(42)
+	n.Push(h264Packet(7, 1000, true, []byte{0x65, 0xaa}))
+
+	if len(emitted) != 2 {
+		t.Fatalf("expected access units before and after switch reset, got %d", len(emitted))
+	}
+	before, withoutFreshSets := emitted[0], emitted[1]
+	if !before.ParameterSetsReady || before.Generation != 0 {
+		t.Fatalf("expected initial cached parameter sets in generation 0, got %+v", before)
+	}
+	if withoutFreshSets.ParameterSetsReady || withoutFreshSets.Generation != 42 {
+		t.Fatalf("expected reset generation without ready parameter sets, got %+v", withoutFreshSets)
+	}
+	if withoutFreshSets.InjectedParameterSets || len(withoutFreshSets.Packets) != 1 {
+		t.Fatalf("expected IDR without stale parameter-set injection, got %+v", withoutFreshSets)
+	}
+	beforeLast := before.Packets[len(before.Packets)-1]
+	afterFirst := withoutFreshSets.Packets[0]
+	if afterFirst.SequenceNumber != beforeLast.SequenceNumber+1 {
+		t.Fatalf("outbound sequence discontinuity across switch reset: %d then %d", beforeLast.SequenceNumber, afterFirst.SequenceNumber)
+	}
+	if int32(afterFirst.Timestamp-beforeLast.Timestamp) <= 0 {
+		t.Fatalf("outbound timestamp did not remain monotonic across switch reset: %d then %d", beforeLast.Timestamp, afterFirst.Timestamp)
+	}
+
+	n.Push(h264Packet(8, 4000, false, []byte{0x67, 0x64}))
+	n.Push(h264Packet(9, 4000, false, []byte{0x68, 0xef}))
+	n.Push(h264Packet(10, 4000, true, []byte{0x65, 0xbb}))
+
+	if len(emitted) != 3 {
+		t.Fatalf("expected fresh parameter-set access unit, got %d emissions", len(emitted))
+	}
+	withFreshSets := emitted[2]
+	if !withFreshSets.ParameterSetsReady || withFreshSets.Generation != 42 {
+		t.Fatalf("expected fresh parameter sets to be ready in generation 42, got %+v", withFreshSets)
+	}
+	if withFreshSets.InjectedParameterSets || len(withFreshSets.Packets) != 3 {
+		t.Fatalf("expected present fresh parameter sets without injection, got %+v", withFreshSets)
+	}
+	if withFreshSets.Packets[0].SequenceNumber != afterFirst.SequenceNumber+1 {
+		t.Fatalf("outbound sequence discontinuity after fresh parameter sets: %d then %d", afterFirst.SequenceNumber, withFreshSets.Packets[0].SequenceNumber)
+	}
+}
+
 func TestH264AccessUnitNormalizerInjectsCachedParameterSetsBeforeIDR(t *testing.T) {
 	var emitted []NormalizedH264AccessUnit
 	n := NewH264AccessUnitNormalizer(H264AccessUnitNormalizerConfig{}, func(au NormalizedH264AccessUnit) {
