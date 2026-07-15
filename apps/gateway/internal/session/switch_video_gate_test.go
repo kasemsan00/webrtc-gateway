@@ -187,6 +187,43 @@ func TestSwitchVideoGateThrottlesRepeatedRejectionReason(t *testing.T) {
 	}
 }
 
+func TestSwitchVideoGateThrottlesAlternatingRejectionReasonsGlobally(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	sess := &Session{VideoAUNormalizeEnabled: true, SwitchGeneration: 6}
+	sess.StartSwitchVideoGate(now, "switch")
+
+	sess.EvaluateSwitchVideoAccessUnit(gateTestAU(5, true, true, 1), now)
+	sess.mu.RLock()
+	firstLogAt := sess.SwitchVideoGateLastRejectLogAt
+	sess.mu.RUnlock()
+
+	for i := 1; i <= 8; i++ {
+		var au NormalizedH264AccessUnit
+		if i%2 == 0 {
+			au = gateTestAU(5, true, true, 1)
+		} else {
+			au = gateTestAU(6, false, true, 1)
+		}
+		sess.EvaluateSwitchVideoAccessUnit(au, now.Add(time.Duration(i)*100*time.Millisecond))
+	}
+
+	sess.mu.RLock()
+	throttledLogAt := sess.SwitchVideoGateLastRejectLogAt
+	rejected := sess.SwitchVideoGateRejectedCount
+	sess.mu.RUnlock()
+	if !throttledLogAt.Equal(firstLogAt) || rejected != 9 {
+		t.Fatalf("alternating rejection throttle: first=%s last=%s rejected=%d", firstLogAt, throttledLogAt, rejected)
+	}
+
+	sess.EvaluateSwitchVideoAccessUnit(gateTestAU(6, false, true, 1), now.Add(time.Second))
+	sess.mu.RLock()
+	resumedLogAt := sess.SwitchVideoGateLastRejectLogAt
+	sess.mu.RUnlock()
+	if !resumedLogAt.Equal(now.Add(time.Second)) {
+		t.Fatalf("global logging did not resume after throttle window: %s", resumedLogAt)
+	}
+}
+
 func gateTestAU(generation int, idr, parameterSetsReady bool, ssrc uint32) NormalizedH264AccessUnit {
 	return NormalizedH264AccessUnit{
 		Packets:            []*rtp.Packet{{Header: rtp.Header{SSRC: ssrc}}},

@@ -40,11 +40,10 @@ func (s *Session) EvaluateSwitchVideoAccessUnit(au NormalizedH264AccessUnit, now
 		s.SwitchVideoGateRejectedCount++
 		rejected := s.SwitchVideoGateRejectedCount
 		elapsed := now.Sub(s.SwitchVideoGateStartedAt)
-		shouldLog := reason != s.SwitchVideoGateLastRejectReason ||
-			s.SwitchVideoGateLastRejectLogAt.IsZero() ||
+		shouldLog := s.SwitchVideoGateLastRejectLogAt.IsZero() ||
 			now.Sub(s.SwitchVideoGateLastRejectLogAt) >= switchVideoGateRejectLogInterval
+		s.SwitchVideoGateLastRejectReason = reason
 		if shouldLog {
-			s.SwitchVideoGateLastRejectReason = reason
 			s.SwitchVideoGateLastRejectLogAt = now
 		}
 		id := s.ID
