@@ -81,6 +81,28 @@ func TestVideoRecoveryBurstPolicyLifecycle(t *testing.T) {
 	}
 }
 
+func TestEndVideoRecoveryBurstIsIdempotentAndFinishesSwitchAfterReasonOverride(t *testing.T) {
+	sess := newBurstTestSession("switch-end-idempotent")
+	sess.StartSwitchVideoRecovery(5*time.Second, 750*time.Millisecond)
+	sess.StartVideoRecoveryBurst("ice-reconnecting")
+
+	sess.mu.Lock()
+	first := sess.endVideoRecoveryBurst(time.Now(), "stable-rtp")
+	second := sess.endVideoRecoveryBurst(time.Now(), "stable-rtp")
+	switchActive := !sess.SwitchVideoRecoveryStartedAt.IsZero() || !sess.SwitchVideoRecoveryUntil.IsZero()
+	sess.mu.Unlock()
+
+	if !first {
+		t.Fatal("expected first recovery end to change state")
+	}
+	if second {
+		t.Fatal("expected repeated recovery end to be a no-op")
+	}
+	if switchActive {
+		t.Fatal("expected switch recovery cleared even after burst reason override")
+	}
+}
+
 func TestSendBrowserRecoveryToAsterisk_UsesBothInBurstForWSKeyframe(t *testing.T) {
 	sess := newBurstTestSession("burst-ws-request")
 	makeSIPVideoRecoveryReady(t, sess)

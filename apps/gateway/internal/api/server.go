@@ -248,9 +248,6 @@ func (s *Server) Start(ctx context.Context) error {
 
 	// REST API endpoints
 	if s.config.EnableREST {
-		router.HandleFunc("/api/logs", s.handleListLogFiles).Methods("GET", "OPTIONS")
-		router.HandleFunc("/api/logs/current", s.handleGetCurrentLog).Methods("GET", "OPTIONS")
-		router.HandleFunc("/api/logs/{name}", s.handleGetLogFile).Methods("GET", "OPTIONS")
 		router.HandleFunc("/api/client-diagnostics", s.handleListClientDiagnostics).Methods("GET", "OPTIONS")
 		router.HandleFunc("/api/client-diagnostics/sessions/{sessionId}/events", s.handleListClientDiagnosticSessionEvents).Methods("GET", "OPTIONS")
 		router.HandleFunc("/api/client-diagnostics/sessions/{sessionId}/payloads", s.handleListClientDiagnosticSessionPayloads).Methods("GET", "OPTIONS")
@@ -260,6 +257,9 @@ func (s *Server) Start(ctx context.Context) error {
 		if s.tokenVerifier != nil {
 			api.Use(s.authMiddleware)
 		}
+		api.HandleFunc("/logs", s.handleListLogFiles).Methods("GET", "OPTIONS")
+		api.HandleFunc("/logs/current", s.handleGetCurrentLog).Methods("GET", "OPTIONS")
+		api.HandleFunc("/logs/{name}", s.handleGetLogFile).Methods("GET", "OPTIONS")
 		api.HandleFunc("/offer", s.handleOffer).Methods("POST", "OPTIONS")
 		api.HandleFunc("/call", s.handleCall).Methods("POST", "OPTIONS")
 		api.HandleFunc("/hangup/{sessionId}", s.handleHangup).Methods("POST", "OPTIONS")

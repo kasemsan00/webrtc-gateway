@@ -38,9 +38,14 @@ func (s *Session) StartVideoRecoveryBurst(reason string) {
 	fmt.Printf("[%s] 📈 recovery_policy interval=%s stale=%s firStale=%s\n", s.ID, interval, stale, firStale)
 }
 
-func (s *Session) endVideoRecoveryBurst(now time.Time, reason string) {
+func (s *Session) endVideoRecoveryBurst(now time.Time, reason string) bool {
 	startedAt := s.VideoRecoveryBurstStartedAt
 	lastReason := s.VideoRecoveryBurstLastReason
+	burstActive := !s.VideoRecoveryBurstUntil.IsZero() || !startedAt.IsZero() || lastReason != ""
+	switchActive := !s.SwitchVideoRecoveryStartedAt.IsZero() || !s.SwitchVideoRecoveryUntil.IsZero()
+	if !burstActive && !switchActive {
+		return false
+	}
 	if lastReason == "switch" && reason == "timeout" && s.SwitchVideoRecoveryUnstableCount > 0 {
 		reason = "timeout-rtp-unstable"
 	}
@@ -49,14 +54,20 @@ func (s *Session) endVideoRecoveryBurst(now time.Time, reason string) {
 	s.VideoRecoveryBurstLastReason = ""
 	s.VideoRTCPFallbackUntil = time.Time{}
 
-	recoveryMS := int64(-1)
-	if !startedAt.IsZero() {
-		recoveryMS = now.Sub(startedAt).Milliseconds()
+	if burstActive {
+		recoveryMS := int64(-1)
+		if !startedAt.IsZero() {
+			recoveryMS = now.Sub(startedAt).Milliseconds()
+		}
+		fmt.Printf("[%s] 📈 video_recovery_window_end reason=%s keyframe_recovery_ms=%d\n", s.ID, reason, recoveryMS)
 	}
-	fmt.Printf("[%s] 📈 video_recovery_window_end reason=%s keyframe_recovery_ms=%d\n", s.ID, reason, recoveryMS)
-	if lastReason == "switch" {
+	// Switch recovery is a separate state machine. A resume/reconnect burst can
+	// overwrite VideoRecoveryBurstLastReason while the switch is still active,
+	// so finish it based on its own state rather than the last burst reason.
+	if switchActive {
 		s.finishSwitchVideoRecoveryLocked(now, reason)
 	}
+	return true
 }
 
 // StopVideoRecoveryBurstIfActive ends the burst window when media recovery is complete.

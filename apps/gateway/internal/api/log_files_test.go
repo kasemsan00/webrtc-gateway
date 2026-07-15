@@ -20,14 +20,13 @@ func setupLogFileHandlers(t *testing.T, srv *Server) *mux.Router {
 	t.Helper()
 
 	router := mux.NewRouter()
-	router.HandleFunc("/api/logs", srv.handleListLogFiles).Methods("GET", "OPTIONS")
-	router.HandleFunc("/api/logs/current", srv.handleGetCurrentLog).Methods("GET", "OPTIONS")
-	router.HandleFunc("/api/logs/{name}", srv.handleGetLogFile).Methods("GET", "OPTIONS")
-
 	apiRouter := router.PathPrefix("/api").Subrouter()
 	if srv.tokenVerifier != nil {
 		apiRouter.Use(srv.authMiddleware)
 	}
+	apiRouter.HandleFunc("/logs", srv.handleListLogFiles).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/logs/current", srv.handleGetCurrentLog).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/logs/{name}", srv.handleGetLogFile).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}).Methods("GET", "OPTIONS")
@@ -202,7 +201,7 @@ func TestHandleLogFileErrors(t *testing.T) {
 	}
 }
 
-func TestLogRoutesBypassAPIMiddleware(t *testing.T) {
+func TestLogRoutesUseAPIMiddlewareWhenAuthConfigured(t *testing.T) {
 	calledCurrent := false
 	calledNamed := false
 	overrideLogFileFuncs(t,
@@ -233,8 +232,16 @@ func TestLogRoutesBypassAPIMiddleware(t *testing.T) {
 	for _, path := range []string{"/api/logs", "/api/logs/current", "/api/logs/k2-gateway-2026-05-25_10-30-00.log"} {
 		rr := httptest.NewRecorder()
 		router.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, path, nil))
-		if rr.Code != http.StatusOK {
-			t.Fatalf("expected %s without token to return 200, got %d body=%s", path, rr.Code, rr.Body.String())
+		if rr.Code != http.StatusUnauthorized {
+			t.Fatalf("expected %s without token to return 401, got %d body=%s", path, rr.Code, rr.Body.String())
+		}
+
+		authorized := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("Authorization", "Bearer valid-token")
+		router.ServeHTTP(authorized, req)
+		if authorized.Code != http.StatusOK {
+			t.Fatalf("expected %s with token to return 200, got %d body=%s", path, authorized.Code, authorized.Body.String())
 		}
 	}
 	if !calledCurrent || !calledNamed {

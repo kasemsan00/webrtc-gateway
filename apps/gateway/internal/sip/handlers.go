@@ -13,6 +13,11 @@ import (
 	"k2-gateway/internal/session"
 )
 
+const (
+	switchFeedbackBurstCount    = 3
+	switchFeedbackBurstInterval = 50 * time.Millisecond
+)
+
 // setupHandlers configures SIP request handlers
 func (s *Server) setupHandlers() {
 	// Handle INVITE requests (incoming calls)
@@ -1308,7 +1313,9 @@ func (s *Server) handleSwitchMessage(body string, callerURI string) {
 		}
 	}
 
-	// 4. Send FIR burst (6x, 50ms) to request keyframe with SPS/PPS quickly.
+	// 4. Send a bounded FIR burst after the immediate kick. Production gate
+	// releases are normally below one second, so three retries retain recovery
+	// coverage without the previous RTCP volume.
 	if genuineSwitch {
 		if !sess.IsSwitchVideoAuthority(switchDecision.Generation, switchDecision.MediaEpoch) {
 			return
@@ -1318,8 +1325,8 @@ func (s *Server) handleSwitchMessage(body string, callerURI string) {
 			return
 		}
 	}
-	fmt.Printf("[%s] 🔀 Sending @switch: FIR burst (6x @ 50ms)\n", sess.ID)
-	for i := 0; i < 6; i++ {
+	fmt.Printf("[%s] 🔀 Sending @switch: FIR burst (%dx @ %s)\n", sess.ID, switchFeedbackBurstCount, switchFeedbackBurstInterval)
+	for i := 0; i < switchFeedbackBurstCount; i++ {
 		if sess.GetState() == session.StateEnded || !switchAuthorized() {
 			return
 		}
@@ -1333,10 +1340,10 @@ func (s *Server) handleSwitchMessage(body string, callerURI string) {
 			sess.SendFIRToWebRTC()
 			sess.SendFIRToAsterisk()
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(switchFeedbackBurstInterval)
 	}
 
-	// 5. Send PLI burst (6x, 50ms) for redundancy and faster stabilization.
+	// 5. Send the matching bounded PLI burst for redundancy.
 	if genuineSwitch {
 		if !sess.IsSwitchVideoAuthority(switchDecision.Generation, switchDecision.MediaEpoch) {
 			return
@@ -1346,8 +1353,8 @@ func (s *Server) handleSwitchMessage(body string, callerURI string) {
 			return
 		}
 	}
-	fmt.Printf("[%s] 🔀 Sending @switch: PLI burst (6x @ 50ms)\n", sess.ID)
-	for i := 0; i < 6; i++ {
+	fmt.Printf("[%s] 🔀 Sending @switch: PLI burst (%dx @ %s)\n", sess.ID, switchFeedbackBurstCount, switchFeedbackBurstInterval)
+	for i := 0; i < switchFeedbackBurstCount; i++ {
 		if sess.GetState() == session.StateEnded || !switchAuthorized() {
 			return
 		}
@@ -1361,7 +1368,7 @@ func (s *Server) handleSwitchMessage(body string, callerURI string) {
 			sess.SendPLItoWebRTC()
 			sess.SendPLIToAsteriskForced("switch")
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(switchFeedbackBurstInterval)
 	}
 
 	fmt.Printf("✅ Sent @switch immediate kick + FIR/PLI bursts (Browser + Asterisk) for session: %s\n", sess.ID)

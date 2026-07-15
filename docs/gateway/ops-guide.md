@@ -23,7 +23,7 @@ Gateway process logs:
 - `GET /api/logs` lists gateway-managed `k2-gateway-*.log` files.
 - `GET /api/logs/current?tail=500` reads the current gateway log tail.
 - `GET /api/logs/{name}?tail=500` reads a selected gateway log file tail.
-- These read endpoints are intentionally available without a bearer token, even when API auth is enabled.
+- When API auth is enabled, these endpoints require the same bearer token as other `/api/*` operations endpoints. They remain public only when no token verifier is configured.
 
 Runtime configuration (read-only):
 
@@ -50,10 +50,12 @@ PowerShell examples:
 
 ```powershell
 $base = "https://k2-gateway.kasemsan.com"
-Invoke-RestMethod "$base/api/logs/current?tail=500" | ConvertTo-Json -Depth 8
-Invoke-RestMethod "$base/api/client-diagnostics?page=1&pageSize=100" | ConvertTo-Json -Depth 12
-Invoke-RestMethod "$base/api/client-diagnostics?level=error&page=1&pageSize=100" | ConvertTo-Json -Depth 12
-Invoke-RestMethod "$base/api/client-diagnostics/sessions/<sessionId>/events?page=1&pageSize=100" | ConvertTo-Json -Depth 12
+$token = "<jwt>"
+$headers = @{ Authorization = "Bearer $token" } # required when API auth is enabled
+Invoke-RestMethod "$base/api/logs/current?tail=500" -Headers $headers | ConvertTo-Json -Depth 8
+Invoke-RestMethod "$base/api/client-diagnostics?page=1&pageSize=100" -Headers $headers | ConvertTo-Json -Depth 12
+Invoke-RestMethod "$base/api/client-diagnostics?level=error&page=1&pageSize=100" -Headers $headers | ConvertTo-Json -Depth 12
+Invoke-RestMethod "$base/api/client-diagnostics/sessions/<sessionId>/events?page=1&pageSize=100" -Headers $headers | ConvertTo-Json -Depth 12
 ```
 
 Use a real session ID in session URLs. The placeholder `<sessionId>` or encoded

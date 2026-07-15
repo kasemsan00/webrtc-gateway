@@ -42,7 +42,7 @@ With `SIP_VIDEO_AU_NORMALIZE_ENABLE=true`, an accepted `@switch` keeps the
 previous decoded frame visible until the Gateway writes fresh SPS/PPS and a
 complete IDR for the new switch generation. Audio continues independently.
 
-- `switch_video_gate_start` means the new media generation is gated.
+- `switch_video_gate_activation outcome=active` means the new media generation is gated.
 - `switch_video_au_rejected` identifies an unsafe AU; inspect `reason` for a
   stale generation, non-IDR frame, or missing fresh parameter sets.
 - `switch_video_gate_release` reports the clean release latency in `wait_ms`.
