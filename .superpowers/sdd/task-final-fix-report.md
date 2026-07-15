@@ -51,4 +51,4 @@
 
 #### Commits
 
-- `d7757a3` fix(gateway): serialize NACK retransmit against SSRC remap
+- `6916153` fix(gateway): serialize NACK retransmit against SSRC remap
