@@ -255,6 +255,19 @@ func (s *Session) SendFIRToWebRTC() {
 	s.sendWebRTCFeedback("fir", nil)
 }
 
+// KickUplinkKeyframeOnRemoteJoinIfNeeded claims the first-join uplink keyframe
+// kick and sends FIR + PLI to the WebRTC browser. Returns true when claimed.
+// Safe without a PeerConnection (feedback becomes a no-op); claim still sticks.
+func (s *Session) KickUplinkKeyframeOnRemoteJoinIfNeeded() bool {
+	if !s.TryClaimUplinkKeyframeKickOnRemoteJoin() {
+		return false
+	}
+	fmt.Printf("[%s] 📈 uplink_keyframe_kick reason=remote-ssrc-learn\n", s.ID)
+	s.SendFIRToWebRTC()
+	s.SendPLItoWebRTC()
+	return true
+}
+
 // SendNACKToWebRTC forwards a NACK (Negative Acknowledgement) to the WebRTC browser
 // requesting retransmission of lost packets
 func (s *Session) SendNACKToWebRTC(mediaSSRC uint32, nacks []rtcp.NackPair) {

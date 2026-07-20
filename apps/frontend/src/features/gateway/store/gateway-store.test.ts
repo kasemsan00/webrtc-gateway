@@ -19,6 +19,8 @@ function createState(overrides?: Partial<GatewayState>): GatewayState {
       localStream: null,
       remoteVideoStream: null,
       remoteAudioStream: null,
+      remoteVideoReceiving: false,
+      remoteAudioReceiving: false,
       iceState: 'new',
       signalingState: 'stable',
     },

@@ -12,11 +12,22 @@ import (
 
 // NotifySessionState notifies WebSocket clients about session state changes
 func (s *Server) NotifySessionState(sessionID string, state session.SessionState) {
+	s.NotifySessionStateWithReason(sessionID, state, "session-state")
+}
+
+// NotifySessionStateWithReason notifies WebSocket clients and logs the trigger reason.
+func (s *Server) NotifySessionStateWithReason(sessionID string, state session.SessionState, reason string) {
+	if reason == "" {
+		reason = "session-state"
+	}
+
 	// Notify session stream listeners about state changes
 	var eventType string
 	switch state {
 	case session.StateConnecting:
 		eventType = "session_created"
+	case session.StateRinging:
+		eventType = "session_state_changed"
 	case session.StateActive:
 		eventType = "session_active"
 	case session.StateEnded:
@@ -43,14 +54,56 @@ func (s *Server) NotifySessionState(sessionID string, state session.SessionState
 	client, ok := s.wsClients[sessionID]
 	s.mu.RUnlock()
 
-	if ok {
-		msg := WSMessage{
-			Type:      "state",
-			SessionID: sessionID,
-			State:     string(state),
-		}
-		s.sendWSMessage(client, msg)
+	if !ok {
+		return
 	}
+
+	msg := WSMessage{
+		Type:      "state",
+		SessionID: sessionID,
+		State:     string(state),
+	}
+	log.Printf("[%s] 📡 WS call-progress type=state state=%s reason=%s", sessionID, state, reason)
+	s.sendWSMessage(client, msg)
+
+	// Additive ringing message for softphone-kmp-sdk RingingMessage compatibility.
+	if state == session.StateRinging {
+		log.Printf("[%s] 📡 WS call-progress type=ringing reason=%s", sessionID, reason)
+		s.sendWSMessage(client, WSMessage{
+			Type:      "ringing",
+			SessionID: sessionID,
+		})
+	}
+}
+
+// NotifyRemoteMedia notifies the bound WebSocket client that remote SIP media is receiving.
+// Missing clients and full send buffers are non-fatal (sendWSMessage drops with a log).
+func (s *Server) NotifyRemoteMedia(sessionID, kind, direction, state string) {
+	if kind == "" {
+		kind = "video"
+	}
+	if direction == "" {
+		direction = "remote"
+	}
+	if state == "" {
+		state = "receiving"
+	}
+
+	s.mu.RLock()
+	client, ok := s.wsClients[sessionID]
+	s.mu.RUnlock()
+	if !ok || client == nil {
+		return
+	}
+
+	log.Printf("[%s] 📡 WS media kind=%s direction=%s state=%s", sessionID, kind, direction, state)
+	s.sendWSMessage(client, WSMessage{
+		Type:      "media",
+		SessionID: sessionID,
+		Kind:      kind,
+		Direction: direction,
+		State:     state,
+	})
 }
 
 func (s *Server) NotifyMidCallRenegotiation(sessionID string, renegotiation session.MidCallRenegotiationSnapshot, validation session.MidCallSDPValidation) {

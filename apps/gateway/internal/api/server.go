@@ -132,6 +132,9 @@ type WSMessage struct {
 	ReasonSource string          `json:"reasonSource,omitempty"`
 	Error        string          `json:"error,omitempty"`
 	HasVideo     string          `json:"hasVideo,omitempty"`
+	// Remote media presence (SIP→WebRTC): use Kind + Direction + State.
+	// Kind is audio|video; Direction is remote (v1). Direction is also used by translation captions.
+	Kind string `json:"kind,omitempty"`
 	// Mid-call renegotiation fields. Additive for clients that support
 	// renegotiate, renegotiate_answer, and renegotiate_result messages.
 	RenegotiationID string `json:"renegotiationId,omitempty"`

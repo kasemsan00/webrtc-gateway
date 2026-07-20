@@ -859,7 +859,7 @@ func (s *Server) registerIncomingCancelHandler(sess *session.Session, tx sip.Ser
 }
 
 // handleACK handles ACK requests
-func (s *Server) handleACK(req *sip.Request, tx sip.ServerTransaction) {
+func (s *Server) handleACK(req *sip.Request, _ sip.ServerTransaction) {
 	ctx := context.Background()
 	// ACK confirms the INVITE transaction is complete
 	fmt.Printf("Received ACK from: %s\n", req.From().Value())

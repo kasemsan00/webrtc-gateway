@@ -375,6 +375,7 @@ func runAPIMode(ctx context.Context, cfg *config.Config, unicastAddress string, 
 	sipServer.SetSessionManager(sessionMgr)
 	sipServer.SetStateNotifier(apiServer)
 	sipServer.SetMidCallRenegotiationNotifier(apiServer)
+	sipServer.SetRemoteMediaNotifier(apiServer)
 	sipServer.SetSwitchVideoRenegotiationStarter(apiServer)
 
 	// Wire dependencies for incoming call support

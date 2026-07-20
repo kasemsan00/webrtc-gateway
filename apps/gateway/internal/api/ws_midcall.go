@@ -181,7 +181,7 @@ func (s *Server) handleWSClientState(client *WSClient, msg WSMessage) {
 }
 
 // handleWSPing handles WebSocket ping messages
-func (s *Server) handleWSPing(client *WSClient, msg WSMessage) {
+func (s *Server) handleWSPing(client *WSClient, _ WSMessage) {
 	if s.config.DebugWebSocket {
 		fmt.Printf("[WebSocket] 💓 Received ping from client (sessionID=%s)\n", client.sessionID)
 	}

@@ -197,6 +197,10 @@ export function GatewayConsolePage() {
   const msgsRef = useAutoScroll(state.messages)
 
   const hasRemoteVideo = Boolean(state.media.remoteVideoStream)
+  const waitingRemoteVideo =
+    hasRemoteVideo &&
+    state.call.state === 'active' &&
+    !state.media.remoteVideoReceiving
   const hasLocalVideo = Boolean(state.media.localStream)
 
   const selectedCameraValue =
@@ -930,6 +934,14 @@ export function GatewayConsolePage() {
               <RiVideoOnLine className="size-10 opacity-30" />
               <p className="text-sm">No active video call</p>
             </div>
+          ) : waitingRemoteVideo ? (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/40 text-gray-300">
+              <RiVideoOnLine className="size-10 opacity-50" />
+              <p className="text-sm">Waiting for remote video…</p>
+              <p className="text-xs text-gray-500">
+                Call is active; SIP video not decode-ready yet
+              </p>
+            </div>
           ) : null}
 
           {state.rtt.remotePreviewText ? (
@@ -1290,6 +1302,11 @@ export function GatewayConsolePage() {
               <span>ICE: {state.media.iceState}</span>
               <span>Sig: {state.media.signalingState}</span>
               <span>Calls: {state.call.callCount}</span>
+              <span>
+                Remote media: v=
+                {state.media.remoteVideoReceiving ? 'recv' : '-'} a=
+                {state.media.remoteAudioReceiving ? 'recv' : '-'}
+              </span>
             </div>
           </div>
         </aside>

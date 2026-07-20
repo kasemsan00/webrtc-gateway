@@ -89,6 +89,8 @@ const initialState: GatewayState = {
     localStream: null,
     remoteVideoStream: null,
     remoteAudioStream: null,
+    remoteVideoReceiving: false,
+    remoteAudioReceiving: false,
     iceState: 'new',
     signalingState: 'stable',
   },
@@ -737,6 +739,8 @@ function teardownFullSession({ preserveCallState = false } = {}) {
       localStream: null,
       remoteVideoStream: null,
       remoteAudioStream: null,
+      remoteVideoReceiving: false,
+      remoteAudioReceiving: false,
       iceState: 'new',
       signalingState: 'stable',
     },
@@ -787,6 +791,8 @@ function teardownSessionForRecovery() {
       rtcStateText: 'Reconnecting...',
       remoteVideoStream: null,
       remoteAudioStream: null,
+      remoteVideoReceiving: false,
+      remoteAudioReceiving: false,
       iceState: 'new',
       signalingState: 'stable',
     },
@@ -1504,6 +1510,36 @@ function handleMessage(event: MessageEvent<string>) {
         clearResumeRecovery()
       }
       handleCallState(nextState)
+      break
+    }
+    case 'media': {
+      const kind = String(message.kind ?? '')
+      const direction = String(message.direction ?? 'remote')
+      const mediaState = String(message.state ?? 'receiving')
+      if (mediaState !== 'receiving') break
+      if (kind === 'video') {
+        gatewayStore.setState((state) => ({
+          ...state,
+          media: {
+            ...state.media,
+            remoteVideoReceiving: true,
+          },
+        }))
+      } else if (kind === 'audio') {
+        gatewayStore.setState((state) => ({
+          ...state,
+          media: {
+            ...state.media,
+            remoteAudioReceiving: true,
+          },
+        }))
+      } else {
+        break
+      }
+      appendLog(
+        `Remote media ${kind} ${direction} ${mediaState}`,
+        'success',
+      )
       break
     }
     case 'incoming':

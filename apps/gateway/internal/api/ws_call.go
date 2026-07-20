@@ -431,13 +431,21 @@ func (s *Server) handleWSCall(client *WSClient, msg WSMessage) {
 		go s.runWSCall(client, msg, sess, authMode, accountKey)
 	}
 
-	// Send state update
-	response := WSMessage{
-		Type:      "state",
-		SessionID: sess.ID,
-		State:     string(sess.GetState()),
+	// Bind client to session so SIP progress notifies reach this connection.
+	client.sessionID = sess.ID
+	s.mu.Lock()
+	s.wsClients[sess.ID] = client
+	s.mu.Unlock()
+
+	// Acknowledge dialing progress explicitly. Do not echo an ICE-promoted
+	// active snapshot — active means SIP answered.
+	ackState := session.OutboundCallAckState(sess.GetState())
+	if ackState == session.StateConnecting {
+		sess.UpdateState(session.StateConnecting)
 	}
-	s.sendWSMessage(client, response)
+	if sess.TakeProgressNotify(ackState) {
+		s.NotifySessionStateWithReason(sess.ID, ackState, "ws-call-ack")
+	}
 }
 
 func (s *Server) runWSCall(client *WSClient, msg WSMessage, sess *session.Session, authMode, accountKey string) {

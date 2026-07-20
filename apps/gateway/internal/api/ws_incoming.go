@@ -535,7 +535,8 @@ func (s *Server) handleWSAccept(client *WSClient, msg WSMessage) {
 	s.logSessionSnapshot(ctx, callSession, "")
 
 	// Delete the old incoming session (even if AcceptCall reported error, call may work)
-	if webrtcSess != nil && incomingSessionID != webrtcSess.ID {
+	// webrtcSess is non-nil here (early return above if missing).
+	if incomingSessionID != webrtcSess.ID {
 		log.Printf("🗑️ Deleting old incoming session: %s", incomingSessionID)
 		s.sessionMgr.DeleteSession(incomingSessionID)
 	}

@@ -152,6 +152,10 @@ export interface GatewayState {
     localStream: MediaStream | null
     remoteVideoStream: MediaStream | null
     remoteAudioStream: MediaStream | null
+    /** Gateway `type: media` video remote receiving (decode-ready). Independent of call.state. */
+    remoteVideoReceiving: boolean
+    /** Gateway `type: media` audio remote receiving. Independent of call.state. */
+    remoteAudioReceiving: boolean
     iceState: string
     signalingState: string
   }

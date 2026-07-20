@@ -41,7 +41,7 @@ Auth behavior:
 
 ### Server -> Client message types
 
-- `answer`, `state`, `incoming`
+- `answer`, `state`, `incoming`, `ringing`, `media`
 - `message`, `messageSent`, `dtmf`
 - `renegotiate`, `renegotiate_result`
   - `renegotiate` is additive mid-call WebRTC assistance for SIP re-INVITE/UPDATE media changes and for `@switch` gate release (`reason=agent_switch`). It includes `sessionId`, `renegotiationId`, optional `sdp`, `reason`, `mediaDirection`, `hasVideo`, and `requiresAnswer`.
@@ -50,6 +50,42 @@ Auth behavior:
 - `trunk_resolved`, `trunk_redirect`, `trunk_not_found`, `trunk_not_ready`
   - `trunk_resolved` now returns both `trunkId` and `trunkPublicId`
 - `pong`, `error`
+
+### Outbound call progress (`state` / `ringing`)
+
+Outbound WebRTC→SIP call progress is SIP dialog progress, **not** WebRTC ICE readiness.
+
+| `state` value | Meaning |
+|---------------|---------|
+| `connecting` | Outbound INVITE initiated / dialing |
+| `ringing` | SIP `180`/`183` received (far end alerting) |
+| `active` | SIP `200 OK` — far end answered |
+| `ended` | Call or attempt terminated |
+| `reconnecting` | Post-answer ICE recovery |
+
+Rules:
+
+- WebRTC ICE connected during `connecting`/`ringing` does **not** emit `active`.
+- After client `call`, the gateway acknowledges with `connecting` (or current SIP progress if already `ringing`/`active`).
+- On transition to ringing, the gateway also sends additive `{"type":"ringing","sessionId":"..."}` for softphone clients that listen for that message type.
+- `type: answer` remains the WebRTC SDP answer to `offer`, unrelated to SIP answer.
+- **`state: active` is not equivalent to remote video receiving.** Asterisk may answer immediately while Linphone video arrives later.
+
+### Remote media presence (`media`)
+
+Additive server→client signal when remote SIP media is first observed as ready toward the WebRTC client:
+
+```json
+{"type":"media","sessionId":"<id>","kind":"video","direction":"remote","state":"receiving"}
+```
+
+| Field | Values | Meaning |
+|-------|--------|---------|
+| `kind` | `video` \| `audio` | Media type |
+| `direction` | `remote` | SIP→WebRTC (v1) |
+| `state` | `receiving` | First ready observation |
+
+Video `receiving` is emitted once per session when the gateway has parameter sets (SPS/PPS) and observes a complete IDR (or legacy keyframe with cached sets). Audio `receiving` is emitted once on the first accepted SIP audio RTP write to the WebRTC track. SSRC-learn alone does not emit video ready. Missing WS clients are non-fatal.
 
 If you add/change a message type, update all of:
 

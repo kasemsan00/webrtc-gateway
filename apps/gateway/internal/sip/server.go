@@ -25,6 +25,11 @@ type MidCallRenegotiationNotifier interface {
 	NotifyMidCallRenegotiation(sessionID string, renegotiation session.MidCallRenegotiationSnapshot, validation session.MidCallSDPValidation)
 }
 
+// RemoteMediaNotifier notifies clients when remote SIP media first becomes ready.
+type RemoteMediaNotifier interface {
+	NotifyRemoteMedia(sessionID, kind, direction, state string)
+}
+
 // SwitchVideoRenegotiationStarter starts client-assisted WebRTC renegotiation
 // after @switch video gate release.
 type SwitchVideoRenegotiationStarter interface {
@@ -73,12 +78,13 @@ type Server struct {
 	sipPort          int
 	sessionMgr       SessionManager // For finding sessions by Call-ID
 	sessionCreator   SessionCreator // For creating sessions for incoming calls
-	stateNotifier    StateNotifier  // For notifying WebSocket clients
-	midCallNotifier              MidCallRenegotiationNotifier
-	switchRenegotiationStarter   SwitchVideoRenegotiationStarter
-	incomingNotifier             IncomingCallNotifier // For notifying incoming calls
-	messageNotifier  MessageNotifier      // For notifying incoming SIP messages
-	dtmfNotifier     DTMFNotifier         // For notifying received DTMF
+	stateNotifier              StateNotifier // For notifying WebSocket clients
+	midCallNotifier            MidCallRenegotiationNotifier
+	remoteMediaNotifier        RemoteMediaNotifier
+	switchRenegotiationStarter SwitchVideoRenegotiationStarter
+	incomingNotifier           IncomingCallNotifier // For notifying incoming calls
+	messageNotifier            MessageNotifier      // For notifying incoming SIP messages
+	dtmfNotifier               DTMFNotifier         // For notifying received DTMF
 	logStore         logstore.LogStore
 	logFullSIP       bool
 	// Registration fields
@@ -148,6 +154,17 @@ func (s *Server) SetMidCallRenegotiationNotifier(notifier MidCallRenegotiationNo
 	s.midCallNotifier = notifier
 }
 
+func (s *Server) SetRemoteMediaNotifier(notifier RemoteMediaNotifier) {
+	s.remoteMediaNotifier = notifier
+}
+
+func (s *Server) notifyRemoteMediaReady(sess *session.Session, kind string) {
+	if sess == nil || s.remoteMediaNotifier == nil {
+		return
+	}
+	s.remoteMediaNotifier.NotifyRemoteMedia(sess.ID, kind, "remote", "receiving")
+}
+
 func (s *Server) SetSwitchVideoRenegotiationStarter(starter SwitchVideoRenegotiationStarter) {
 	s.switchRenegotiationStarter = starter
 }
@@ -156,7 +173,13 @@ func (s *Server) notifySessionStateChange(sess *session.Session, state session.S
 	if sess == nil || s.stateNotifier == nil {
 		return
 	}
-	if state != session.StateActive && state != session.StateEnded {
+	switch state {
+	case session.StateConnecting, session.StateRinging, session.StateActive, session.StateEnded:
+		// Call-progress states forwarded to WebSocket clients.
+	default:
+		return
+	}
+	if !sess.TakeProgressNotify(state) {
 		return
 	}
 	s.stateNotifier.NotifySessionState(sess.ID, state)

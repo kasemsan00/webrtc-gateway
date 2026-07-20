@@ -63,7 +63,14 @@ type Session struct {
 	VideoRTCPConn  *net.UDPConn                `json:"-"` // Dedicated RTCP port for video (RTP+1)
 	SIPCallID      string                      `json:"sipCallId,omitempty"`
 	State          SessionState                `json:"state"`
-	Direction      string                      `json:"direction"` // "inbound" or "outbound"
+	// lastNotifiedProgressState dedupes consecutive identical WS call-progress notifies.
+	lastNotifiedProgressState SessionState `json:"-"`
+	// One-shot remote media-ready notifies (SIP→WebRTC presence, not call progress).
+	remoteVideoReadyNotified bool `json:"-"`
+	remoteAudioReadyNotified bool `json:"-"`
+	// One-shot WebRTC→SIP keyframe kick when remote SIP video first appears.
+	uplinkKeyframeKickOnRemoteJoinDone bool `json:"-"`
+	Direction                string `json:"direction"` // "inbound" or "outbound"
 	From           string                      `json:"from,omitempty"`
 	To             string                      `json:"to,omitempty"`
 	RTPPort        int                         `json:"rtpPort,omitempty"`
@@ -611,17 +618,17 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 				}
 			}
 
-			// If reconnecting after network change, transition back to active
-			wasReconnecting := session.State == StateReconnecting
-			if session.State == StateConnecting || session.State == StateReconnecting {
-				session.State = StateActive
-				if wasReconnecting {
-					fmt.Printf("[%s] ✅ ICE reconnected - resuming call\n", id)
-					startRecoveryBurstReason = "ice-reconnected"
-				} else {
-					fmt.Printf("[%s] ✅ ICE connected - starting initial call recovery burst\n", id)
-					startRecoveryBurstReason = "initial-call"
-				}
+			// Call-progress state must follow SIP answer, not ICE readiness.
+			// Only restore active when recovering from a post-answer ICE reconnect.
+			nextState, recoveryReason, stateChanged := ApplyICEConnectedCallProgress(session.State)
+			if stateChanged {
+				session.State = nextState
+				fmt.Printf("[%s] ✅ ICE reconnected - resuming call\n", id)
+			} else if recoveryReason == "initial-call" {
+				fmt.Printf("[%s] ✅ ICE connected - starting initial call recovery burst (call state=%s)\n", id, session.State)
+			}
+			if recoveryReason != "" {
+				startRecoveryBurstReason = recoveryReason
 			}
 			// Send a conservative FIR + single forced PLI for startup recovery.
 			// Keep this lightweight to avoid over-driving upstream encoder adaptation

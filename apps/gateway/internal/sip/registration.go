@@ -123,17 +123,18 @@ func (s *Server) doRegister(ctx context.Context) error {
 	logSIPResponse(res, "Response from Asterisk")
 
 	// Handle response
-	if res.StatusCode == 200 {
+	switch res.StatusCode {
+	case 200:
 		fmt.Printf("✓ SIP Registration successful (200 OK)\n")
 		fmt.Printf("========================\n\n")
 		return nil
-	} else if res.StatusCode == 401 || res.StatusCode == 407 {
+	case 401, 407:
 		// Handle authentication challenge
 		fmt.Printf("Authentication required (%d), attempting with credentials...\n", res.StatusCode)
 		return s.registerWithAuth(ctx, req, res)
+	default:
+		return fmt.Errorf("registration failed with status: %d %s", res.StatusCode, res.Reason)
 	}
-
-	return fmt.Errorf("registration failed with status: %d %s", res.StatusCode, res.Reason)
 }
 
 // createRegisterRequest creates a SIP REGISTER request using static config

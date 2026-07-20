@@ -328,6 +328,9 @@ func (s *Server) handleAudioRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 					fmt.Printf("[%s] Error writing to audio track: %v\n", sess.ID, writeErr)
 					return
 				}
+				if sess.TryMarkRemoteAudioReady() {
+					s.notifyRemoteMediaReady(sess, "audio")
+				}
 				continue
 			}
 
@@ -392,6 +395,9 @@ func (s *Server) handleAudioRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 				fmt.Printf("[%s] Error writing to audio track: %v\n", sess.ID, err)
 				return
 			}
+			if sess.TryMarkRemoteAudioReady() {
+				s.notifyRemoteMediaReady(sess, "audio")
+			}
 		} else if packetCount == 1 {
 			fmt.Printf("[%s] WARNING: AudioTrack is nil, cannot forward audio RTP!\n", sess.ID)
 		}
@@ -451,6 +457,11 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 				fmt.Printf("[%s] h264_au_normalized status=complete-idr packets=%d injected_parameter_sets=%v source_timestamp=%d pli_response=%v response_time=%v pli_sent=%d pli_responses=%d\n",
 					sess.ID, len(au.Packets), au.InjectedParameterSets, au.SourceTimestamp,
 					isPLIResponse, responseTime, pliSent, pliResponse)
+				_, _, hasCachedSets := sess.GetSIPCachedSPSPPS()
+				hasParameterSets := hasCachedSets || au.InjectedParameterSets
+				if sess.TryMarkRemoteVideoReady(hasParameterSets) {
+					s.notifyRemoteMediaReady(sess, "video")
+				}
 			}
 		})
 		if sps, pps, ok := sess.GetSIPCachedSPSPPS(); ok {
@@ -612,6 +623,21 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 				// Send FIR first, then a short guarded PLI burst.
 				// Keep startup recovery conservative to avoid RTCP storms during @switch answer.
 				go func() {
+					// First remote SSRC learn: also kick WebRTC uplink keyframe so
+					// late-joining SIP decoders (e.g. Linphone after long ring) get an IDR.
+					uplinkKick := sess.KickUplinkKeyframeOnRemoteJoinIfNeeded()
+					if uplinkKick {
+						go func() {
+							for i := 1; i < startupPLIAttempts; i++ {
+								if sess.GetState() == session.StateEnded {
+									return
+								}
+								time.Sleep(startupPLIInterval)
+								sess.SendPLItoWebRTC()
+							}
+						}()
+					}
+
 					fmt.Printf("[%s] 🚀 Sending startup FIR + guarded PLI burst\n", sess.ID)
 					sess.SendFIRToAsterisk()
 					if sess.IsSwitchVideoRecoveryActive() {
@@ -742,6 +768,10 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 				sess.MarkSwitchVideoKeyframe(time.Now())
 				fmt.Printf("[%s] h264_au_normalized status=legacy-keyframe-start packet=%d pli_response=%v response_time=%v pli_sent=%d pli_responses=%d\n",
 					sess.ID, packetCount, isPLIResponse, responseTime, pliSent, pliResponse)
+				_, _, hasCachedSets := sess.GetSIPCachedSPSPPS()
+				if sess.TryMarkRemoteVideoReady(hasCachedSets) {
+					s.notifyRemoteMediaReady(sess, "video")
+				}
 			}
 
 			if auNormalizer == nil && sess.ShouldHoldSwitchVideoPacket(time.Now(), isKeyframe) {
