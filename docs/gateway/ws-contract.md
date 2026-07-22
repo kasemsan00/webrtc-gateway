@@ -65,6 +65,10 @@ Outbound WebRTC→SIP call progress is SIP dialog progress, **not** WebRTC ICE r
 
 Rules:
 
+- `state` messages may include an optional additive `reason` string. Older clients may ignore it.
+- If ICE becomes terminal before the outbound SIP INVITE starts, the gateway emits
+  `{"type":"state","state":"ended","reason":"ice_failed_pre_sip","sessionId":"..."}`
+  and suppresses the less actionable generic `Failed to make call: context canceled` error.
 - WebRTC ICE connected during `connecting`/`ringing` does **not** emit `active`.
 - After client `call`, the gateway acknowledges with `connecting` (or current SIP progress if already `ringing`/`active`).
 - On transition to ringing, the gateway also sends additive `{"type":"ringing","sessionId":"..."}` for softphone clients that listen for that message type.

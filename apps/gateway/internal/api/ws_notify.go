@@ -62,6 +62,7 @@ func (s *Server) NotifySessionStateWithReason(sessionID string, state session.Se
 		Type:      "state",
 		SessionID: sessionID,
 		State:     string(state),
+		Reason:    reason,
 	}
 	log.Printf("[%s] 📡 WS call-progress type=state state=%s reason=%s", sessionID, state, reason)
 	s.sendWSMessage(client, msg)

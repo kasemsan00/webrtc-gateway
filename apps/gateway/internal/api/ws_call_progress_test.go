@@ -1,7 +1,9 @@
 package api
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"k2-gateway/internal/config"
 	"k2-gateway/internal/session"
@@ -87,6 +89,85 @@ func TestNotifySessionState_ActiveOnlyState(t *testing.T) {
 	msgs := readWSMessages(t, client.send)
 	if len(msgs) != 1 || msgs[0].Type != "state" || msgs[0].State != "active" {
 		t.Fatalf("expected single active state, got %+v", msgs)
+	}
+}
+
+func TestNotifySessionState_IncludesReason(t *testing.T) {
+	mgr := newTestSessionManager()
+	sess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, nil, nil, nil, nil)
+	client := &WSClient{send: make(chan []byte, 8), sessionID: sess.ID}
+	srv.mu.Lock()
+	srv.wsClients[sess.ID] = client
+	srv.mu.Unlock()
+
+	srv.NotifySessionStateWithReason(sess.ID, session.StateEnded, "ice_failed_pre_sip")
+
+	msgs := readWSMessages(t, client.send)
+	if len(msgs) != 1 || msgs[0].Reason != "ice_failed_pre_sip" {
+		t.Fatalf("expected terminal reason, got %+v", msgs)
+	}
+}
+
+func TestRunWSCall_ICEFailureBeforeInviteEndsWithoutGenericError(t *testing.T) {
+	mgr := newTestSessionManager()
+	sess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+	sess.SetTerminalReason("ice_failed")
+	maker := &stubSIPCallMaker{makeCallErr: context.Canceled}
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, maker, nil, nil, nil)
+	client := &WSClient{send: make(chan []byte, 8), sessionID: sess.ID}
+	srv.mu.Lock()
+	srv.wsClients[sess.ID] = client
+	srv.mu.Unlock()
+
+	srv.runWSCall(client, WSMessage{SessionID: sess.ID, Destination: "1002"}, sess, "", "")
+
+	msgs := readWSMessages(t, client.send)
+	if len(msgs) != 1 || msgs[0].Type != "state" || msgs[0].State != "ended" || msgs[0].Reason != "ice_failed_pre_sip" {
+		t.Fatalf("expected reasoned terminal state without generic error, got %+v", msgs)
+	}
+}
+
+func TestHandleWSCall_BindsClientBeforeImmediatePreSIPFailure(t *testing.T) {
+	mgr := newTestSessionManager()
+	sess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+	sess.SetTerminalReason("ice_failed")
+	maker := &stubSIPCallMaker{makeCallErr: context.Canceled}
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, maker, nil, nil, nil)
+	client := &WSClient{send: make(chan []byte, 8), publicOnly: true}
+
+	srv.handleWSCall(client, WSMessage{
+		Type:        "call",
+		SessionID:   sess.ID,
+		Destination: "1002",
+		SIPDomain:   "example.com",
+		SIPUsername: "userA",
+		SIPPassword: "secret",
+		SIPPort:     5060,
+	})
+
+	deadline := time.Now().Add(time.Second)
+	var msgs []WSMessage
+	for len(msgs) < 2 && time.Now().Before(deadline) {
+		msgs = append(msgs, readWSMessages(t, client.send)...)
+		if len(msgs) < 2 {
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("expected connecting then ended, got %+v", msgs)
+	}
+	if msgs[0].State != "connecting" || msgs[1].State != "ended" || msgs[1].Reason != "ice_failed_pre_sip" {
+		t.Fatalf("unexpected progress ordering: %+v", msgs)
 	}
 }
 

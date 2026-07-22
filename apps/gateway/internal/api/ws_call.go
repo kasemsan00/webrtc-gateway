@@ -188,12 +188,27 @@ func (s *Server) handleWSIce(client *WSClient, msg WSMessage) {
 		s.sendWSError(client, sessionID, fmt.Sprintf("Failed to add ICE candidate: %v", err))
 		return
 	}
+	candidateType := "unknown"
+	parts := strings.Fields(candidate.Candidate)
+	for i := 0; i+1 < len(parts); i++ {
+		if parts[i] == "typ" {
+			candidateType = parts[i+1]
+			break
+		}
+	}
+	count, elapsed := sess.RecordRemoteICECandidate()
+	log.Printf("[%s] 🧊 Remote ICE candidate added type=%s count=%d elapsed=%s", sessionID, candidateType, count, elapsed)
 
 	s.logEvent(&logstore.Event{
 		Timestamp: time.Now(),
 		SessionID: sessionID,
 		Category:  "ice",
 		Name:      "ws_ice_candidate_added",
+		Data: map[string]interface{}{
+			"candidateType":  candidateType,
+			"candidateCount": count,
+			"elapsedMs":      elapsed.Milliseconds(),
+		},
 	})
 }
 
@@ -425,13 +440,9 @@ func (s *Server) handleWSCall(client *WSClient, msg WSMessage) {
 		}
 	}
 
-	// Make SIP call asynchronously so the read loop can process hangup while
-	// the outbound INVITE is still pending and translate it to SIP CANCEL.
-	if s.sipMaker != nil {
-		go s.runWSCall(client, msg, sess, authMode, accountKey)
-	}
-
-	// Bind client to session so SIP progress notifies reach this connection.
+	// Bind and acknowledge before starting the asynchronous SIP path. A cold
+	// ICE failure can cancel MakeCall immediately; starting it first could drop
+	// the terminal reason and then incorrectly send a late connecting ack.
 	client.sessionID = sess.ID
 	s.mu.Lock()
 	s.wsClients[sess.ID] = client
@@ -445,6 +456,12 @@ func (s *Server) handleWSCall(client *WSClient, msg WSMessage) {
 	}
 	if sess.TakeProgressNotify(ackState) {
 		s.NotifySessionStateWithReason(sess.ID, ackState, "ws-call-ack")
+	}
+
+	// Make SIP call asynchronously so the read loop can process hangup while
+	// the outbound INVITE is still pending and translate it to SIP CANCEL.
+	if s.sipMaker != nil {
+		go s.runWSCall(client, msg, sess, authMode, accountKey)
 	}
 }
 
@@ -463,6 +480,26 @@ func (s *Server) runWSCall(client *WSClient, msg WSMessage, sess *session.Sessio
 
 		if authMode == "public" && accountKey != "" && s.publicRegistry != nil {
 			s.publicRegistry.DecrementRefCount(accountKey)
+		}
+
+		if sess.GetTerminalReason() == "ice_failed" && !sess.HasOutboundInviteStarted() {
+			const reason = "ice_failed_pre_sip"
+			localCandidates, remoteCandidates := sess.ICECandidateCounts()
+			s.logEvent(&logstore.Event{
+				Timestamp: time.Now(),
+				SessionID: sess.ID,
+				Category:  "ice",
+				Name:      reason,
+				State:     string(session.StateEnded),
+				Data: map[string]interface{}{
+					"error":                 err.Error(),
+					"localCandidateCount":   localCandidates,
+					"remoteCandidateCount":  remoteCandidates,
+					"outboundInviteStarted": false,
+				},
+			})
+			s.NotifySessionStateWithReason(sess.ID, session.StateEnded, reason)
+			return
 		}
 
 		s.logEvent(&logstore.Event{

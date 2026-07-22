@@ -808,7 +808,7 @@ function teardownSessionForRecovery() {
   }))
 }
 
-function handleCallState(callState: string) {
+function handleCallState(callState: string, reason?: string) {
   const normalized = normalizeCallStatus(callState)
   gatewayStore.setState((state) => ({
     ...state,
@@ -821,7 +821,10 @@ function handleCallState(callState: string) {
         ? 'idle'
         : state.incomingAction,
   }))
-  appendLog(`Call State: ${normalized}`, 'info')
+  appendLog(
+    `Call State: ${normalized}${reason ? ` (${reason})` : ''}`,
+    normalized === 'ended' && reason ? 'warning' : 'info',
+  )
 
   if (normalized === 'active') {
     const activeSessionId = gatewayStore.state.call.sessionId
@@ -1496,6 +1499,7 @@ function handleMessage(event: MessageEvent<string>) {
       break
     case 'state': {
       const nextState = String(message.state ?? 'idle')
+      const reason = message.reason ? String(message.reason) : undefined
       const sessionId = message.sessionId ? String(message.sessionId) : null
       if (sessionId && nextState !== 'ended') {
         gatewayStore.setState((state) => ({
@@ -1509,7 +1513,7 @@ function handleMessage(event: MessageEvent<string>) {
       if (nextState === 'ended') {
         clearResumeRecovery()
       }
-      handleCallState(nextState)
+      handleCallState(nextState, reason)
       break
     }
     case 'media': {

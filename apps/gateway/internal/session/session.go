@@ -69,16 +69,16 @@ type Session struct {
 	remoteVideoReadyNotified bool `json:"-"`
 	remoteAudioReadyNotified bool `json:"-"`
 	// One-shot WebRTC→SIP keyframe kick when remote SIP video first appears.
-	uplinkKeyframeKickOnRemoteJoinDone bool `json:"-"`
-	Direction                string `json:"direction"` // "inbound" or "outbound"
-	From           string                      `json:"from,omitempty"`
-	To             string                      `json:"to,omitempty"`
-	RTPPort        int                         `json:"rtpPort,omitempty"`
-	VideoRTPPort   int                         `json:"videoRtpPort,omitempty"`
-	AudioRTCPPort  int                         `json:"audioRtcpPort,omitempty"`
-	VideoRTCPPort  int                         `json:"videoRtcpPort,omitempty"`
-	CreatedAt      time.Time                   `json:"createdAt"`
-	UpdatedAt      time.Time                   `json:"updatedAt"`
+	uplinkKeyframeKickOnRemoteJoinDone bool      `json:"-"`
+	Direction                          string    `json:"direction"` // "inbound" or "outbound"
+	From                               string    `json:"from,omitempty"`
+	To                                 string    `json:"to,omitempty"`
+	RTPPort                            int       `json:"rtpPort,omitempty"`
+	VideoRTPPort                       int       `json:"videoRtpPort,omitempty"`
+	AudioRTCPPort                      int       `json:"audioRtcpPort,omitempty"`
+	VideoRTCPPort                      int       `json:"videoRtcpPort,omitempty"`
+	CreatedAt                          time.Time `json:"createdAt"`
+	UpdatedAt                          time.Time `json:"updatedAt"`
 	// ICE-lite credentials for SIP side
 	ICEUfrag string `json:"-"`
 	ICEPwd   string `json:"-"`
@@ -167,12 +167,12 @@ type Session struct {
 	VideoRTPDisorderContainmentSummary   VideoRecoverySummary `json:"-"`
 	// @switch transition hold (SIP->WebRTC): blackout (default) blocks gate release
 	// until minimum elapsed; preserve is rollback that keeps last frame visible.
-	SwitchVideoTransitionMode  string    `json:"-"`
-	SwitchVideoBlackoutEnabled bool      `json:"-"`
-	SwitchVideoBlackoutStarted time.Time `json:"-"`
-	SwitchVideoBlackoutUntil   time.Time `json:"-"`
-	SwitchVideoBlackoutMaxWait time.Time `json:"-"`
-	SwitchVideoFirstKeyframeAt         time.Time `json:"-"`
+	SwitchVideoTransitionMode        string    `json:"-"`
+	SwitchVideoBlackoutEnabled       bool      `json:"-"`
+	SwitchVideoBlackoutStarted       time.Time `json:"-"`
+	SwitchVideoBlackoutUntil         time.Time `json:"-"`
+	SwitchVideoBlackoutMaxWait       time.Time `json:"-"`
+	SwitchVideoFirstKeyframeAt       time.Time `json:"-"`
 	SwitchVideoRenegotiateGeneration int       `json:"-"`
 	// RTP State for re-packetization
 	AudioSeq        uint16 `json:"-"`
@@ -180,7 +180,7 @@ type Session struct {
 	VideoSeq        uint16 `json:"-"`
 	VideoSSRC       uint32 `json:"-"`
 	RemoteAudioSSRC uint32 `json:"-"`
-	RemoteVideoSSRC       uint32 `json:"-"`
+	RemoteVideoSSRC uint32 `json:"-"`
 	// PendingBrowserKeyframeRequest is set when a client ws-request_keyframe
 	// arrives before SIP video SSRC/addr/conn are ready. Flushed on ssrc-learn / @switch.
 	PendingBrowserKeyframeRequest      bool      `json:"-"`
@@ -192,8 +192,8 @@ type Session struct {
 	LastSPSPPSInjectionTime time.Time `json:"-"` // Track last SPS/PPS injection for periodic re-injection
 	// SIP-side cached SPS/PPS (SIP→WebRTC direction, from SIP endpoint's encoder)
 	// Used to inject parameter sets before keyframes forwarded to browser for decoder recovery.
-	SIPCachedSPS []byte `json:"-"`
-	SIPCachedPPS []byte `json:"-"`
+	SIPCachedSPS             []byte                `json:"-"`
+	SIPCachedPPS             []byte                `json:"-"`
 	h264AUParameterSetSeeder func(sps, pps []byte) `json:"-"`
 	// @switch controlled SPS/PPS injection (inject 3 copies before each of first 3 IDRs after @switch)
 	SwitchSPSPPSInjectRemaining int       `json:"-"` // Number of IDR frames left to inject SPS/PPS (0 = disabled, 3 = inject next 3 IDRs)
@@ -230,6 +230,12 @@ type Session struct {
 	// Terminal signaling action guard for accept/reject/cancel/timeout/bye races.
 	TerminalAction              string                     `json:"-"`
 	TerminalActionAt            time.Time                  `json:"-"`
+	TerminalReason              string                     `json:"-"`
+	OutboundInviteStarted       bool                       `json:"-"`
+	LocalICECandidateCount      int                        `json:"-"`
+	RemoteICECandidateCount     int                        `json:"-"`
+	FirstLocalICECandidateAt    time.Time                  `json:"-"`
+	FirstRemoteICECandidateAt   time.Time                  `json:"-"`
 	PendingMidCallRenegotiation *midCallRenegotiationState `json:"-"`
 	RemoteAudioDirection        string                     `json:"-"`
 	RemoteVideoDirection        string                     `json:"-"`
@@ -535,32 +541,31 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 			fmt.Printf("[%s] 🧊 ICE Gathering State: %s\n", id, state.String())
 		})
 
-		// Log all ICE candidates as they are discovered
-		peerConnection.OnICECandidate(func(candidate *webrtc.ICECandidate) {
-			if candidate == nil {
-				// nil candidate indicates gathering is complete
-				fmt.Printf("[%s] 🧊 ICE Candidate gathering complete\n", id)
-				return
-			}
-			candidateType := "unknown"
-			switch candidate.Typ {
-			case webrtc.ICECandidateTypeHost:
-				candidateType = "host"
-			case webrtc.ICECandidateTypeSrflx:
-				candidateType = "srflx"
-			case webrtc.ICECandidateTypePrflx:
-				candidateType = "prflx"
-			case webrtc.ICECandidateTypeRelay:
-				candidateType = "relay"
-			}
-			fmt.Printf("[%s] 🧊 ICE Candidate: type=%s address=%s:%d protocol=%s\n", id, candidateType, candidate.Address, candidate.Port, candidate.Protocol.String())
-		})
 	}
+
+	// Always count candidates so terminal diagnostics remain useful even when
+	// verbose TURN logging is disabled.
+	peerConnection.OnICECandidate(func(candidate *webrtc.ICECandidate) {
+		if candidate == nil {
+			if cfg.API.DebugTURN {
+				fmt.Printf("[%s] 🧊 ICE Candidate gathering complete\n", id)
+			}
+			return
+		}
+		count, elapsed := session.RecordLocalICECandidate()
+		if cfg.API.DebugTURN {
+			fmt.Printf("[%s] 🧊 ICE Candidate: type=%s address=%s:%d protocol=%s count=%d elapsed=%s\n",
+				id, candidate.Typ.String(), candidate.Address, candidate.Port, candidate.Protocol.String(), count, elapsed)
+		}
+	})
 
 	// Set ICE connection state change handler
 	reconnectGracePeriod := 30 * time.Second
 	peerConnection.OnICEConnectionStateChange(func(connectionState webrtc.ICEConnectionState) {
 		fmt.Printf("[%s] ICE Connection State: %s\n", id, connectionState.String())
+		if connectionState == webrtc.ICEConnectionStateConnected || connectionState == webrtc.ICEConnectionStateFailed {
+			logICECandidatePairDiagnostics(id, peerConnection, connectionState.String())
+		}
 
 		session.mu.Lock()
 		session.UpdatedAt = time.Now()
@@ -698,7 +703,10 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 				fmt.Printf("[%s] 🧊 ICE failed ignored during terminal cleanup (state=%s action=%s)\n", id, session.State, session.TerminalAction)
 				break
 			}
-			// ICE failed is truly terminal - end immediately
+			// ICE failed is truly terminal - end immediately. Preserve the
+			// machine-readable cause so the API can distinguish pre-SIP failure
+			// from SIP cancellation after an INVITE has started.
+			session.TerminalReason = "ice_failed"
 			session.State = StateEnded
 			if session.cancel != nil {
 				session.cancel()

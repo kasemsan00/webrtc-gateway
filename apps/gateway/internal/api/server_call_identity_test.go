@@ -15,6 +15,7 @@ type stubSIPCallMaker struct {
 	lastDest      string
 	lastFrom      string
 	lastSessionID string
+	makeCallErr   error
 }
 
 func (s *stubSIPCallMaker) MakeCall(destination, from string, sess *session.Session) error {
@@ -24,7 +25,7 @@ func (s *stubSIPCallMaker) MakeCall(destination, from string, sess *session.Sess
 	if sess != nil {
 		s.lastSessionID = sess.ID
 	}
-	return nil
+	return s.makeCallErr
 }
 
 func (s *stubSIPCallMaker) CancelPendingCall(sess *session.Session) error         { return nil }

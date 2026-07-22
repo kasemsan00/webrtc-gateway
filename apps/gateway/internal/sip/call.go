@@ -200,6 +200,7 @@ func (s *Server) MakeCall(destination, from string, sess *session.Session) error
 	fmt.Printf("[%s] Making outbound call to %s\n", sess.ID, destination)
 
 	// Send INVITE using TransactionRequest for proper response handling
+	sess.MarkOutboundInviteStarted()
 	tx, err := s.sipClient.TransactionRequest(ctx, inviteReq)
 	if err != nil {
 		sess.UpdateState(session.StateEnded)
