@@ -206,6 +206,7 @@ type Session struct {
 	SIPDomain        string   `json:"-"` // SIP domain (dialog state + auth context)
 	SIPPort          int      `json:"-"` // SIP port (dialog state + auth context)
 	SIPRouteSet      []string `json:"-"` // Route headers from Record-Route (reversed order)
+	Held             bool     `json:"held,omitempty"`
 	// SIP Codec Payload Types (for RTP rewriting between SIP <-> WebRTC)
 	SIPOpusPT uint8 `json:"-"` // Opus payload type negotiated with SIP peer (e.g., 107, 111)
 	// Incoming call state

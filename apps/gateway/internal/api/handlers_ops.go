@@ -112,6 +112,8 @@ type WSClientResponse struct {
 	AuthSubject           string `json:"authSubject,omitempty"`
 	PublicOnly            bool   `json:"publicOnly,omitempty"`
 	AgentOnly             bool   `json:"agentOnly,omitempty"`
+	MultiCall             bool   `json:"multiCall,omitempty"`
+	ActiveCalls           int    `json:"activeCalls,omitempty"`
 	PresenceMode          string `json:"presenceMode,omitempty"`
 	AgentTrunkRefCount    int    `json:"agentTrunkRefCount,omitempty"`
 }

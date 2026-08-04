@@ -32,9 +32,9 @@ func (s *agentTrunkManagerStub) GetTrunkByID(id int64) (interface{}, bool) {
 	return nil, false
 }
 func (s *agentTrunkManagerStub) GetTrunkByPublicID(string) (interface{}, bool) { return nil, false }
-func (s *agentTrunkManagerStub) GetTrunkIDByPublicID(string) (int64, bool)    { return 0, false }
-func (s *agentTrunkManagerStub) GetDefaultTrunk() (interface{}, bool)         { return nil, false }
-func (s *agentTrunkManagerStub) RefreshTrunks() error                         { return nil }
+func (s *agentTrunkManagerStub) GetTrunkIDByPublicID(string) (int64, bool)     { return 0, false }
+func (s *agentTrunkManagerStub) GetDefaultTrunk() (interface{}, bool)          { return nil, false }
+func (s *agentTrunkManagerStub) RefreshTrunks() error                          { return nil }
 func (s *agentTrunkManagerStub) CreateTrunk(context.Context, sip.CreateTrunkPayload) (*sip.Trunk, error) {
 	return nil, errors.New("not implemented")
 }
@@ -112,12 +112,14 @@ func newAgentTestServer(t *testing.T, tm *agentTrunkManagerStub) *Server {
 
 func newAgentWSClient() *WSClient {
 	return &WSClient{
-		clientID:     "agent-client-1",
-		send:         make(chan []byte, 8),
-		availability: clientAvailabilityIdle,
-		callState:    string(session.StateNew),
-		ConnectedAt:  time.Now(),
-		agentOnly:    true,
+		clientID:        "agent-client-1",
+		send:            make(chan []byte, 8),
+		ownedSessionIDs: make(map[string]struct{}),
+		pendingIncoming: make(map[string]struct{}),
+		availability:    clientAvailabilityIdle,
+		callState:       string(session.StateNew),
+		ConnectedAt:     time.Now(),
+		agentOnly:       true,
 	}
 }
 
@@ -148,6 +150,7 @@ func TestAgentRegisterSuccessDoesNotEchoPassword(t *testing.T) {
 		SIPDomain:   "sip.example.com",
 		SIPUsername: "1001",
 		SIPPassword: "super-secret",
+		MultiCall:   true,
 	})
 
 	msgs := readAgentWSMessages(t, client)
@@ -168,6 +171,9 @@ func TestAgentRegisterSuccessDoesNotEchoPassword(t *testing.T) {
 	}
 	if tm.upsertPayload.Password != "super-secret" {
 		t.Fatalf("expected upsert to receive password")
+	}
+	if !client.multiCall {
+		t.Fatalf("expected explicit multiCall capability to be retained")
 	}
 }
 
@@ -343,5 +349,237 @@ func TestMobileDisconnectDoesNotTriggerAgentUnregister(t *testing.T) {
 	srv.cleanupAgentPresence(mobile)
 	if tm.unregisterCount != 0 {
 		t.Fatalf("mobile disconnect must not unregister via agent cleanup")
+	}
+}
+
+func TestAgentClientOwnsMultipleSessions(t *testing.T) {
+	srv := newAgentTestServer(t, &agentTrunkManagerStub{})
+	client := newAgentWSClient()
+	first, err := srv.sessionMgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("CreateSession first: %v", err)
+	}
+	second, err := srv.sessionMgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("CreateSession second: %v", err)
+	}
+
+	srv.bindClientSession(client, first.ID)
+	srv.bindClientSession(client, second.ID)
+
+	if !srv.clientOwnsSession(client, first.ID) || !srv.clientOwnsSession(client, second.ID) {
+		t.Fatalf("expected agent to own both sessions")
+	}
+	if got := srv.activeOwnedSessionCount(client); got != 2 {
+		t.Fatalf("expected 2 active owned sessions, got %d", got)
+	}
+	if srv.wsClients[first.ID] != client || srv.wsClients[second.ID] != client {
+		t.Fatalf("expected both session routes to point to the same agent connection")
+	}
+}
+
+func TestAgentDisconnectEndsEveryOwnedSession(t *testing.T) {
+	tm := &agentTrunkManagerStub{}
+	sipMaker := &incomingTestSIPCallMaker{}
+	srv := newAgentTestServer(t, tm)
+	srv.sipMaker = sipMaker
+	client := newAgentWSClient()
+	client.trunkResolved = true
+	client.resolvedTrunkID = 99
+	srv.agentTrunkBindings[99] = map[*WSClient]struct{}{client: {}}
+
+	for i := 0; i < 2; i++ {
+		sess, err := srv.sessionMgr.CreateSession(config.TURNConfig{})
+		if err != nil {
+			t.Fatalf("CreateSession %d: %v", i, err)
+		}
+		sess.SetSIPAuthContext("trunk", "", 99, "sip.example.com", "1001", "secret", 5060)
+		sess.UpdateState(session.StateActive)
+		srv.bindClientSession(client, sess.ID)
+	}
+
+	srv.cleanupAgentPresence(client)
+
+	if sipMaker.hangupCount != 2 {
+		t.Fatalf("expected both calls to hang up, got %d", sipMaker.hangupCount)
+	}
+	if got := len(srv.sessionMgr.ListSessions()); got != 0 {
+		t.Fatalf("expected every owned session deleted, got %d", got)
+	}
+	if got := len(client.ownedSessionIDs); got != 0 {
+		t.Fatalf("expected ownership cleared, got %d", got)
+	}
+	if tm.unregisterCount != 1 {
+		t.Fatalf("expected last agent disconnect to unregister once, got %d", tm.unregisterCount)
+	}
+}
+
+func TestBusyMultiCallAgentReceivesWaitingIncoming(t *testing.T) {
+	sipMaker := &incomingTestSIPCallMaker{}
+	srv := newAgentTestServer(t, &agentTrunkManagerStub{})
+	srv.sipMaker = sipMaker
+	client := newAgentWSClient()
+	client.trunkResolved = true
+	client.resolvedTrunkID = 99
+	client.multiCall = true
+	client.availability = clientAvailabilityBusy
+	client.callState = string(session.StateActive)
+	srv.wsConnections[client] = struct{}{}
+
+	incoming, err := srv.sessionMgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	incoming.SetState(session.StateIncoming)
+	srv.NotifyIncomingCall(incoming.ID, "sip:2002@example.com", "sip:1001@example.com", 99)
+
+	msgs := readAgentWSMessages(t, client)
+	if len(msgs) != 1 || msgs[0].Type != "incoming" || msgs[0].SessionID != incoming.ID {
+		t.Fatalf("expected waiting incoming notification, got %+v", msgs)
+	}
+	if !srv.clientHasPendingIncoming(client, incoming.ID) {
+		t.Fatalf("expected incoming session ownership to be presented")
+	}
+	if sipMaker.rejectCount != 0 {
+		t.Fatalf("multi-call agent must not busy-reject waiting call")
+	}
+}
+
+func TestBusyLegacyAgentStillRejectsWaitingIncoming(t *testing.T) {
+	sipMaker := &incomingTestSIPCallMaker{}
+	srv := newAgentTestServer(t, &agentTrunkManagerStub{})
+	srv.sipMaker = sipMaker
+	client := newAgentWSClient()
+	client.trunkResolved = true
+	client.resolvedTrunkID = 99
+	client.availability = clientAvailabilityBusy
+	client.callState = string(session.StateActive)
+	srv.wsConnections[client] = struct{}{}
+
+	incoming, err := srv.sessionMgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	incoming.SetState(session.StateIncoming)
+	srv.NotifyIncomingCall(incoming.ID, "sip:2002@example.com", "sip:1001@example.com", 99)
+
+	if got := len(readAgentWSMessages(t, client)); got != 0 {
+		t.Fatalf("legacy busy agent must not receive incoming notification")
+	}
+	if sipMaker.rejectCount != 1 || sipMaker.lastReject != "busy" {
+		t.Fatalf("expected one busy rejection, count=%d reason=%q", sipMaker.rejectCount, sipMaker.lastReject)
+	}
+}
+
+func TestAgentAcceptKeepsPresentedIncomingSessionID(t *testing.T) {
+	sipMaker := &incomingTestSIPCallMaker{}
+	srv := newAgentTestServer(t, &agentTrunkManagerStub{})
+	srv.sipMaker = sipMaker
+	client := newAgentWSClient()
+	client.multiCall = true
+
+	incoming, err := srv.sessionMgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	incoming.SetState(session.StateIncoming)
+	incoming.SetCallInfo("inbound", "sip:2002@example.com", "sip:1001@example.com", "sip-call-stable")
+	srv.markPendingIncoming(client, incoming.ID)
+	// A multi-call client prepares the incoming session in place with
+	// offer.sessionId before it sends accept.
+	srv.bindClientSession(client, incoming.ID)
+
+	srv.handleWSAccept(client, WSMessage{Type: "accept", SessionID: incoming.ID})
+
+	if sipMaker.acceptCount != 1 {
+		t.Fatalf("expected AcceptCall once, got %d", sipMaker.acceptCount)
+	}
+	if client.sessionID != incoming.ID || !srv.clientOwnsSession(client, incoming.ID) {
+		t.Fatalf("expected stable accepted session ID %s", incoming.ID)
+	}
+	if got := len(srv.sessionMgr.ListSessions()); got != 1 {
+		t.Fatalf("expected no replacement session, got %d sessions", got)
+	}
+	msgs := readAgentWSMessages(t, client)
+	if len(msgs) != 1 || msgs[0].Type != "state" || msgs[0].SessionID != incoming.ID || msgs[0].State != "active" {
+		t.Fatalf("expected active state for stable session, got %+v", msgs)
+	}
+}
+
+type agentHoldSIPMaker struct {
+	incomingTestSIPCallMaker
+	holdCount int
+	lastHeld  bool
+	holdErr   error
+}
+
+func (s *agentHoldSIPMaker) SetHold(sess *session.Session, held bool) error {
+	s.holdCount++
+	s.lastHeld = held
+	if s.holdErr != nil {
+		return s.holdErr
+	}
+	sess.SetHeld(held)
+	return nil
+}
+
+func TestAgentHoldUnholdAreOwnedIdempotentAndReportState(t *testing.T) {
+	holdMaker := &agentHoldSIPMaker{}
+	srv := newAgentTestServer(t, &agentTrunkManagerStub{})
+	srv.sipMaker = holdMaker
+	client := newAgentWSClient()
+	sess, err := srv.sessionMgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	sess.UpdateState(session.StateActive)
+	sess.SetSIPDialogState("local", "remote", "<sip:2002@example.com>", "example.com", 5060, 1, nil)
+	srv.bindClientSession(client, sess.ID)
+
+	srv.handleWSMessage(client, []byte(`{"type":"hold","sessionId":"`+sess.ID+`"}`))
+	srv.handleWSMessage(client, []byte(`{"type":"hold","sessionId":"`+sess.ID+`"}`))
+	srv.handleWSMessage(client, []byte(`{"type":"unhold","sessionId":"`+sess.ID+`"}`))
+
+	if holdMaker.holdCount != 2 || holdMaker.lastHeld {
+		t.Fatalf("expected one hold and one unhold SIP update, count=%d lastHeld=%v", holdMaker.holdCount, holdMaker.lastHeld)
+	}
+	msgs := readAgentWSMessages(t, client)
+	if len(msgs) != 3 {
+		t.Fatalf("expected hold, idempotent hold, and unhold responses, got %+v", msgs)
+	}
+	if msgs[0].Held == nil || !*msgs[0].Held || msgs[1].Held == nil || !*msgs[1].Held || msgs[2].Held == nil || *msgs[2].Held {
+		t.Fatalf("unexpected hold_state sequence: %+v", msgs)
+	}
+}
+
+func TestAgentHoldFailureAndUnownedSessionReturnErrors(t *testing.T) {
+	holdMaker := &agentHoldSIPMaker{holdErr: errors.New("re-INVITE rejected")}
+	srv := newAgentTestServer(t, &agentTrunkManagerStub{})
+	srv.sipMaker = holdMaker
+	client := newAgentWSClient()
+	owned, err := srv.sessionMgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("CreateSession owned: %v", err)
+	}
+	owned.UpdateState(session.StateActive)
+	srv.bindClientSession(client, owned.ID)
+	unowned, err := srv.sessionMgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("CreateSession unowned: %v", err)
+	}
+	unowned.UpdateState(session.StateActive)
+
+	srv.handleWSMessage(client, []byte(`{"type":"hold","sessionId":"`+owned.ID+`"}`))
+	srv.handleWSMessage(client, []byte(`{"type":"hold","sessionId":"`+unowned.ID+`"}`))
+
+	if owned.IsHeld() {
+		t.Fatalf("failed SIP hold must not change session hold state")
+	}
+	msgs := readAgentWSMessages(t, client)
+	if len(msgs) != 2 || msgs[0].Type != "error" || msgs[1].Type != "error" {
+		t.Fatalf("expected errors for failed and unowned hold, got %+v", msgs)
+	}
+	if !strings.Contains(msgs[0].Error, "re-INVITE rejected") {
+		t.Fatalf("expected SIP hold failure detail, got %q", msgs[0].Error)
 	}
 }

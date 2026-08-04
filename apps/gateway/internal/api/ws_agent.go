@@ -27,6 +27,11 @@ func (s *Server) handleWSAgentRegister(client *WSClient, msg WSMessage) {
 		s.sendWSError(client, msg.SessionID, "sipDomain, sipUsername, and sipPassword are required")
 		return
 	}
+	// Capability negotiation is explicit so older ws-agent clients retain the
+	// original one-call admission behavior.
+	s.mu.Lock()
+	client.multiCall = msg.MultiCall
+	s.mu.Unlock()
 
 	ctx := context.Background()
 	trunk, err := s.trunkManager.UpsertAgentTrunk(ctx, sip.AgentTrunkPayload{
@@ -158,11 +163,15 @@ func (s *Server) cleanupAgentPresence(client *WSClient) {
 		return
 	}
 
-	// Hang up the disconnecting client's owned session first.
-	if client.sessionID != "" && s.sessionMgr != nil {
-		if sess, ok := s.sessionMgr.GetSession(client.sessionID); ok && sess != nil {
-			s.forceEndSession(sess, "agent_disconnect")
+	// Hang up every call owned by the disconnecting connection. The trunk may
+	// remain registered when another ws-agent connection still holds presence.
+	for _, sessionID := range s.ownedClientSessionIDs(client) {
+		if s.sessionMgr != nil {
+			if sess, ok := s.sessionMgr.GetSession(sessionID); ok && sess != nil {
+				s.forceEndSession(sess, "agent_disconnect")
+			}
 		}
+		s.unbindClientSession(client, sessionID)
 	}
 
 	trunkID, remaining, wasBound := s.unbindAgentClient(client, true)

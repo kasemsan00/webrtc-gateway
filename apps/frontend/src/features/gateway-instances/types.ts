@@ -30,6 +30,8 @@ export interface WSClient {
   authSubject?: string
   publicOnly?: boolean
   agentOnly?: boolean
+  multiCall?: boolean
+  activeCalls?: number
   presenceMode?: 'ephemeral' | 'sticky' | 'public' | string
   agentTrunkRefCount?: number
 }

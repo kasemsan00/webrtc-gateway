@@ -72,7 +72,10 @@ func isClientAvailableForIncoming(client *WSClient) bool {
 		return false
 	}
 	if normalizeClientAvailability(client.availability) != clientAvailabilityIdle {
-		return false
+		return client.agentOnly && client.multiCall && normalizeClientAvailability(client.availability) != clientAvailabilityUnavailable
+	}
+	if client.agentOnly && client.multiCall {
+		return true
 	}
 	return !isBusyCallState(client.callState)
 }
@@ -315,6 +318,7 @@ func (s *Server) NotifyIncomingCall(sessionID, from, to string, trunkID int64) {
 
 	if len(idleClients) > 0 {
 		for _, client := range idleClients {
+			s.markPendingIncoming(client, sessionID)
 			recipientSessionIDs = append(recipientSessionIDs, client.sessionID)
 			s.sendWSMessage(client, WSMessage{
 				Type:      "incoming",
@@ -367,9 +371,9 @@ func (s *Server) NotifyIncomingCall(sessionID, from, to string, trunkID int64) {
 // NotifyIncomingCancel notifies connected WebSocket clients that an incoming call was cancelled by caller.
 func (s *Server) NotifyIncomingCancel(sessionID string, trunkID int64, reason string) {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
 
 	if trunkID <= 0 {
+		s.mu.RUnlock()
 		log.Printf("📲 Skipping incoming cancel notification for session %s: missing trunkID", sessionID)
 		return
 	}
@@ -391,6 +395,8 @@ func (s *Server) NotifyIncomingCancel(sessionID string, trunkID int64, reason st
 		})
 		log.Printf("📲 Sent incoming cancel notification to resolved client (sessionID=%s trunkID=%d)", sessionID, trunkID)
 	}
+	s.mu.RUnlock()
+	s.clearPendingIncoming(sessionID)
 
 	if totalConnections == 0 {
 		log.Printf("⚠️ No WebSocket clients connected for incoming cancel notification")
@@ -423,7 +429,16 @@ func (s *Server) handleWSAccept(client *WSClient, msg WSMessage) {
 	var webrtcSess *session.Session
 	webrtcSessionFound := false
 	webrtcPeerConnectionReady := false
-	if client.sessionID != "" && client.sessionID != msg.SessionID {
+	if client.sessionID == msg.SessionID {
+		if sess, ok := s.sessionMgr.GetSession(client.sessionID); ok {
+			webrtcSessionFound = true
+			if sess.PeerConnection != nil {
+				webrtcSess = sess
+				webrtcPeerConnectionReady = true
+				log.Printf("📞 Incoming session already owns client's WebRTC session: %s", webrtcSess.ID)
+			}
+		}
+	} else if client.sessionID != "" {
 		if sess, ok := s.sessionMgr.GetSession(client.sessionID); ok {
 			webrtcSessionFound = true
 			if sess.PeerConnection != nil {
@@ -512,11 +527,8 @@ func (s *Server) handleWSAccept(client *WSClient, msg WSMessage) {
 	log.Printf("📈 [Accept] selected_call_session incomingSessionID=%s callSessionID=%s transferredSIP=true", incomingSessionID, callSession.ID)
 
 	// Associate client with the call session
-	if client.sessionID == "" || client.sessionID != callSession.ID {
-		client.sessionID = callSession.ID
-		s.mu.Lock()
-		s.wsClients[callSession.ID] = client
-		s.mu.Unlock()
+	if client.sessionID == "" || client.sessionID != callSession.ID || !s.clientOwnsSession(client, callSession.ID) {
+		s.bindClientSession(client, callSession.ID)
 		s.notifyWSClientChanged("updated", client)
 	}
 
@@ -578,6 +590,7 @@ func (s *Server) handleWSAccept(client *WSClient, msg WSMessage) {
 		})
 	}
 	callSession.ClearTerminalAction()
+	s.clearPendingIncoming(incomingSessionID)
 	s.incrementIncomingCounter("incoming_accepted")
 }
 
@@ -704,6 +717,7 @@ func (s *Server) handleWSReject(client *WSClient, msg WSMessage) {
 	sess.UpdateState(session.StateEnded)
 
 	// Delete session
+	s.clearPendingIncoming(msg.SessionID)
 	s.sessionMgr.DeleteSession(msg.SessionID)
 	s.logSessionSnapshot(ctx, sess, "ws_reject")
 

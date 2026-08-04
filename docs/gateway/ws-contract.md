@@ -5,7 +5,7 @@ When changing message types, also update `internal/api/ws_dispatch.go` and front
 
 ---
 
-Endpoint: `/ws`  
+Endpoint: `/ws`
 Payload format: JSON
 
 Auth behavior:
@@ -24,24 +24,34 @@ Auth behavior:
 
 ---
 
-Endpoint: `/ws-agent` (opt-in via `API_ENABLE_AGENT_WS=true`)  
+Endpoint: `/ws-agent` (opt-in via `API_ENABLE_AGENT_WS=true`)
 Payload format: JSON
 
 Auth behavior:
 
 - No `access_token` and no mobile SIP provisioner.
-- Client MUST send `agent_register` with `sipDomain` (host or IP), `sipUsername`, `sipPassword`, optional `sipPort` before placing/receiving calls.
+- Client MUST send `agent_register` with `sipDomain` (host or IP), `sipUsername`, `sipPassword`, optional `sipPort` before placing/receiving calls. Browser/KMP clients that support multiple simultaneous call legs also send `multiCall: true`.
 - Gateway upserts a deterministic agent trunk (`sipclient-agent-<username>@<domain>:<port>`) distinct from mobile trunks, SIP REGISTERs when the first agent WebSocket binds that trunk, and replies with `trunk_resolved`.
 - Multiple `/ws-agent` clients may share the same SIP identity (refcount). REGISTER stays while refcount ≥ 1.
 - When the last bound agent WebSocket disconnects: hang up any remaining call sessions for that trunk, then SIP UNREGISTER immediately (no grace period).
 - No FCM/APNs push for agent offline incoming; zero bound clients → offline reject.
-- Allowed messages: `agent_register`, `offer`, `ice`, `call`, `hangup`, `accept`, `reject`, `dtmf`, `ping`, `request_keyframe`, `renegotiate_answer`, `client_state`.
+- Allowed messages: `agent_register`, `offer`, `ice`, `call`, `hangup`, `accept`, `reject`, `dtmf`, `hold`, `unhold`, `ping`, `request_keyframe`, `renegotiate_answer`, `client_state`.
 - Rejected on `/ws-agent`: `trunk_push_token`, `trunk_resolve`, `resume`, and other non-allowlisted types.
+
+#### `/ws-agent` multi-call negotiation
+
+- Multi-call is backward compatible and connection-scoped. The gateway enables it only after `agent_register` or `client_state` includes `multiCall: true`; omitted/false keeps the original single-call busy admission behavior.
+- A multi-call connection can own multiple `sessionId` values. Every call-control/media command after `answer` MUST carry the intended `sessionId`; the gateway rejects access to sessions not owned or explicitly presented to that connection.
+- A busy multi-call agent remains eligible for call waiting. For a presented incoming call, prepare WebRTC in place with `offer.sessionId` equal to the incoming `sessionId`, then send `accept` with the same ID. The ID stays stable through answer, hold, resume, and hangup.
+- `hold` and `unhold` perform an in-dialog SIP re-INVITE (`inactive` and `sendrecv`). Success returns `hold_state`; an error leaves the previous hold state unchanged. `491` glare and other non-2xx responses are reported as errors without ending the call.
+- `client_state` may include `activeCalls` for diagnostics/admission visibility. The gateway still derives session ownership from successful offers and presented incoming calls.
+- Disconnect ends every call owned by that WebSocket. The last connection for the SIP identity then unregisters the agent trunk.
 
 ### Client -> Server message types
 
-- `agent_register` -> `/ws-agent` only; requires `sipDomain`, `sipUsername`, `sipPassword` (`sipPort` optional)
+- `agent_register` -> `/ws-agent` only; requires `sipDomain`, `sipUsername`, `sipPassword`; optional `sipPort`, `multiCall`
 - `offer` -> requires `sdp` (`sessionId` optional for existing session)
+- `ice` -> requires `candidate` and the owning `sessionId` once an offer has been answered
 - `call` -> requires `sessionId`, `destination` (`from` optional)
   - Public mode: include `sipDomain`, `sipUsername`, `sipPassword`, optional `sipPort`
   - Trunk mode: include `trunkId` or `trunkPublicId`
@@ -50,16 +60,19 @@ Auth behavior:
 - `accept` -> requires `sessionId`
 - `reject` -> requires `sessionId` (`reason` optional, defaults to `busy`)
 - `dtmf` -> requires `sessionId`, `digits`
+- `hold` / `unhold` -> `/ws-agent` multi-call only; requires an active, owned `sessionId`
 - `send_message` -> requires `body`; use in-dialog if session exists, otherwise requires `destination`
 - `resume` -> requires `sessionId`, optional `sdp`
 - `trunk_resolve` -> requires `sipDomain`, `sipUsername`, `sipPassword`, optional `sipPort` (resolve-only; no auto-create)
   - Mobile clients may include `devicePlatform` (`ios` or `android`) so the gateway can persist the latest online platform for incoming push routing.
 - `ping` -> keepalive
 - `request_keyframe` -> requires `sessionId` (or the connection's active session) and uses bounded legacy SIP-directed recovery.
+- `client_state` -> optional `availability`, `callState`, `sessionId`; multi-call clients also send `multiCall: true` and `activeCalls`.
 
 ### Server -> Client message types
 
-- `answer`, `state`, `incoming`, `ringing`, `media`
+- `answer`, `state`, `incoming`, `ringing`, `media`, `hold_state`
+  - `hold_state` includes `sessionId` and `held: true|false` and confirms a successful or idempotent `hold`/`unhold` request.
 - `message`, `messageSent`, `dtmf`
 - `renegotiate`, `renegotiate_result`
   - `renegotiate` is additive mid-call WebRTC assistance for SIP re-INVITE/UPDATE media changes and for `@switch` gate release (`reason=agent_switch`). It includes `sessionId`, `renegotiationId`, optional `sdp`, `reason`, `mediaDirection`, `hasVideo`, and `requiresAnswer`.
@@ -73,13 +86,13 @@ Auth behavior:
 
 Outbound WebRTC→SIP call progress is SIP dialog progress, **not** WebRTC ICE readiness.
 
-| `state` value | Meaning |
-|---------------|---------|
-| `connecting` | Outbound INVITE initiated / dialing |
-| `ringing` | SIP `180`/`183` received (far end alerting) |
-| `active` | SIP `200 OK` — far end answered |
-| `ended` | Call or attempt terminated |
-| `reconnecting` | Post-answer ICE recovery |
+| `state` value  | Meaning                                     |
+| -------------- | ------------------------------------------- |
+| `connecting`   | Outbound INVITE initiated / dialing         |
+| `ringing`      | SIP `180`/`183` received (far end alerting) |
+| `active`       | SIP `200 OK` — far end answered             |
+| `ended`        | Call or attempt terminated                  |
+| `reconnecting` | Post-answer ICE recovery                    |
 
 Rules:
 
@@ -98,14 +111,20 @@ Rules:
 Additive server→client signal when remote SIP media is first observed as ready toward the WebRTC client:
 
 ```json
-{"type":"media","sessionId":"<id>","kind":"video","direction":"remote","state":"receiving"}
+{
+  "type": "media",
+  "sessionId": "<id>",
+  "kind": "video",
+  "direction": "remote",
+  "state": "receiving"
+}
 ```
 
-| Field | Values | Meaning |
-|-------|--------|---------|
-| `kind` | `video` \| `audio` | Media type |
-| `direction` | `remote` | SIP→WebRTC (v1) |
-| `state` | `receiving` | First ready observation |
+| Field       | Values             | Meaning                 |
+| ----------- | ------------------ | ----------------------- |
+| `kind`      | `video` \| `audio` | Media type              |
+| `direction` | `remote`           | SIP→WebRTC (v1)         |
+| `state`     | `receiving`        | First ready observation |
 
 Video `receiving` is emitted once per session when the gateway has parameter sets (SPS/PPS) and observes a complete IDR (or legacy keyframe with cached sets). Audio `receiving` is emitted once on the first accepted SIP audio RTP write to the WebRTC track. SSRC-learn alone does not emit video ready. Missing WS clients are non-fatal.
 

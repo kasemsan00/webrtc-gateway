@@ -59,10 +59,7 @@ func (s *Server) handleWSoffer(client *WSClient, msg WSMessage) {
 	})
 
 	// Associate client with session
-	client.sessionID = sess.ID
-	s.mu.Lock()
-	s.wsClients[sess.ID] = client
-	s.mu.Unlock()
+	s.bindClientSession(client, sess.ID)
 	s.notifyWSClientChanged("updated", client)
 
 	// Best-effort: cache H.264 SPS/PPS from Offer SDP (if present) so SIP SDP can include sprop-parameter-sets.
@@ -135,13 +132,19 @@ func (s *Server) handleWSoffer(client *WSClient, msg WSMessage) {
 		PayloadID: answerPayloadID,
 	})
 
-	sess.UpdateState(session.StateConnecting)
+	// An incoming session may be prepared in place by a multi-call client. Keep
+	// it in StateIncoming until the explicit accept command wins the SIP race.
+	resultState := sess.GetState()
+	if resultState != session.StateIncoming {
+		sess.UpdateState(session.StateConnecting)
+		resultState = session.StateConnecting
+	}
 	s.logEvent(&logstore.Event{
 		Timestamp: time.Now(),
 		SessionID: sess.ID,
 		Category:  "ws",
 		Name:      "session_state_changed",
-		State:     string(session.StateConnecting),
+		State:     string(resultState),
 	})
 	s.logSessionSnapshot(ctx, sess, "")
 }
@@ -443,10 +446,7 @@ func (s *Server) handleWSCall(client *WSClient, msg WSMessage) {
 	// Bind and acknowledge before starting the asynchronous SIP path. A cold
 	// ICE failure can cancel MakeCall immediately; starting it first could drop
 	// the terminal reason and then incorrectly send a late connecting ack.
-	client.sessionID = sess.ID
-	s.mu.Lock()
-	s.wsClients[sess.ID] = client
-	s.mu.Unlock()
+	s.bindClientSession(client, sess.ID)
 
 	// Acknowledge dialing progress explicitly. Do not echo an ICE-promoted
 	// active snapshot — active means SIP answered.
@@ -601,6 +601,7 @@ func (s *Server) handleWSHangup(client *WSClient, msg WSMessage) {
 	}
 
 	// Delete session after BYE is sent
+	s.unbindClientSession(client, msg.SessionID)
 	s.sessionMgr.DeleteSession(msg.SessionID)
 }
 

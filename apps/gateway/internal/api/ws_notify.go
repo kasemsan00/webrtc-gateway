@@ -66,6 +66,9 @@ func (s *Server) NotifySessionStateWithReason(sessionID string, state session.Se
 	}
 	log.Printf("[%s] 📡 WS call-progress type=state state=%s reason=%s", sessionID, state, reason)
 	s.sendWSMessage(client, msg)
+	if state == session.StateEnded {
+		s.unbindClientSession(client, sessionID)
+	}
 
 	// Additive ringing message for softphone-kmp-sdk RingingMessage compatibility.
 	if state == session.StateRinging {

@@ -164,6 +164,12 @@ func (s *Server) handleWSClientState(client *WSClient, msg WSMessage) {
 	s.mu.Lock()
 	client.availability = availability
 	client.callState = callState
+	if client.agentOnly && msg.MultiCall {
+		client.multiCall = true
+	}
+	if client.agentOnly && client.multiCall {
+		client.activeCalls = max(msg.ActiveCalls, 0)
+	}
 	s.mu.Unlock()
 	s.notifyWSClientChanged("updated", client)
 
@@ -176,6 +182,8 @@ func (s *Server) handleWSClientState(client *WSClient, msg WSMessage) {
 			"availability": availability,
 			"callState":    callState,
 			"sessionId":    msg.SessionID,
+			"multiCall":    msg.MultiCall,
+			"activeCalls":  msg.ActiveCalls,
 		},
 	})
 }

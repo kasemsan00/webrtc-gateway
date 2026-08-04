@@ -56,6 +56,8 @@ func (s *Server) handleWSMessage(client *WSClient, message []byte) {
 		s.handleWSRequestKeyframe(client, msg)
 	case "renegotiate_answer":
 		s.handleWSRenegotiateAnswer(client, msg)
+	case "hold", "unhold":
+		s.handleWSHold(client, msg)
 	case "trunk_resolve":
 		s.handleWSTrunkResolve(client, msg)
 	case "trunk_push_token":
@@ -75,10 +77,15 @@ func (s *Server) handleWSMessage(client *WSClient, message []byte) {
 
 func (s *Server) allowAgentWSMessage(client *WSClient, msg WSMessage) (bool, string) {
 	switch msg.Type {
-	case "agent_register", "offer", "ping", "client_state":
+	case "agent_register", "ping", "client_state":
 		return true, ""
-	case "call", "ice", "hangup", "accept", "reject", "dtmf", "request_keyframe", "renegotiate_answer":
-		return true, ""
+	case "offer":
+		if strings.TrimSpace(msg.SessionID) == "" {
+			return true, ""
+		}
+		return s.agentClientCanAccessSession(client, msg)
+	case "call", "ice", "hangup", "accept", "reject", "dtmf", "request_keyframe", "renegotiate_answer", "hold", "unhold":
+		return s.agentClientCanAccessSession(client, msg)
 	case "trunk_push_token", "trunk_resolve", "resume":
 		return false, fmt.Sprintf("Message type %q is not allowed on agent WebSocket", msg.Type)
 	default:
