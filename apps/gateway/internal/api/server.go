@@ -40,6 +40,7 @@ type Server struct {
 	upgrader          websocket.Upgrader
 	wsClients         map[string]*WSClient
 	wsConnections     map[*WSClient]struct{}
+	agentTrunkBindings map[int64]map[*WSClient]struct{} // agent WS refcount per trunk
 	trunkStreams      map[int]chan []byte
 	trunkStreamSeq    int
 	sessionStreams    map[int]chan []byte
@@ -84,6 +85,7 @@ type TrunkManager interface {
 	SetTrunkNotifyUserID(ctx context.Context, trunkID int64, userID *string) error
 	SetTrunkNotifyUserIDAndPlatform(ctx context.Context, trunkID int64, userID *string, platform *string) error
 	SetTrunkPushContact(ctx context.Context, trunkID int64, contact sip.TrunkPushContact) (bool, error)
+	UpsertAgentTrunk(ctx context.Context, payload sip.AgentTrunkPayload) (*sip.Trunk, error)
 }
 
 // SIPCallMaker interface for making SIP calls (implemented by SIP server)
@@ -113,6 +115,7 @@ type WSClient struct {
 	ConnectedAt     time.Time
 	authClaims      *auth.VerifiedClaims // populated when tokenVerifier is set
 	publicOnly      bool                 // true for unauthenticated /ws-public clients
+	agentOnly       bool                 // true for unauthenticated /ws-agent clients
 }
 
 // WSMessage represents a WebSocket message
@@ -191,14 +194,15 @@ func NewServer(cfg config.APIConfig, turnCfg config.TURNConfig, gatewayCfg confi
 				return true
 			},
 		},
-		wsClients:        make(map[string]*WSClient),
-		wsConnections:    make(map[*WSClient]struct{}),
-		trunkStreams:     make(map[int]chan []byte),
-		sessionStreams:   make(map[int]chan []byte),
-		wsClientStreams:  make(map[int]chan []byte),
-		incomingCounters: make(map[string]int64),
-		diagnosticLimits: make(map[string]*diagnosticRateState),
-		startTime:        time.Now(),
+		wsClients:         make(map[string]*WSClient),
+		wsConnections:     make(map[*WSClient]struct{}),
+		agentTrunkBindings: make(map[int64]map[*WSClient]struct{}),
+		trunkStreams:      make(map[int]chan []byte),
+		sessionStreams:    make(map[int]chan []byte),
+		wsClientStreams:   make(map[int]chan []byte),
+		incomingCounters:  make(map[string]int64),
+		diagnosticLimits:  make(map[string]*diagnosticRateState),
+		startTime:         time.Now(),
 	}
 }
 
@@ -247,6 +251,10 @@ func (s *Server) Start(ctx context.Context) error {
 	if s.config.EnablePublicWS {
 		router.HandleFunc("/ws-public", s.handlePublicWebSocket)
 		fmt.Printf("Public WebSocket endpoint enabled: /ws-public\n")
+	}
+	if s.config.EnableAgentWS {
+		router.HandleFunc("/ws-agent", s.handleAgentWebSocket)
+		fmt.Printf("Agent WebSocket endpoint enabled: /ws-agent\n")
 	}
 
 	// REST API endpoints

@@ -141,6 +141,10 @@ func (s *apiHandlerTrunkManagerStub) SetTrunkPushContact(_ context.Context, _ in
 	return true, nil
 }
 
+func (s *apiHandlerTrunkManagerStub) UpsertAgentTrunk(_ context.Context, _ sip.AgentTrunkPayload) (*sip.Trunk, error) {
+	return nil, errors.New("not implemented")
+}
+
 func (s *apiHandlerTrunkManagerStub) FindTrunkByInUseBy(_ context.Context, inUseBy string) (*sip.Trunk, error) {
 	for _, t := range s.byID {
 		if t.InUseBy != nil && *t.InUseBy == inUseBy {

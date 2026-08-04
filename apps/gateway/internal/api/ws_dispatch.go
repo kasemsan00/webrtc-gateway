@@ -17,7 +17,13 @@ func (s *Server) handleWSMessage(client *WSClient, message []byte) {
 		return
 	}
 
-	if client != nil && client.publicOnly {
+	if client != nil && client.agentOnly {
+		if ok, reason := s.allowAgentWSMessage(client, msg); !ok {
+			log.Printf("Agent WebSocket message rejected: type=%s sessionID=%s reason=%s", msg.Type, msg.SessionID, reason)
+			s.sendWSError(client, msg.SessionID, reason)
+			return
+		}
+	} else if client != nil && client.publicOnly {
 		if ok, reason := s.allowPublicWSMessage(client, msg); !ok {
 			log.Printf("Public WebSocket message rejected: type=%s sessionID=%s reason=%s", msg.Type, msg.SessionID, reason)
 			s.sendWSError(client, msg.SessionID, reason)
@@ -54,6 +60,8 @@ func (s *Server) handleWSMessage(client *WSClient, message []byte) {
 		s.handleWSTrunkResolve(client, msg)
 	case "trunk_push_token":
 		s.handleWSTrunkPushToken(client, msg)
+	case "agent_register":
+		s.handleWSAgentRegister(client, msg)
 	case "client_state":
 		s.handleWSClientState(client, msg)
 	case "translate":
@@ -62,6 +70,19 @@ func (s *Server) handleWSMessage(client *WSClient, message []byte) {
 		s.handleWSTranslateStop(client, msg)
 	default:
 		s.sendWSError(client, msg.SessionID, "Unknown message type")
+	}
+}
+
+func (s *Server) allowAgentWSMessage(client *WSClient, msg WSMessage) (bool, string) {
+	switch msg.Type {
+	case "agent_register", "offer", "ping", "client_state":
+		return true, ""
+	case "call", "ice", "hangup", "accept", "reject", "dtmf", "request_keyframe", "renegotiate_answer":
+		return true, ""
+	case "trunk_push_token", "trunk_resolve", "resume":
+		return false, fmt.Sprintf("Message type %q is not allowed on agent WebSocket", msg.Type)
+	default:
+		return false, fmt.Sprintf("Message type %q is not allowed on agent WebSocket", msg.Type)
 	}
 }
 

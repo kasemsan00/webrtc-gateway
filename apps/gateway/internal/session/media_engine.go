@@ -29,18 +29,6 @@ func createCustomMediaEngine() (*webrtc.MediaEngine, error) {
 		return nil, err
 	}
 
-	// Register VP8 with custom feedback (fallback)
-	if err := m.RegisterCodec(webrtc.RTPCodecParameters{
-		RTPCodecCapability: webrtc.RTPCodecCapability{
-			MimeType:     webrtc.MimeTypeVP8,
-			ClockRate:    90000,
-			RTCPFeedback: videoRTCPFeedback,
-		},
-		PayloadType: 97,
-	}, webrtc.RTPCodecTypeVideo); err != nil {
-		return nil, err
-	}
-
 	// Audio codecs
 	if err := m.RegisterCodec(webrtc.RTPCodecParameters{
 		RTPCodecCapability: webrtc.RTPCodecCapability{

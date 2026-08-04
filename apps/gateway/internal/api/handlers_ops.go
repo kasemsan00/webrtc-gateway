@@ -111,6 +111,9 @@ type WSClientResponse struct {
 	CallState             string `json:"callState,omitempty"`
 	AuthSubject           string `json:"authSubject,omitempty"`
 	PublicOnly            bool   `json:"publicOnly,omitempty"`
+	AgentOnly             bool   `json:"agentOnly,omitempty"`
+	PresenceMode          string `json:"presenceMode,omitempty"`
+	AgentTrunkRefCount    int    `json:"agentTrunkRefCount,omitempty"`
 }
 
 // --- Ops Handlers ---

@@ -10,6 +10,9 @@ export interface WSClient {
   callState?: string
   authSubject?: string
   publicOnly?: boolean
+  agentOnly?: boolean
+  presenceMode?: 'ephemeral' | 'sticky' | 'public' | string
+  agentTrunkRefCount?: number
 }
 
 export interface WSClientStreamEvent {
@@ -17,4 +20,14 @@ export interface WSClientStreamEvent {
   clientId: string
   at: string
   client?: WSClient
+}
+
+export type WSClientPresenceLabel = 'agent' | 'mobile' | 'public'
+
+export function resolveWSClientPresenceLabel(
+  client: Pick<WSClient, 'agentOnly' | 'publicOnly' | 'presenceMode'>,
+): WSClientPresenceLabel {
+  if (client.agentOnly || client.presenceMode === 'ephemeral') return 'agent'
+  if (client.publicOnly || client.presenceMode === 'public') return 'public'
+  return 'mobile'
 }

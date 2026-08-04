@@ -95,6 +95,30 @@ func TestPublicWebSocketConfigCanBeEnabled(t *testing.T) {
 	}
 }
 
+func TestAgentWebSocketConfigDefaultDisabled(t *testing.T) {
+	t.Setenv("API_ENABLE_AGENT_WS", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.API.EnableAgentWS {
+		t.Fatalf("expected agent WebSocket endpoint to be disabled by default")
+	}
+}
+
+func TestAgentWebSocketConfigCanBeEnabled(t *testing.T) {
+	t.Setenv("API_ENABLE_AGENT_WS", "true")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.API.EnableAgentWS {
+		t.Fatalf("expected agent WebSocket endpoint to be enabled by env")
+	}
+}
+
 func TestVideoAUNormalizationConfigDefaultsEnabled(t *testing.T) {
 	t.Setenv("SIP_VIDEO_AU_NORMALIZE_ENABLE", "")
 

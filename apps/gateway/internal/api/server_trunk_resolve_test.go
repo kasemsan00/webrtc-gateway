@@ -146,6 +146,10 @@ func (s *stubResolveTrunkManager) SetTrunkPushContact(_ context.Context, trunkID
 	return true, nil
 }
 
+func (s *stubResolveTrunkManager) UpsertAgentTrunk(_ context.Context, _ sip.AgentTrunkPayload) (*sip.Trunk, error) {
+	return nil, errors.New("not implemented")
+}
+
 func (s *stubResolveStore) ResolveTrunkByCredentials(ctx context.Context, domain string, port int, username, password string) (int64, *string, *time.Time, bool, error) {
 	return s.resolveTrunkID, s.resolveLeaseOwner, s.resolveLeaseUntil, s.resolveFound, s.resolveErr
 }

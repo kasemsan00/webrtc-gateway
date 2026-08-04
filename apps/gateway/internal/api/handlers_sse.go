@@ -80,6 +80,17 @@ func (s *Server) buildWSClientResponse(client *WSClient) WSClientResponse {
 		Availability:    client.availability,
 		CallState:       client.callState,
 		PublicOnly:      client.publicOnly,
+		AgentOnly:       client.agentOnly,
+	}
+	if client.agentOnly {
+		resp.PresenceMode = "ephemeral"
+		if client.resolvedTrunkID > 0 {
+			resp.AgentTrunkRefCount = s.agentTrunkRefCountLocked(client.resolvedTrunkID)
+		}
+	} else if client.publicOnly {
+		resp.PresenceMode = "public"
+	} else {
+		resp.PresenceMode = "sticky"
 	}
 	if client.sessionID != "" {
 		resp.SessionID = client.sessionID
@@ -95,6 +106,17 @@ func (s *Server) buildWSClientResponse(client *WSClient) WSClientResponse {
 		}
 	}
 	return resp
+}
+
+// agentTrunkRefCountLocked returns refcount; caller must hold s.mu (RLock or Lock)
+// when used from buildWSClientResponse which already holds RLock via notify path.
+// For notifyWSClientChanged it RLocks then calls build — so we need a version that
+// does not take the lock again. Use unlocked helper when lock already held.
+func (s *Server) agentTrunkRefCountLocked(trunkID int64) int {
+	if s.agentTrunkBindings == nil {
+		return 0
+	}
+	return len(s.agentTrunkBindings[trunkID])
 }
 
 func (s *Server) writeSSE(w http.ResponseWriter, eventName string, payload []byte) error {

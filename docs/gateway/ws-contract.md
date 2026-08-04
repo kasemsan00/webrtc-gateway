@@ -1,6 +1,6 @@
 # Gateway WebSocket Contract
 
-Source of truth for `/ws` and `/ws-public` JSON messages.
+Source of truth for `/ws`, `/ws-public`, and `/ws-agent` JSON messages.
 When changing message types, also update `internal/api/ws_dispatch.go` and frontend `gateway-store.ts`.
 
 ---
@@ -20,14 +20,32 @@ Auth behavior:
   - `notify_user_id` is bound from verified JWT `sub`, and `last_online_platform` is updated from `devicePlatform`;
   - provisioning or SIP REGISTER failure rejects the WebSocket connection;
   - after successful provisioning and SIP REGISTER, the gateway sends `trunk_resolved` with `trunkId` and `trunkPublicId`.
+  - Mobile presence is sticky: WebSocket disconnect does **not** SIP UNREGISTER (push wake remains available).
+
+---
+
+Endpoint: `/ws-agent` (opt-in via `API_ENABLE_AGENT_WS=true`)  
+Payload format: JSON
+
+Auth behavior:
+
+- No `access_token` and no mobile SIP provisioner.
+- Client MUST send `agent_register` with `sipDomain` (host or IP), `sipUsername`, `sipPassword`, optional `sipPort` before placing/receiving calls.
+- Gateway upserts a deterministic agent trunk (`sipclient-agent-<username>@<domain>:<port>`) distinct from mobile trunks, SIP REGISTERs when the first agent WebSocket binds that trunk, and replies with `trunk_resolved`.
+- Multiple `/ws-agent` clients may share the same SIP identity (refcount). REGISTER stays while refcount ≥ 1.
+- When the last bound agent WebSocket disconnects: hang up any remaining call sessions for that trunk, then SIP UNREGISTER immediately (no grace period).
+- No FCM/APNs push for agent offline incoming; zero bound clients → offline reject.
+- Allowed messages: `agent_register`, `offer`, `ice`, `call`, `hangup`, `accept`, `reject`, `dtmf`, `ping`, `request_keyframe`, `renegotiate_answer`, `client_state`.
+- Rejected on `/ws-agent`: `trunk_push_token`, `trunk_resolve`, `resume`, and other non-allowlisted types.
 
 ### Client -> Server message types
 
+- `agent_register` -> `/ws-agent` only; requires `sipDomain`, `sipUsername`, `sipPassword` (`sipPort` optional)
 - `offer` -> requires `sdp` (`sessionId` optional for existing session)
 - `call` -> requires `sessionId`, `destination` (`from` optional)
   - Public mode: include `sipDomain`, `sipUsername`, `sipPassword`, optional `sipPort`
   - Trunk mode: include `trunkId` or `trunkPublicId`
-  - Auto-provisioned mobile connections may omit trunk fields and public SIP credentials; the gateway uses the connection's resolved trunk.
+  - Auto-provisioned mobile connections and resolved `/ws-agent` connections may omit trunk fields and public SIP credentials; the gateway uses the connection's resolved trunk.
 - `hangup` -> requires `sessionId`
 - `accept` -> requires `sessionId`
 - `reject` -> requires `sessionId` (`reason` optional, defaults to `busy`)

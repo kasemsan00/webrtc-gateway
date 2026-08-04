@@ -88,6 +88,14 @@ type MobileTrunkPayload struct {
 	Password string
 }
 
+// AgentTrunkPayload defines SIP credentials supplied by a PC agent WebSocket client.
+type AgentTrunkPayload struct {
+	Domain   string
+	Username string
+	Password string
+	Port     int // 0 defaults to 5060
+}
+
 // Trunk represents a SIP trunk account from DB
 type Trunk struct {
 	ID        int64
@@ -268,6 +276,106 @@ func (tm *TrunkManager) UpsertMobileTrunk(ctx context.Context, payload MobileTru
 			return nil, fmt.Errorf("%w: %v", ErrTrunkValidation, err)
 		}
 		return nil, fmt.Errorf("upsert mobile trunk failed: %w", err)
+	}
+
+	tm.mu.Lock()
+	if tm.trunks == nil {
+		tm.trunks = make(map[int64]*Trunk)
+	}
+	if tm.trunkByPublic == nil {
+		tm.trunkByPublic = make(map[string]int64)
+	}
+	if trunk.Enabled {
+		tm.trunks[trunk.ID] = trunk
+		if trunk.PublicID != "" {
+			tm.trunkByPublic[trunk.PublicID] = trunk.ID
+		}
+	} else {
+		delete(tm.trunks, trunk.ID)
+		if trunk.PublicID != "" {
+			delete(tm.trunkByPublic, trunk.PublicID)
+		}
+	}
+	tm.mu.Unlock()
+
+	return trunk, nil
+}
+
+// BuildAgentTrunkName returns the deterministic DB trunk name for a PC agent SIP identity.
+// The name always uses the sipclient-agent- prefix and cannot collide with mobile trunks
+// (sipclient-mobile-<subject>).
+func BuildAgentTrunkName(domain, username string, port int) (string, error) {
+	domain = strings.ToLower(strings.TrimSpace(domain))
+	username = strings.TrimSpace(username)
+	if domain == "" {
+		return "", fmt.Errorf("%w: domain is required", ErrTrunkValidation)
+	}
+	if username == "" {
+		return "", fmt.Errorf("%w: username is required", ErrTrunkValidation)
+	}
+	if port <= 0 {
+		port = 5060
+	}
+	return fmt.Sprintf("sipclient-agent-%s@%s:%d", username, domain, port), nil
+}
+
+// UpsertAgentTrunk creates or updates the deterministic SIP trunk for a PC agent identity.
+func (tm *TrunkManager) UpsertAgentTrunk(ctx context.Context, payload AgentTrunkPayload) (*Trunk, error) {
+	if tm.db == nil {
+		return nil, fmt.Errorf("database not available for trunk manager")
+	}
+
+	port := payload.Port
+	if port <= 0 {
+		port = 5060
+	}
+	name, err := BuildAgentTrunkName(payload.Domain, payload.Username, port)
+	if err != nil {
+		return nil, err
+	}
+	domain := strings.ToLower(strings.TrimSpace(payload.Domain))
+	username := strings.TrimSpace(payload.Username)
+	password := strings.TrimSpace(payload.Password)
+	if password == "" {
+		return nil, fmt.Errorf("%w: password is required", ErrTrunkValidation)
+	}
+
+	const transport = "tcp"
+
+	trunk := &Trunk{}
+	err = tm.db.QueryRow(ctx, `
+		INSERT INTO sip_trunks (
+			public_id, name, domain, port, username, password, transport, enabled, is_default
+		)
+		VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, false)
+		ON CONFLICT (name) DO UPDATE
+		SET domain = EXCLUDED.domain,
+		    port = EXCLUDED.port,
+		    username = EXCLUDED.username,
+		    password = EXCLUDED.password,
+		    transport = EXCLUDED.transport,
+		    enabled = true,
+		    updated_at = NOW()
+		RETURNING id, public_id, name, domain, port, username, password, transport, enabled, is_default,
+		          lease_owner, lease_until, last_registered_at, last_error, in_use_by, notify_user_id,
+		          last_online_platform, last_online_at,
+		          pn_app_id, pn_type, pn_token, pn_updated_at, created_at, updated_at
+	`, name, domain, port, username, password, transport, true).Scan(
+		&trunk.ID, &trunk.PublicID, &trunk.Name, &trunk.Domain, &trunk.Port,
+		&trunk.Username, &trunk.Password, &trunk.Transport,
+		&trunk.Enabled, &trunk.IsDefault,
+		&trunk.LeaseOwner, &trunk.LeaseUntil,
+		&trunk.LastRegisteredAt, &trunk.LastError, &trunk.InUseBy, &trunk.NotifyUserID,
+		&trunk.LastOnlinePlatform, &trunk.LastOnlineAt,
+		&trunk.PNAppID, &trunk.PNType, &trunk.PNToken, &trunk.PNUpdatedAt,
+		&trunk.CreatedAt, &trunk.UpdatedAt,
+	)
+	if err != nil {
+		msg := strings.ToLower(err.Error())
+		if strings.Contains(msg, "check constraint") {
+			return nil, fmt.Errorf("%w: %v", ErrTrunkValidation, err)
+		}
+		return nil, fmt.Errorf("upsert agent trunk failed: %w", err)
 	}
 
 	tm.mu.Lock()

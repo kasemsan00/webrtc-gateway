@@ -12,8 +12,8 @@ import {
   subscribeWSClientEvents,
 } from '../services/ws-clients-api'
 import type { ColumnDef } from '@tanstack/react-table'
-
 import type { WSClient, WSClientStreamEvent } from '../types'
+import { resolveWSClientPresenceLabel } from '../types'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -162,6 +162,30 @@ export function WSClientsPage() {
             {row.original.sessionId || '-'}
           </span>
         ),
+      },
+      {
+        id: 'mode',
+        header: 'Mode',
+        cell: ({ row }) => {
+          const c = row.original
+          const mode = resolveWSClientPresenceLabel(c)
+          let variant: 'default' | 'success' | 'warning' | 'outline' = 'outline'
+          if (mode === 'agent') variant = 'warning'
+          else if (mode === 'mobile') variant = 'success'
+          else if (mode === 'public') variant = 'default'
+          return (
+            <div className="flex flex-col gap-0.5">
+              <Badge variant={variant} className="w-fit text-[10px]">
+                {mode}
+              </Badge>
+              {mode === 'agent' && (c.agentTrunkRefCount ?? 0) > 0 ? (
+                <span className="font-mono text-[10px] text-muted-foreground">
+                  {c.agentTrunkRefCount} WS
+                </span>
+              ) : null}
+            </div>
+          )
+        },
       },
       {
         id: 'trunk',

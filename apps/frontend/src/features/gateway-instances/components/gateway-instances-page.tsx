@@ -14,6 +14,7 @@ import type {
   GatewayInstance,
   WSClient,
 } from '@/features/gateway-instances/types'
+import { resolveWSClientPresenceLabel } from '@/features/ws-clients/types'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -50,13 +51,30 @@ function formatUptime(seconds: number) {
 const WS_CLIENT_PREVIEW_LIMIT = 8
 
 function WSClientCard({ client }: { client: WSClient }) {
+  const mode = resolveWSClientPresenceLabel(client)
+
   return (
     <div className="rounded-md border border-border/60 px-3 py-2">
       <div className="mb-1 flex items-center justify-between gap-2">
         <span className="truncate font-mono text-[11px] text-muted-foreground">
-          {client.sessionId || '-'}
+          {client.clientId?.slice(0, 8) || client.sessionId || '-'}
+          {client.clientId ? '…' : ''}
         </span>
-        <ClientAvailabilityBadge availability={client.availability} />
+        <div className="flex items-center gap-1">
+          <Badge
+            variant={
+              mode === 'agent'
+                ? 'warning'
+                : mode === 'mobile'
+                  ? 'success'
+                  : 'outline'
+            }
+            className="text-[10px]"
+          >
+            {mode}
+          </Badge>
+          <ClientAvailabilityBadge availability={client.availability} />
+        </div>
       </div>
       <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
         <span className="text-muted-foreground">Call State</span>
@@ -65,6 +83,14 @@ function WSClientCard({ client }: { client: WSClient }) {
         <span className="truncate text-right font-mono">
           {client.resolvedTrunkPublicId || client.resolvedTrunkId || '-'}
         </span>
+        {mode === 'agent' ? (
+          <>
+            <span className="text-muted-foreground">Agent WS</span>
+            <span className="text-right font-mono">
+              {client.agentTrunkRefCount ?? '-'}
+            </span>
+          </>
+        ) : null}
         <span className="text-muted-foreground">Auth</span>
         <span className="truncate text-right">{client.authSubject || '-'}</span>
         <span className="text-muted-foreground">Connected</span>

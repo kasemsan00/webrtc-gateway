@@ -164,6 +164,10 @@ func (s *incomingNotifyTestTrunkManager) SetTrunkPushContact(ctx context.Context
 	return true, nil
 }
 
+func (s *incomingNotifyTestTrunkManager) UpsertAgentTrunk(_ context.Context, _ sip.AgentTrunkPayload) (*sip.Trunk, error) {
+	return nil, errors.New("not implemented")
+}
+
 func waitForDBLookups(t *testing.T, trunkMgr *incomingNotifyTestTrunkManager, want int) {
 	t.Helper()
 	for i := 0; i < want; i++ {

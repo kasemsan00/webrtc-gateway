@@ -30,17 +30,23 @@ const (
 
 // handleWebSocket handles WebSocket connections
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
-	s.handleWebSocketConn(w, r, false)
+	s.handleWebSocketConn(w, r, false, false)
 }
 
 func (s *Server) handlePublicWebSocket(w http.ResponseWriter, r *http.Request) {
-	s.handleWebSocketConn(w, r, true)
+	s.handleWebSocketConn(w, r, true, false)
 }
 
-func (s *Server) handleWebSocketConn(w http.ResponseWriter, r *http.Request, publicOnly bool) {
+func (s *Server) handleAgentWebSocket(w http.ResponseWriter, r *http.Request) {
+	s.handleWebSocketConn(w, r, false, true)
+}
+
+func (s *Server) handleWebSocketConn(w http.ResponseWriter, r *http.Request, publicOnly, agentOnly bool) {
 	req := r
 	var provisioned *MobileSIPProvisionResult
-	if s.tokenVerifier != nil && !publicOnly {
+	if agentOnly {
+		log.Printf("Agent WebSocket connection accepted: remote=%s", r.RemoteAddr)
+	} else if s.tokenVerifier != nil && !publicOnly {
 		rawToken := strings.TrimSpace(r.URL.Query().Get("access_token"))
 		if rawToken == "" {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
@@ -95,6 +101,7 @@ func (s *Server) handleWebSocketConn(w http.ResponseWriter, r *http.Request, pub
 		callState:    string(session.StateNew),
 		ConnectedAt:  time.Now(),
 		publicOnly:   publicOnly,
+		agentOnly:    agentOnly,
 	}
 	if claims, ok := AuthClaimsFromContext(req.Context()); ok {
 		client.authClaims = claims
@@ -140,6 +147,9 @@ func (s *Server) handleWebSocketConn(w http.ResponseWriter, r *http.Request, pub
 
 		s.handleWSMessage(client, message)
 	}
+
+	// Agent presence cleanup before dropping connection maps.
+	s.cleanupAgentPresence(client)
 
 	// Cleanup - only delete if this client is still the registered one
 	s.mu.Lock()

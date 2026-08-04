@@ -211,7 +211,7 @@ func (s *Session) RenegotiatePeerConnection(newOfferSDP string, turnConfig confi
 
 	// 5. Create video track (H.264 for SIP compatibility)
 	videoTrack, err := webrtc.NewTrackLocalStaticRTP(
-		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264},
+		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264, ClockRate: 90000},
 		"video",
 		fmt.Sprintf("pion-video-%s-renegotiate", s.ID),
 	)

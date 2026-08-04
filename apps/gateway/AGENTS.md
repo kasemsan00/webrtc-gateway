@@ -82,7 +82,8 @@ apps/gateway/
 | `auth_http.go` | HTTP/WS JWT middleware |
 | `mobile_sip_provision.go` | Mobile trunk auto-provision on `/ws` connect |
 | `client_diagnostics.go` | `/api/client-diagnostics` upload and query |
-| `ws_conn.go` | WebSocket upgrade, read/write pumps |
+| `ws_conn.go` | WebSocket upgrade, read/write pumps (`/ws`, `/ws-public`, `/ws-agent`) |
+| `ws_agent.go` | `/ws-agent` `agent_register`, refcount presence, last-disconnect hangup+unregister |
 | `ws_dispatch.go` | `handleWSMessage` router, public-only guards |
 | `ws_call.go` | `offer`, `ice`, `call`, `hangup`, `dtmf` |
 | `ws_incoming.go` | `accept`, `reject`, push dispatch, ring timeout |
@@ -107,6 +108,7 @@ apps/gateway/
 | Task | File(s) |
 |------|---------|
 | WS connect / auth / mobile provision | `ws_conn.go`, `auth_http.go`, `mobile_sip_provision.go` |
+| PC agent WS register / presence | `ws_conn.go`, `ws_agent.go`, `sip/trunk_manager.go` (`UpsertAgentTrunk`) |
 | WS message routing | `ws_dispatch.go` |
 | Outbound call / offer / hangup | `ws_call.go` |
 | Incoming call / accept / reject / push | `ws_incoming.go`, `internal/push/` |

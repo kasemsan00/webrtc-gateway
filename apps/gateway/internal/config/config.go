@@ -49,6 +49,7 @@ type APIConfig struct {
 	Port                       int    // HTTP server port (default: 8080)
 	EnableWS                   bool   // Enable WebSocket endpoint
 	EnablePublicWS             bool   // Enable unauthenticated public SIP WebSocket endpoint
+	EnableAgentWS              bool   // Enable unauthenticated PC agent WebSocket endpoint (/ws-agent)
 	EnableREST                 bool   // Enable REST API
 	CORSOrigins                string // CORS allowed origins (comma-separated)
 	DebugWebSocket             bool   // Enable WebSocket debug logging (ping/pong, messages)
@@ -314,6 +315,7 @@ func Load() (*Config, error) {
 			Port:                       apiPort,
 			EnableWS:                   getEnvAsBool("API_ENABLE_WS", true),
 			EnablePublicWS:             getEnvAsBool("API_ENABLE_PUBLIC_WS", false),
+			EnableAgentWS:              getEnvAsBool("API_ENABLE_AGENT_WS", false),
 			EnableREST:                 getEnvAsBool("API_ENABLE_REST", true),
 			CORSOrigins:                getEnvWithDefault("API_CORS_ORIGINS", "*"),
 			DebugWebSocket:             getEnvAsBool("DEBUG_WEBSOCKET", false),
