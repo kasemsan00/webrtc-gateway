@@ -88,7 +88,8 @@ GET /api/trunks?search=agent&page=1&pageSize=5&createdAfter=2025-06-01T00:00:00Z
       "activeCallCount": 0,
       "leaseOwner": "",
       "leaseUntil": "",
-      "lastRegisteredAt": "2025-06-30T10:00:00Z",
+      "lastRegisteredAt": "",
+      "lastUnregisteredAt": "2025-06-30T10:00:00Z",
       "isRegistered": false,
       "lastError": "",
       "createdAt": "2025-03-20T09:00:00Z",
@@ -125,8 +126,9 @@ GET /api/trunks?search=agent&page=1&pageSize=5&createdAfter=2025-06-01T00:00:00Z
 | `activeCallCount`  | int    | Number of active calls currently using this trunk    |
 | `leaseOwner`       | string | Gateway instance ID that owns the registration lease |
 | `leaseUntil`       | string | Lease expiry time (RFC 3339), empty if no lease      |
-| `lastRegisteredAt` | string | Last successful SIP REGISTER time (RFC 3339)         |
-| `isRegistered`     | bool   | Whether trunk is currently considered registered     |
+| `lastRegisteredAt`   | string | Last successful SIP REGISTER time (RFC 3339)         |
+| `lastUnregisteredAt` | string | Last SIP UNREGISTER time (RFC 3339), empty if none   |
+| `isRegistered`       | bool   | Whether trunk is currently considered registered     |
 | `lastError`        | string | Last registration error message, empty if none       |
 | `createdAt`        | string | Trunk creation time (RFC 3339)                       |
 | `updatedAt`        | string | Last update time (RFC 3339)                          |

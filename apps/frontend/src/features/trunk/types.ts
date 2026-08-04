@@ -16,6 +16,7 @@ export interface Trunk {
   leaseOwner: string
   leaseUntil: string
   lastRegisteredAt: string
+  lastUnregisteredAt?: string
   isRegistered: boolean
   lastError: string
   pnAppId?: string

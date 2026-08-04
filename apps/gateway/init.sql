@@ -157,6 +157,7 @@ CREATE TABLE IF NOT EXISTS sip_trunks (
   
   -- Status
   last_registered_at TIMESTAMPTZ,
+  last_unregistered_at TIMESTAMPTZ,
   last_error         TEXT,
 
   -- Active call tracking: set to JWT subject when a call starts, cleared on hangup

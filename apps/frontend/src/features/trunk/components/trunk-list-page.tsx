@@ -1276,6 +1276,15 @@ function TrunkTable({
         ),
       },
       {
+        accessorKey: 'lastUnregisteredAt',
+        header: 'Last Unregistered',
+        cell: ({ row }) => (
+          <span className="text-muted-foreground">
+            {formatThaiDateTime(row.original.lastUnregisteredAt || '')}
+          </span>
+        ),
+      },
+      {
         id: 'actions',
         header: () => <div className="text-right">Actions</div>,
         cell: ({ row }) => (
@@ -1427,6 +1436,10 @@ function TrunkCard({
           <Detail
             label="Last Registered"
             value={formatThaiDateTime(trunk.lastRegisteredAt)}
+          />
+          <Detail
+            label="Last Unregistered"
+            value={formatThaiDateTime(trunk.lastUnregisteredAt || '')}
           />
           <Detail
             label="Lease Until"

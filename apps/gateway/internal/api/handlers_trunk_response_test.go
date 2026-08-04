@@ -62,3 +62,29 @@ func TestTrunkResponseFrom_IncludesPublicIDBothFields(t *testing.T) {
 		t.Fatalf("full pn_token leaked in response")
 	}
 }
+
+func TestTrunkResponseFrom_IncludesLastUnregisteredAt(t *testing.T) {
+	now := time.Now()
+	unregisteredAt := now.Add(-time.Hour)
+	trunk := &sip.Trunk{
+		ID:                 3,
+		PublicID:           "public-3",
+		Name:               "Backup",
+		Domain:             "sip.example.com",
+		Port:               5060,
+		Username:           "1002",
+		Transport:          "tcp",
+		Enabled:            true,
+		LastUnregisteredAt: &unregisteredAt,
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	}
+
+	resp := trunkResponseFrom(trunk, 0, nil)
+	if resp.IsRegistered {
+		t.Fatalf("expected IsRegistered=false when lastRegisteredAt is nil")
+	}
+	if resp.LastUnregisteredAt != unregisteredAt.Format(time.RFC3339) {
+		t.Fatalf("expected lastUnregisteredAt=%s, got %s", unregisteredAt.Format(time.RFC3339), resp.LastUnregisteredAt)
+	}
+}

@@ -114,8 +114,9 @@ type Trunk struct {
 	LeaseUntil *time.Time
 
 	// Registration status
-	LastRegisteredAt *time.Time
-	LastError        *string
+	LastRegisteredAt   *time.Time
+	LastUnregisteredAt *time.Time
+	LastError          *string
 
 	// Active call tracking (set to JWT subject on call start, cleared on hangup)
 	InUseBy *string
@@ -257,7 +258,7 @@ func (tm *TrunkManager) UpsertMobileTrunk(ctx context.Context, payload MobileTru
 		    enabled = true,
 		    updated_at = NOW()
 		RETURNING id, public_id, name, domain, port, username, password, transport, enabled, is_default,
-		          lease_owner, lease_until, last_registered_at, last_error, in_use_by, notify_user_id,
+		          lease_owner, lease_until, last_registered_at, last_unregistered_at, last_error, in_use_by, notify_user_id,
 		          last_online_platform, last_online_at,
 		          pn_app_id, pn_type, pn_token, pn_updated_at, created_at, updated_at
 	`, name, domain, port, username, password, transport, true).Scan(
@@ -265,7 +266,7 @@ func (tm *TrunkManager) UpsertMobileTrunk(ctx context.Context, payload MobileTru
 		&trunk.Username, &trunk.Password, &trunk.Transport,
 		&trunk.Enabled, &trunk.IsDefault,
 		&trunk.LeaseOwner, &trunk.LeaseUntil,
-		&trunk.LastRegisteredAt, &trunk.LastError, &trunk.InUseBy, &trunk.NotifyUserID,
+		&trunk.LastRegisteredAt, &trunk.LastUnregisteredAt, &trunk.LastError, &trunk.InUseBy, &trunk.NotifyUserID,
 		&trunk.LastOnlinePlatform, &trunk.LastOnlineAt,
 		&trunk.PNAppID, &trunk.PNType, &trunk.PNToken, &trunk.PNUpdatedAt,
 		&trunk.CreatedAt, &trunk.UpdatedAt,
@@ -357,7 +358,7 @@ func (tm *TrunkManager) UpsertAgentTrunk(ctx context.Context, payload AgentTrunk
 		    enabled = true,
 		    updated_at = NOW()
 		RETURNING id, public_id, name, domain, port, username, password, transport, enabled, is_default,
-		          lease_owner, lease_until, last_registered_at, last_error, in_use_by, notify_user_id,
+		          lease_owner, lease_until, last_registered_at, last_unregistered_at, last_error, in_use_by, notify_user_id,
 		          last_online_platform, last_online_at,
 		          pn_app_id, pn_type, pn_token, pn_updated_at, created_at, updated_at
 	`, name, domain, port, username, password, transport, true).Scan(
@@ -365,7 +366,7 @@ func (tm *TrunkManager) UpsertAgentTrunk(ctx context.Context, payload AgentTrunk
 		&trunk.Username, &trunk.Password, &trunk.Transport,
 		&trunk.Enabled, &trunk.IsDefault,
 		&trunk.LeaseOwner, &trunk.LeaseUntil,
-		&trunk.LastRegisteredAt, &trunk.LastError, &trunk.InUseBy, &trunk.NotifyUserID,
+		&trunk.LastRegisteredAt, &trunk.LastUnregisteredAt, &trunk.LastError, &trunk.InUseBy, &trunk.NotifyUserID,
 		&trunk.LastOnlinePlatform, &trunk.LastOnlineAt,
 		&trunk.PNAppID, &trunk.PNType, &trunk.PNToken, &trunk.PNUpdatedAt,
 		&trunk.CreatedAt, &trunk.UpdatedAt,
@@ -491,7 +492,7 @@ func (tm *TrunkManager) loadTrunks() error {
 
 	rows, err := tm.db.Query(ctx, `
 		SELECT id, public_id, name, domain, port, username, password, transport, enabled, is_default,
-		       lease_owner, lease_until, last_registered_at, last_error, in_use_by, notify_user_id,
+		       lease_owner, lease_until, last_registered_at, last_unregistered_at, last_error, in_use_by, notify_user_id,
 		       last_online_platform, last_online_at,
 		       pn_app_id, pn_type, pn_token, pn_updated_at, created_at, updated_at
 		FROM sip_trunks
@@ -516,7 +517,7 @@ func (tm *TrunkManager) loadTrunks() error {
 			&trunk.Username, &trunk.Password, &trunk.Transport,
 			&trunk.Enabled, &trunk.IsDefault,
 			&trunk.LeaseOwner, &trunk.LeaseUntil,
-			&trunk.LastRegisteredAt, &trunk.LastError, &trunk.InUseBy, &trunk.NotifyUserID,
+			&trunk.LastRegisteredAt, &trunk.LastUnregisteredAt, &trunk.LastError, &trunk.InUseBy, &trunk.NotifyUserID,
 			&trunk.LastOnlinePlatform, &trunk.LastOnlineAt,
 			&trunk.PNAppID, &trunk.PNType, &trunk.PNToken, &trunk.PNUpdatedAt,
 			&trunk.CreatedAt, &trunk.UpdatedAt,
@@ -1482,7 +1483,7 @@ func (tm *TrunkManager) ListTrunks(ctx context.Context, params TrunkListParams) 
 	offset := (params.Page - 1) * params.PageSize
 	dataSQL := fmt.Sprintf(`
 		SELECT id, public_id, name, domain, port, username, password, transport, enabled, is_default,
-		       lease_owner, lease_until, last_registered_at, last_error, in_use_by, notify_user_id,
+		       lease_owner, lease_until, last_registered_at, last_unregistered_at, last_error, in_use_by, notify_user_id,
 		       last_online_platform, last_online_at,
 		       pn_app_id, pn_type, pn_token, pn_updated_at, created_at, updated_at
 		FROM sip_trunks
@@ -1506,7 +1507,7 @@ func (tm *TrunkManager) ListTrunks(ctx context.Context, params TrunkListParams) 
 			&trunk.Username, &trunk.Password, &trunk.Transport,
 			&trunk.Enabled, &trunk.IsDefault,
 			&trunk.LeaseOwner, &trunk.LeaseUntil,
-			&trunk.LastRegisteredAt, &trunk.LastError, &trunk.InUseBy, &trunk.NotifyUserID,
+			&trunk.LastRegisteredAt, &trunk.LastUnregisteredAt, &trunk.LastError, &trunk.InUseBy, &trunk.NotifyUserID,
 			&trunk.LastOnlinePlatform, &trunk.LastOnlineAt,
 			&trunk.PNAppID, &trunk.PNType, &trunk.PNToken, &trunk.PNUpdatedAt,
 			&trunk.CreatedAt, &trunk.UpdatedAt,
@@ -1584,7 +1585,7 @@ func (tm *TrunkManager) CreateTrunk(ctx context.Context, payload CreateTrunkPayl
 		INSERT INTO sip_trunks (public_id, name, domain, port, username, password, transport, enabled, is_default)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		RETURNING id, public_id, name, domain, port, username, password, transport, enabled, is_default,
-		          lease_owner, lease_until, last_registered_at, last_error, in_use_by, created_at, updated_at
+		          lease_owner, lease_until, last_registered_at, last_unregistered_at, last_error, in_use_by, created_at, updated_at
 	`, publicID, payload.Name, payload.Domain, payload.Port, payload.Username, payload.Password,
 		payload.Transport, payload.Enabled, payload.IsDefault,
 	).Scan(
@@ -1592,7 +1593,7 @@ func (tm *TrunkManager) CreateTrunk(ctx context.Context, payload CreateTrunkPayl
 		&created.Username, &created.Password, &created.Transport,
 		&created.Enabled, &created.IsDefault,
 		&created.LeaseOwner, &created.LeaseUntil,
-		&created.LastRegisteredAt, &created.LastError, &created.InUseBy,
+		&created.LastRegisteredAt, &created.LastUnregisteredAt, &created.LastError, &created.InUseBy,
 		&created.CreatedAt, &created.UpdatedAt,
 	)
 	if err != nil {
@@ -1691,7 +1692,7 @@ func (tm *TrunkManager) UpdateTrunk(ctx context.Context, trunkID int64, patch Tr
 	current := &Trunk{}
 	err = tx.QueryRow(ctx, `
 		SELECT id, public_id, name, domain, port, username, password, transport, enabled, is_default,
-		       lease_owner, lease_until, last_registered_at, last_error, in_use_by, notify_user_id,
+		       lease_owner, lease_until, last_registered_at, last_unregistered_at, last_error, in_use_by, notify_user_id,
 		       last_online_platform, last_online_at,
 		       pn_app_id, pn_type, pn_token, pn_updated_at, created_at, updated_at
 		FROM sip_trunks
@@ -1702,7 +1703,7 @@ func (tm *TrunkManager) UpdateTrunk(ctx context.Context, trunkID int64, patch Tr
 		&current.Username, &current.Password, &current.Transport,
 		&current.Enabled, &current.IsDefault,
 		&current.LeaseOwner, &current.LeaseUntil,
-		&current.LastRegisteredAt, &current.LastError, &current.InUseBy, &current.NotifyUserID,
+		&current.LastRegisteredAt, &current.LastUnregisteredAt, &current.LastError, &current.InUseBy, &current.NotifyUserID,
 		&current.LastOnlinePlatform, &current.LastOnlineAt,
 		&current.PNAppID, &current.PNType, &current.PNToken, &current.PNUpdatedAt,
 		&current.CreatedAt, &current.UpdatedAt,
@@ -1786,7 +1787,7 @@ func (tm *TrunkManager) UpdateTrunk(ctx context.Context, trunkID int64, patch Tr
 	updated := &Trunk{}
 	err = tx.QueryRow(ctx, `
 		SELECT id, public_id, name, domain, port, username, password, transport, enabled, is_default,
-		       lease_owner, lease_until, last_registered_at, last_error, in_use_by, notify_user_id,
+		       lease_owner, lease_until, last_registered_at, last_unregistered_at, last_error, in_use_by, notify_user_id,
 		       last_online_platform, last_online_at,
 		       pn_app_id, pn_type, pn_token, pn_updated_at, created_at, updated_at
 		FROM sip_trunks
@@ -1796,7 +1797,7 @@ func (tm *TrunkManager) UpdateTrunk(ctx context.Context, trunkID int64, patch Tr
 		&updated.Username, &updated.Password, &updated.Transport,
 		&updated.Enabled, &updated.IsDefault,
 		&updated.LeaseOwner, &updated.LeaseUntil,
-		&updated.LastRegisteredAt, &updated.LastError, &updated.InUseBy, &updated.NotifyUserID,
+		&updated.LastRegisteredAt, &updated.LastUnregisteredAt, &updated.LastError, &updated.InUseBy, &updated.NotifyUserID,
 		&updated.LastOnlinePlatform, &updated.LastOnlineAt,
 		&updated.PNAppID, &updated.PNType, &updated.PNToken, &updated.PNUpdatedAt,
 		&updated.CreatedAt, &updated.UpdatedAt,
@@ -1958,11 +1959,12 @@ func (tm *TrunkManager) updateUnregisteredStatus(trunkID int64) {
 	ctx, cancel := tm.dbContext()
 	defer cancel()
 
+	now := time.Now()
 	_, err := tm.db.Exec(ctx, `
 		UPDATE sip_trunks
-		SET last_registered_at = NULL, last_error = NULL, updated_at = NOW()
-		WHERE id = $1
-	`, trunkID)
+		SET last_registered_at = NULL, last_unregistered_at = $1, last_error = NULL, updated_at = NOW()
+		WHERE id = $2
+	`, now, trunkID)
 	if err != nil {
 		fmt.Printf("⚠️ [TrunkManager] Failed to clear registration status for trunk %d: %v\n", trunkID, err)
 	}
@@ -1970,6 +1972,7 @@ func (tm *TrunkManager) updateUnregisteredStatus(trunkID int64) {
 	tm.mu.Lock()
 	if trunk, ok := tm.trunks[trunkID]; ok {
 		trunk.LastRegisteredAt = nil
+		trunk.LastUnregisteredAt = &now
 		trunk.LastError = nil
 	}
 	tm.mu.Unlock()
@@ -2021,7 +2024,7 @@ func (tm *TrunkManager) getTrunkByIDFromDB(ctx context.Context, trunkID int64) (
 	trunk := &Trunk{}
 	err := tm.db.QueryRow(ctx, `
 		SELECT id, public_id, name, domain, port, username, password, transport, enabled, is_default,
-		       lease_owner, lease_until, last_registered_at, last_error, in_use_by, notify_user_id,
+		       lease_owner, lease_until, last_registered_at, last_unregistered_at, last_error, in_use_by, notify_user_id,
 		       last_online_platform, last_online_at,
 		       pn_app_id, pn_type, pn_token, pn_updated_at, created_at, updated_at
 		FROM sip_trunks
@@ -2031,7 +2034,7 @@ func (tm *TrunkManager) getTrunkByIDFromDB(ctx context.Context, trunkID int64) (
 		&trunk.Username, &trunk.Password, &trunk.Transport,
 		&trunk.Enabled, &trunk.IsDefault,
 		&trunk.LeaseOwner, &trunk.LeaseUntil,
-		&trunk.LastRegisteredAt, &trunk.LastError, &trunk.InUseBy, &trunk.NotifyUserID,
+		&trunk.LastRegisteredAt, &trunk.LastUnregisteredAt, &trunk.LastError, &trunk.InUseBy, &trunk.NotifyUserID,
 		&trunk.LastOnlinePlatform, &trunk.LastOnlineAt,
 		&trunk.PNAppID, &trunk.PNType, &trunk.PNToken, &trunk.PNUpdatedAt,
 		&trunk.CreatedAt, &trunk.UpdatedAt,
@@ -2309,7 +2312,7 @@ func (tm *TrunkManager) FindTrunkByInUseBy(ctx context.Context, inUseBy string) 
 	trunk := &Trunk{}
 	err := tm.db.QueryRow(dbCtx, `
 		SELECT id, public_id, name, domain, port, username, password, transport, enabled, is_default,
-		       lease_owner, lease_until, last_registered_at, last_error, in_use_by, notify_user_id,
+		       lease_owner, lease_until, last_registered_at, last_unregistered_at, last_error, in_use_by, notify_user_id,
 		       last_online_platform, last_online_at,
 		       pn_app_id, pn_type, pn_token, pn_updated_at, created_at, updated_at
 		FROM sip_trunks
@@ -2320,7 +2323,7 @@ func (tm *TrunkManager) FindTrunkByInUseBy(ctx context.Context, inUseBy string) 
 		&trunk.Username, &trunk.Password, &trunk.Transport,
 		&trunk.Enabled, &trunk.IsDefault,
 		&trunk.LeaseOwner, &trunk.LeaseUntil,
-		&trunk.LastRegisteredAt, &trunk.LastError, &trunk.InUseBy, &trunk.NotifyUserID,
+		&trunk.LastRegisteredAt, &trunk.LastUnregisteredAt, &trunk.LastError, &trunk.InUseBy, &trunk.NotifyUserID,
 		&trunk.LastOnlinePlatform, &trunk.LastOnlineAt,
 		&trunk.PNAppID, &trunk.PNType, &trunk.PNToken, &trunk.PNUpdatedAt,
 		&trunk.CreatedAt, &trunk.UpdatedAt,
