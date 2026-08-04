@@ -159,6 +159,7 @@ CREATE TABLE IF NOT EXISTS sip_trunks (
   last_registered_at TIMESTAMPTZ,
   last_unregistered_at TIMESTAMPTZ,
   last_error         TEXT,
+  sip_auto_register  BOOLEAN NOT NULL DEFAULT true,
 
   -- Active call tracking: set to JWT subject when a call starts, cleared on hangup
   in_use_by          TEXT,

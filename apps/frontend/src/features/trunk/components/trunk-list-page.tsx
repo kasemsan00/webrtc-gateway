@@ -1227,12 +1227,19 @@ function TrunkTable({
         id: 'register',
         header: 'Register',
         cell: ({ row }) => (
-          <Badge
-            variant={row.original.isRegistered ? 'success' : 'secondary'}
-            className="text-[10px]"
-          >
-            {row.original.isRegistered ? 'Registered' : 'Unregistered'}
-          </Badge>
+          <div className="space-y-0.5">
+            <Badge
+              variant={row.original.isRegistered ? 'success' : 'secondary'}
+              className="text-[10px]"
+            >
+              {row.original.isRegistered ? 'Registered' : 'Unregistered'}
+            </Badge>
+            {row.original.sipAutoRegister === false ? (
+              <div className="text-[10px] text-muted-foreground">
+                Auto-register off
+              </div>
+            ) : null}
+          </div>
         ),
       },
       {
@@ -1411,12 +1418,19 @@ function TrunkCard({
           <Detail
             label="Register"
             value={
-              <Badge
-                variant={trunk.isRegistered ? 'success' : 'secondary'}
-                className="text-[10px]"
-              >
-                {trunk.isRegistered ? 'Registered' : 'Unregistered'}
-              </Badge>
+              <div className="space-y-0.5">
+                <Badge
+                  variant={trunk.isRegistered ? 'success' : 'secondary'}
+                  className="text-[10px]"
+                >
+                  {trunk.isRegistered ? 'Registered' : 'Unregistered'}
+                </Badge>
+                {trunk.sipAutoRegister === false ? (
+                  <div className="text-[10px] text-muted-foreground">
+                    Auto-register off
+                  </div>
+                ) : null}
+              </div>
             }
           />
           <Detail

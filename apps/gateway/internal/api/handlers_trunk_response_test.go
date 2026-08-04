@@ -75,6 +75,7 @@ func TestTrunkResponseFrom_IncludesLastUnregisteredAt(t *testing.T) {
 		Username:           "1002",
 		Transport:          "tcp",
 		Enabled:            true,
+		SipAutoRegister:    false,
 		LastUnregisteredAt: &unregisteredAt,
 		CreatedAt:          now,
 		UpdatedAt:          now,
@@ -86,5 +87,8 @@ func TestTrunkResponseFrom_IncludesLastUnregisteredAt(t *testing.T) {
 	}
 	if resp.LastUnregisteredAt != unregisteredAt.Format(time.RFC3339) {
 		t.Fatalf("expected lastUnregisteredAt=%s, got %s", unregisteredAt.Format(time.RFC3339), resp.LastUnregisteredAt)
+	}
+	if resp.SipAutoRegister {
+		t.Fatalf("expected sipAutoRegister=false")
 	}
 }

@@ -19,6 +19,7 @@ export interface Trunk {
   lastUnregisteredAt?: string
   isRegistered: boolean
   lastError: string
+  sipAutoRegister?: boolean
   pnAppId?: string
   pnType?: string
   pnTokenMasked?: string

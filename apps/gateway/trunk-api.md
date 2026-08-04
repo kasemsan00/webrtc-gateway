@@ -91,6 +91,7 @@ GET /api/trunks?search=agent&page=1&pageSize=5&createdAfter=2025-06-01T00:00:00Z
       "lastRegisteredAt": "",
       "lastUnregisteredAt": "2025-06-30T10:00:00Z",
       "isRegistered": false,
+      "sipAutoRegister": false,
       "lastError": "",
       "createdAt": "2025-03-20T09:00:00Z",
       "updatedAt": "2025-06-30T10:00:00Z"
@@ -129,6 +130,7 @@ GET /api/trunks?search=agent&page=1&pageSize=5&createdAfter=2025-06-01T00:00:00Z
 | `lastRegisteredAt`   | string | Last successful SIP REGISTER time (RFC 3339)         |
 | `lastUnregisteredAt` | string | Last SIP UNREGISTER time (RFC 3339), empty if none   |
 | `isRegistered`       | bool   | Whether trunk is currently considered registered     |
+| `sipAutoRegister`    | bool   | Whether gateway should auto-register on start/refresh |
 | `lastError`        | string | Last registration error message, empty if none       |
 | `createdAt`        | string | Trunk creation time (RFC 3339)                       |
 | `updatedAt`        | string | Last update time (RFC 3339)                          |
@@ -170,6 +172,7 @@ GET /api/trunk/5
   "leaseUntil": "2025-07-01T12:30:00Z",
   "lastRegisteredAt": "2025-07-01T12:00:00Z",
   "isRegistered": true,
+  "sipAutoRegister": true,
   "lastError": "",
   "createdAt": "2025-02-10T14:00:00Z",
   "updatedAt": "2025-07-01T12:00:00Z"

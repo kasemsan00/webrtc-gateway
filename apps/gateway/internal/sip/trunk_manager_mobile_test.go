@@ -62,16 +62,17 @@ func (r mobileTrunkTestRow) Scan(dest ...any) error {
 	*(dest[12].(**time.Time)) = trunk.LastRegisteredAt
 	*(dest[13].(**time.Time)) = trunk.LastUnregisteredAt
 	*(dest[14].(**string)) = trunk.LastError
-	*(dest[15].(**string)) = trunk.InUseBy
-	*(dest[16].(**string)) = trunk.NotifyUserID
-	*(dest[17].(**string)) = trunk.LastOnlinePlatform
-	*(dest[18].(**time.Time)) = trunk.LastOnlineAt
-	*(dest[19].(**string)) = trunk.PNAppID
-	*(dest[20].(**string)) = trunk.PNType
-	*(dest[21].(**string)) = trunk.PNToken
-	*(dest[22].(**time.Time)) = trunk.PNUpdatedAt
-	*(dest[23].(*time.Time)) = trunk.CreatedAt
-	*(dest[24].(*time.Time)) = trunk.UpdatedAt
+	*(dest[15].(*bool)) = trunk.SipAutoRegister
+	*(dest[16].(**string)) = trunk.InUseBy
+	*(dest[17].(**string)) = trunk.NotifyUserID
+	*(dest[18].(**string)) = trunk.LastOnlinePlatform
+	*(dest[19].(**time.Time)) = trunk.LastOnlineAt
+	*(dest[20].(**string)) = trunk.PNAppID
+	*(dest[21].(**string)) = trunk.PNType
+	*(dest[22].(**string)) = trunk.PNToken
+	*(dest[23].(**time.Time)) = trunk.PNUpdatedAt
+	*(dest[24].(*time.Time)) = trunk.CreatedAt
+	*(dest[25].(*time.Time)) = trunk.UpdatedAt
 	return nil
 }
 
