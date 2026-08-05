@@ -3,7 +3,11 @@ import {
   getCoreRowModel,
   useReactTable,
 } from '@tanstack/react-table'
-import type { ColumnDef } from '@tanstack/react-table'
+import type {
+  ColumnDef,
+  OnChangeFn,
+  VisibilityState,
+} from '@tanstack/react-table'
 
 import { cn } from '@/lib/utils'
 
@@ -23,6 +27,8 @@ type DataTableProps<TData, TValue> = {
   className?: string
   onRowClick?: (row: TData) => void
   getRowClassName?: (row: TData) => string | undefined
+  columnVisibility?: VisibilityState
+  onColumnVisibilityChange?: OnChangeFn<VisibilityState>
 }
 
 export function DataTable<TData, TValue>({
@@ -32,11 +38,17 @@ export function DataTable<TData, TValue>({
   className,
   onRowClick,
   getRowClassName,
+  columnVisibility,
+  onColumnVisibilityChange,
 }: DataTableProps<TData, TValue>) {
   const table = useReactTable({
     data,
     columns,
     getCoreRowModel: getCoreRowModel(),
+    state: {
+      columnVisibility,
+    },
+    onColumnVisibilityChange,
   })
 
   return (

@@ -1,6 +1,7 @@
 import {
   RiAddLine,
   RiGridLine,
+  RiLayoutColumnLine,
   RiListCheck,
   RiLoader4Line,
   RiMoonLine,
@@ -13,7 +14,7 @@ import { debounce } from '@tanstack/pacer'
 import { useStore } from '@tanstack/react-store'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import type { ColumnDef } from '@tanstack/react-table'
+import type { ColumnDef, OnChangeFn, VisibilityState } from '@tanstack/react-table'
 
 import type {
   CreateTrunkPayload,
@@ -35,6 +36,14 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import {
   Select,
@@ -62,11 +71,38 @@ import {
 } from '@/features/trunk/services/trunk-api'
 import {
   initializeTrunkPrefsStore,
+  setColumnVisibility as setPersistedColumnVisibility,
   setViewMode as setPersistedViewMode,
+  toggleColumnVisibility,
   trunkPrefsStore,
 } from '@/features/trunk/store/trunk-prefs-store'
 
 const DEFAULT_PAGE_SIZE = 20
+
+const TRUNK_TABLE_COLUMN_TOGGLES = [
+  { id: 'id', label: 'ID' },
+  { id: 'name', label: 'Name', locked: true },
+  { id: 'inUseBy', label: 'In Use By' },
+  { id: 'register', label: 'Register' },
+  { id: 'pushContact', label: 'Push Contact' },
+  { id: 'status', label: 'Status' },
+  { id: 'domain', label: 'Domain' },
+  { id: 'port', label: 'Port' },
+  { id: 'username', label: 'Username' },
+  { id: 'transport', label: 'Transport' },
+  { id: 'destination', label: 'Destination' },
+  { id: 'calls', label: 'Calls' },
+  { id: 'lastRegisteredAt', label: 'Last Registered' },
+  { id: 'lastUnregisteredAt', label: 'Last Unregistered' },
+  { id: 'uid', label: 'UID' },
+] as const
+
+function isColumnVisible(
+  columnVisibility: VisibilityState,
+  columnId: string,
+) {
+  return columnVisibility[columnId] !== false
+}
 
 type TrunkSortMode =
   | 'activeCallsDesc'
@@ -211,11 +247,20 @@ export function TrunkListPage() {
   const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const [sortMode, setSortMode] = useState<TrunkSortMode>('activeCallsDesc')
-  const { viewMode } = useStore(trunkPrefsStore, (state) => state)
+  const { viewMode, columnVisibility } = useStore(trunkPrefsStore, (state) => state)
 
   useEffect(() => {
     initializeTrunkPrefsStore()
   }, [])
+
+  const handleColumnVisibilityChange = useCallback<OnChangeFn<VisibilityState>>(
+    (updater) => {
+      const current = trunkPrefsStore.state.columnVisibility
+      const next = typeof updater === 'function' ? updater(current) : updater
+      setPersistedColumnVisibility(next)
+    },
+    [],
+  )
   const [registerTarget, setRegisterTarget] = useState<Trunk | null>(null)
   const [registering, setRegistering] = useState(false)
   const [unregisterTarget, setUnregisterTarget] = useState<Trunk | null>(null)
@@ -629,6 +674,42 @@ export function TrunkListPage() {
               <RiListCheck className="size-3.5" />
             </Button>
           </div>
+          {viewMode === 'table' ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 gap-1 px-2 text-xs"
+                  aria-label="Toggle columns"
+                >
+                  <RiLayoutColumnLine className="size-3.5" />
+                  Columns
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-48">
+                <DropdownMenuLabel>Toggle columns</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                {TRUNK_TABLE_COLUMN_TOGGLES.map((column) => {
+                  const locked = 'locked' in column && column.locked
+                  return (
+                    <DropdownMenuCheckboxItem
+                      key={column.id}
+                      checked={isColumnVisible(columnVisibility, column.id)}
+                      disabled={locked}
+                      onCheckedChange={(checked) => {
+                        if (locked) return
+                        toggleColumnVisibility(column.id, checked === true)
+                      }}
+                      onSelect={(event) => event.preventDefault()}
+                    >
+                      {column.label}
+                    </DropdownMenuCheckboxItem>
+                  )
+                })}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : null}
           <Separator orientation="vertical" className="h-4" />
           {/* Add Trunk */}
           <Button
@@ -711,6 +792,8 @@ export function TrunkListPage() {
         ) : (
           <TrunkTable
             trunks={trunks}
+            columnVisibility={columnVisibility}
+            onColumnVisibilityChange={handleColumnVisibilityChange}
             onEdit={openEditModal}
             onRegister={openRegisterModal}
             onUnregister={openUnregisterModal}
@@ -1144,6 +1227,8 @@ export function TrunkListPage() {
 
 function TrunkTable({
   trunks,
+  columnVisibility,
+  onColumnVisibilityChange,
   onEdit,
   onRegister,
   onUnregister,
@@ -1151,6 +1236,8 @@ function TrunkTable({
   onRestore,
 }: {
   trunks: Array<Trunk>
+  columnVisibility: VisibilityState
+  onColumnVisibilityChange: OnChangeFn<VisibilityState>
   onEdit: (trunk: Trunk) => void
   onRegister: (trunk: Trunk) => void
   onUnregister: (trunk: Trunk) => void
@@ -1167,51 +1254,11 @@ function TrunkTable({
         ),
       },
       {
-        id: 'uid',
-        header: 'UID',
-        cell: ({ row }) => (
-          <span className="font-mono text-[11px]">
-            {formatUid(normalizeTrunkUid(row.original))}
-          </span>
-        ),
-      },
-      {
         accessorKey: 'name',
         header: 'Name',
+        enableHiding: false,
         cell: ({ row }) => (
           <span className="font-medium">{row.original.name}</span>
-        ),
-      },
-      {
-        accessorKey: 'domain',
-        header: 'Domain',
-      },
-      {
-        accessorKey: 'port',
-        header: 'Port',
-      },
-      {
-        accessorKey: 'username',
-        header: 'Username',
-      },
-      {
-        accessorKey: 'transport',
-        header: 'Transport',
-        cell: ({ row }) => row.original.transport.toUpperCase(),
-      },
-      {
-        id: 'destination',
-        header: 'Destination',
-        cell: ({ row }) => formatDestinations(row.original.activeDestinations),
-      },
-      {
-        id: 'calls',
-        header: 'Calls',
-        cell: ({ row }) => (
-          <span className="flex items-center gap-1">
-            <RiPhoneLine className="size-3 text-cyan-400" />
-            {row.original.activeCallCount}
-          </span>
         ),
       },
       {
@@ -1274,6 +1321,38 @@ function TrunkTable({
         ),
       },
       {
+        accessorKey: 'domain',
+        header: 'Domain',
+      },
+      {
+        accessorKey: 'port',
+        header: 'Port',
+      },
+      {
+        accessorKey: 'username',
+        header: 'Username',
+      },
+      {
+        accessorKey: 'transport',
+        header: 'Transport',
+        cell: ({ row }) => row.original.transport.toUpperCase(),
+      },
+      {
+        id: 'destination',
+        header: 'Destination',
+        cell: ({ row }) => formatDestinations(row.original.activeDestinations),
+      },
+      {
+        id: 'calls',
+        header: 'Calls',
+        cell: ({ row }) => (
+          <span className="flex items-center gap-1">
+            <RiPhoneLine className="size-3 text-cyan-400" />
+            {row.original.activeCallCount}
+          </span>
+        ),
+      },
+      {
         accessorKey: 'lastRegisteredAt',
         header: 'Last Registered',
         cell: ({ row }) => (
@@ -1292,8 +1371,18 @@ function TrunkTable({
         ),
       },
       {
+        id: 'uid',
+        header: 'UID',
+        cell: ({ row }) => (
+          <span className="font-mono text-[11px]">
+            {formatUid(normalizeTrunkUid(row.original))}
+          </span>
+        ),
+      },
+      {
         id: 'actions',
         header: () => <div className="text-right">Actions</div>,
+        enableHiding: false,
         cell: ({ row }) => (
           <div className="flex justify-end gap-1">
             <Button
@@ -1348,7 +1437,14 @@ function TrunkTable({
     [onEdit, onRegister, onRestore, onSoftDelete, onUnregister],
   )
 
-  return <DataTable columns={columns} data={trunks} />
+  return (
+    <DataTable
+      columns={columns}
+      data={trunks}
+      columnVisibility={columnVisibility}
+      onColumnVisibilityChange={onColumnVisibilityChange}
+    />
+  )
 }
 
 function TrunkCard({
