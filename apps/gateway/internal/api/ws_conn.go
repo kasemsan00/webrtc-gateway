@@ -94,14 +94,16 @@ func (s *Server) handleWebSocketConn(w http.ResponseWriter, r *http.Request, pub
 	defer conn.Close()
 
 	client := &WSClient{
-		conn:         conn,
-		clientID:     uuid.NewString(),
-		send:         make(chan []byte, 256),
-		availability: clientAvailabilityIdle,
-		callState:    string(session.StateNew),
-		ConnectedAt:  time.Now(),
-		publicOnly:   publicOnly,
-		agentOnly:    agentOnly,
+		conn:            conn,
+		clientID:        uuid.NewString(),
+		send:            make(chan []byte, 256),
+		ownedSessionIDs: make(map[string]struct{}),
+		pendingIncoming: make(map[string]struct{}),
+		availability:    clientAvailabilityIdle,
+		callState:       string(session.StateNew),
+		ConnectedAt:     time.Now(),
+		publicOnly:      publicOnly,
+		agentOnly:       agentOnly,
 	}
 	if claims, ok := AuthClaimsFromContext(req.Context()); ok {
 		client.authClaims = claims
@@ -151,13 +153,17 @@ func (s *Server) handleWebSocketConn(w http.ResponseWriter, r *http.Request, pub
 	// Agent presence cleanup before dropping connection maps.
 	s.cleanupAgentPresence(client)
 
-	// Cleanup - only delete if this client is still the registered one
+	// Cleanup every session owned by this connection. Legacy clients normally
+	// have one entry; multi-call agents may have several.
 	s.mu.Lock()
 	delete(s.wsConnections, client)
-	if client.sessionID != "" {
-		if s.wsClients[client.sessionID] == client {
-			delete(s.wsClients, client.sessionID)
+	for sessionID := range client.ownedSessionIDs {
+		if s.wsClients[sessionID] == client {
+			delete(s.wsClients, sessionID)
 		}
+	}
+	if client.sessionID != "" && s.wsClients[client.sessionID] == client {
+		delete(s.wsClients, client.sessionID)
 	}
 	s.mu.Unlock()
 	s.notifyWSClientChanged("disconnected", client)

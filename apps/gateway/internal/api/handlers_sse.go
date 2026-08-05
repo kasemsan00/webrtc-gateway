@@ -81,6 +81,8 @@ func (s *Server) buildWSClientResponse(client *WSClient) WSClientResponse {
 		CallState:       client.callState,
 		PublicOnly:      client.publicOnly,
 		AgentOnly:       client.agentOnly,
+		MultiCall:       client.multiCall,
+		ActiveCalls:     client.activeCalls,
 	}
 	if client.agentOnly {
 		resp.PresenceMode = "ephemeral"

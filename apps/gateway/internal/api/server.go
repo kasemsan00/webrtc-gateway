@@ -23,34 +23,34 @@ import (
 
 // Server represents the HTTP/WebSocket API server
 type Server struct {
-	sessionMgr        *session.Manager
-	sipMaker          SIPCallMaker
-	tokenVerifier     TokenVerifier
-	publicRegistry    PublicAccountRegistry
-	trunkManager      TrunkManager
-	logStore          logstore.LogStore
-	pushService       *push.Service
-	mobileProvisioner MobileSIPProvisioner
-	config            config.APIConfig
-	turnConfig        config.TURNConfig
-	gatewayConfig     config.GatewayConfig
-	translatorCfg     config.TranslatorConfig
-	translatorClient  *translator.Client
-	runtimeConfig     *config.Config
-	upgrader          websocket.Upgrader
-	wsClients         map[string]*WSClient
-	wsConnections     map[*WSClient]struct{}
+	sessionMgr         *session.Manager
+	sipMaker           SIPCallMaker
+	tokenVerifier      TokenVerifier
+	publicRegistry     PublicAccountRegistry
+	trunkManager       TrunkManager
+	logStore           logstore.LogStore
+	pushService        *push.Service
+	mobileProvisioner  MobileSIPProvisioner
+	config             config.APIConfig
+	turnConfig         config.TURNConfig
+	gatewayConfig      config.GatewayConfig
+	translatorCfg      config.TranslatorConfig
+	translatorClient   *translator.Client
+	runtimeConfig      *config.Config
+	upgrader           websocket.Upgrader
+	wsClients          map[string]*WSClient
+	wsConnections      map[*WSClient]struct{}
 	agentTrunkBindings map[int64]map[*WSClient]struct{} // agent WS refcount per trunk
-	trunkStreams      map[int]chan []byte
-	trunkStreamSeq    int
-	sessionStreams    map[int]chan []byte
-	sessionStreamSeq  int
-	wsClientStreams   map[int]chan []byte
-	wsClientStreamSeq int
-	incomingCounters  map[string]int64
-	diagnosticLimits  map[string]*diagnosticRateState
-	startTime         time.Time
-	mu                sync.RWMutex
+	trunkStreams       map[int]chan []byte
+	trunkStreamSeq     int
+	sessionStreams     map[int]chan []byte
+	sessionStreamSeq   int
+	wsClientStreams    map[int]chan []byte
+	wsClientStreamSeq  int
+	incomingCounters   map[string]int64
+	diagnosticLimits   map[string]*diagnosticRateState
+	startTime          time.Time
+	mu                 sync.RWMutex
 }
 
 // TokenVerifier verifies bearer JWT tokens.
@@ -106,11 +106,15 @@ type SIPCallMaker interface {
 type WSClient struct {
 	conn            *websocket.Conn
 	clientID        string // UUID assigned at connect, stable across session assignment
-	sessionID       string
+	sessionID       string // legacy/current session; ownedSessionIDs is authoritative for multi-call agents
+	ownedSessionIDs map[string]struct{}
+	pendingIncoming map[string]struct{}
 	trunkResolved   bool
 	resolvedTrunkID int64
 	availability    string
 	callState       string
+	multiCall       bool
+	activeCalls     int
 	send            chan []byte
 	ConnectedAt     time.Time
 	authClaims      *auth.VerifiedClaims // populated when tokenVerifier is set
@@ -131,6 +135,9 @@ type WSMessage struct {
 	State        string          `json:"state,omitempty"`
 	Availability string          `json:"availability,omitempty"`
 	CallState    string          `json:"callState,omitempty"`
+	MultiCall    bool            `json:"multiCall,omitempty"`
+	ActiveCalls  int             `json:"activeCalls,omitempty"`
+	Held         *bool           `json:"held,omitempty"`
 	Reason       string          `json:"reason,omitempty"`
 	ReasonSource string          `json:"reasonSource,omitempty"`
 	Error        string          `json:"error,omitempty"`
@@ -194,15 +201,15 @@ func NewServer(cfg config.APIConfig, turnCfg config.TURNConfig, gatewayCfg confi
 				return true
 			},
 		},
-		wsClients:         make(map[string]*WSClient),
-		wsConnections:     make(map[*WSClient]struct{}),
+		wsClients:          make(map[string]*WSClient),
+		wsConnections:      make(map[*WSClient]struct{}),
 		agentTrunkBindings: make(map[int64]map[*WSClient]struct{}),
-		trunkStreams:      make(map[int]chan []byte),
-		sessionStreams:    make(map[int]chan []byte),
-		wsClientStreams:   make(map[int]chan []byte),
-		incomingCounters:  make(map[string]int64),
-		diagnosticLimits:  make(map[string]*diagnosticRateState),
-		startTime:         time.Now(),
+		trunkStreams:       make(map[int]chan []byte),
+		sessionStreams:     make(map[int]chan []byte),
+		wsClientStreams:    make(map[int]chan []byte),
+		incomingCounters:   make(map[string]int64),
+		diagnosticLimits:   make(map[string]*diagnosticRateState),
+		startTime:          time.Now(),
 	}
 }
 

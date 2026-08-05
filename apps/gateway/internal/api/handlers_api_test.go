@@ -1217,6 +1217,9 @@ func TestHandleListWSClients_IncludesResolvedTrunkAndClientState(t *testing.T) {
 		resolvedTrunkID: 42,
 		availability:    "busy",
 		callState:       "incall",
+		agentOnly:       true,
+		multiCall:       true,
+		activeCalls:     2,
 	}
 	srv.wsConnections[client] = struct{}{}
 
@@ -1227,6 +1230,9 @@ func TestHandleListWSClients_IncludesResolvedTrunkAndClientState(t *testing.T) {
 	}
 	if resp[0].ClientID != "ws-1" || !resp[0].TrunkResolved || resp[0].ResolvedTrunkID != 42 {
 		t.Fatalf("unexpected client: %+v", resp[0])
+	}
+	if !resp[0].MultiCall || resp[0].ActiveCalls != 2 {
+		t.Fatalf("expected multi-call diagnostics, got %+v", resp[0])
 	}
 }
 

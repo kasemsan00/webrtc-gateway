@@ -1540,10 +1540,7 @@ function handleMessage(event: MessageEvent<string>) {
       } else {
         break
       }
-      appendLog(
-        `Remote media ${kind} ${direction} ${mediaState}`,
-        'success',
-      )
+      appendLog(`Remote media ${kind} ${direction} ${mediaState}`, 'success')
       break
     }
     case 'incoming':
@@ -1677,6 +1674,12 @@ function handleMessage(event: MessageEvent<string>) {
         status: message.status ? String(message.status) : undefined,
         reason: message.reason ? String(message.reason) : undefined,
       })
+      break
+    case 'hold_state':
+      appendLog(
+        `Session ${String(message.sessionId ?? '-')} ${message.held ? 'held' : 'resumed'}`,
+        'info',
+      )
       break
     case 'cancel':
       handleIncomingCallCancel({

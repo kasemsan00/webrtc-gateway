@@ -34,8 +34,10 @@ type TrunkResponse struct {
 	LeaseOwner         string   `json:"leaseOwner,omitempty"`
 	LeaseUntil         string   `json:"leaseUntil,omitempty"`
 	LastRegisteredAt   string   `json:"lastRegisteredAt,omitempty"`
+	LastUnregisteredAt string   `json:"lastUnregisteredAt,omitempty"`
 	IsRegistered       bool     `json:"isRegistered"`
 	LastError          string   `json:"lastError,omitempty"`
+	SipAutoRegister    bool     `json:"sipAutoRegister"`
 	InUseBy            *string  `json:"inUseBy,omitempty"`
 	LastOnlinePlatform string   `json:"lastOnlinePlatform,omitempty"`
 	LastOnlineAt       string   `json:"lastOnlineAt,omitempty"`
@@ -538,7 +540,9 @@ func trunkResponseFrom(trunk *sip.Trunk, activeCallCount int, activeDestinations
 		ActiveDestinations: append([]string(nil), activeDestinations...),
 		LeaseUntil:         formatOptionalTime(trunk.LeaseUntil),
 		LastRegisteredAt:   formatOptionalTime(trunk.LastRegisteredAt),
+		LastUnregisteredAt: formatOptionalTime(trunk.LastUnregisteredAt),
 		IsRegistered:       isRegistered,
+		SipAutoRegister:    trunk.SipAutoRegister,
 		CreatedAt:          trunk.CreatedAt.Format(time.RFC3339),
 		UpdatedAt:          trunk.UpdatedAt.Format(time.RFC3339),
 	}
