@@ -4,7 +4,7 @@ mcps
 node_modules
 .pnp
 .pnp.js
-
+.reasonix/
 # Local env files
 .env
 .env.local
