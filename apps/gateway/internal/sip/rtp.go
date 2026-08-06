@@ -200,13 +200,17 @@ func (s *Server) startRTPListenerForSession(sess *session.Session) (int, error) 
 		sess.SetVideoRTPConnection(videoConn, videoPort)
 		sess.SetVideoRTCPConnection(videoRTCPConn, videoRTCPPort)
 
+		// Rescue channel: some SIP peers deliver video RTP to the dedicated RTCP
+		// port (RTP+1). Demux those into the same SIP→WebRTC video path.
+		videoRTPRescue := make(chan videoUDPIngress, 128)
+
 		// Start forwarding RTP to session's tracks
 		go s.handleAudioRTPPacketsForSession(audioConn, sess)
-		go s.handleVideoRTPPacketsForSession(videoConn, sess)
+		go s.handleVideoRTPPacketsForSession(videoConn, sess, videoRTPRescue)
 
 		// Start forwarding RTCP (dedicated ports) to session handlers
 		go s.handleAudioRTCPPacketsForSession(audioRTCPConn, sess)
-		go s.handleVideoRTCPPacketsForSession(videoRTCPConn, sess)
+		go s.handleVideoRTCPPacketsForSession(videoRTCPConn, sess, videoRTPRescue)
 
 		// Start periodic PLI sender for fast video start
 		go s.startPeriodicPLIForSession(sess)
@@ -404,8 +408,34 @@ func (s *Server) handleAudioRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 	}
 }
 
+// videoUDPIngress carries a datagram into the SIP→WebRTC video path.
+type videoUDPIngress struct {
+	data []byte
+	addr *net.UDPAddr
+	via  string // "rtp" | "rtcp-rescue"
+}
+
+func cloneUDPAddr(addr *net.UDPAddr) *net.UDPAddr {
+	if addr == nil {
+		return nil
+	}
+	ip := make(net.IP, len(addr.IP))
+	copy(ip, addr.IP)
+	return &net.UDPAddr{IP: ip, Port: addr.Port, Zone: addr.Zone}
+}
+
+func isLikelyRTPPacket(data []byte) bool {
+	if len(data) < 12 {
+		return false
+	}
+	if (data[0]>>6)&0x03 != 2 {
+		return false
+	}
+	return !isRTCPPacketCheck(data)
+}
+
 // handleVideoRTPPacketsForSession reads video RTP packets and writes them to a session's video track
-func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *session.Session) {
+func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *session.Session, rescue <-chan videoUDPIngress) {
 	buffer := make([]byte, s.rtpConfig.BufferSize)
 	packetCount := 0
 	rtcpCount := 0
@@ -426,6 +456,34 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 	)
 
 	fmt.Printf("[%s] Video RTP handler started, VideoTrack is nil: %v\n", sess.ID, sess.VideoTrack == nil)
+
+	udpPackets := make(chan videoUDPIngress, 128)
+	udpErr := make(chan error, 1)
+	go func() {
+		readBuf := make([]byte, s.rtpConfig.BufferSize)
+		for {
+			n, remoteAddr, err := conn.ReadFromUDP(readBuf)
+			if err != nil {
+				udpErr <- err
+				return
+			}
+			pkt := videoUDPIngress{
+				data: append([]byte(nil), readBuf[:n]...),
+				addr: cloneUDPAddr(remoteAddr),
+				via:  "rtp",
+			}
+			select {
+			case udpPackets <- pkt:
+			default:
+				// Prefer newest media over stalling the UDP reader.
+				select {
+				case <-udpPackets:
+				default:
+				}
+				udpPackets <- pkt
+			}
+		}
+	}()
 
 	// Create ICE credentials for STUN response
 	iceCreds := &ICECredentials{
@@ -520,14 +578,20 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 	}
 
 	for {
-		n, remoteAddr, err := conn.ReadFromUDP(buffer)
-		if err != nil {
+		var ingress videoUDPIngress
+		select {
+		case err := <-udpErr:
 			if sess.GetState() == session.StateEnded {
 				return
 			}
 			fmt.Printf("[%s] Error reading video RTP packet: %v\n", sess.ID, err)
 			return
+		case ingress = <-udpPackets:
+		case ingress = <-rescue:
 		}
+
+		n := copy(buffer, ingress.data)
+		remoteAddr := ingress.addr
 
 		// Handle STUN packets (ICE connectivity check)
 		if HandleSTUNPacket(conn, buffer[:n], remoteAddr, iceCreds, sess.ID, "video") {
@@ -1083,9 +1147,11 @@ func (s *Server) handleAudioRTCPPacketsForSession(conn *net.UDPConn, sess *sessi
 
 // handleVideoRTCPPacketsForSession reads RTCP packets from the dedicated video RTCP port (RTP+1)
 // This supports classic non-muxed RTCP. Muxed RTCP on the RTP port is handled in handleVideoRTPPacketsForSession.
-func (s *Server) handleVideoRTCPPacketsForSession(conn *net.UDPConn, sess *session.Session) {
+// Some SIP peers also deliver video RTP to this port; those datagrams are rescued into the video RTP path.
+func (s *Server) handleVideoRTCPPacketsForSession(conn *net.UDPConn, sess *session.Session, rescue chan<- videoUDPIngress) {
 	buffer := make([]byte, s.rtpConfig.BufferSize)
 	rtcpCount := 0
+	rescueCount := 0
 
 	fmt.Printf("[%s] 📨 Video RTCP handler started (dedicated port for non-muxed RTCP)\n", sess.ID)
 
@@ -1097,6 +1163,31 @@ func (s *Server) handleVideoRTCPPacketsForSession(conn *net.UDPConn, sess *sessi
 			}
 			fmt.Printf("[%s] Error reading video RTCP packet: %v\n", sess.ID, err)
 			return
+		}
+
+		// RTP misdelivered to the RTCP port must not be treated as RTCP (drops keyframes).
+		if isLikelyRTPPacket(buffer[:n]) {
+			rescueCount++
+			pkt := videoUDPIngress{
+				data: append([]byte(nil), buffer[:n]...),
+				addr: cloneUDPAddr(remoteAddr),
+				via:  "rtcp-rescue",
+			}
+			select {
+			case rescue <- pkt:
+				if rescueCount <= 10 || rescueCount%100 == 0 {
+					fmt.Printf("[%s] 🛟 Video RTP on RTCP port #%d: %d bytes from %s → video path\n",
+						sess.ID, rescueCount, n, remoteAddr.String())
+				}
+			default:
+				fmt.Printf("[%s] ⚠️ Dropped rescued video RTP (ingress full): %d bytes from %s\n",
+					sess.ID, n, remoteAddr.String())
+			}
+			continue
+		}
+
+		if n < 8 || !isRTCPPacketCheck(buffer[:n]) {
+			continue
 		}
 
 		rtcpCount++

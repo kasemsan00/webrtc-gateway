@@ -216,23 +216,34 @@ func (s *Server) createSDPAnswerForInvite(rtpPort int, sess *session.Session, in
 	if !videoRtcpMux {
 		sdp = strings.Replace(sdp, "a=rtcp-mux\na=rtcp-fb:* ccm fir\na=sendrecv", "a=rtcp-fb:* ccm fir\na=sendrecv", 1)
 		sdp = strings.Replace(sdp, "a=rtcp-mux\na=sendrecv", "a=sendrecv", 1)
+		// Explicit RTCP port when mux is off (RFC 3605). Avoids peers guessing wrong.
+		rtcpPort := videoPort + 1
+		videoLine := fmt.Sprintf("m=video %d %s 96\n", videoPort, videoProfile)
+		if strings.Contains(sdp, videoLine) {
+			sdp = strings.Replace(sdp, videoLine, fmt.Sprintf("%sa=rtcp:%d\n", videoLine, rtcpPort), 1)
+		}
 	}
 
+	// Keep packetization-mode=1 even when the offer omits it (Asterisk default = mode 0).
+	// WebRTC and Linphone mobile need mode 1 (FU-A). Stripping caused intermittent
+	// SIP→WebRTC stalls after the first IDR (framesDecoded stuck at 1–2).
+	keepPmode1 := true
 	if !videoPacketizationMode {
-		sdp = strings.ReplaceAll(sdp, ";packetization-mode=1", "")
+		fmt.Printf("[%s] 📋 Offer omitted packetization-mode=1 — keeping it for WebRTC interop\n", sess.ID)
 	}
 
 	if videoProfile != "RTP/AVPF" {
 		sdp = strings.ReplaceAll(sdp, "a=rtcp-fb:* ccm fir\n", "")
 	}
 
-	fmt.Printf("[%s] 📋 Inbound SDP answer constrained to offer (audio=%s video=%s audio_mux=%v video_mux=%v pmode1=%v)\n",
+	fmt.Printf("[%s] 📋 Inbound SDP answer constrained to offer (audio=%s video=%s audio_mux=%v video_mux=%v offer_pmode1=%v answer_pmode1=%v)\n",
 		sess.ID,
 		audioProfile,
 		videoProfile,
 		audioRtcpMux,
 		videoRtcpMux,
 		videoPacketizationMode,
+		keepPmode1,
 	)
 
 	return []byte(sdp)
