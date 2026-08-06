@@ -67,3 +67,65 @@ func TestCreateSDPOffer_IncludesCachedSpropParameterSets(t *testing.T) {
 		t.Fatalf("expected profile-level-id derived from cached SPS\nSDP:\n%s", offer)
 	}
 }
+
+func TestCreateSDPAnswerForInvite_HonorsPacketizationMode0Default(t *testing.T) {
+	s := &Server{config: config.SIPConfig{}, publicAddress: "203.0.113.10"}
+	sess := &session.Session{ID: "test-mode0"}
+	invite := []byte("v=0\r\nm=audio 4000 RTP/AVP 107\r\na=rtpmap:107 opus/48000/2\r\nm=video 4002 RTP/AVP 96\r\na=rtpmap:96 H264/90000\r\na=fmtp:96 profile-level-id=42801F\r\na=sendrecv\r\n")
+
+	answer := string(s.createSDPAnswerForInvite(12000, sess, invite))
+	if !strings.Contains(answer, "profile-level-id=42E01F;packetization-mode=0") {
+		t.Fatalf("expected packetization-mode=0 in answer\nSDP:\n%s", answer)
+	}
+	if strings.Contains(answer, "packetization-mode=1") {
+		t.Fatalf("unexpected packetization-mode=1 in answer\nSDP:\n%s", answer)
+	}
+	if got := sess.GetSIPVideoPacketizationMode(); got != 0 {
+		t.Fatalf("session packetization mode = %d, want 0", got)
+	}
+}
+
+func TestCreateSDPAnswerForInvite_PreservesOfferedPacketizationMode1(t *testing.T) {
+	s := &Server{config: config.SIPConfig{}, publicAddress: "203.0.113.10"}
+	sess := &session.Session{ID: "test-mode1"}
+	invite := []byte("v=0\r\nm=audio 4000 RTP/AVP 107\r\na=rtpmap:107 opus/48000/2\r\nm=video 4002 RTP/AVP 96\r\na=rtpmap:96 H264/90000\r\na=fmtp:96 profile-level-id=42E01F;packetization-mode=1\r\na=sendrecv\r\n")
+
+	answer := string(s.createSDPAnswerForInvite(12000, sess, invite))
+	if !strings.Contains(answer, "profile-level-id=42E01F;packetization-mode=1") {
+		t.Fatalf("expected packetization-mode=1 in answer\nSDP:\n%s", answer)
+	}
+	if got := sess.GetSIPVideoPacketizationMode(); got != 1 {
+		t.Fatalf("session packetization mode = %d, want 1", got)
+	}
+}
+
+func TestSDPFmtpHasParameter(t *testing.T) {
+	tests := []struct {
+		line string
+		want bool
+	}{
+		{line: "a=fmtp:103 level-asymmetry-allowed=1; packetization-mode=1;profile-level-id=42e01f", want: true},
+		{line: "a=fmtp:96 profile-level-id=42801F;packetization-mode=0", want: false},
+		{line: "a=fmtp:96 packetization-mode=10", want: false},
+		{line: "a=rtpmap:96 H264/90000", want: false},
+	}
+	for _, tt := range tests {
+		if got := sdpFmtpHasParameter(tt.line, "packetization-mode", "1"); got != tt.want {
+			t.Errorf("sdpFmtpHasParameter(%q) = %v, want %v", tt.line, got, tt.want)
+		}
+	}
+}
+
+func TestSIPVideoPacketizationModeDefaultsToZero(t *testing.T) {
+	sdp := []byte("v=0\r\nm=video 4002 RTP/AVP 96\r\na=rtpmap:96 H264/90000\r\na=fmtp:96 profile-level-id=42801F\r\n")
+	if got := sipVideoPacketizationMode(sdp); got != 0 {
+		t.Fatalf("packetization mode = %d, want 0", got)
+	}
+}
+
+func TestSIPVideoPacketizationModeFindsModeOneOnDynamicPayload(t *testing.T) {
+	sdp := []byte("v=0\r\nm=video 4002 RTP/AVP 103\r\na=rtpmap:103 H264/90000\r\na=fmtp:103 profile-level-id=42e01f; packetization-mode=1\r\nm=audio 4000 RTP/AVP 111\r\n")
+	if got := sipVideoPacketizationMode(sdp); got != 1 {
+		t.Fatalf("packetization mode = %d, want 1", got)
+	}
+}

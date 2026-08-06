@@ -417,6 +417,13 @@ func (s *Session) RenegotiatePeerConnection(newOfferSDP string, turnConfig confi
 		return fmt.Errorf("failed to set remote description: %w", err)
 	}
 
+	videoPacketizationMode := s.GetSIPVideoPacketizationMode()
+	if err := PreferWebRTCH264PacketizationMode(newPC, newOfferSDP, videoPacketizationMode); err != nil {
+		newPC.Close()
+		return fmt.Errorf("failed to select H264 packetization mode: %w", err)
+	}
+	fmt.Printf("[%s] 🎬 Renegotiated WebRTC H264 answer restricted to packetization-mode=%d (SIP leg)\n", s.ID, videoPacketizationMode)
+
 	// 10. Create answer
 	answer, err := newPC.CreateAnswer(nil)
 	if err != nil {

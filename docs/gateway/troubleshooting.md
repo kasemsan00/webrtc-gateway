@@ -22,6 +22,18 @@ Checkpoints:
 - validate AVPF compatibility (`SIP_VIDEO_USE_AVPF` and endpoint support)
 - temporarily force AVP with `SIP_FORCE_AVP=true` for interoperability testing
 
+## Linphone closes or crashes when an agent answers
+
+- Inspect the inbound SIP offer and Gateway answer for `packetization-mode`.
+  RFC 6184 treats an omitted value as mode 0; the Gateway answers mode 0 and
+  converts WebRTC FU-A into Single NAL Unit packets for that SIP leg.
+- Look for `h264_mode0_reassembled` to confirm FU-A conversion. Repeated
+  `h264_mode0_drop` means a fragmented NAL was incomplete, discontinuous, or
+  too large for one UDP/RTP packet; correlate it with the Linphone tombstone
+  and the first SPS/PPS/IDR sequence.
+- A SIP offer that explicitly advertises `packetization-mode=1` keeps the
+  existing non-interleaved forwarding behavior.
+
 ## Auth/register timeouts
 
 - transport consistency matters; requests explicitly set transport to avoid digest retry switching transports.

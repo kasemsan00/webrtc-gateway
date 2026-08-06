@@ -16,6 +16,9 @@ import (
 func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 	buffer := make([]byte, s.RTPBufferSize)
 	packetCount := 0
+	mode0Reassembler := h264Mode0Reassembler{}
+	mode0Reassembled := 0
+	mode0Dropped := 0
 
 	for {
 		n, _, err := track.Read(buffer)
@@ -33,6 +36,28 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 		packet := &rtp.Packet{}
 		if err := packet.Unmarshal(buffer[:n]); err != nil {
 			continue
+		}
+
+		if kind == "video" && s.GetSIPVideoPacketizationMode() == 0 {
+			var result h264Mode0Result
+			packet, result = mode0Reassembler.push(packet)
+			switch result {
+			case h264Mode0Buffered:
+				continue
+			case h264Mode0Dropped:
+				mode0Dropped++
+				if mode0Dropped <= 5 || mode0Dropped%100 == 0 {
+					fmt.Printf("[%s] h264_mode0_drop count=%d reason=invalid-discontinuous-or-oversized-fua\n", s.ID, mode0Dropped)
+				}
+				continue
+			case h264Mode0Reassembled:
+				mode0Reassembled++
+				if mode0Reassembled <= 5 || mode0Reassembled%100 == 0 {
+					fmt.Printf("[%s] h264_mode0_reassembled count=%d nal_bytes=%d\n", s.ID, mode0Reassembled, len(packet.Payload))
+				}
+			}
+		} else if kind == "video" {
+			mode0Reassembler.reset()
 		}
 
 		// Check for SPS/PPS (must cache) or Keyframe (IDR) to inject SPS/PPS

@@ -94,6 +94,13 @@ func (s *Server) handleOffer(w http.ResponseWriter, r *http.Request) {
 		Name:      "webrtc_set_remote_description_ok",
 	})
 
+	videoPacketizationMode := sess.GetSIPVideoPacketizationMode()
+	if err := session.PreferWebRTCH264PacketizationMode(sess.PeerConnection, req.SDP, videoPacketizationMode); err != nil {
+		s.respondError(w, http.StatusBadRequest, fmt.Sprintf("Failed to select H264 packetization mode: %v", err))
+		return
+	}
+	fmt.Printf("[%s] 🎬 WebRTC H264 answer restricted to packetization-mode=%d (SIP leg)\n", sess.ID, videoPacketizationMode)
+
 	// Create answer
 	answer, err := sess.PeerConnection.CreateAnswer(nil)
 	if err != nil {

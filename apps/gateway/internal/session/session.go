@@ -208,7 +208,8 @@ type Session struct {
 	SIPRouteSet      []string `json:"-"` // Route headers from Record-Route (reversed order)
 	Held             bool     `json:"held,omitempty"`
 	// SIP Codec Payload Types (for RTP rewriting between SIP <-> WebRTC)
-	SIPOpusPT uint8 `json:"-"` // Opus payload type negotiated with SIP peer (e.g., 107, 111)
+	SIPOpusPT                 uint8 `json:"-"` // Opus payload type negotiated with SIP peer (e.g., 107, 111)
+	SIPVideoPacketizationMode uint8 `json:"-"` // RFC 6184 packetization-mode negotiated with SIP peer (0 or 1)
 	// Incoming call state
 	IncomingSIPTx   interface{} `json:"-"` // Store SIP ServerTransaction for delayed response
 	IncomingSIPReq  interface{} `json:"-"` // Store original SIP INVITE Request for 200 OK
@@ -438,6 +439,7 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 		CreatedAt:                            time.Now(),
 		UpdatedAt:                            time.Now(),
 		RTPBufferSize:                        rtpBufferSize,
+		SIPVideoPacketizationMode:            1,
 		SwitchSPSPPSInjectRemaining:          0, // 0 = disabled, will be set to 3 when @switch message is received
 		VideoRTCPSource:                      "unknown",
 		VideoFeedbackTransport:               cfg.SIP.VideoFeedbackTransport,

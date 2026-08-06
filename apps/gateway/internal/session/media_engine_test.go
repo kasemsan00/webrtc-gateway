@@ -1,10 +1,148 @@
 package session
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/pion/webrtc/v4"
 )
+
+func TestPreferWebRTCH264PacketizationModeAnswersWithSIPModeOnly(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		mode       uint8
+		wantMode   string
+		rejectMode string
+		wantPT     string
+		rejectPTs  []string
+	}{
+		{name: "sip_mode_0", mode: 0, wantMode: "packetization-mode=0", rejectMode: "packetization-mode=1", wantPT: "a=rtpmap:107 H264/90000", rejectPTs: []string{"a=rtpmap:98 H264/90000", "a=rtpmap:103 H264/90000"}},
+		{name: "sip_mode_1", mode: 1, wantMode: "packetization-mode=1", rejectMode: "packetization-mode=0", wantPT: "a=rtpmap:103 H264/90000", rejectPTs: []string{"a=rtpmap:96 H264/90000", "a=rtpmap:107 H264/90000"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			offerer := newH264DualModeOfferer(t)
+			defer offerer.Close()
+
+			offer, err := offerer.CreateOffer(nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := offerer.SetLocalDescription(offer); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(offer.SDP, "packetization-mode=1") || !strings.Contains(offer.SDP, "packetization-mode=0") {
+				t.Fatalf("test offer must advertise both H264 modes:\n%s", offer.SDP)
+			}
+
+			answerer := newGatewayH264Answerer(t)
+			defer answerer.Close()
+			if err := answerer.SetRemoteDescription(offer); err != nil {
+				t.Fatal(err)
+			}
+			if err := PreferWebRTCH264PacketizationMode(answerer, offer.SDP, tc.mode); err != nil {
+				t.Fatal(err)
+			}
+
+			answer, err := answerer.CreateAnswer(nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(answer.SDP, tc.wantMode) {
+				t.Fatalf("answer does not contain %s:\n%s", tc.wantMode, answer.SDP)
+			}
+			if strings.Contains(answer.SDP, tc.rejectMode) {
+				t.Fatalf("answer unexpectedly contains %s:\n%s", tc.rejectMode, answer.SDP)
+			}
+			if !strings.Contains(answer.SDP, tc.wantPT) {
+				t.Fatalf("answer does not preserve offered payload mapping %s:\n%s", tc.wantPT, answer.SDP)
+			}
+			for _, rejectPT := range tc.rejectPTs {
+				if strings.Contains(answer.SDP, rejectPT) {
+					t.Fatalf("answer unexpectedly contains payload mapping %s:\n%s", rejectPT, answer.SDP)
+				}
+			}
+			if err := answerer.SetLocalDescription(answer); err != nil {
+				t.Fatal(err)
+			}
+			if err := offerer.SetRemoteDescription(answer); err != nil {
+				t.Fatalf("browser must accept the restricted answer: %v\n%s", err, answer.SDP)
+			}
+
+			videoSenderChecked := false
+			for _, sender := range offerer.GetSenders() {
+				if sender.Track() == nil || sender.Track().Kind() != webrtc.RTPCodecTypeVideo {
+					continue
+				}
+				videoSenderChecked = true
+				codecs := sender.GetParameters().Codecs
+				if len(codecs) == 0 || !strings.Contains(codecs[0].SDPFmtpLine, tc.wantMode) {
+					t.Fatalf("browser video sender did not select %s: %+v", tc.wantMode, codecs)
+				}
+			}
+			if !videoSenderChecked {
+				t.Fatal("test offerer has no video sender")
+			}
+		})
+	}
+}
+
+func newH264DualModeOfferer(t *testing.T) *webrtc.PeerConnection {
+	t.Helper()
+	mediaEngine := &webrtc.MediaEngine{}
+	for _, codec := range []webrtc.RTPCodecParameters{
+		h264CodecParameters(103, h264ConstrainedBaselineProfile, 1, nil),
+		h264CodecParameters(107, h264ConstrainedBaselineProfile, 0, nil),
+	} {
+		if err := mediaEngine.RegisterCodec(codec, webrtc.RTPCodecTypeVideo); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	pc, err := webrtc.NewAPI(webrtc.WithMediaEngine(mediaEngine)).NewPeerConnection(webrtc.Configuration{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	videoTrack, err := webrtc.NewTrackLocalStaticRTP(
+		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264, ClockRate: 90000},
+		"video",
+		"browser-video",
+	)
+	if err != nil {
+		pc.Close()
+		t.Fatal(err)
+	}
+	if _, err := pc.AddTrack(videoTrack); err != nil {
+		pc.Close()
+		t.Fatal(err)
+	}
+	return pc
+}
+
+func newGatewayH264Answerer(t *testing.T) *webrtc.PeerConnection {
+	t.Helper()
+	mediaEngine, err := createCustomMediaEngine()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pc, err := webrtc.NewAPI(webrtc.WithMediaEngine(mediaEngine)).NewPeerConnection(webrtc.Configuration{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	videoTrack, err := webrtc.NewTrackLocalStaticRTP(
+		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264, ClockRate: 90000},
+		"video",
+		"gateway-video",
+	)
+	if err != nil {
+		pc.Close()
+		t.Fatal(err)
+	}
+	if _, err := pc.AddTrack(videoTrack); err != nil {
+		pc.Close()
+		t.Fatal(err)
+	}
+	return pc
+}
 
 func TestCustomMediaEngineAnswersBrowserLikeOffer(t *testing.T) {
 	for _, tc := range []struct {

@@ -155,7 +155,7 @@ func (s *Server) createSDPAnswerForInvite(rtpPort int, sess *session.Session, in
 	videoProfile := "RTP/AVP"
 	audioRtcpMux := false
 	videoRtcpMux := false
-	videoPacketizationMode := false
+	videoPacketizationMode := sipVideoPacketizationMode(inviteSDP) == 1
 
 	if len(inviteSDP) > 0 {
 		currentMedia := ""
@@ -194,9 +194,6 @@ func (s *Server) createSDPAnswerForInvite(rtpPort int, sess *session.Session, in
 				continue
 			}
 
-			if currentMedia == "video" && strings.HasPrefix(line, "a=fmtp:96 ") && strings.Contains(line, "packetization-mode=1") {
-				videoPacketizationMode = true
-			}
 		}
 	}
 
@@ -224,13 +221,15 @@ func (s *Server) createSDPAnswerForInvite(rtpPort int, sess *session.Session, in
 		}
 	}
 
-	// Keep packetization-mode=1 even when the offer omits it (Asterisk default = mode 0).
-	// WebRTC and Linphone mobile need mode 1 (FU-A). Stripping caused intermittent
-	// SIP→WebRTC stalls after the first IDR (framesDecoded stuck at 1–2).
-	keepPmode1 := true
+	// RFC 6184 defaults an omitted packetization-mode to 0. An answer must not
+	// introduce mode 1 when the offer did not advertise it. The WebRTC→SIP
+	// forwarding path converts FU-A to Single NAL Unit packets for mode-0 peers.
+	answerPacketizationMode := uint8(1)
 	if !videoPacketizationMode {
-		fmt.Printf("[%s] 📋 Offer omitted packetization-mode=1 — keeping it for WebRTC interop\n", sess.ID)
+		answerPacketizationMode = 0
+		sdp = strings.ReplaceAll(sdp, ";packetization-mode=1", ";packetization-mode=0")
 	}
+	sess.SetSIPVideoPacketizationMode(answerPacketizationMode)
 
 	if videoProfile != "RTP/AVPF" {
 		sdp = strings.ReplaceAll(sdp, "a=rtcp-fb:* ccm fir\n", "")
@@ -243,10 +242,43 @@ func (s *Server) createSDPAnswerForInvite(rtpPort int, sess *session.Session, in
 		audioRtcpMux,
 		videoRtcpMux,
 		videoPacketizationMode,
-		keepPmode1,
+		answerPacketizationMode == 1,
 	)
 
 	return []byte(sdp)
+}
+
+func sipVideoPacketizationMode(sdp []byte) uint8 {
+	currentMedia := ""
+	for _, rawLine := range strings.Split(string(sdp), "\n") {
+		line := strings.TrimSpace(rawLine)
+		if strings.HasPrefix(line, "m=video ") {
+			currentMedia = "video"
+			continue
+		}
+		if strings.HasPrefix(line, "m=") {
+			currentMedia = "other"
+			continue
+		}
+		if currentMedia == "video" && sdpFmtpHasParameter(line, "packetization-mode", "1") {
+			return 1
+		}
+	}
+	return 0
+}
+
+func sdpFmtpHasParameter(line, key, value string) bool {
+	fields := strings.Fields(strings.TrimSpace(line))
+	if len(fields) < 2 || !strings.HasPrefix(strings.ToLower(fields[0]), "a=fmtp:") {
+		return false
+	}
+	for _, parameter := range strings.Split(strings.Join(fields[1:], " "), ";") {
+		parts := strings.SplitN(strings.TrimSpace(parameter), "=", 2)
+		if len(parts) == 2 && strings.EqualFold(strings.TrimSpace(parts[0]), key) && strings.TrimSpace(parts[1]) == value {
+			return true
+		}
+	}
+	return false
 }
 
 // parseAsteriskSDPAndSetEndpoints parses Asterisk's SDP answer to extract RTP ports
