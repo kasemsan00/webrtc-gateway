@@ -80,10 +80,13 @@ func TestResetMediaStateClearsSIPEndpointsKeepsCachedSPSPPS(t *testing.T) {
 			IP:   net.ParseIP("127.0.0.1"),
 			Port: 4002,
 		},
-		CachedSPS: cachedSPS,
-		CachedPPS: cachedPPS,
-		AudioSeq:  111,
-		VideoSeq:  222,
+		CachedSPS:                          cachedSPS,
+		CachedPPS:                          cachedPPS,
+		AudioSeq:                           111,
+		VideoSeq:                           222,
+		remoteAudioReadyNotified:           true,
+		remoteVideoReadyNotified:           true,
+		uplinkKeyframeKickOnRemoteJoinDone: true,
 	}
 
 	sess.ResetMediaState()
@@ -102,6 +105,15 @@ func TestResetMediaStateClearsSIPEndpointsKeepsCachedSPSPPS(t *testing.T) {
 	}
 	if string(sess.CachedPPS) != string(cachedPPS) {
 		t.Fatalf("cached PPS changed unexpectedly")
+	}
+	if !sess.TryMarkRemoteAudioReady() {
+		t.Fatalf("expected remote-audio ready notify to be re-armed after reset")
+	}
+	if !sess.TryMarkRemoteVideoReady(true) {
+		t.Fatalf("expected remote-video ready notify to be re-armed after reset")
+	}
+	if !sess.TryClaimUplinkKeyframeKickOnRemoteJoin() {
+		t.Fatalf("expected uplink keyframe kick to be re-armed after reset")
 	}
 }
 

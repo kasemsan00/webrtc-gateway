@@ -380,11 +380,14 @@ func (s *Session) ResetMediaState() {
 	s.AudioSeq = 0
 	s.AudioSSRC = 0
 	s.RemoteAudioSSRC = 0
+	s.remoteAudioReadyNotified = false
 
 	// Reset video RTP state
 	s.VideoSeq = 0
 	s.VideoSSRC = 0
 	s.RemoteVideoSSRC = 0
+	s.remoteVideoReadyNotified = false
+	s.uplinkKeyframeKickOnRemoteJoinDone = false
 	s.PendingBrowserKeyframeRequest = false
 	s.PendingBrowserKeyframeRequestAt = time.Time{}
 	s.PendingBrowserKeyframeRequestEpoch = 0
