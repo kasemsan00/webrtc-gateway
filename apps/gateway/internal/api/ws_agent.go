@@ -163,18 +163,27 @@ func (s *Server) cleanupAgentPresence(client *WSClient) {
 		return
 	}
 
-	// Hang up every call owned by the disconnecting connection. The trunk may
-	// remain registered when another ws-agent connection still holds presence.
-	for _, sessionID := range s.ownedClientSessionIDs(client) {
+	// Snapshot and detach session ownership before any SIP network I/O. A
+	// hanging BYE/CANCEL must not keep a closed agent in the routing maps.
+	sessionIDs := s.ownedClientSessionIDs(client)
+	for _, sessionID := range sessionIDs {
+		s.unbindClientSession(client, sessionID)
+	}
+
+	// Remove the agent from the trunk refcount before ending calls. The trunk
+	// may remain registered when another ws-agent connection still holds
+	// presence; the last agent is handled below after call cleanup.
+	trunkID, remaining, wasBound := s.unbindAgentClient(client, true)
+
+	// Hang up every call owned by the disconnecting connection.
+	for _, sessionID := range sessionIDs {
 		if s.sessionMgr != nil {
 			if sess, ok := s.sessionMgr.GetSession(sessionID); ok && sess != nil {
 				s.forceEndSession(sess, "agent_disconnect")
 			}
 		}
-		s.unbindClientSession(client, sessionID)
 	}
 
-	trunkID, remaining, wasBound := s.unbindAgentClient(client, true)
 	if !wasBound || trunkID <= 0 {
 		return
 	}

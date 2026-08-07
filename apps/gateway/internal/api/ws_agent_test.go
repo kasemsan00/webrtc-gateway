@@ -271,6 +271,40 @@ func TestAgentTwoClientsShareRegisterAndLastDisconnectUnregisters(t *testing.T) 
 	}
 }
 
+func TestDetachWSClientRemovesClosedAgentFromRoutingIndexes(t *testing.T) {
+	tm := &agentTrunkManagerStub{}
+	srv := newAgentTestServer(t, tm)
+	client := newAgentWSClient()
+	client.clientID = "closed-agent"
+	client.trunkResolved = true
+	client.resolvedTrunkID = 99
+	srv.wsConnections[client] = struct{}{}
+	srv.agentTrunkBindings[99] = map[*WSClient]struct{}{client: {}}
+	srv.wsClients["call-1"] = client
+	client.sessionID = "call-1"
+	client.ownedSessionIDs["call-1"] = struct{}{}
+
+	srv.detachWSClient(client)
+
+	if _, ok := srv.wsConnections[client]; ok {
+		t.Fatal("closed agent must be removed from wsConnections")
+	}
+	if _, ok := srv.wsClients["call-1"]; ok {
+		t.Fatal("closed agent session route must be removed")
+	}
+	if srv.agentTrunkRefCount(99) != 1 {
+		t.Fatal("detach must not mutate trunk binding before presence cleanup")
+	}
+
+	srv.cleanupAgentPresence(client)
+	if srv.agentTrunkRefCount(99) != 0 {
+		t.Fatal("presence cleanup must remove the agent binding")
+	}
+	if tm.unregisterCount != 1 || tm.unregisterID != 99 {
+		t.Fatalf("last closed agent must unregister trunk, got count=%d id=%d", tm.unregisterCount, tm.unregisterID)
+	}
+}
+
 func TestAgentLastDisconnectHangsUpActiveCall(t *testing.T) {
 	tm := &agentTrunkManagerStub{}
 	sipMaker := &incomingTestSIPCallMaker{}

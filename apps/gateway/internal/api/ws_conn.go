@@ -150,12 +150,28 @@ func (s *Server) handleWebSocketConn(w http.ResponseWriter, r *http.Request, pub
 		s.handleWSMessage(client, message)
 	}
 
-	// Agent presence cleanup before dropping connection maps.
-	s.cleanupAgentPresence(client)
+	// Detach the socket from all live-client indexes before doing SIP cleanup.
+	// Cleanup can involve BYE/CANCEL/UNREGISTER network I/O; keeping the client
+	// indexed until that work completes lets a closed agent remain an incoming
+	// call recipient and can leave trunk refcounts stale after a reconnect.
+	s.detachWSClient(client)
 
-	// Cleanup every session owned by this connection. Legacy clients normally
-	// have one entry; multi-call agents may have several.
+	// Agent presence cleanup may hang up calls and unregister the trunk. The
+	// client is already absent from notification maps at this point.
+	s.cleanupAgentPresence(client)
+	s.notifyWSClientChanged("disconnected", client)
+}
+
+// detachWSClient removes a connection from all in-memory routing indexes. It
+// deliberately does not mutate the client's trunk/session fields; presence
+// cleanup owns those transitions and can still use the snapshot safely.
+func (s *Server) detachWSClient(client *WSClient) {
+	if client == nil {
+		return
+	}
 	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	delete(s.wsConnections, client)
 	for sessionID := range client.ownedSessionIDs {
 		if s.wsClients[sessionID] == client {
@@ -165,8 +181,6 @@ func (s *Server) handleWebSocketConn(w http.ResponseWriter, r *http.Request, pub
 	if client.sessionID != "" && s.wsClients[client.sessionID] == client {
 		delete(s.wsClients, client.sessionID)
 	}
-	s.mu.Unlock()
-	s.notifyWSClientChanged("disconnected", client)
 }
 
 // wsWritePump pumps messages from the send channel to the WebSocket connection
