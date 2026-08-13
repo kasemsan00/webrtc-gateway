@@ -1,0 +1,675 @@
+
+================================================================================
+=== K2 Gateway Log Started: 2026-08-13 07:35:04 ===
+=== Log File: logs/k2-gateway-2026-08-13_07-35-04.log ===
+================================================================================
+
+2026-08-13 07:35:04.771 Warning: Error loading .env file: open .env: no such file or directory
+2026-08-13 07:35:04.771 === Environment Configuration ===
+2026-08-13 07:35:04.771 
+2026-08-13 07:35:04.771 TURN Server:
+2026-08-13 07:35:04.772 Server: turn:turn.ttrs.or.th:3478?transport=udp
+2026-08-13 07:35:04.772 Username: turn01
+2026-08-13 07:35:04.772 Password: Te****34
+2026-08-13 07:35:04.772 
+2026-08-13 07:35:04.772 SIP Configuration:
+2026-08-13 07:35:04.772 Not configured
+2026-08-13 07:35:04.772 Debug SIP MESSAGE: false
+2026-08-13 07:35:04.772 Debug SIP INVITE: true
+2026-08-13 07:35:04.772 SIP Listen TCP: true
+2026-08-13 07:35:04.772 SIP Listen UDP: true
+2026-08-13 07:35:04.772 Audio Use AVPF: false
+2026-08-13 07:35:04.772 Inbound Audio Gain: disabled
+2026-08-13 07:35:04.772 Video Use AVPF: false
+2026-08-13 07:35:04.772 Video Feedback Transport: auto
+2026-08-13 07:35:04.772 Video Preserve STAP-A: true
+2026-08-13 07:35:04.772 Video Keyframe Watchdog: true (interval=1500ms, stale=2000ms, firStale=5000ms)
+2026-08-13 07:35:04.772 Video Recovery Burst: true (window=12000ms, interval=800ms, stale=1200ms, firStale=2500ms)
+2026-08-13 07:35:04.772 @switch Video Transition: mode=preserve enabled=true (blackout=300ms, maxWait=1200ms, recoveryWindow=5000ms, stable=750ms)
+2026-08-13 07:35:04.772 @switch RTP Stability: true (minPackets=30, maxGap=12, maxMissing=20, maxOOO=20, maxDrop=0, maxTimeout=5)
+2026-08-13 07:35:04.772 @switch Duplicate Debounce: true (window=60000ms)
+2026-08-13 07:35:04.772 SIP Video RTP Disorder Monitor: true (minPackets=300, maxGap=45, maxMissing=80, maxOOO=80, maxTimeout=20, consecutive=3, logInterval=5000ms, containment=false/10000ms)
+2026-08-13 07:35:04.772 SIP Video H264 AU Normalization: true
+2026-08-13 07:35:04.772 
+2026-08-13 07:35:04.772 API Configuration:
+2026-08-13 07:35:04.773 Port: 7089
+2026-08-13 07:35:04.773 WebSocket: true
+2026-08-13 07:35:04.773 REST API: true
+2026-08-13 07:35:04.773 CORS Origins: *
+2026-08-13 07:35:04.773 Debug WebSocket: false
+2026-08-13 07:35:04.773 Debug TURN/ICE: true
+2026-08-13 07:35:04.773 Mobile SIP Auth Register URL: https://sipclient-auth.ttrs.or.th/auth/register
+2026-08-13 07:35:04.773 Mobile SIP Auth Timeout: 5000 ms
+2026-08-13 07:35:04.773 
+2026-08-13 07:35:04.773 Auth Configuration:
+2026-08-13 07:35:04.773 Enabled: false
+2026-08-13 07:35:04.773 
+2026-08-13 07:35:04.773 RTP Configuration:
+2026-08-13 07:35:04.773 Port Range: 20000-20050
+2026-08-13 07:35:04.773 Buffer Size: 60000 bytes
+2026-08-13 07:35:04.773 
+2026-08-13 07:35:04.773 Database Configuration:
+2026-08-13 07:35:04.773 Enabled: true
+2026-08-13 07:35:04.773 DSN: postgres://k2user:****@postgres:5432/k2_gateway?sslmode=disable
+2026-08-13 07:35:04.773 Stats Interval: 5000 ms
+2026-08-13 07:35:04.773 Log Full SIP: true
+2026-08-13 07:35:04.773 Batch Size: 100
+2026-08-13 07:35:04.773 Batch Interval: 1000 ms
+2026-08-13 07:35:04.773 Retention: payloads=730d, events=730d, stats=730d, sessions=730d
+2026-08-13 07:35:04.774 
+2026-08-13 07:35:04.774 SIP Public Configuration:
+2026-08-13 07:35:04.774 Register Expires: 3600 seconds
+2026-08-13 07:35:04.774 Register Timeout: 10 seconds
+2026-08-13 07:35:04.774 Idle TTL: 600 seconds
+2026-08-13 07:35:04.774 Cleanup Interval: 30 seconds
+2026-08-13 07:35:04.774 Max Accounts: 1000
+2026-08-13 07:35:04.774 
+2026-08-13 07:35:04.774 SIP Trunk Configuration:
+2026-08-13 07:35:04.774 Enabled: true
+2026-08-13 07:35:04.774 Lease TTL: 60 seconds
+2026-08-13 07:35:04.774 Lease Renew Interval: 20 seconds
+2026-08-13 07:35:04.774 Register Timeout: 10 seconds
+2026-08-13 07:35:04.774 
+2026-08-13 07:35:04.774 Gateway Configuration:
+2026-08-13 07:35:04.774 Instance ID: dev-instance-1
+2026-08-13 07:35:04.774 Public WS URL: wss://k2-gateway.kasemsan.com/ws
+2026-08-13 07:35:04.774 
+2026-08-13 07:35:04.774 Session Directory Configuration:
+2026-08-13 07:35:04.774 TTL: 7200 seconds
+2026-08-13 07:35:04.774 Cleanup Interval: 300 seconds
+2026-08-13 07:35:04.774 
+2026-08-13 07:35:04.774 Push Notification Configuration:
+2026-08-13 07:35:04.774 Enabled: true
+2026-08-13 07:35:04.774 TTRS API URL: http://203.150.245.35:8040
+2026-08-13 07:35:04.775 TTRS API Timeout: 5000 ms
+2026-08-13 07:35:04.775 TTRS Keycloak Token URL: https://accounts.ttrs.or.th/auth/realms/TTRS-Employees/protocol/openid-connect/token
+2026-08-13 07:35:04.775 TTRS Token Grant Type: client_credentials
+2026-08-13 07:35:04.775 TTRS Client ID: TTRS_WebRTC_Gateway
+2026-08-13 07:35:04.775 TTRS Client Secret: J3****************************PG
+2026-08-13 07:35:04.775 Trunk PN App ID: th.or.nectec.kasemsan.softphone
+2026-08-13 07:35:04.775 Firebase Credentials File: /app/softphone-c5e2f-5b8363b2fb78.json
+2026-08-13 07:35:04.775 Firebase Project ID: 643558767688
+2026-08-13 07:35:04.775 APNs Enabled: true
+2026-08-13 07:35:04.775 APNs Environment: production
+2026-08-13 07:35:04.775 APNs Auth Mode: certificate
+2026-08-13 07:35:04.775 APNs Key File: 
+2026-08-13 07:35:04.775 APNs Key ID: 
+2026-08-13 07:35:04.775 APNs Team ID: 
+2026-08-13 07:35:04.775 APNs Cert File: /app/aps_production.pem
+2026-08-13 07:35:04.775 APNs Cert Key File: /app/softphone-voip.key
+2026-08-13 07:35:04.775 APNs Bundle ID: th.or.nectec.kasemsan.softphone
+2026-08-13 07:35:04.775 APNs Topic: th.or.nectec.kasemsan.softphone.voip
+2026-08-13 07:35:04.775 
+2026-08-13 07:35:04.775 Translator Configuration:
+2026-08-13 07:35:04.775 Enabled: true
+2026-08-13 07:35:04.775 gRPC Address: 122.8.149.219:5000
+2026-08-13 07:35:04.775 Source Lang: en-US → Target Lang: th
+2026-08-13 07:35:04.776 TTS Voice: th-TH-PremwadeeNeural
+2026-08-13 07:35:04.776 Opus Bitrate: 24000
+2026-08-13 07:35:04.776 
+2026-08-13 07:35:04.776 =================================
+2026-08-13 07:35:04.796 ✅ Database connection established
+2026-08-13 07:35:04.796 📊 Database logging: Enabled
+2026-08-13 07:35:04.796 - Batch size: 100 events
+2026-08-13 07:35:04.796 - Batch interval: 1000 ms
+2026-08-13 07:35:04.796 - Stats interval: 5000 ms
+2026-08-13 07:35:04.796 - Log full SIP: true
+2026-08-13 07:35:04.796 
+2026-08-13 07:35:04.796 === Running in API Mode (HTTP/WebSocket) ===
+2026-08-13 07:35:04.796 🗂️ Running partition maintenance...
+2026-08-13 07:35:04.796 Using configured Public IP: 203.151.21.121 for SIP/SDP
+2026-08-13 07:35:04.796 SIP Client created (no static domain configured, will use per-call credentials)
+2026-08-13 07:35:04.796 📞 SIP Public Registry started (cleanup interval: 30s, idle TTL: 600s)
+2026-08-13 07:35:04.805 📅 Partition ready: call_events_2026_08 (2026-08-01 to 2026-09-01)
+2026-08-13 07:35:04.806 📅 Created partition: call_events_2026_09 (next month)
+2026-08-13 07:35:04.806 📅 Partition ready: call_payloads_2026_08 (2026-08-01 to 2026-09-01)
+2026-08-13 07:35:04.807 📅 Created partition: call_payloads_2026_09 (next month)
+2026-08-13 07:35:04.807 🗑️ Dropped old partition: call_events_2023_08 (older than 24 months)
+2026-08-13 07:35:04.807 🗑️ Dropped old partition: call_events_2023_09 (older than 24 months)
+2026-08-13 07:35:04.807 🗑️ Dropped old partition: call_events_2023_10 (older than 24 months)
+2026-08-13 07:35:04.808 🗑️ Dropped old partition: call_events_2023_11 (older than 24 months)
+2026-08-13 07:35:04.808 🗑️ Dropped old partition: call_events_2023_12 (older than 24 months)
+2026-08-13 07:35:04.808 🗑️ Dropped old partition: call_events_2024_01 (older than 24 months)
+2026-08-13 07:35:04.808 🗑️ Dropped old partition: call_events_2024_02 (older than 24 months)
+2026-08-13 07:35:04.809 🗑️ Dropped old partition: call_events_2024_03 (older than 24 months)
+2026-08-13 07:35:04.809 🗑️ Dropped old partition: call_events_2024_04 (older than 24 months)
+2026-08-13 07:35:04.809 🗑️ Dropped old partition: call_events_2024_05 (older than 24 months)
+2026-08-13 07:35:04.809 🗑️ Dropped old partition: call_events_2024_06 (older than 24 months)
+2026-08-13 07:35:04.810 🗑️ Dropped old partition: call_events_2024_07 (older than 24 months)
+2026-08-13 07:35:04.810 🗑️ Dropped old partition: call_payloads_2023_08 (older than 24 months)
+2026-08-13 07:35:04.810 🗑️ Dropped old partition: call_payloads_2023_09 (older than 24 months)
+2026-08-13 07:35:04.810 🗑️ Dropped old partition: call_payloads_2023_10 (older than 24 months)
+2026-08-13 07:35:04.811 🗑️ Dropped old partition: call_payloads_2023_11 (older than 24 months)
+2026-08-13 07:35:04.811 🗑️ Dropped old partition: call_payloads_2023_12 (older than 24 months)
+2026-08-13 07:35:04.811 🗑️ Dropped old partition: call_payloads_2024_01 (older than 24 months)
+2026-08-13 07:35:04.811 🗑️ Dropped old partition: call_payloads_2024_02 (older than 24 months)
+2026-08-13 07:35:04.811 🗑️ Dropped old partition: call_payloads_2024_03 (older than 24 months)
+2026-08-13 07:35:04.812 🗑️ Dropped old partition: call_payloads_2024_04 (older than 24 months)
+2026-08-13 07:35:04.812 🗑️ Dropped old partition: call_payloads_2024_05 (older than 24 months)
+2026-08-13 07:35:04.812 🗑️ Dropped old partition: call_payloads_2024_06 (older than 24 months)
+2026-08-13 07:35:04.812 🗑️ Dropped old partition: call_payloads_2024_07 (older than 24 months)
+2026-08-13 07:35:04.812 ✅ Partition maintenance complete
+2026-08-13 07:35:04.872 📞 [TrunkManager] Loaded 8 enabled trunk(s) from DB
+2026-08-13 07:35:04.872 📞 [TrunkManager] Skipping auto-register for trunk 1 (sip_auto_register=false)
+2026-08-13 07:35:04.872 📞 [TrunkManager] Skipping auto-register for trunk 2 (sip_auto_register=false)
+2026-08-13 07:35:04.873 📞 [TrunkManager] Skipping auto-register for trunk 3 (sip_auto_register=false)
+2026-08-13 07:35:04.873 📞 [TrunkManager] Skipping auto-register for trunk 4 (sip_auto_register=false)
+2026-08-13 07:35:04.873 📞 [TrunkManager] Skipping auto-register for trunk 13 (sip_auto_register=false)
+2026-08-13 07:35:04.873 📞 [TrunkManager] Skipping auto-register for trunk 58 (sip_auto_register=false)
+2026-08-13 07:35:04.873 📞 [TrunkManager] Skipping auto-register for trunk 148 (sip_auto_register=false)
+2026-08-13 07:35:04.873 📞 [TrunkManager] Skipping auto-register for trunk 170 (sip_auto_register=false)
+2026-08-13 07:35:04.873 ✅ [TrunkManager] Started with instance_id=dev-instance-1
+2026-08-13 07:35:04.873 Starting SIP Listener
+2026-08-13 07:35:04.873 Starting TCP listener on 0.0.0.0:5090
+2026-08-13 07:35:04.873 Starting UDP listener on 0.0.0.0:5090
+2026-08-13 07:35:05.373 SIP Registration skipped - not configured
+2026/08/13 07:35:05.373884 Mobile SIP provisioning enabled: registerURL=https://sipclient-auth.ttrs.or.th/auth/register timeout=5000ms
+2026/08/13 07:35:05.374009 ⚠️ Warning: FCM fallback disabled — init failed: fcm: read credentials file: open /app/softphone-c5e2f-5b8363b2fb78.json: no such file or directory
+2026/08/13 07:35:05.374080 ⚠️ Warning: APNs PushKit disabled — init failed: apns: load certificate pair: open /app/aps_production.pem: no such file or directory
+2026/08/13 07:35:05.374095 ⚠️ Warning: PUSH_ENABLE=true but no push channel initialized
+2026/08/13 07:35:05.384763 🎤 Translator client connected to 122.8.149.219:5000 (en-US → th)
+2026/08/13 07:35:08.385312 ✅ Translator health check passed
+2026-08-13 07:35:08.385 
+2026-08-13 07:35:08.385 [รอรับ WebRTC connections ผ่าน HTTP/WebSocket API...]
+2026-08-13 07:35:08.385 WebSocket endpoint enabled: /ws
+2026-08-13 07:35:08.385 Public WebSocket endpoint enabled: /ws-public
+2026-08-13 07:35:08.385 Agent WebSocket endpoint enabled: /ws-agent
+2026-08-13 07:35:08.387 REST API endpoints enabled: /api/*
+2026-08-13 07:35:08.387 
+2026-08-13 07:35:08.387 === API Server ===
+2026-08-13 07:35:08.387 Listening on: http://0.0.0.0:7089
+2026-08-13 07:35:08.387 ==================
+2026-08-13 07:35:08.387 
+2026/08/13 07:35:09.140087 Public WebSocket connection accepted: remote=127.0.0.1:34872
+2026/08/13 07:35:15.905195 WebSocket error: websocket: close 1000 (normal): User disconnect
+2026/08/13 07:35:15.991315 Public WebSocket connection accepted: remote=127.0.0.1:52622
+2026-08-13 07:35:16.695 TURN server configured: turn:turn.ttrs.or.th:3478?transport=udp (with credentials)
+2026-08-13 07:35:16.696 [S0pcsSiaH0Ut] Created new session
+2026-08-13 07:35:16.856 [S0pcsSiaH0Ut] 🎬 WebRTC H264 answer restricted to packetization-mode=1 (SIP leg)
+2026-08-13 07:35:16.856 [S0pcsSiaH0Ut] ICE Connection State: checking
+2026-08-13 07:35:16.856 [S0pcsSiaH0Ut] 🧊 ICE Gathering State: gathering
+2026-08-13 07:35:16.857 [S0pcsSiaH0Ut] 🧊 ICE Candidate: type=host address=192.168.80.3:47059 protocol=udp count=1 elapsed=161.285884ms
+2026-08-13 07:35:16.859 [S0pcsSiaH0Ut] 🧊 ICE Candidate: type=srflx address=203.151.21.121:42292 protocol=udp count=2 elapsed=163.359037ms
+2026-08-13 07:35:16.860 [S0pcsSiaH0Ut] 🧊 ICE Candidate: type=relay address=203.150.245.38:47025 protocol=udp count=3 elapsed=164.62639ms
+2026-08-13 07:35:16.874 [S0pcsSiaH0Ut] 🧊 ICE Gathering State: complete
+2026-08-13 07:35:16.874 [S0pcsSiaH0Ut] 🧊 ICE Candidate gathering complete
+2026-08-13 07:35:17.070 📞 [PublicReg] Created new account: 0000178667543@sipclient.ttrs.or.th
+2026-08-13 07:35:17.070 📞 [PublicReg] Registering account: 0000178667543@sipclient.ttrs.or.th
+2026-08-13 07:35:17.114 2026/08/13 07:35:17.114235 📞 [WS Call] Session S0pcsSiaH0Ut using public mode (account=0000178667543@sipclient.ttrs.or.th, port=5060)
+✅ [PublicReg] Account registered: 0000178667543@sipclient.ttrs.or.th (expires in 3600s)
+2026-08-13 07:35:17.116 [S0pcsSiaH0Ut] ICE Connection State: connected
+2026-08-13 07:35:17.116 [S0pcsSiaH0Ut] 🧊 ICE diagnostics trigger=connected pair=candidate:EbXi/d37bC9rYZM8CYhKdJSuzzTyNJNi-candidate:OKqPoWLSetsX8DBYFU8uC3mRlSJDzt7p state=succeeded relay=false gathering=complete local=srflx/udp/203.151.21.121:42292 remote=srflx/udp/49.49.32.58:34445
+2026-08-13 07:35:17.117 [S0pcsSiaH0Ut] 🧊 Selected Candidate Pair:
+2026-08-13 07:35:17.117 [S0pcsSiaH0Ut] Local: type=srflx address=203.151.21.121:42292 protocol=udp
+2026-08-13 07:35:17.117 [S0pcsSiaH0Ut] Remote: type=srflx address=49.49.32.58:34445 protocol=udp
+2026-08-13 07:35:17.117 [S0pcsSiaH0Ut] ✅ ICE connected - starting initial call recovery burst (call state=connecting)
+2026-08-13 07:35:17.117 [S0pcsSiaH0Ut] 📈 video_recovery_window_start reason=initial-call until=2026-08-13T07:35:29.117070817Z
+2026-08-13 07:35:17.117 [S0pcsSiaH0Ut] 📈 recovery_policy interval=800ms stale=1.2s firStale=2.5s
+2026-08-13 07:35:17.117 [S0pcsSiaH0Ut] 🚀 ICE Connected - Sending conservative FIR + PLI startup recovery
+2026/08/13 07:35:17.161921 [S0pcsSiaH0Ut] 📡 WS call-progress type=state state=connecting reason=ws-call-ack
+2026/08/13 07:35:17.162120 [S0pcsSiaH0Ut] 🧊 Remote ICE candidate added type=host count=1 elapsed=466.07708ms
+2026-08-13 07:35:17.162 [S0pcsSiaH0Ut] 🔄 Media state reset (Audio + Video) for new call
+2026/08/13 07:35:17.162269 [S0pcsSiaH0Ut] 🧊 Remote ICE candidate added type=host count=2 elapsed=466.220625ms
+2026-08-13 07:35:17.162 [S0pcsSiaH0Ut] 🔄 RTCP fallback window enabled (call-start) until 2026-08-13T07:35:21.162189822Z
+2026-08-13 07:35:17.162 [S0pcsSiaH0Ut] 📞 Audio RTP listener started on port: 20000
+2026/08/13 07:35:17.162465 [S0pcsSiaH0Ut] 🧊 Remote ICE candidate added type=host count=3 elapsed=466.422096ms
+2026-08-13 07:35:17.162 [S0pcsSiaH0Ut] 📞 Audio RTCP listener started on port: 20001
+2026-08-13 07:35:17.162 [S0pcsSiaH0Ut] 📞 Video RTP listener started on port: 20002
+2026-08-13 07:35:17.162 [S0pcsSiaH0Ut] 📞 Video RTCP listener started on port: 20003
+2026-08-13 07:35:17.162 [S0pcsSiaH0Ut] 📈 video_prime_start timeout=5s
+2026/08/13 07:35:17.162703 [S0pcsSiaH0Ut] 🧊 Remote ICE candidate added type=host count=4 elapsed=466.659715ms
+2026-08-13 07:35:17.162 [S0pcsSiaH0Ut] 📨 Audio RTCP handler started (dedicated port for non-muxed RTCP)
+2026-08-13 07:35:17.162 [S0pcsSiaH0Ut] Audio RTP handler started, AudioTrack is nil: false
+2026-08-13 07:35:17.162 2026/08/13 07:35:17.162777 [S0pcsSiaH0Ut] 🧊 Remote ICE candidate added type=host count=5 elapsed=466.73405ms
+[S0pcsSiaH0Ut] 🔄 Starting periodic PLI sender for fast video start2026/08/13 07:35:17.162880 [S0pcsSiaH0Ut] 🧊 Remote ICE candidate added type=host count=6 elapsed=466.837593ms
+
+2026/08/13 07:35:17.162937 [S0pcsSiaH0Ut] 🧊 Remote ICE candidate added type=host count=7 elapsed=466.894146ms
+2026/08/13 07:35:17.163010 [S0pcsSiaH0Ut] 🧊 Remote ICE candidate added type=srflx count=8 elapsed=466.967403ms
+2026-08-13 07:35:17.162 2026/08/13 07:35:17.163066 [S0pcsSiaH0Ut] 🧊 Remote ICE candidate added type=srflx count=9 elapsed=467.02358ms
+[S0pcsSiaH0Ut] Video RTP handler started, VideoTrack is nil: false
+2026/08/13 07:35:17.163122 [S0pcsSiaH0Ut] 🧊 Remote ICE candidate added type=srflx count=10 elapsed=467.079303ms
+2026-08-13 07:35:17.163 [S0pcsSiaH0Ut] 📨 Video RTCP handler started (dedicated port for non-muxed RTCP)
+2026/08/13 07:35:17.163333 [S0pcsSiaH0Ut] 🧊 Remote ICE candidate added type=relay count=11 elapsed=467.289274ms
+2026/08/13 07:35:17.163503 [S0pcsSiaH0Ut] 🧊 Remote ICE candidate added type=relay count=12 elapsed=467.460292ms
+2026/08/13 07:35:17.163662 [S0pcsSiaH0Ut] 🧊 Remote ICE candidate added type=relay count=13 elapsed=467.619604ms
+2026/08/13 07:35:17.163787 [S0pcsSiaH0Ut] 🧊 Remote ICE candidate added type=srflx count=14 elapsed=467.743797ms
+2026/08/13 07:35:17.163906 [S0pcsSiaH0Ut] 🧊 Remote ICE candidate added type=srflx count=15 elapsed=467.862988ms
+2026/08/13 07:35:17.164053 [S0pcsSiaH0Ut] 🧊 Remote ICE candidate added type=srflx count=16 elapsed=468.009686ms
+2026/08/13 07:35:17.164159 [S0pcsSiaH0Ut] 🧊 Remote ICE candidate added type=srflx count=17 elapsed=468.116166ms
+2026/08/13 07:35:17.164276 [S0pcsSiaH0Ut] 🧊 Remote ICE candidate added type=srflx count=18 elapsed=468.232992ms
+2026/08/13 07:35:17.164401 [S0pcsSiaH0Ut] 🧊 Remote ICE candidate added type=srflx count=19 elapsed=468.357588ms
+2026/08/13 07:35:17.164523 [S0pcsSiaH0Ut] 🧊 Remote ICE candidate added type=srflx count=20 elapsed=468.480199ms
+2026/08/13 07:35:17.164641 [S0pcsSiaH0Ut] 🧊 Remote ICE candidate added type=srflx count=21 elapsed=468.598044ms
+2026/08/13 07:35:17.164751 [S0pcsSiaH0Ut] 🧊 Remote ICE candidate added type=relay count=22 elapsed=468.708227ms
+2026/08/13 07:35:17.164862 [S0pcsSiaH0Ut] 🧊 Remote ICE candidate added type=relay count=23 elapsed=468.81874ms
+2026/08/13 07:35:17.164975 [S0pcsSiaH0Ut] 🧊 Remote ICE candidate added type=relay count=24 elapsed=468.932023ms
+2026-08-13 07:35:17.594 [S0pcsSiaH0Ut] 🎬 OnTrack: kind=video mime=video/H264 pt=103 ssrc=3502830069 clockRate=90000 fmtp="level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f"
+2026-08-13 07:35:17.594 [S0pcsSiaH0Ut] 🎬 WebRTC video codec details: video/H264 (fmtp: level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f)
+2026-08-13 07:35:17.594 [S0pcsSiaH0Ut] 📦 STAP-A detected in packet #1 (22 bytes) - will de-aggregate
+2026-08-13 07:35:17.594 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #1: NAL Type=24 (STAP-A), NRI=3, Size=22 bytes
+2026-08-13 07:35:17.594 [S0pcsSiaH0Ut] 💾 Cached SPS from STAP-A (13 bytes)
+2026-08-13 07:35:17.594 [S0pcsSiaH0Ut] 💾 Cached PPS from STAP-A (4 bytes)
+2026-08-13 07:35:17.595 [S0pcsSiaH0Ut] 🚀 Starting video forwarding to Asterisk (SSRC=1499456777) - requesting keyframes from browser
+2026-08-13 07:35:17.595 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #2: NAL Type=28 (FU-A), NRI=3, Size=1119 bytes
+2026-08-13 07:35:17.606 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #3: NAL Type=28 (FU-A), NRI=3, Size=1119 bytes
+2026-08-13 07:35:17.612 [S0pcsSiaH0Ut] 📈 video_prime_spspps_ready source=webrtc kicks=2 sps=13 pps=4
+2026-08-13 07:35:17.612 [S0pcsSiaH0Ut] ⚠ Ignoring derived non-baseline profile-level-id=42C01E, keeping 42E01F
+2026-08-13 07:35:17.612 [S0pcsSiaH0Ut] 🎬 Including sprop-parameter-sets in SDP (SPS: 13 bytes, PPS: 4 bytes)
+2026-08-13 07:35:17.612 === SDP Offer to Asterisk (Plain RTP, no SRTP, Opus PT=111, Profile=AVP) ===
+2026-08-13 07:35:17.612 v=0
+2026-08-13 07:35:17.612 o=0000178667543 1786606517612 1786606517612 IN IP4 203.151.21.121
+2026-08-13 07:35:17.613 s=Talk
+2026-08-13 07:35:17.613 c=IN IP4 203.151.21.121
+2026-08-13 07:35:17.613 t=0 0
+2026-08-13 07:35:17.613 m=audio 20000 RTP/AVP 111 101
+2026-08-13 07:35:17.613 a=rtpmap:111 opus/48000/2
+2026-08-13 07:35:17.613 a=fmtp:111 minptime=10;useinbandfec=1
+2026-08-13 07:35:17.613 a=rtpmap:101 telephone-event/8000
+2026-08-13 07:35:17.613 a=fmtp:101 0-16
+2026-08-13 07:35:17.613 a=ptime:20
+2026-08-13 07:35:17.613 a=rtcp-mux
+2026-08-13 07:35:17.613 a=sendrecv
+2026-08-13 07:35:17.613 m=video 20002 RTP/AVP 96
+2026-08-13 07:35:17.613 a=rtpmap:96 H264/90000
+2026-08-13 07:35:17.613 a=fmtp:96 profile-level-id=42E01F;packetization-mode=1;sprop-parameter-sets=Z0LAHoxoFA9oB4RCNQ==,aM48gA==
+2026-08-13 07:35:17.613 a=rtcp-mux
+2026-08-13 07:35:17.613 a=sendrecv
+2026-08-13 07:35:17.613 
+2026-08-13 07:35:17.613 =============================
+2026-08-13 07:35:17.619 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #4: NAL Type=28 (FU-A), NRI=3, Size=1119 bytes
+2026-08-13 07:35:17.620 [S0pcsSiaH0Ut] Making outbound call to 14131
+2026-08-13 07:35:17.622 [S0pcsSiaH0Ut] Received SIP response: 407 Proxy Authentication Required
+2026-08-13 07:35:17.622 [S0pcsSiaH0Ut] Authentication required for INVITE
+2026-08-13 07:35:17.622 [S0pcsSiaH0Ut] Creating authenticated INVITE request
+2026-08-13 07:35:17.622 [S0pcsSiaH0Ut] Using credentials - Username: 0000178667543, Password length: 20
+2026-08-13 07:35:17.622 [S0pcsSiaH0Ut] Request URI: sip:14131@sipclient.ttrs.or.th
+2026-08-13 07:35:17.622 [S0pcsSiaH0Ut] Auth request body length: 460
+2026-08-13 07:35:17.622 [S0pcsSiaH0Ut] Content-Type headers count: 1
+2026-08-13 07:35:17.622 [S0pcsSiaH0Ut] Sending authenticated INVITE with new Via/CSeq
+2026-08-13 07:35:17.626 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #5: NAL Type=28 (FU-A), NRI=3, Size=1119 bytes
+2026-08-13 07:35:17.636 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #6: NAL Type=28 (FU-A), NRI=3, Size=1120 bytes
+2026-08-13 07:35:17.647 [S0pcsSiaH0Ut] 📦 STAP-A detected in packet #8 (22 bytes) - will de-aggregate
+2026-08-13 07:35:17.647 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #8: NAL Type=24 (STAP-A), NRI=3, Size=22 bytes
+2026-08-13 07:35:17.647 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #9: NAL Type=28 (FU-A), NRI=3, Size=1109 bytes
+2026-08-13 07:35:17.659 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #10: NAL Type=28 (FU-A), NRI=3, Size=1110 bytes
+2026-08-13 07:35:17.659 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #11: NAL Type=28 (FU-A), NRI=3, Size=1110 bytes
+2026-08-13 07:35:17.694 [S0pcsSiaH0Ut] 🎬 OnTrack: kind=audio mime=audio/opus pt=111 ssrc=1654313405 clockRate=48000 fmtp="minptime=10;useinbandfec=1"
+2026-08-13 07:35:17.694 [S0pcsSiaH0Ut] 🎵 Audio packet #1: PT=111, payload=32 bytes
+2026-08-13 07:35:17.694 [S0pcsSiaH0Ut] ⚠️ Cannot forward audio: Asterisk endpoint not set yet
+2026-08-13 07:35:17.694 [S0pcsSiaH0Ut] 🎵 Audio packet #2: PT=111, payload=34 bytes
+2026-08-13 07:35:17.695 [S0pcsSiaH0Ut] 🎵 Audio packet #3: PT=111, payload=35 bytes
+2026-08-13 07:35:17.713 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #16: NAL Type=1 (P-slice), NRI=3, Size=690 bytes
+2026-08-13 07:35:17.723 [S0pcsSiaH0Ut] 🎵 Audio packet #4: PT=111, payload=36 bytes
+2026-08-13 07:35:17.739 [S0pcsSiaH0Ut] 🎵 Audio packet #5: PT=111, payload=36 bytes
+2026-08-13 07:35:17.751 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #18: NAL Type=28 (FU-A), NRI=3, Size=641 bytes
+2026-08-13 07:35:17.753 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #19: NAL Type=28 (FU-A), NRI=3, Size=642 bytes
+2026-08-13 07:35:17.824 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #37: NAL Type=28 (FU-A), NRI=3, Size=793 bytes
+2026-08-13 07:35:17.824 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #38: NAL Type=28 (FU-A), NRI=3, Size=793 bytes
+2026-08-13 07:35:17.834 [S0pcsSiaH0Ut] Auth INVITE response: 200 OK
+2026/08/13 07:35:17.834056 [S0pcsSiaH0Ut] 📡 WS call-progress type=state state=active reason=session-state
+2026-08-13 07:35:17.834 [S0pcsSiaH0Ut] Call answered (authenticated)!
+2026-08-13 07:35:17.834 [S0pcsSiaH0Ut] SIP Dialog state set - FromTag: awbUxZreGDXC2M29, ToTag: as04165c96, Domain: sipclient.ttrs.or.th, RouteSet: [<sip:203.150.245.39;transport=tcp;r2=on;lr=on;did=f.b2a;rtp=bridge> <sip:203.150.245.39;r2=on;lr=on;did=f.b2a;rtp=bridge>]
+2026-08-13 07:35:17.834 [S0pcsSiaH0Ut] Dialog state captured - FromTag: awbUxZreGDXC2M29, ToTag: as04165c96, Contact: <sip:614131@203.150.245.41:5060>, RouteSet: [<sip:203.150.245.39;transport=tcp;r2=on;lr=on;did=f.b2a;rtp=bridge> <sip:203.150.245.39;r2=on;lr=on;did=f.b2a;rtp=bridge>]
+2026/08/13 07:35:17.856978 [S0pcsSiaH0Ut] 🎤 Translation enabled via WS: outbound en → th (voice: th-TH-PremwadeeNeural), inbound th → en (voice: en-US-AriaNeural)
+2026-08-13 07:35:17.857 [S0pcsSiaH0Ut] 🎤 Translation enabled: outbound en → th (voice: th-TH-PremwadeeNeural), inbound th → en (voice: en-US-AriaNeural)
+2026-08-13 07:35:17.862 [S0pcsSiaH0Ut outbound] translator passthrough_no_frame count=1 packets_in=1 packets_out=0 responses=0 audio_responses=0 empty_audio_responses=0
+2026-08-13 07:35:17.881 [S0pcsSiaH0Ut outbound] translator passthrough_no_frame count=2 packets_in=2 packets_out=0 responses=0 audio_responses=0 empty_audio_responses=0
+2026-08-13 07:35:17.884 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #39: NAL Type=28 (FU-A), NRI=3, Size=819 bytes
+2026-08-13 07:35:17.884 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #40: NAL Type=28 (FU-A), NRI=3, Size=819 bytes
+2026-08-13 07:35:17.885 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #41: NAL Type=28 (FU-A), NRI=3, Size=820 bytes
+2026-08-13 07:35:17.900 [S0pcsSiaH0Ut outbound] translator passthrough_no_frame count=3 packets_in=3 packets_out=0 responses=0 audio_responses=0 empty_audio_responses=0
+2026-08-13 07:35:17.902 === SDP Answer from Asterisk ===
+2026-08-13 07:35:17.902 v=0
+2026-08-13 07:35:17.902 o=root 2131716697 2131716697 IN IP4 203.150.245.39
+2026-08-13 07:35:17.902 s=Asterisk PBX 15.5.0
+2026-08-13 07:35:17.902 c=IN IP4 203.150.245.39
+2026-08-13 07:35:17.902 b=CT:384
+2026-08-13 07:35:17.902 t=0 0
+2026-08-13 07:35:17.902 m=audio 29034 RTP/AVP 111 101
+2026-08-13 07:35:17.902 a=maxptime:20
+2026-08-13 07:35:17.902 a=rtpmap:111 opus/48000/2
+2026-08-13 07:35:17.902 a=fmtp:111 useinbandfec=1
+2026-08-13 07:35:17.902 a=rtpmap:101 telephone-event/8000
+2026-08-13 07:35:17.902 a=fmtp:101 0-16
+2026-08-13 07:35:17.902 a=sendrecv
+2026-08-13 07:35:17.902 a=rtcp:29034
+2026-08-13 07:35:17.902 a=rtcp-mux
+2026-08-13 07:35:17.902 a=ptime:20
+2026-08-13 07:35:17.902 m=video 29060 RTP/AVP 96
+2026-08-13 07:35:17.902 a=rtpmap:96 H264/90000
+2026-08-13 07:35:17.902 a=fmtp:96 packetization-mode=1;profile-level-id=42E01F
+2026-08-13 07:35:17.903 a=sendrecv
+2026-08-13 07:35:17.903 a=rtcp:29060
+2026-08-13 07:35:17.903 a=rtcp-mux
+2026-08-13 07:35:17.903 
+2026-08-13 07:35:17.903 ================================
+2026-08-13 07:35:17.903 [S0pcsSiaH0Ut] Asterisk endpoints set - Audio: 203.150.245.39:29034, Video: 203.150.245.39:29060
+2026-08-13 07:35:17.903 [S0pcsSiaH0Ut] ✅ Asterisk RTP endpoints configured - Audio: 203.150.245.39:29034, Video: 203.150.245.39:29060
+2026-08-13 07:35:17.903 ACK sent successfully (Request-URI: sip:614131@203.150.245.41:5060)
+2026-08-13 07:35:17.922 [S0pcsSiaH0Ut outbound] translator passthrough_no_frame count=4 packets_in=4 packets_out=0 responses=0 audio_responses=0 empty_audio_responses=0
+2026-08-13 07:35:17.943 [S0pcsSiaH0Ut outbound] translator passthrough_no_frame count=5 packets_in=5 packets_out=0 responses=0 audio_responses=0 empty_audio_responses=0
+2026-08-13 07:35:17.953 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #42: NAL Type=28 (FU-A), NRI=3, Size=1006 bytes
+2026-08-13 07:35:17.953 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #43: NAL Type=28 (FU-A), NRI=3, Size=1007 bytes
+2026-08-13 07:35:17.953 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #44: NAL Type=28 (FU-A), NRI=3, Size=1007 bytes
+2026-08-13 07:35:17.992 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #45: NAL Type=28 (FU-A), NRI=3, Size=914 bytes
+2026-08-13 07:35:17.992 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #46: NAL Type=28 (FU-A), NRI=3, Size=914 bytes
+2026-08-13 07:35:17.992 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #47: NAL Type=28 (FU-A), NRI=3, Size=914 bytes
+2026-08-13 07:35:18.028 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #48: NAL Type=24 (STAP-A), NRI=3, Size=22 bytes
+2026-08-13 07:35:18.028 [S0pcsSiaH0Ut] 📤 De-aggregated STAP-A NAL #1 type=7 (Seq=47755, Size=25, Marker=false)
+2026-08-13 07:35:18.028 [S0pcsSiaH0Ut] 📤 De-aggregated STAP-A NAL #2 type=8 (Seq=47756, Size=16, Marker=false)
+2026-08-13 07:35:18.028 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #49: NAL Type=28 (FU-A), NRI=3, Size=1134 bytes
+2026-08-13 07:35:18.028 [S0pcsSiaH0Ut] 💉 Injected SPS (NRI=3) copy 1/2 (Seq=47757, Size=25, Keyframe=true)
+2026-08-13 07:35:18.028 [S0pcsSiaH0Ut] 💉 Injected PPS (NRI=3) copy 1/2 (Seq=47758, Size=16, Keyframe=true)
+2026-08-13 07:35:18.028 [S0pcsSiaH0Ut] 💉 Injected SPS (NRI=3) copy 2/2 (Seq=47759, Size=25, Keyframe=true)
+2026-08-13 07:35:18.028 [S0pcsSiaH0Ut] 💉 Injected PPS (NRI=3) copy 2/2 (Seq=47760, Size=16, Keyframe=true)
+2026-08-13 07:35:18.028 [S0pcsSiaH0Ut] 🔑 KEYFRAME (Forwarded) detected in video packet #49 → Asterisk
+2026-08-13 07:35:18.028 [S0pcsSiaH0Ut] 📤 Re-packetized video #49 (Seq=47761, SSRC=1499456777, Size=1146) → 203.150.245.39:29060
+2026-08-13 07:35:18.028 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #50: NAL Type=28 (FU-A), NRI=3, Size=1134 bytes
+2026-08-13 07:35:18.028 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #51: NAL Type=28 (FU-A), NRI=3, Size=1134 bytes
+2026-08-13 07:35:18.028 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #52: NAL Type=28 (FU-A), NRI=3, Size=1134 bytes
+2026-08-13 07:35:18.028 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #53: NAL Type=28 (FU-A), NRI=3, Size=1134 bytes
+2026-08-13 07:35:18.028 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #54: NAL Type=28 (FU-A), NRI=3, Size=1135 bytes
+2026-08-13 07:35:18.029 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #55: NAL Type=28 (FU-A), NRI=3, Size=1135 bytes
+2026-08-13 07:35:18.029 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #56: NAL Type=28 (FU-A), NRI=3, Size=1135 bytes
+2026-08-13 07:35:18.029 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #57: NAL Type=28 (FU-A), NRI=3, Size=1135 bytes
+2026-08-13 07:35:18.062 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #58: NAL Type=28 (FU-A), NRI=3, Size=1156 bytes
+2026-08-13 07:35:18.062 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #59: NAL Type=28 (FU-A), NRI=3, Size=1156 bytes
+2026-08-13 07:35:18.062 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #60: NAL Type=28 (FU-A), NRI=3, Size=1157 bytes
+2026-08-13 07:35:18.062 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #61: NAL Type=28 (FU-A), NRI=3, Size=1157 bytes
+2026-08-13 07:35:18.062 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #62: NAL Type=28 (FU-A), NRI=3, Size=1157 bytes
+2026-08-13 07:35:18.093 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #63: NAL Type=28 (FU-A), NRI=3, Size=1086 bytes
+2026-08-13 07:35:18.093 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #64: NAL Type=28 (FU-A), NRI=3, Size=1087 bytes
+2026-08-13 07:35:18.093 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #65: NAL Type=28 (FU-A), NRI=3, Size=1087 bytes
+2026-08-13 07:35:18.093 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #66: NAL Type=28 (FU-A), NRI=3, Size=1087 bytes
+2026-08-13 07:35:18.131 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #67: NAL Type=28 (FU-A), NRI=3, Size=1091 bytes
+2026-08-13 07:35:18.131 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #68: NAL Type=28 (FU-A), NRI=3, Size=1091 bytes
+2026-08-13 07:35:18.131 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #69: NAL Type=28 (FU-A), NRI=3, Size=1092 bytes
+2026-08-13 07:35:18.155 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #70: NAL Type=28 (FU-A), NRI=3, Size=1115 bytes
+2026-08-13 07:35:18.155 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #71: NAL Type=28 (FU-A), NRI=3, Size=1115 bytes
+2026-08-13 07:35:18.155 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #72: NAL Type=28 (FU-A), NRI=3, Size=1115 bytes
+2026-08-13 07:35:18.155 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #73: NAL Type=28 (FU-A), NRI=3, Size=1115 bytes
+2026-08-13 07:35:18.155 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #74: NAL Type=28 (FU-A), NRI=3, Size=1115 bytes
+2026-08-13 07:35:18.188 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #75: NAL Type=28 (FU-A), NRI=3, Size=1017 bytes
+2026-08-13 07:35:18.188 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #76: NAL Type=28 (FU-A), NRI=3, Size=1017 bytes
+2026-08-13 07:35:18.188 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #77: NAL Type=28 (FU-A), NRI=3, Size=1017 bytes
+2026-08-13 07:35:18.188 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #78: NAL Type=28 (FU-A), NRI=3, Size=1017 bytes
+2026-08-13 07:35:18.221 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #79: NAL Type=28 (FU-A), NRI=3, Size=1077 bytes
+2026-08-13 07:35:18.221 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #80: NAL Type=28 (FU-A), NRI=3, Size=1077 bytes
+2026-08-13 07:35:18.221 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #81: NAL Type=28 (FU-A), NRI=3, Size=1077 bytes
+2026-08-13 07:35:18.222 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #82: NAL Type=28 (FU-A), NRI=3, Size=1077 bytes
+2026-08-13 07:35:18.254 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #83: NAL Type=28 (FU-A), NRI=3, Size=1058 bytes
+2026-08-13 07:35:18.254 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #84: NAL Type=28 (FU-A), NRI=3, Size=1059 bytes
+2026-08-13 07:35:18.254 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #85: NAL Type=28 (FU-A), NRI=3, Size=1059 bytes
+2026-08-13 07:35:18.254 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #86: NAL Type=28 (FU-A), NRI=3, Size=1059 bytes
+2026-08-13 07:35:18.292 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #87: NAL Type=28 (FU-A), NRI=3, Size=959 bytes
+2026-08-13 07:35:18.292 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #88: NAL Type=28 (FU-A), NRI=3, Size=960 bytes
+2026-08-13 07:35:18.292 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #89: NAL Type=28 (FU-A), NRI=3, Size=960 bytes
+2026-08-13 07:35:18.292 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #90: NAL Type=28 (FU-A), NRI=3, Size=960 bytes
+2026-08-13 07:35:18.292 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #91: NAL Type=28 (FU-A), NRI=3, Size=960 bytes
+2026-08-13 07:35:18.326 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #92: NAL Type=28 (FU-A), NRI=3, Size=1050 bytes
+2026-08-13 07:35:18.326 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #93: NAL Type=28 (FU-A), NRI=3, Size=1050 bytes
+2026-08-13 07:35:18.326 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #94: NAL Type=28 (FU-A), NRI=3, Size=1050 bytes
+2026-08-13 07:35:18.327 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #95: NAL Type=28 (FU-A), NRI=3, Size=1050 bytes
+2026-08-13 07:35:18.362 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #96: NAL Type=28 (FU-A), NRI=3, Size=1132 bytes
+2026-08-13 07:35:18.362 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #97: NAL Type=28 (FU-A), NRI=3, Size=1133 bytes
+2026-08-13 07:35:18.362 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #98: NAL Type=28 (FU-A), NRI=3, Size=1133 bytes
+2026-08-13 07:35:18.362 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #99: NAL Type=28 (FU-A), NRI=3, Size=1133 bytes
+2026-08-13 07:35:18.362 [S0pcsSiaH0Ut] 🔍 WebRTC Video Packet #100: NAL Type=28 (FU-A), NRI=3, Size=1133 bytes
+2026-08-13 07:35:18.431 [S0pcsSiaH0Ut] 💉 Injected SPS (NRI=3) copy 1/2 (Seq=47820, Size=25, Keyframe=true)
+2026-08-13 07:35:18.431 [S0pcsSiaH0Ut] 💉 Injected PPS (NRI=3) copy 1/2 (Seq=47821, Size=16, Keyframe=true)
+2026-08-13 07:35:18.431 [S0pcsSiaH0Ut] 🔑 KEYFRAME (Forwarded) detected in video packet #107 → Asterisk
+2026-08-13 07:35:18.431 [S0pcsSiaH0Ut] 📤 Re-packetized video #107 (Seq=47824, SSRC=1499456777, Size=1147) → 203.150.245.39:29060
+2026-08-13 07:35:18.849 [S0pcsSiaH0Ut] 💉 Injected SPS (NRI=3) copy 1/1 (Seq=47889, Size=25, Keyframe=true)
+2026-08-13 07:35:18.849 [S0pcsSiaH0Ut] 💉 Injected PPS (NRI=3) copy 1/1 (Seq=47890, Size=16, Keyframe=true)
+2026-08-13 07:35:18.849 [S0pcsSiaH0Ut] 🔑 KEYFRAME (Forwarded) detected in video packet #171 → Asterisk
+2026-08-13 07:35:18.849 [S0pcsSiaH0Ut] 📤 Re-packetized video #171 (Seq=47891, SSRC=1499456777, Size=1175) → 203.150.245.39:29060
+2026-08-13 07:35:19.235 [S0pcsSiaH0Ut] 💉 Injected SPS (NRI=3) copy 1/1 (Seq=47953, Size=25, Keyframe=true)
+2026-08-13 07:35:19.235 [S0pcsSiaH0Ut] 💉 Injected PPS (NRI=3) copy 1/1 (Seq=47954, Size=16, Keyframe=true)
+2026-08-13 07:35:19.235 [S0pcsSiaH0Ut] 🔑 KEYFRAME (Forwarded) detected in video packet #232 → Asterisk
+2026-08-13 07:35:19.235 [S0pcsSiaH0Ut] 📤 Re-packetized video #232 (Seq=47955, SSRC=1499456777, Size=1160) → 203.150.245.39:29060
+2026-08-13 07:35:19.662 [S0pcsSiaH0Ut] 🔄 Periodic PLI #6 to browser
+2026-08-13 07:35:19.733 [S0pcsSiaH0Ut] 💉 Injected SPS (NRI=3) copy 1/1 (Seq=48040, Size=25, Keyframe=true)
+2026-08-13 07:35:19.733 [S0pcsSiaH0Ut] 💉 Injected PPS (NRI=3) copy 1/1 (Seq=48041, Size=16, Keyframe=true)
+2026-08-13 07:35:19.733 [S0pcsSiaH0Ut] 🔑 KEYFRAME (Forwarded) detected in video packet #316 → Asterisk
+2026-08-13 07:35:19.733 [S0pcsSiaH0Ut] 📤 Re-packetized video #316 (Seq=48042, SSRC=1499456777, Size=1164) → 203.150.245.39:29060
+2026-08-13 07:35:20.089 [S0pcsSiaH0Ut] Audio RTP packet #1 received: 84 bytes from 203.150.245.39:29034
+2026-08-13 07:35:20.089 [S0pcsSiaH0Ut inbound] translator passthrough_no_frame count=1 packets_in=1 packets_out=0 responses=0 audio_responses=0 empty_audio_responses=0
+2026-08-13 07:35:20.090 [S0pcsSiaH0Ut] 🎤 Inbound translation pending for packet #1 (suppressing original audio)
+2026-08-13 07:35:20.090 [S0pcsSiaH0Ut] 📍 Seeded SIP Video RTCP addr from RTP source: 203.150.245.39:29060
+2026-08-13 07:35:20.090 [S0pcsSiaH0Ut] 🔄 RTCP fallback window refreshed (rtp-source-update) until 2026-08-13T07:35:24.089691351Z
+2026-08-13 07:35:20.090 [S0pcsSiaH0Ut] 📈 sip_video_rtp_source_changed source=203.150.245.39:29060 previous= switchGeneration=0
+2026-08-13 07:35:20.090 [S0pcsSiaH0Ut] ⚠️ Small RTP video packet #1: 23 bytes, PT=96 from 203.150.245.39:29060
+2026-08-13 07:35:20.090 [S0pcsSiaH0Ut] Learned Remote Video SSRC: 1736626415 (previous: 0)
+2026-08-13 07:35:20.090 [S0pcsSiaH0Ut] 📈 sip_video_ssrc_learned ssrc=1736626415 previous=0
+2026-08-13 07:35:20.090 [S0pcsSiaH0Ut] 🔄 RTCP fallback window enabled (ssrc-learn) until 2026-08-13T07:35:24.089785664Z
+2026-08-13 07:35:20.090 [S0pcsSiaH0Ut] ⚠️ Small RTP video packet #2: 25 bytes, PT=96 from 203.150.245.39:29060
+2026-08-13 07:35:20.090 [S0pcsSiaH0Ut] ⚠️ Small RTP video packet #3: 25 bytes, PT=96 from 203.150.245.39:29060
+2026-08-13 07:35:20.090 [S0pcsSiaH0Ut] ⚠️ Small RTP video packet #4: 25 bytes, PT=96 from 203.150.245.39:29060
+2026-08-13 07:35:20.090 [S0pcsSiaH0Ut] 📈 uplink_keyframe_kick reason=remote-ssrc-learn
+2026-08-13 07:35:20.090 [S0pcsSiaH0Ut] 🚀 Sending startup FIR + guarded PLI burst
+2026-08-13 07:35:20.090 [S0pcsSiaH0Ut] ⚠️ Small RTP video packet #5: 26 bytes, PT=96 from 203.150.245.39:29060
+2026-08-13 07:35:20.090 [S0pcsSiaH0Ut] 📦 SPS (parameter set) received in packet #5 (size: 14 bytes, seq=22532)
+2026-08-13 07:35:20.090 [S0pcsSiaH0Ut] ⚠️ Small RTP video packet #6: 16 bytes, PT=96 from 203.150.245.39:29060
+2026-08-13 07:35:20.090 [S0pcsSiaH0Ut] 📦 PPS (parameter set) received in packet #6 (size: 4 bytes, seq=22533)
+2026-08-13 07:35:20.091 [S0pcsSiaH0Ut] h264_au_normalized status=complete-idr packets=11 injected_parameter_sets=false source_timestamp=2700 pli_response=true response_time=1.177599ms pli_sent=3 pli_responses=1
+2026/08/13 07:35:20.091199 [S0pcsSiaH0Ut] 📡 WS media kind=video direction=remote state=receiving
+2026-08-13 07:35:20.093 [S0pcsSiaH0Ut] ⚠️ Small RTP video packet #20: 29 bytes, PT=96 from 203.150.245.39:29060
+2026-08-13 07:35:20.109 [S0pcsSiaH0Ut] Audio RTP packet #2 received: 79 bytes from 203.150.245.39:29034
+2026-08-13 07:35:20.109 [S0pcsSiaH0Ut] 📸 Received PLI from browser for video (RTPSender)
+2026-08-13 07:35:20.109 [S0pcsSiaH0Ut] 📈 browser_recovery_handled trigger=browser-pli action=pli burst=true keyframeAge=18.011051ms remoteVideoSSRC=1736626415 target=rtp-learn/203.150.245.39:29060 reason=forced-startup
+2026-08-13 07:35:20.109 [S0pcsSiaH0Ut inbound] translator passthrough_no_frame count=2 packets_in=2 packets_out=0 responses=0 audio_responses=0 empty_audio_responses=0
+2026-08-13 07:35:20.109 [S0pcsSiaH0Ut] 🎤 Inbound translation pending for packet #2 (suppressing original audio)
+2026-08-13 07:35:20.126 [S0pcsSiaH0Ut] 💉 Injected SPS (NRI=3) copy 1/1 (Seq=48096, Size=25, Keyframe=true)
+2026-08-13 07:35:20.126 [S0pcsSiaH0Ut] 💉 Injected PPS (NRI=3) copy 1/1 (Seq=48097, Size=16, Keyframe=true)
+2026-08-13 07:35:20.126 [S0pcsSiaH0Ut] 🔑 KEYFRAME (Forwarded) detected in video packet #369 → Asterisk
+2026-08-13 07:35:20.126 [S0pcsSiaH0Ut] 📤 Re-packetized video #369 (Seq=48098, SSRC=1499456777, Size=1178) → 203.150.245.39:29060
+2026-08-13 07:35:20.129 [S0pcsSiaH0Ut] Audio RTP packet #3 received: 140 bytes from 203.150.245.39:29034
+2026-08-13 07:35:20.129 [S0pcsSiaH0Ut inbound] translator passthrough_no_frame count=3 packets_in=3 packets_out=0 responses=0 audio_responses=0 empty_audio_responses=0
+2026-08-13 07:35:20.129 [S0pcsSiaH0Ut] 🎤 Inbound translation pending for packet #3 (suppressing original audio)
+2026-08-13 07:35:20.149 [S0pcsSiaH0Ut] Audio RTP packet #4 received: 152 bytes from 203.150.245.39:29034
+2026-08-13 07:35:20.149 [S0pcsSiaH0Ut inbound] translator passthrough_no_frame count=4 packets_in=4 packets_out=0 responses=0 audio_responses=0 empty_audio_responses=0
+2026-08-13 07:35:20.149 [S0pcsSiaH0Ut] 🎤 Inbound translation pending for packet #4 (suppressing original audio)
+2026-08-13 07:35:20.169 [S0pcsSiaH0Ut] Audio RTP packet #5 received: 121 bytes from 203.150.245.39:29034
+2026-08-13 07:35:20.169 [S0pcsSiaH0Ut inbound] translator passthrough_no_frame count=5 packets_in=5 packets_out=0 responses=0 audio_responses=0 empty_audio_responses=0
+2026-08-13 07:35:20.169 [S0pcsSiaH0Ut] 🎤 Inbound translation pending for packet #5 (suppressing original audio)
+2026-08-13 07:35:20.240 [S0pcsSiaH0Ut] ✅ Startup recovery settled after keyframe; stopping PLI burst
+2026-08-13 07:35:20.433 [S0pcsSiaH0Ut] 💉 Injected SPS (NRI=3) copy 1/1 (Seq=48125, Size=25, Keyframe=true)
+2026-08-13 07:35:20.433 [S0pcsSiaH0Ut] 💉 Injected PPS (NRI=3) copy 1/1 (Seq=48126, Size=16, Keyframe=true)
+2026-08-13 07:35:20.433 [S0pcsSiaH0Ut] 🔑 KEYFRAME (Forwarded) detected in video packet #395 → Asterisk
+2026-08-13 07:35:20.433 [S0pcsSiaH0Ut] 📤 Re-packetized video #395 (Seq=48127, SSRC=1499456777, Size=1184) → 203.150.245.39:29060
+2026-08-13 07:35:20.733 [S0pcsSiaH0Ut] 💉 Injected SPS (NRI=3) copy 1/1 (Seq=48154, Size=25, Keyframe=true)
+2026-08-13 07:35:20.733 [S0pcsSiaH0Ut] 💉 Injected PPS (NRI=3) copy 1/1 (Seq=48155, Size=16, Keyframe=true)
+2026-08-13 07:35:20.733 [S0pcsSiaH0Ut] 🔑 KEYFRAME (Forwarded) detected in video packet #421 → Asterisk
+2026-08-13 07:35:20.733 [S0pcsSiaH0Ut] 📤 Re-packetized video #421 (Seq=48156, SSRC=1499456777, Size=1188) → 203.150.245.39:29060
+2026-08-13 07:35:21.157 [S0pcsSiaH0Ut inbound] translation response #1 audio_bytes=0 final=false same_text=false source=th target=en recognized="กร" translated="Korn"
+2026-08-13 07:35:21.533 [S0pcsSiaH0Ut inbound] translation response #2 audio_bytes=0 final=false same_text=false source=th target=en recognized="กรุณา" translated="Please"
+2026-08-13 07:35:21.662 [S0pcsSiaH0Ut] 🔄 Periodic PLI #7 to browser
+2026-08-13 07:35:21.698 [S0pcsSiaH0Ut] 💉 Injected SPS (NRI=3) copy 1/1 (Seq=48211, Size=25, Keyframe=true)
+2026-08-13 07:35:21.698 [S0pcsSiaH0Ut] 💉 Injected PPS (NRI=3) copy 1/1 (Seq=48212, Size=16, Keyframe=true)
+2026-08-13 07:35:21.698 [S0pcsSiaH0Ut] 🔑 KEYFRAME (Forwarded) detected in video packet #475 → Asterisk
+2026-08-13 07:35:21.698 [S0pcsSiaH0Ut] 📤 Re-packetized video #475 (Seq=48213, SSRC=1499456777, Size=1157) → 203.150.245.39:29060
+2026-08-13 07:35:21.802 [S0pcsSiaH0Ut] 📤 Re-packetized video #500 (Seq=48238, SSRC=1499456777, Size=1009) → 203.150.245.39:29060
+2026-08-13 07:35:21.965 [S0pcsSiaH0Ut] ⚠️ (burst) Keyframe stale for 1.874662444s (>= 1.2s) - sending PLI to SIP
+2026-08-13 07:35:22.048 [S0pcsSiaH0Ut inbound] translation response #3 audio_bytes=0 final=false same_text=false source=th target=en recognized="กรุณา รอสัก" translated="Please wait for a tattoo"
+2026-08-13 07:35:22.766 [S0pcsSiaH0Ut] ⚠️ Keyframe stale for 2.675175121s (>= 2.5s) - sending FIR to SIP
+2026-08-13 07:35:22.954 [S0pcsSiaH0Ut] 📨 Video RTCP packet #1 received: 100 bytes from 203.150.245.39:29060
+2026-08-13 07:35:22.954 [S0pcsSiaH0Ut] Received SR from Linphone (SSRC=1736626415)
+2026-08-13 07:35:22.954 [S0pcsSiaH0Ut] Received RTCP type *rtcp.SourceDescription from Linphone
+2026-08-13 07:35:23.210 [S0pcsSiaH0Ut] 📸 Received PLI from browser for video (RTPSender)
+2026-08-13 07:35:23.210 [S0pcsSiaH0Ut] 📈 browser_recovery_handled trigger=browser-pli action=pli burst=true keyframeAge=3.119393213s remoteVideoSSRC=1736626415 target=rtp-learn/203.150.245.39:29060 reason=forced-startup
+2026-08-13 07:35:23.214 [S0pcsSiaH0Ut inbound] translation response #4 audio_bytes=53646 final=true same_text=false source=th target=en recognized="กรุณา รอสักครู่" translated="Please wait."
+2026/08/13 07:35:23.255198 [S0pcsSiaH0Ut] 📡 WS media kind=audio direction=remote state=receiving
+2026-08-13 07:35:23.567 [S0pcsSiaH0Ut] ⚠️ Keyframe stale for 3.475928042s (>= 2.5s) - sending FIR to SIP
+2026-08-13 07:35:23.662 [S0pcsSiaH0Ut] 🔄 Periodic PLI #8 to browser
+2026-08-13 07:35:23.705 [S0pcsSiaH0Ut] 💉 Injected SPS (NRI=3) copy 1/1 (Seq=48501, Size=25, Keyframe=true)
+2026-08-13 07:35:23.705 [S0pcsSiaH0Ut] 💉 Injected PPS (NRI=3) copy 1/1 (Seq=48502, Size=16, Keyframe=true)
+2026-08-13 07:35:23.705 [S0pcsSiaH0Ut] 🔑 KEYFRAME (Forwarded) detected in video packet #762 → Asterisk
+2026-08-13 07:35:23.705 [S0pcsSiaH0Ut] 📤 Re-packetized video #762 (Seq=48503, SSRC=1499456777, Size=1131) → 203.150.245.39:29060
+2026-08-13 07:35:23.840 [S0pcsSiaH0Ut inbound] translation partial_t2s audio generated attempt=1 successes=1 bytes=74446 target=en voice="en-US-AriaNeural" translated="Please wait for a tattoo"
+2026-08-13 07:35:23.948 🔀 Found @switch: message: @switch:14131|00025, handling PLI Keyframe...
+2026-08-13 07:35:23.949 💬 MESSAGE from 00025 to sip:0000178667543@203.150.245.39:5060 (19 bytes)
+2026-08-13 07:35:23.949 🔀 @switch message: queue=14131, agent=00025, caller=sip:0000178667543@203.150.245.39:5060 (username: 0000178667543)
+2026-08-13 07:35:23.949 📍 Found session S0pcsSiaH0Ut for caller 0000178667543 (queue: 14131, agent: 00025)
+2026-08-13 07:35:23.949 [S0pcsSiaH0Ut] switch_target_honored queue=14131 agent=00025 generation=1 mediaEpoch=1 reason=new-target ssrc=1736626415 source=203.150.245.39:29060 duplicateCount=0 debounceMs=60000 mediaGeneration=ssrc=1736626415 source=203.150.245.39:29060
+2026/08/13 07:35:23.949155 💬 Sent message notification to client (sessionID=S0pcsSiaH0Ut targetSessionID=S0pcsSiaH0Ut)
+2026/08/13 07:35:23.949247 💬 SIP message fanout summary: from=00025 to=sip:0000178667543@203.150.245.39:5060 targetSessionID=S0pcsSiaH0Ut recipients=1 filtered=0 duplicates=0 total=1 bodyBytes=19
+2026-08-13 07:35:23.949 [S0pcsSiaH0Ut] switch_video_gate_activation generation=1 mediaEpoch=1 outcome=active active=true feedbackBaseline=7 rejectReason=
+2026-08-13 07:35:23.949 [S0pcsSiaH0Ut] switch_sps_pps_inject_armed generation=1 remaining=3
+2026-08-13 07:35:23.949 [S0pcsSiaH0Ut] switch_recovery_start until=2026-08-13T07:35:28.949064807Z stableWindow=750ms
+2026-08-13 07:35:23.949 [S0pcsSiaH0Ut] 📈 video_recovery_window_start reason=switch until=2026-08-13T07:35:28.949064807Z
+2026-08-13 07:35:23.949 [S0pcsSiaH0Ut] 📈 recovery_policy interval=800ms stale=1.2s firStale=2.5s
+2026-08-13 07:35:23.949 [S0pcsSiaH0Ut] 🔀 Sent @switch: immediate FIR + PLI kick to both endpoints
+2026-08-13 07:35:23.949 [S0pcsSiaH0Ut] switch_transition_hold_start mode=preserve reason=switch blackoutUntil=2026-08-13T07:35:23.949244217Z maxWaitUntil=2026-08-13T07:35:25.149244217Z
+2026-08-13 07:35:24.170 [S0pcsSiaH0Ut] h264_au_source_reset reason=switch-generation previous_generation=0 generation=1
+2026-08-13 07:35:24.171 [S0pcsSiaH0Ut] switch_transition_hold_end mode=preserve reason=gate-released heldMs=222 firstKeyframeMs=-1
+2026-08-13 07:35:24.171 [S0pcsSiaH0Ut] switch_video_gate_release generation=1 waitMs=222 ssrc=1736626415 packets=10 injection=false rejected=0 feedback=3
+2026-08-13 07:35:24.171 [S0pcsSiaH0Ut] 🧊 ICE Candidate gathering complete
+2026-08-13 07:35:24.171 [S0pcsSiaH0Ut] switch_renegotiate ice_gathering=complete
+2026/08/13 07:35:24.171981 [S0pcsSiaH0Ut] switch_renegotiate_started generation=1 renegotiationId=reneg-1786606524171920199
+2026-08-13 07:35:24.172 [S0pcsSiaH0Ut] switch_recovery_first_keyframe elapsed_ms=222
+2026-08-13 07:35:24.172 [S0pcsSiaH0Ut] h264_au_normalized status=complete-idr packets=10 injected_parameter_sets=false source_timestamp=1000024290 pli_response=true response_time=222.803862ms pli_sent=10 pli_responses=2
+2026-08-13 07:35:24.498 [S0pcsSiaH0Ut] 📈 video_recovery_window_end reason=stable-rtp keyframe_recovery_ms=549
+2026-08-13 07:35:24.499 [S0pcsSiaH0Ut] switch_recovery_end reason=stable-rtp recovery_ms=549 first_keyframe_ms=222 packets=155 gaps=14 missing=18 ooo=18 dup=0 reorder(buf=21 rel=153 drop=0 to=0 pend=0) keyframeAge=326.867656ms
+2026/08/13 07:35:24.967787 💬 Sent message notification to client (sessionID=S0pcsSiaH0Ut targetSessionID=S0pcsSiaH0Ut)
+2026/08/13 07:35:24.967822 💬 SIP message fanout summary: from=00025 to=sip:0000178667543@203.150.245.39:5060 targetSessionID=S0pcsSiaH0Ut recipients=1 filtered=0 duplicates=0 total=1 bodyBytes=10
+2026-08-13 07:35:24.967 💬 MESSAGE from 00025 to sip:0000178667543@203.150.245.39:5060 (10 bytes)
+2026-08-13 07:35:25.041 [S0pcsSiaH0Ut] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1000102590 pli_response=true response_time=1.092122177s pli_sent=10 pli_responses=3
+2026-08-13 07:35:25.170 [S0pcsSiaH0Ut] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1000114290 pli_response=true response_time=1.221509454s pli_sent=10 pli_responses=4
+2026-08-13 07:35:25.240 [S0pcsSiaH0Ut] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1000120590 pli_response=true response_time=1.291096295s pli_sent=10 pli_responses=5
+2026-08-13 07:35:25.663 [S0pcsSiaH0Ut] 🔄 Periodic PLI #9 to browser
+2026-08-13 07:35:25.949 [S0pcsSiaH0Ut] 🔀 Sending @switch: FIR burst (3x @ 50ms)
+2026-08-13 07:35:25.972 [S0pcsSiaH0Ut] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1000186290 pli_response=true response_time=22.321724ms pli_sent=12 pli_responses=6
+2026-08-13 07:35:26.100 [S0pcsSiaH0Ut] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1000197990 pli_response=true response_time=48.929499ms pli_sent=16 pli_responses=7
+2026-08-13 07:35:26.101 [S0pcsSiaH0Ut] 🔀 Sending @switch: PLI burst (3x @ 50ms)
+2026-08-13 07:35:26.171 [S0pcsSiaH0Ut] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1000204290 pli_response=true response_time=119.900363ms pli_sent=16 pli_responses=8
+2026-08-13 07:35:26.240 [S0pcsSiaH0Ut] 📊 SIP→WebRTC video stats: packets=300 gaps=31 missing=41 ooo=41 dup=0 reorder(buf=44 rel=297 drop=0 to=0 pend=1) keyframeAge=100ms
+2026-08-13 07:35:26.240 [S0pcsSiaH0Ut] h264_au_stats emitted=61 dropped_incomplete=0 dropped_overflow=0 pending_packets=0
+2026-08-13 07:35:26.241 [S0pcsSiaH0Ut] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1000210590 pli_response=true response_time=37.78472ms pli_sent=17 pli_responses=9
+2026-08-13 07:35:26.254 ✅ Sent @switch immediate kick + FIR/PLI bursts (Browser + Asterisk) for session: S0pcsSiaH0Ut
+2026-08-13 07:35:27.170 [S0pcsSiaH0Ut] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1000294290 pli_response=true response_time=966.936624ms pli_sent=17 pli_responses=10
+2026-08-13 07:35:27.662 [S0pcsSiaH0Ut] 🔄 Periodic PLI #10 to browser
+2026-08-13 07:35:27.954 [S0pcsSiaH0Ut] 📨 Video RTCP packet #2 received: 100 bytes from 203.150.245.39:29060
+2026-08-13 07:35:27.954 [S0pcsSiaH0Ut] Received SR from Linphone (SSRC=1736626415)
+2026-08-13 07:35:27.954 [S0pcsSiaH0Ut] Received RTCP type *rtcp.SourceDescription from Linphone
+2026-08-13 07:35:28.171 [S0pcsSiaH0Ut] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1000384290 pli_response=true response_time=1.967899829s pli_sent=17 pli_responses=11
+2026-08-13 07:35:29.170 [S0pcsSiaH0Ut] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1000474290 pli_response=false response_time=2.966993861s pli_sent=17 pli_responses=11
+2026-08-13 07:35:29.662 [S0pcsSiaH0Ut] 🔄 Periodic PLI #11 to browser
+2026-08-13 07:35:30.170 [S0pcsSiaH0Ut] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1000564290 pli_response=false response_time=3.967185949s pli_sent=17 pli_responses=11
+2026-08-13 07:35:30.699 [S0pcsSiaH0Ut] 📊 SIP→WebRTC video stats: packets=600 gaps=51 missing=63 ooo=63 dup=0 reorder(buf=70 rel=596 drop=0 to=0 pend=1) keyframeAge=500ms
+2026-08-13 07:35:30.699 [S0pcsSiaH0Ut] h264_au_stats emitted=128 dropped_incomplete=0 dropped_overflow=0 pending_packets=1
+2026-08-13 07:35:31.170 [S0pcsSiaH0Ut] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1000654290 pli_response=false response_time=4.967638392s pli_sent=17 pli_responses=11
+2026-08-13 07:35:31.662 [S0pcsSiaH0Ut] 🔄 Periodic PLI #12 to browser
+2026-08-13 07:35:32.170 [S0pcsSiaH0Ut] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1000744290 pli_response=false response_time=5.967228175s pli_sent=17 pli_responses=11
+2026-08-13 07:35:32.954 [S0pcsSiaH0Ut] 📨 Video RTCP packet #3 received: 100 bytes from 203.150.245.39:29060
+2026-08-13 07:35:32.954 [S0pcsSiaH0Ut] Received SR from Linphone (SSRC=1736626415)
+2026-08-13 07:35:32.954 [S0pcsSiaH0Ut] Received RTCP type *rtcp.SourceDescription from Linphone
+2026-08-13 07:35:33.170 [S0pcsSiaH0Ut] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1000834290 pli_response=false response_time=6.967268208s pli_sent=17 pli_responses=11
+2026-08-13 07:35:33.662 [S0pcsSiaH0Ut] 🔄 Periodic PLI #13 to browser
+2026-08-13 07:35:34.170 [S0pcsSiaH0Ut] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1000924290 pli_response=false response_time=7.9672899s pli_sent=17 pli_responses=11
+2026-08-13 07:35:35.168 [S0pcsSiaH0Ut] 📊 SIP→WebRTC video stats: packets=900 gaps=66 missing=80 ooo=80 dup=0 reorder(buf=88 rel=896 drop=0 to=0 pend=0) keyframeAge=1s
+2026-08-13 07:35:35.168 [S0pcsSiaH0Ut] h264_au_stats emitted=195 dropped_incomplete=0 dropped_overflow=0 pending_packets=3
+2026-08-13 07:35:35.169 [S0pcsSiaH0Ut] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1001014290 pli_response=false response_time=8.966251266s pli_sent=17 pli_responses=11
+2026-08-13 07:35:35.663 [S0pcsSiaH0Ut] 🔄 Periodic PLI #14 to browser
+2026-08-13 07:35:36.171 [S0pcsSiaH0Ut] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1001104290 pli_response=false response_time=9.968430728s pli_sent=17 pli_responses=11
+2026-08-13 07:35:37.171 [S0pcsSiaH0Ut] h264_au_normalized status=complete-idr packets=8 injected_parameter_sets=false source_timestamp=1001194290 pli_response=false response_time=10.967851117s pli_sent=17 pli_responses=11
+2026-08-13 07:35:37.643 [S0pcsSiaH0Ut] 🎤 Translation pending for packet #1000 (suppressing original audio)
+2026-08-13 07:35:37.662 [S0pcsSiaH0Ut] Stopping periodic PLI sender - startup window ended
+2026-08-13 07:35:37.842 [S0pcsSiaH0Ut outbound] translator passthrough_no_frame count=1000 packets_in=1000 packets_out=0 responses=0 audio_responses=0 empty_audio_responses=0
+2026-08-13 07:35:37.954 [S0pcsSiaH0Ut] 📨 Video RTCP packet #4 received: 100 bytes from 203.150.245.39:29060
+2026-08-13 07:35:37.954 [S0pcsSiaH0Ut] Received RTCP type *rtcp.SourceDescription from Linphone
+2026-08-13 07:35:38.170 [S0pcsSiaH0Ut] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1001284290 pli_response=false response_time=11.967011323s pli_sent=17 pli_responses=11
+2026-08-13 07:35:39.170 [S0pcsSiaH0Ut] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1001374290 pli_response=false response_time=12.967241885s pli_sent=17 pli_responses=11
+2026-08-13 07:35:39.568 [S0pcsSiaH0Ut] 📊 SIP→WebRTC video stats: packets=1200 gaps=78 missing=95 ooo=95 dup=0 reorder(buf=104 rel=1193 drop=0 to=0 pend=2) keyframeAge=400ms
+2026-08-13 07:35:39.568 [S0pcsSiaH0Ut] h264_au_stats emitted=261 dropped_incomplete=0 dropped_overflow=0 pending_packets=1
+2026-08-13 07:35:39.989 [S0pcsSiaH0Ut] Audio RTP packet #1000 received: 71 bytes from 203.150.245.39:29034
+2026-08-13 07:35:39.989 [S0pcsSiaH0Ut] 🎤 Inbound translation pending for packet #1000 (suppressing original audio)
+2026-08-13 07:35:40.171 [S0pcsSiaH0Ut] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1001464290 pli_response=false response_time=13.968170119s pli_sent=17 pli_responses=11
+2026-08-13 07:35:41.170 [S0pcsSiaH0Ut] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1001554290 pli_response=false response_time=14.96707707s pli_sent=17 pli_responses=11
+2026-08-13 07:35:42.172 [S0pcsSiaH0Ut] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1001644290 pli_response=false response_time=15.969176298s pli_sent=17 pli_responses=11
+2026-08-13 07:35:42.954 [S0pcsSiaH0Ut] 📨 Video RTCP packet #5 received: 100 bytes from 203.150.245.39:29060
+2026-08-13 07:35:42.954 [S0pcsSiaH0Ut] Received RTCP type *rtcp.SourceDescription from Linphone
+2026-08-13 07:35:43.170 [S0pcsSiaH0Ut] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1001734290 pli_response=false response_time=16.967412631s pli_sent=17 pli_responses=11
+2026-08-13 07:35:44.025 [S0pcsSiaH0Ut inbound] translator passthrough_no_frame count=1000 packets_in=1004 packets_out=201 responses=4 audio_responses=1 empty_audio_responses=3
+2026-08-13 07:35:44.099 [S0pcsSiaH0Ut] 📊 SIP→WebRTC video stats: packets=1500 gaps=92 missing=113 ooo=113 dup=0 reorder(buf=120 rel=1494 drop=0 to=0 pend=0) keyframeAge=900ms
+2026-08-13 07:35:44.099 [S0pcsSiaH0Ut] h264_au_stats emitted=329 dropped_incomplete=0 dropped_overflow=0 pending_packets=3
+2026-08-13 07:35:44.170 [S0pcsSiaH0Ut] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1001824290 pli_response=false response_time=17.967240071s pli_sent=17 pli_responses=11
+2026-08-13 07:35:45.170 [S0pcsSiaH0Ut] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1001914290 pli_response=false response_time=18.966770529s pli_sent=17 pli_responses=11
+2026-08-13 07:35:46.170 [S0pcsSiaH0Ut] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1002004290 pli_response=false response_time=19.967447235s pli_sent=17 pli_responses=11
+2026-08-13 07:35:47.170 [S0pcsSiaH0Ut] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1002094290 pli_response=false response_time=20.966891761s pli_sent=17 pli_responses=11
+2026-08-13 07:35:47.954 [S0pcsSiaH0Ut] 📨 Video RTCP packet #6 received: 100 bytes from 203.150.245.39:29060
+2026-08-13 07:35:48.170 [S0pcsSiaH0Ut] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1002184290 pli_response=false response_time=21.967173699s pli_sent=17 pli_responses=11
+2026-08-13 07:35:48.639 [S0pcsSiaH0Ut] 📊 SIP→WebRTC video stats: packets=1800 gaps=102 missing=127 ooo=127 dup=0 reorder(buf=136 rel=1793 drop=0 to=0 pend=0) keyframeAge=500ms
+2026-08-13 07:35:48.639 [S0pcsSiaH0Ut] h264_au_stats emitted=397 dropped_incomplete=0 dropped_overflow=0 pending_packets=3
+2026-08-13 07:35:49.170 [S0pcsSiaH0Ut] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1002274290 pli_response=false response_time=22.967002559s pli_sent=17 pli_responses=11
+2026-08-13 07:35:50.170 [S0pcsSiaH0Ut] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1002364290 pli_response=false response_time=23.967158117s pli_sent=17 pli_responses=11
+2026-08-13 07:35:51.171 [S0pcsSiaH0Ut] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1002454290 pli_response=false response_time=24.967785899s pli_sent=17 pli_responses=11
+2026-08-13 07:35:52.170 [S0pcsSiaH0Ut] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1002544290 pli_response=false response_time=25.967490917s pli_sent=17 pli_responses=11
+2026-08-13 07:35:52.954 [S0pcsSiaH0Ut] 📨 Video RTCP packet #7 received: 100 bytes from 203.150.245.39:29060
+2026-08-13 07:35:53.170 [S0pcsSiaH0Ut] 📊 SIP→WebRTC video stats: packets=2100 gaps=116 missing=147 ooo=145 dup=0 reorder(buf=152 rel=2092 drop=0 to=0 pend=0) keyframeAge=1s
+2026-08-13 07:35:53.170 [S0pcsSiaH0Ut] h264_au_stats emitted=465 dropped_incomplete=0 dropped_overflow=0 pending_packets=5
+2026-08-13 07:35:53.170 [S0pcsSiaH0Ut] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1002634290 pli_response=false response_time=26.967285793s pli_sent=17 pli_responses=11
+2026-08-13 07:35:54.170 [S0pcsSiaH0Ut] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1002724290 pli_response=false response_time=27.967230367s pli_sent=17 pli_responses=11
+2026-08-13 07:35:55.170 [S0pcsSiaH0Ut] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1002814290 pli_response=false response_time=28.966725804s pli_sent=17 pli_responses=11
+2026-08-13 07:35:56.171 [S0pcsSiaH0Ut] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1002904290 pli_response=false response_time=29.967903074s pli_sent=17 pli_responses=11
+2026-08-13 07:35:57.170 [S0pcsSiaH0Ut] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1002994290 pli_response=false response_time=30.96709895s pli_sent=17 pli_responses=11
+2026-08-13 07:35:57.643 [S0pcsSiaH0Ut] 🎤 Translation pending for packet #2000 (suppressing original audio)
+2026-08-13 07:35:57.769 [S0pcsSiaH0Ut] 📊 SIP→WebRTC video stats: packets=2400 gaps=128 missing=162 ooo=162 dup=0 reorder(buf=175 rel=2392 drop=0 to=0 pend=0) keyframeAge=600ms
+2026-08-13 07:35:57.769 [S0pcsSiaH0Ut] h264_au_stats emitted=534 dropped_incomplete=0 dropped_overflow=0 pending_packets=2
+2026-08-13 07:35:57.841 [S0pcsSiaH0Ut outbound] translator passthrough_no_frame count=2000 packets_in=2000 packets_out=0 responses=0 audio_responses=0 empty_audio_responses=0
+2026-08-13 07:35:57.953 [S0pcsSiaH0Ut] 📨 Video RTCP packet #8 received: 100 bytes from 203.150.245.39:29060
+2026-08-13 07:35:58.171 [S0pcsSiaH0Ut] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1003084290 pli_response=false response_time=31.967875669s pli_sent=17 pli_responses=11
+2026-08-13 07:35:59.170 [S0pcsSiaH0Ut] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1003174290 pli_response=false response_time=32.967134178s pli_sent=17 pli_responses=11
+2026-08-13 07:35:59.919 [S0pcsSiaH0Ut] Audio RTP packet #2000 received: 71 bytes from 203.150.245.39:29034
+2026-08-13 07:35:59.919 [S0pcsSiaH0Ut] 🎤 Inbound translation pending for packet #2000 (suppressing original audio)
+2026-08-13 07:36:00.172 [S0pcsSiaH0Ut] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1003264290 pli_response=false response_time=33.968821693s pli_sent=17 pli_responses=11
+2026-08-13 07:36:01.170 [S0pcsSiaH0Ut] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1003354290 pli_response=false response_time=34.967500211s pli_sent=17 pli_responses=11
+2026-08-13 07:36:02.169 [S0pcsSiaH0Ut] 📊 SIP→WebRTC video stats: packets=2700 gaps=148 missing=186 ooo=186 dup=0 reorder(buf=199 rel=2691 drop=0 to=0 pend=0) keyframeAge=1s
+2026-08-13 07:36:02.169 [S0pcsSiaH0Ut] h264_au_stats emitted=600 dropped_incomplete=0 dropped_overflow=0 pending_packets=5
+2026-08-13 07:36:02.170 [S0pcsSiaH0Ut] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1003444290 pli_response=false response_time=35.967053096s pli_sent=17 pli_responses=11
+2026-08-13 07:36:02.954 [S0pcsSiaH0Ut] 📨 Video RTCP packet #9 received: 100 bytes from 203.150.245.39:29060
+2026-08-13 07:36:03.170 [S0pcsSiaH0Ut] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1003534290 pli_response=false response_time=36.967397384s pli_sent=17 pli_responses=11
+2026/08/13 07:36:03.844849 [S0pcsSiaH0Ut] 🎤 Translation disabled via WS
+2026-08-13 07:36:03.844 [S0pcsSiaH0Ut] 🎤 Translation disabled
+2026-08-13 07:36:03.853 [S0pcsSiaH0Ut] Error reading video from WebRTC: EOF
+2026-08-13 07:36:03.853 [S0pcsSiaH0Ut] Error reading audio from WebRTC: EOF
+2026-08-13 07:36:03.867 
+2026-08-13 07:36:03.867 === [S0pcsSiaH0Ut] Hangup Request ===
+2026-08-13 07:36:03.867 [S0pcsSiaH0Ut] Direction: 'outbound'
+2026-08-13 07:36:03.867 [S0pcsSiaH0Ut] SIPCallID: '1c7veSnf3FtMMSKK@203.151.21.121'
+2026-08-13 07:36:03.867 [S0pcsSiaH0Ut] SIPFromTag: 'awbUxZreGDXC2M29'
+2026-08-13 07:36:03.867 [S0pcsSiaH0Ut] SIPToTag: 'as04165c96'
+2026-08-13 07:36:03.867 [S0pcsSiaH0Ut] SIPRemoteContact: '<sip:614131@203.150.245.41:5060>'
+2026-08-13 07:36:03.867 [S0pcsSiaH0Ut] SIPCSeq: 2
+2026-08-13 07:36:03.867 [S0pcsSiaH0Ut] From: '0000178667543', To: '14131'
+2026-08-13 07:36:03.867 [S0pcsSiaH0Ut] sipClient is nil: false
+2026-08-13 07:36:03.867 [S0pcsSiaH0Ut] ✅ Proceeding to send SIP BYE to Asterisk
+2026-08-13 07:36:03.867 [S0pcsSiaH0Ut] BYE target source=dialog domain=sipclient.ttrs.or.th port=5060
+2026-08-13 07:36:03.874 [S0pcsSiaH0Ut] BYE Request-URI: sip:614131@203.150.245.41:5060
+2026-08-13 07:36:03.874 [S0pcsSiaH0Ut] Adding 2 Route headers to BYE
+2026-08-13 07:36:03.874 [S0pcsSiaH0Ut] Created BYE request - Call-ID: 1c7veSnf3FtMMSKK@203.151.21.121, CSeq: 3
+2026-08-13 07:36:03.874 
+2026-08-13 07:36:03.874 === BYE Request (Session S0pcsSiaH0Ut) ===
+2026-08-13 07:36:03.874 BYE sip:614131@203.150.245.41:5060 SIP/2.0
+2026-08-13 07:36:03.874 Via: SIP/2.0/TCP 203.151.21.121:5090;branch=z9hG4bK.iOApjUEDGejbNQqr
+2026-08-13 07:36:03.874 Route: <sip:203.150.245.39;transport=tcp;r2=on;lr=on;did=f.b2a;rtp=bridge>
+2026-08-13 07:36:03.874 Route: <sip:203.150.245.39;r2=on;lr=on;did=f.b2a;rtp=bridge>
+2026-08-13 07:36:03.874 From: <sip:0000178667543@sipclient.ttrs.or.th>;tag=awbUxZreGDXC2M29
+2026-08-13 07:36:03.874 To: <sip:14131@sipclient.ttrs.or.th>;tag=as04165c96
+2026-08-13 07:36:03.874 Call-ID: 1c7veSnf3FtMMSKK@203.151.21.121
+2026-08-13 07:36:03.874 CSeq: 3 BYE
+2026-08-13 07:36:03.874 Max-Forwards: 70
+2026-08-13 07:36:03.874 Contact: <sip:0000178667543@203.151.21.121:5090;transport=tcp>
+2026-08-13 07:36:03.875 User-Agent: TTRS-K2Gateway/1.0
+2026-08-13 07:36:03.875 
+2026-08-13 07:36:03.875 
+2026-08-13 07:36:03.875 ================================
+2026-08-13 07:36:03.875 
+2026-08-13 07:36:03.882 [S0pcsSiaH0Ut] BYE response: 200 OK
+2026/08/13 07:36:03.882059 [S0pcsSiaH0Ut] 📡 WS call-progress type=state state=ended reason=session-state
+2026-08-13 07:36:03.882 [S0pcsSiaH0Ut] 📈 hangup_cleanup_start preState=active
+2026-08-13 07:36:03.882 [S0pcsSiaH0Ut] ✅ PeerConnection closed
+2026-08-13 07:36:03.882 [S0pcsSiaH0Ut] 📈 hangup_cleanup_end postState=ended
+2026-08-13 07:36:03.883 [S0pcsSiaH0Ut] Call terminated
+2026-08-13 07:36:03.884 [S0pcsSiaH0Ut] Deleted session
+2026-08-13 07:36:04.255 [S0pcsSiaH0Ut] ICE Connection State: closed
+2026-08-13 07:36:04.255 [S0pcsSiaH0Ut] 🧊 ICE closed ignored during terminal cleanup (state=ended action=bye)

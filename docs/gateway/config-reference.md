@@ -56,7 +56,7 @@ When `AUTH_ENABLE=true`:
 - `SIP_SWITCH_VIDEO_BLACKOUT_ENABLED` (default `true`)
 - `SIP_SWITCH_VIDEO_BLACKOUT_MS` (default `300`; minimum blackout before gate may release in `blackout` mode)
 - `SIP_SWITCH_VIDEO_BLACKOUT_MAX_WAIT_MS` (default `1200`)
-- `SIP_SWITCH_VIDEO_RENEGOTIATE_ENABLE` (default `true`; after `@switch` gate release, emit WebSocket `renegotiate` with `reason=agent_switch` so clients reset the remote video decoder via offer/answer)
+- `SIP_SWITCH_VIDEO_RENEGOTIATE_ENABLE` (default `true`; after `@switch` gate release, emit WebSocket `renegotiate` with `reason=agent_switch` and a gateway WebRTC offer so existing clients answer in place. Before `CreateOffer`, the gateway restores H.264 codec preferences for the SIP packetization mode so 1.3.7's single remote-PT lock does not ride into the mid-call offer.)
 - `SIP_VIDEO_KEYFRAME_WATCHDOG` (default `true`)
 - `SIP_VIDEO_KEYFRAME_WATCHDOG_INTERVAL_MS` (default `1000`)
 - `SIP_VIDEO_KEYFRAME_STALE_MS` (default `2500`)

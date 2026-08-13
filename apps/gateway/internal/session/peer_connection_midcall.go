@@ -7,13 +7,19 @@ import (
 )
 
 // CreatePeerConnectionOffer builds an in-place WebRTC offer on the active
-// PeerConnection. Used for @switch client-assisted renegotiation.
+// PeerConnection for @switch. Existing clients answer this offer; the gateway
+// restores H.264 preferences first so a 1.3.7 remote-PT lock does not carry
+// into CreateOffer.
 func (s *Session) CreatePeerConnectionOffer() (string, error) {
 	s.mu.RLock()
 	pc := s.PeerConnection
 	s.mu.RUnlock()
 	if pc == nil {
 		return "", fmt.Errorf("peer connection not available")
+	}
+
+	if err := restoreSwitchOfferH264Preferences(pc, s.GetSIPVideoPacketizationMode()); err != nil {
+		fmt.Printf("[%s] switch_renegotiate restore_h264 warning=%v\n", s.ID, err)
 	}
 
 	offer, err := pc.CreateOffer(nil)

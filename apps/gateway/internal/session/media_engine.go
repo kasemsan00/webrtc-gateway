@@ -191,3 +191,69 @@ func PreferWebRTCH264PacketizationMode(pc *webrtc.PeerConnection, offerSDP strin
 	}
 	return nil
 }
+
+func localH264CodecsForPacketizationMode(mode uint8) []webrtc.RTPCodecParameters {
+	if mode != 0 {
+		mode = 1
+	}
+	feedback := []webrtc.RTCPFeedback{
+		{Type: "nack"},
+		{Type: "nack", Parameter: "pli"},
+		{Type: "ccm", Parameter: "fir"},
+		{Type: "goog-remb"},
+		{Type: "transport-cc"},
+	}
+	if mode == 0 {
+		return []webrtc.RTPCodecParameters{
+			h264CodecParameters(98, h264ConstrainedBaselineProfile, 0, feedback),
+			h264CodecParameters(99, h264BaselineProfile, 0, feedback),
+		}
+	}
+	return []webrtc.RTPCodecParameters{
+		h264CodecParameters(96, h264ConstrainedBaselineProfile, 1, feedback),
+		h264CodecParameters(97, h264BaselineProfile, 1, feedback),
+	}
+}
+
+// restoreSwitchOfferH264Preferences replaces the single remote-PT lock from
+// PreferWebRTCH264PacketizationMode with the negotiated codec plus the local
+// MediaEngine codecs for the SIP mode. In-place CreateOffer on a one-codec
+// lock is what broke React Native after 1.3.7; 1.3.6 advertised a wider list
+// and kept the same WS offer/answer contract.
+func restoreSwitchOfferH264Preferences(pc *webrtc.PeerConnection, mode uint8) error {
+	if pc == nil {
+		return fmt.Errorf("peer connection not available")
+	}
+	if mode != 0 {
+		mode = 1
+	}
+
+	codecs := make([]webrtc.RTPCodecParameters, 0, 4)
+	seen := make(map[webrtc.PayloadType]bool)
+	if ld := pc.LocalDescription(); ld != nil && ld.SDP != "" {
+		if negotiated, err := offeredH264CodecForPacketizationMode(ld.SDP, mode); err == nil {
+			codecs = append(codecs, negotiated)
+			seen[negotiated.PayloadType] = true
+		}
+	}
+	for _, codec := range localH264CodecsForPacketizationMode(mode) {
+		if seen[codec.PayloadType] {
+			continue
+		}
+		codecs = append(codecs, codec)
+		seen[codec.PayloadType] = true
+	}
+	if len(codecs) == 0 {
+		return fmt.Errorf("no H264 packetization-mode=%d codecs for switch offer", mode)
+	}
+
+	for _, transceiver := range pc.GetTransceivers() {
+		if transceiver.Kind() != webrtc.RTPCodecTypeVideo {
+			continue
+		}
+		if err := transceiver.SetCodecPreferences(codecs); err != nil {
+			return fmt.Errorf("restore H264 packetization-mode=%d switch offer preference: %w", mode, err)
+		}
+	}
+	return nil
+}

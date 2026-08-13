@@ -1,0 +1,200 @@
+2026-08-13 07:31:29.872 [TnjTJB29ELP6] 🔑 KEYFRAME (Forwarded) detected in video packet #312 → Asterisk
+2026-08-13 07:31:29.872 [TnjTJB29ELP6] 📤 Re-packetized video #312 (Seq=26561, SSRC=2332545628, Size=1040) → 203.150.245.39:28646
+2026-08-13 07:31:29.881 [TnjTJB29ELP6] Audio RTP packet #4 received: 152 bytes from 203.150.245.39:28614
+2026-08-13 07:31:29.881 [TnjTJB29ELP6 inbound] translator passthrough_no_frame count=4 packets_in=4 packets_out=0 responses=0 audio_responses=0 empty_audio_responses=0
+2026-08-13 07:31:29.881 [TnjTJB29ELP6] 🎤 Inbound translation pending for packet #4 (suppressing original audio)
+2026-08-13 07:31:29.901 [TnjTJB29ELP6] Audio RTP packet #5 received: 121 bytes from 203.150.245.39:28614
+2026-08-13 07:31:29.901 [TnjTJB29ELP6 inbound] translator passthrough_no_frame count=5 packets_in=5 packets_out=0 responses=0 audio_responses=0 empty_audio_responses=0
+2026-08-13 07:31:29.901 [TnjTJB29ELP6] 🎤 Inbound translation pending for packet #5 (suppressing original audio)
+2026-08-13 07:31:29.972 [TnjTJB29ELP6] ✅ Startup recovery settled after keyframe; stopping PLI burst
+2026-08-13 07:31:30.172 [TnjTJB29ELP6] 💉 Injected SPS (NRI=3) copy 1/1 (Seq=26606, Size=25, Keyframe=true)
+2026-08-13 07:31:30.173 [TnjTJB29ELP6] 💉 Injected PPS (NRI=3) copy 1/1 (Seq=26607, Size=16, Keyframe=true)
+2026-08-13 07:31:30.173 [TnjTJB29ELP6] 🔑 KEYFRAME (Forwarded) detected in video packet #356 → Asterisk
+2026-08-13 07:31:30.173 [TnjTJB29ELP6] 📤 Re-packetized video #356 (Seq=26608, SSRC=2332545628, Size=1109) → 203.150.245.39:28646
+2026-08-13 07:31:30.466 [TnjTJB29ELP6] 💉 Injected SPS (NRI=3) copy 1/1 (Seq=26654, Size=25, Keyframe=true)
+2026-08-13 07:31:30.466 [TnjTJB29ELP6] 💉 Injected PPS (NRI=3) copy 1/1 (Seq=26655, Size=16, Keyframe=true)
+2026-08-13 07:31:30.466 [TnjTJB29ELP6] 🔑 KEYFRAME (Forwarded) detected in video packet #401 → Asterisk
+2026-08-13 07:31:30.466 [TnjTJB29ELP6] 📤 Re-packetized video #401 (Seq=26656, SSRC=2332545628, Size=1129) → 203.150.245.39:28646
+2026-08-13 07:31:30.859 [TnjTJB29ELP6 inbound] translation response #1 audio_bytes=0 final=false same_text=false source=th target=en recognized="กร" translated="Korn"
+2026-08-13 07:31:31.110 [TnjTJB29ELP6] 📤 Re-packetized video #500 (Seq=26755, SSRC=2332545628, Size=1147) → 203.150.245.39:28646
+2026-08-13 07:31:31.262 [TnjTJB29ELP6 inbound] translation response #2 audio_bytes=0 final=false same_text=false source=th target=en recognized="กรุณา" translated="Please"
+2026-08-13 07:31:31.408 [TnjTJB29ELP6] 🔄 Periodic PLI #7 to browser
+2026-08-13 07:31:31.468 [TnjTJB29ELP6] 💉 Injected SPS (NRI=3) copy 1/1 (Seq=26810, Size=25, Keyframe=true)
+2026-08-13 07:31:31.468 [TnjTJB29ELP6] 💉 Injected PPS (NRI=3) copy 1/1 (Seq=26811, Size=16, Keyframe=true)
+2026-08-13 07:31:31.468 [TnjTJB29ELP6] 🔑 KEYFRAME (Forwarded) detected in video packet #554 → Asterisk
+2026-08-13 07:31:31.468 [TnjTJB29ELP6] 📤 Re-packetized video #554 (Seq=26812, SSRC=2332545628, Size=1136) → 203.150.245.39:28646
+2026-08-13 07:31:31.711 [TnjTJB29ELP6] ⚠️ (burst) Keyframe stale for 1.888532277s (>= 1.2s) - sending PLI to SIP
+2026-08-13 07:31:31.766 [TnjTJB29ELP6 inbound] translation response #3 audio_bytes=0 final=false same_text=false source=th target=en recognized="กรุณา รอสัก" translated="Please wait for a tattoo"
+2026-08-13 07:31:31.986 [TnjTJB29ELP6 inbound] translation response #4 audio_bytes=0 final=false same_text=false source=th target=en recognized="กรุณา รอสักคร" translated="Please wait for a while"
+2026-08-13 07:31:31.986 [TnjTJB29ELP6 inbound] translation partial_t2s skipped count=1
+2026-08-13 07:31:32.512 [TnjTJB29ELP6] ⚠️ Keyframe stale for 2.689589713s (>= 2.5s) - sending FIR to SIP
+2026-08-13 07:31:32.697 [TnjTJB29ELP6] 📨 Video RTCP packet #1 received: 100 bytes from 203.150.245.39:28646
+2026-08-13 07:31:32.697 [TnjTJB29ELP6] Received SR from Linphone (SSRC=1445460580)
+2026-08-13 07:31:32.697 [TnjTJB29ELP6] Received RTCP type *rtcp.SourceDescription from Linphone
+2026-08-13 07:31:32.941 [TnjTJB29ELP6] 📸 Received PLI from browser for video (RTPSender)
+2026-08-13 07:31:32.941 [TnjTJB29ELP6] 📈 browser_recovery_handled trigger=browser-pli action=pli burst=true keyframeAge=3.118728914s remoteVideoSSRC=1445460580 target=rtp-learn/203.150.245.39:28646 reason=forced-startup
+2026-08-13 07:31:32.950 [TnjTJB29ELP6 inbound] translation response #5 audio_bytes=55086 final=true same_text=false source=th target=en recognized="กรุณา รอสักครู่" translated="Please wait."
+2026/08/13 07:31:32.986964 [TnjTJB29ELP6] 📡 WS media kind=audio direction=remote state=receiving
+2026-08-13 07:31:33.313 [TnjTJB29ELP6] ⚠️ Keyframe stale for 3.490248936s (>= 2.5s) - sending FIR to SIP
+2026-08-13 07:31:33.408 [TnjTJB29ELP6] 🔄 Periodic PLI #8 to browser
+2026-08-13 07:31:33.458 [TnjTJB29ELP6] 💉 Injected SPS (NRI=3) copy 1/1 (Seq=27112, Size=25, Keyframe=true)
+2026-08-13 07:31:33.458 [TnjTJB29ELP6] 💉 Injected PPS (NRI=3) copy 1/1 (Seq=27113, Size=16, Keyframe=true)
+2026-08-13 07:31:33.458 [TnjTJB29ELP6] 🔑 KEYFRAME (Forwarded) detected in video packet #853 → Asterisk
+2026-08-13 07:31:33.458 [TnjTJB29ELP6] 📤 Re-packetized video #853 (Seq=27114, SSRC=2332545628, Size=1064) → 203.150.245.39:28646
+2026-08-13 07:31:33.523 [TnjTJB29ELP6 inbound] translation partial_t2s audio generated attempt=1 successes=1 bytes=74446 target=en voice="en-US-AriaNeural" translated="Please wait for a tattoo"
+2026-08-13 07:31:33.671 🔀 Found @switch: message: @switch:14131|00025, handling PLI Keyframe...
+2026-08-13 07:31:33.671 💬 MESSAGE from 00025 to sip:0000178662875@203.150.245.39:5060 (19 bytes)
+2026-08-13 07:31:33.671 🔀 @switch message: queue=14131, agent=00025, caller=sip:0000178662875@203.150.245.39:5060 (username: 0000178662875)
+2026-08-13 07:31:33.672 📍 Found session TnjTJB29ELP6 for caller 0000178662875 (queue: 14131, agent: 00025)
+2026-08-13 07:31:33.672 2026/08/13 07:31:33.671974 💬 Sent message notification to client (sessionID=TnjTJB29ELP6 targetSessionID=TnjTJB29ELP6)
+2026/08/13 07:31:33.672095 💬 SIP message fanout summary: from=00025 to=sip:0000178662875@203.150.245.39:5060 targetSessionID=TnjTJB29ELP6 recipients=1 filtered=0 duplicates=0 total=1 bodyBytes=19
+[TnjTJB29ELP6] switch_target_honored queue=14131 agent=00025 generation=1 mediaEpoch=1 reason=new-target ssrc=1445460580 source=203.150.245.39:28646 duplicateCount=0 debounceMs=60000 mediaGeneration=ssrc=1445460580 source=203.150.245.39:28646
+2026-08-13 07:31:33.672 [TnjTJB29ELP6] switch_video_gate_activation generation=1 mediaEpoch=1 outcome=active active=true feedbackBaseline=7 rejectReason=
+2026-08-13 07:31:33.672 [TnjTJB29ELP6] switch_sps_pps_inject_armed generation=1 remaining=3
+2026-08-13 07:31:33.672 [TnjTJB29ELP6] switch_recovery_start until=2026-08-13T07:31:38.672001296Z stableWindow=750ms
+2026-08-13 07:31:33.672 [TnjTJB29ELP6] 📈 video_recovery_window_start reason=switch until=2026-08-13T07:31:38.672001296Z
+2026-08-13 07:31:33.672 [TnjTJB29ELP6] 📈 recovery_policy interval=800ms stale=1.2s firStale=2.5s
+2026-08-13 07:31:33.672 [TnjTJB29ELP6] 🔀 Sent @switch: immediate FIR + PLI kick to both endpoints
+2026-08-13 07:31:33.672 [TnjTJB29ELP6] switch_transition_hold_start mode=preserve reason=switch blackoutUntil=2026-08-13T07:31:33.672354272Z maxWaitUntil=2026-08-13T07:31:34.872354272Z
+2026/08/13 07:31:33.688229 💬 Sent message notification to client (sessionID=TnjTJB29ELP6 targetSessionID=TnjTJB29ELP6)
+2026/08/13 07:31:33.688272 💬 SIP message fanout summary: from=00025 to=sip:0000178662875@203.150.245.39:5060 targetSessionID=TnjTJB29ELP6 recipients=1 filtered=0 duplicates=0 total=1 bodyBytes=10
+2026-08-13 07:31:33.688 💬 MESSAGE from 00025 to sip:0000178662875@203.150.245.39:5060 (10 bytes)
+2026-08-13 07:31:34.160 [TnjTJB29ELP6] h264_au_source_reset reason=switch-generation previous_generation=0 generation=1
+2026-08-13 07:31:34.160 [TnjTJB29ELP6] switch_transition_hold_end mode=preserve reason=gate-released heldMs=488 firstKeyframeMs=-1
+2026-08-13 07:31:34.160 [TnjTJB29ELP6] switch_video_gate_release generation=1 waitMs=488 ssrc=1445460580 packets=9 injection=false rejected=0 feedback=3
+2026-08-13 07:31:34.161 [TnjTJB29ELP6] 🧊 ICE Candidate gathering complete
+2026-08-13 07:31:34.161 [TnjTJB29ELP6] switch_renegotiate ice_gathering=complete
+2026/08/13 07:31:34.161277 [TnjTJB29ELP6] switch_renegotiate_started generation=1 renegotiationId=reneg-1786606294161194038
+2026-08-13 07:31:34.161 [TnjTJB29ELP6] switch_recovery_first_keyframe elapsed_ms=488
+2026-08-13 07:31:34.161 [TnjTJB29ELP6] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1000048590 pli_response=true response_time=489.038126ms pli_sent=10 pli_responses=2
+2026-08-13 07:31:34.489 [TnjTJB29ELP6] 📈 video_recovery_window_end reason=stable-rtp keyframe_recovery_ms=817
+2026-08-13 07:31:34.489 [TnjTJB29ELP6] switch_recovery_end reason=stable-rtp recovery_ms=817 first_keyframe_ms=488 packets=154 gaps=10 missing=13 ooo=13 dup=0 reorder(buf=15 rel=152 drop=0 to=0 pend=0) keyframeAge=327.772797ms
+2026-08-13 07:31:34.760 [TnjTJB29ELP6] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1000102590 pli_response=true response_time=1.088533824s pli_sent=10 pli_responses=3
+2026-08-13 07:31:35.020 [TnjTJB29ELP6] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1000125990 pli_response=true response_time=1.348530547s pli_sent=10 pli_responses=4
+2026-08-13 07:31:35.161 [TnjTJB29ELP6] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1000138590 pli_response=true response_time=1.488891827s pli_sent=10 pli_responses=5
+2026-08-13 07:31:35.408 [TnjTJB29ELP6] 🔄 Periodic PLI #9 to browser
+2026-08-13 07:31:35.672 [TnjTJB29ELP6] 🔀 Sending @switch: FIR burst (3x @ 50ms)
+2026-08-13 07:31:35.761 [TnjTJB29ELP6] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1000192590 pli_response=true response_time=37.6745ms pli_sent=14 pli_responses=6
+2026-08-13 07:31:35.819 [TnjTJB29ELP6] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1000197990 pli_response=true response_time=46.08027ms pli_sent=16 pli_responses=7
+2026-08-13 07:31:35.824 [TnjTJB29ELP6] 🔀 Sending @switch: PLI burst (3x @ 50ms)
+2026-08-13 07:31:35.961 [TnjTJB29ELP6] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1000210590 pli_response=true response_time=35.619047ms pli_sent=17 pli_responses=8
+2026-08-13 07:31:35.977 ✅ Sent @switch immediate kick + FIR/PLI bursts (Browser + Asterisk) for session: TnjTJB29ELP6
+2026-08-13 07:31:36.160 [TnjTJB29ELP6] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1000228590 pli_response=true response_time=234.561529ms pli_sent=17 pli_responses=9
+2026-08-13 07:31:36.288 [TnjTJB29ELP6] 📊 SIP→WebRTC video stats: packets=300 gaps=23 missing=28 ooo=28 dup=0 reorder(buf=31 rel=298 drop=0 to=0 pend=0) keyframeAge=100ms
+2026-08-13 07:31:36.288 [TnjTJB29ELP6] h264_au_stats emitted=62 dropped_incomplete=0 dropped_overflow=0 pending_packets=3
+2026-08-13 07:31:37.159 [TnjTJB29ELP6] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1000318590 pli_response=true response_time=1.233444722s pli_sent=17 pli_responses=10
+2026-08-13 07:31:37.409 [TnjTJB29ELP6] 🔄 Periodic PLI #10 to browser
+2026-08-13 07:31:37.697 [TnjTJB29ELP6] 📨 Video RTCP packet #2 received: 100 bytes from 203.150.245.39:28646
+2026-08-13 07:31:37.697 [TnjTJB29ELP6] Received SR from Linphone (SSRC=1445460580)
+2026-08-13 07:31:37.697 [TnjTJB29ELP6] Received RTCP type *rtcp.SourceDescription from Linphone
+2026-08-13 07:31:38.160 [TnjTJB29ELP6] h264_au_normalized status=complete-idr packets=8 injected_parameter_sets=false source_timestamp=1000408590 pli_response=false response_time=2.234195689s pli_sent=17 pli_responses=10
+2026-08-13 07:31:39.160 [TnjTJB29ELP6] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1000498590 pli_response=false response_time=3.234214753s pli_sent=17 pli_responses=10
+2026-08-13 07:31:39.408 [TnjTJB29ELP6] 🔄 Periodic PLI #11 to browser
+2026-08-13 07:31:40.160 [TnjTJB29ELP6] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1000588590 pli_response=false response_time=4.233881352s pli_sent=17 pli_responses=10
+2026-08-13 07:31:40.888 [TnjTJB29ELP6] 📊 SIP→WebRTC video stats: packets=600 gaps=32 missing=37 ooo=37 dup=0 reorder(buf=41 rel=597 drop=0 to=0 pend=0) keyframeAge=700ms
+2026-08-13 07:31:40.888 [TnjTJB29ELP6] h264_au_stats emitted=131 dropped_incomplete=0 dropped_overflow=0 pending_packets=3
+2026-08-13 07:31:41.160 [TnjTJB29ELP6] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1000678590 pli_response=false response_time=5.234181088s pli_sent=17 pli_responses=10
+2026-08-13 07:31:41.409 [TnjTJB29ELP6] 🔄 Periodic PLI #12 to browser
+2026-08-13 07:31:42.160 [TnjTJB29ELP6] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1000768590 pli_response=false response_time=6.233720857s pli_sent=17 pli_responses=10
+2026-08-13 07:31:42.697 [TnjTJB29ELP6] 📨 Video RTCP packet #3 received: 100 bytes from 203.150.245.39:28646
+2026-08-13 07:31:42.697 [TnjTJB29ELP6] Received SR from Linphone (SSRC=1445460580)
+2026-08-13 07:31:42.697 [TnjTJB29ELP6] Received RTCP type *rtcp.SourceDescription from Linphone
+2026-08-13 07:31:43.160 [TnjTJB29ELP6] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1000858590 pli_response=false response_time=7.233939191s pli_sent=17 pli_responses=10
+2026-08-13 07:31:43.408 [TnjTJB29ELP6] 🔄 Periodic PLI #13 to browser
+2026-08-13 07:31:44.161 [TnjTJB29ELP6] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1000948590 pli_response=false response_time=8.23481438s pli_sent=17 pli_responses=10
+2026-08-13 07:31:45.220 [TnjTJB29ELP6] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1001043990 pli_response=false response_time=9.294079798s pli_sent=17 pli_responses=10
+2026-08-13 07:31:45.408 [TnjTJB29ELP6] 🔄 Periodic PLI #14 to browser
+2026-08-13 07:31:45.418 [TnjTJB29ELP6] 📊 SIP→WebRTC video stats: packets=900 gaps=50 missing=59 ooo=59 dup=0 reorder(buf=66 rel=896 drop=0 to=0 pend=0) keyframeAge=200ms
+2026-08-13 07:31:45.418 [TnjTJB29ELP6] h264_au_stats emitted=198 dropped_incomplete=0 dropped_overflow=0 pending_packets=3
+2026-08-13 07:31:46.220 [TnjTJB29ELP6] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1001133990 pli_response=false response_time=10.294348279s pli_sent=17 pli_responses=10
+2026-08-13 07:31:47.220 [TnjTJB29ELP6] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1001223990 pli_response=false response_time=11.294261702s pli_sent=17 pli_responses=10
+2026-08-13 07:31:47.409 [TnjTJB29ELP6] Stopping periodic PLI sender - startup window ended
+2026-08-13 07:31:47.452 [TnjTJB29ELP6] 🎤 Translation pending for packet #1000 (suppressing original audio)
+2026-08-13 07:31:47.690 [TnjTJB29ELP6 outbound] translator passthrough_no_frame count=1000 packets_in=1000 packets_out=0 responses=0 audio_responses=0 empty_audio_responses=0
+2026-08-13 07:31:47.697 [TnjTJB29ELP6] 📨 Video RTCP packet #4 received: 100 bytes from 203.150.245.39:28646
+2026-08-13 07:31:47.697 [TnjTJB29ELP6] Received RTCP type *rtcp.SourceDescription from Linphone
+2026-08-13 07:31:48.220 [TnjTJB29ELP6] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1001313990 pli_response=false response_time=12.293892452s pli_sent=17 pli_responses=10
+2026-08-13 07:31:49.220 [TnjTJB29ELP6] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1001403990 pli_response=false response_time=13.294466575s pli_sent=17 pli_responses=10
+2026-08-13 07:31:49.669 [TnjTJB29ELP6] Audio RTP packet #1000 received: 71 bytes from 203.150.245.39:28614
+2026-08-13 07:31:49.669 [TnjTJB29ELP6] 🎤 Inbound translation pending for packet #1000 (suppressing original audio)
+2026-08-13 07:31:49.888 [TnjTJB29ELP6] 📊 SIP→WebRTC video stats: packets=1200 gaps=59 missing=71 ooo=71 dup=0 reorder(buf=79 rel=1195 drop=0 to=0 pend=0) keyframeAge=700ms
+2026-08-13 07:31:49.888 [TnjTJB29ELP6] h264_au_stats emitted=265 dropped_incomplete=0 dropped_overflow=0 pending_packets=4
+2026-08-13 07:31:50.220 [TnjTJB29ELP6] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1001493990 pli_response=false response_time=14.294617074s pli_sent=17 pli_responses=10
+2026-08-13 07:31:51.220 [TnjTJB29ELP6] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1001583990 pli_response=false response_time=15.294479818s pli_sent=17 pli_responses=10
+2026-08-13 07:31:52.222 [TnjTJB29ELP6] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1001673990 pli_response=false response_time=16.295917592s pli_sent=17 pli_responses=10
+2026-08-13 07:31:52.697 [TnjTJB29ELP6] 📨 Video RTCP packet #5 received: 100 bytes from 203.150.245.39:28646
+2026-08-13 07:31:52.697 [TnjTJB29ELP6] Received RTCP type *rtcp.SourceDescription from Linphone
+2026-08-13 07:31:53.221 [TnjTJB29ELP6] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1001763990 pli_response=false response_time=17.294906505s pli_sent=17 pli_responses=10
+2026-08-13 07:31:53.705 [TnjTJB29ELP6 inbound] translator passthrough_no_frame count=1000 packets_in=1001 packets_out=203 responses=5 audio_responses=1 empty_audio_responses=4
+2026-08-13 07:31:54.220 [TnjTJB29ELP6] 📊 SIP→WebRTC video stats: packets=1500 gaps=69 missing=83 ooo=83 dup=0 reorder(buf=94 rel=1489 drop=0 to=0 pend=5) keyframeAge=1s
+2026-08-13 07:31:54.220 [TnjTJB29ELP6] h264_au_stats emitted=330 dropped_incomplete=0 dropped_overflow=0 pending_packets=3
+2026-08-13 07:31:54.220 [TnjTJB29ELP6] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1001853990 pli_response=false response_time=18.294439111s pli_sent=17 pli_responses=10
+2026-08-13 07:31:55.219 [TnjTJB29ELP6] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1001943990 pli_response=false response_time=19.293541611s pli_sent=17 pli_responses=10
+2026-08-13 07:31:56.220 [TnjTJB29ELP6] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1002033990 pli_response=false response_time=20.294562671s pli_sent=17 pli_responses=10
+2026-08-13 07:31:57.219 [TnjTJB29ELP6] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1002123990 pli_response=false response_time=21.293718362s pli_sent=17 pli_responses=10
+2026-08-13 07:31:57.697 [TnjTJB29ELP6] 📨 Video RTCP packet #6 received: 100 bytes from 203.150.245.39:28646
+2026-08-13 07:31:58.220 [TnjTJB29ELP6] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1002213990 pli_response=false response_time=22.294063467s pli_sent=17 pli_responses=10
+2026-08-13 07:31:58.758 [TnjTJB29ELP6] 📊 SIP→WebRTC video stats: packets=1800 gaps=83 missing=100 ooo=100 dup=0 reorder(buf=113 rel=1793 drop=0 to=0 pend=0) keyframeAge=500ms
+2026-08-13 07:31:58.759 [TnjTJB29ELP6] h264_au_stats emitted=398 dropped_incomplete=0 dropped_overflow=0 pending_packets=1
+2026-08-13 07:31:59.220 [TnjTJB29ELP6] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1002303990 pli_response=false response_time=23.294256501s pli_sent=17 pli_responses=10
+2026-08-13 07:32:00.221 [TnjTJB29ELP6] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1002393990 pli_response=false response_time=24.295300243s pli_sent=17 pli_responses=10
+2026-08-13 07:32:01.220 [TnjTJB29ELP6] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1002483990 pli_response=false response_time=25.294744387s pli_sent=17 pli_responses=10
+2026-08-13 07:32:02.220 [TnjTJB29ELP6] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1002573990 pli_response=false response_time=26.294602961s pli_sent=17 pli_responses=10
+2026-08-13 07:32:02.697 [TnjTJB29ELP6] 📨 Video RTCP packet #7 received: 100 bytes from 203.150.245.39:28646
+2026-08-13 07:32:03.219 [TnjTJB29ELP6] 📊 SIP→WebRTC video stats: packets=2100 gaps=100 missing=128 ooo=123 dup=0 reorder(buf=138 rel=2091 drop=0 to=0 pend=1) keyframeAge=1s
+2026-08-13 07:32:03.219 [TnjTJB29ELP6] h264_au_stats emitted=465 dropped_incomplete=0 dropped_overflow=0 pending_packets=1
+2026-08-13 07:32:03.220 [TnjTJB29ELP6] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1002663990 pli_response=false response_time=27.293767245s pli_sent=17 pli_responses=10
+2026-08-13 07:32:04.221 [TnjTJB29ELP6] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1002753990 pli_response=false response_time=28.294892758s pli_sent=17 pli_responses=10
+2026-08-13 07:32:05.220 [TnjTJB29ELP6] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1002843990 pli_response=false response_time=29.294067731s pli_sent=17 pli_responses=10
+2026-08-13 07:32:06.220 [TnjTJB29ELP6] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1002933990 pli_response=false response_time=30.294348196s pli_sent=17 pli_responses=10
+2026-08-13 07:32:07.361 [TnjTJB29ELP6] h264_au_normalized status=complete-idr packets=9 injected_parameter_sets=false source_timestamp=1003036590 pli_response=false response_time=31.435119973s pli_sent=17 pli_responses=10
+2026-08-13 07:32:07.457 [TnjTJB29ELP6] 🎤 Translation pending for packet #2000 (suppressing original audio)
+2026-08-13 07:32:07.691 [TnjTJB29ELP6 outbound] translator passthrough_no_frame count=2000 packets_in=2000 packets_out=0 responses=0 audio_responses=0 empty_audio_responses=0
+2026-08-13 07:32:07.697 [TnjTJB29ELP6] 📨 Video RTCP packet #8 received: 100 bytes from 203.150.245.39:28646
+2026-08-13 07:32:07.889 [TnjTJB29ELP6] 📊 SIP→WebRTC video stats: packets=2400 gaps=114 missing=144 ooo=144 dup=0 reorder(buf=160 rel=2391 drop=0 to=0 pend=0) keyframeAge=500ms
+2026-08-13 07:32:07.889 [TnjTJB29ELP6] h264_au_stats emitted=532 dropped_incomplete=0 dropped_overflow=0 pending_packets=1
+2026/08/13 07:32:08.358266 [TnjTJB29ELP6] 🎤 Translation disabled via WS
+2026-08-13 07:32:08.358 [TnjTJB29ELP6] 🎤 Translation disabled
+2026-08-13 07:32:08.382 [TnjTJB29ELP6] Error reading audio from WebRTC: EOF
+2026-08-13 07:32:08.382 [TnjTJB29ELP6] Error reading video from WebRTC: EOF
+2026-08-13 07:32:08.382 
+2026-08-13 07:32:08.382 === [TnjTJB29ELP6] Hangup Request ===
+2026-08-13 07:32:08.382 [TnjTJB29ELP6] Direction: 'outbound'
+2026-08-13 07:32:08.382 [TnjTJB29ELP6] SIPCallID: 'mqQb6JCPm4U0FkjZ@203.151.21.121'
+2026-08-13 07:32:08.382 [TnjTJB29ELP6] SIPFromTag: 'V5G17kgLOYAXG0KS'
+2026-08-13 07:32:08.382 [TnjTJB29ELP6] SIPToTag: 'as454a9f7e'
+2026-08-13 07:32:08.382 [TnjTJB29ELP6] SIPRemoteContact: '<sip:614131@203.150.245.41:5060>'
+2026-08-13 07:32:08.382 [TnjTJB29ELP6] SIPCSeq: 2
+2026-08-13 07:32:08.382 [TnjTJB29ELP6] From: '0000178662875', To: '14131'
+2026-08-13 07:32:08.382 [TnjTJB29ELP6] sipClient is nil: false
+2026-08-13 07:32:08.382 [TnjTJB29ELP6] ✅ Proceeding to send SIP BYE to Asterisk
+2026-08-13 07:32:08.382 [TnjTJB29ELP6] BYE target source=dialog domain=sipclient.ttrs.or.th port=5060
+2026-08-13 07:32:08.389 [TnjTJB29ELP6] BYE Request-URI: sip:614131@203.150.245.41:5060
+2026-08-13 07:32:08.389 [TnjTJB29ELP6] Adding 2 Route headers to BYE
+2026-08-13 07:32:08.389 [TnjTJB29ELP6] Created BYE request - Call-ID: mqQb6JCPm4U0FkjZ@203.151.21.121, CSeq: 3
+2026-08-13 07:32:08.389 
+2026-08-13 07:32:08.389 === BYE Request (Session TnjTJB29ELP6) ===
+2026-08-13 07:32:08.389 BYE sip:614131@203.150.245.41:5060 SIP/2.0
+2026-08-13 07:32:08.389 Via: SIP/2.0/TCP 203.151.21.121:5090;branch=z9hG4bK.YRNIdK8IiSKQt8Z3
+2026-08-13 07:32:08.389 Route: <sip:203.150.245.39;transport=tcp;r2=on;lr=on;did=22a.6eb2;rtp=bridge>
+2026-08-13 07:32:08.389 Route: <sip:203.150.245.39;r2=on;lr=on;did=22a.6eb2;rtp=bridge>
+2026-08-13 07:32:08.389 From: <sip:0000178662875@sipclient.ttrs.or.th>;tag=V5G17kgLOYAXG0KS
+2026-08-13 07:32:08.389 To: <sip:14131@sipclient.ttrs.or.th>;tag=as454a9f7e
+2026-08-13 07:32:08.389 Call-ID: mqQb6JCPm4U0FkjZ@203.151.21.121
+2026-08-13 07:32:08.390 CSeq: 3 BYE
+2026-08-13 07:32:08.390 Max-Forwards: 70
+2026-08-13 07:32:08.390 Contact: <sip:0000178662875@203.151.21.121:5090;transport=tcp>
+2026-08-13 07:32:08.390 User-Agent: TTRS-K2Gateway/1.0
+2026-08-13 07:32:08.390 
+2026-08-13 07:32:08.390 
+2026-08-13 07:32:08.390 ================================
+2026-08-13 07:32:08.390 
+2026/08/13 07:32:08.397464 [TnjTJB29ELP6] 📡 WS call-progress type=state state=ended reason=session-state
+2026-08-13 07:32:08.397 [TnjTJB29ELP6] BYE response: 200 OK
+2026-08-13 07:32:08.397 [TnjTJB29ELP6] 📈 hangup_cleanup_start preState=active
+2026-08-13 07:32:08.397 [TnjTJB29ELP6] ✅ PeerConnection closed
+2026-08-13 07:32:08.397 [TnjTJB29ELP6] 📈 hangup_cleanup_end postState=ended
+2026-08-13 07:32:08.398 [TnjTJB29ELP6] Call terminated
+2026-08-13 07:32:08.398 [TnjTJB29ELP6] Deleted session
+2026-08-13 07:32:08.784 [TnjTJB29ELP6] ICE Connection State: closed
+2026-08-13 07:32:08.784 [TnjTJB29ELP6] 🧊 ICE closed ignored during terminal cleanup (state=ended action=bye)

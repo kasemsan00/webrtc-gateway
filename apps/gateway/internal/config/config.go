@@ -147,8 +147,8 @@ type SIPConfig struct {
 	VideoRecoveryBurstIntervalMS int  // Burst watchdog interval in ms (default: 800)
 	VideoRecoveryBurstStaleMS    int  // Burst stale threshold for PLI in ms (default: 1200)
 	VideoRecoveryBurstFIRStaleMS int  // Burst stale threshold for FIR in ms (default: 2500)
-	MidCallRenegotiationEnable    bool // Enable SIP mid-call re-INVITE/UPDATE negotiation (default: true)
-	SwitchVideoRenegotiateEnable  bool // Send WebRTC renegotiate after @switch gate release (default: true)
+	MidCallRenegotiationEnable   bool // Enable SIP mid-call re-INVITE/UPDATE negotiation (default: true)
+	SwitchVideoRenegotiateEnable bool // Send WebRTC renegotiate after @switch gate release (default: true)
 	// Inbound audio gain (SIP → WebRTC): decode Opus, apply PCM gain, re-encode Opus
 	AudioInboundGainEnable bool    // Enable inbound gain processing (default: false)
 	AudioInboundGain       float32 // Linear gain multiplier (default: 1.0)
