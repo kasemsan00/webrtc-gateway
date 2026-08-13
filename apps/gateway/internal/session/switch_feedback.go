@@ -99,6 +99,11 @@ func (s *Session) prepareSIPFeedbackLocked(kind string, force bool, trigger stri
 			return snapshot
 		}
 	}
+	if kind == "fir" {
+		if !s.LastSipFIRSent.IsZero() && now.Sub(s.LastSipFIRSent) < sipFIRMinInterval {
+			return snapshot
+		}
+	}
 
 	learnedAddr := cloneUDPAddr(s.AsteriskVideoRTCPAddr)
 	useFallback := now.Before(s.VideoRTCPFallbackUntil)
@@ -154,6 +159,13 @@ func (s *Session) prepareWebRTCFeedbackLocked(kind string, authority *switchFeed
 	if pc == nil {
 		return snapshot
 	}
+	now := time.Now()
+	if kind == "pli" && !s.LastWebRTCPLISent.IsZero() && now.Sub(s.LastWebRTCPLISent) < webrtcPLIMinInterval {
+		return snapshot
+	}
+	if kind == "fir" && !s.LastWebRTCFIRSent.IsZero() && now.Sub(s.LastWebRTCFIRSent) < webrtcFIRMinInterval {
+		return snapshot
+	}
 	for _, receiver := range pc.GetReceivers() {
 		track := receiver.Track()
 		if track == nil || track.Kind() != webrtc.RTPCodecTypeVideo {
@@ -162,12 +174,15 @@ func (s *Session) prepareWebRTCFeedbackLocked(kind string, authority *switchFeed
 		snapshot.pc = pc
 		snapshot.ssrc = uint32(track.SSRC())
 		snapshot.ready = true
+		if kind == "pli" {
+			s.LastWebRTCPLISent = now
+		}
 		if kind == "fir" {
-			now := time.Now()
 			snapshot.firSeq = s.FIRSeq
 			s.FIRSeq++
 			s.PLISent++
 			s.LastPLISent = now
+			s.LastWebRTCFIRSent = now
 			snapshot.count = s.PLISent
 		}
 		break

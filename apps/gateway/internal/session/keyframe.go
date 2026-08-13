@@ -9,12 +9,15 @@ import (
 )
 
 const (
-	pliKeyframeGrace    = 400 * time.Millisecond
-	pliMinInterval      = 150 * time.Millisecond
-	pliForceMinInterval = 150 * time.Millisecond
-	browserFIRInterval  = 1000 * time.Millisecond
-	browserPLIStale     = 600 * time.Millisecond
-	browserFIRStale     = 1500 * time.Millisecond
+	pliKeyframeGrace     = 400 * time.Millisecond
+	pliMinInterval       = 300 * time.Millisecond
+	pliForceMinInterval  = 300 * time.Millisecond
+	sipFIRMinInterval    = 1000 * time.Millisecond
+	webrtcPLIMinInterval = 400 * time.Millisecond
+	webrtcFIRMinInterval = 1000 * time.Millisecond
+	browserFIRInterval   = 1000 * time.Millisecond
+	browserPLIStale      = 600 * time.Millisecond
+	browserFIRStale      = 1500 * time.Millisecond
 )
 
 // shouldSendPLIToAsterisk gates PLI forwarding to avoid flooding.
@@ -91,6 +94,12 @@ func (s *Session) SendBrowserRecoveryToAsterisk(trigger string) string {
 	}
 
 	forceStartupRecovery := burstActive && isBrowserRecoveryTrigger(trigger)
+	if forceStartupRecovery && !lastKeyframe.IsZero() && now.Sub(lastKeyframe) < pliStale {
+		// A fresh IDR already landed. Forcing another FIR/PLI during the
+		// startup window over-drives the SIP encoder (live calls were
+		// requesting keyframes 19ms after a complete IDR).
+		forceStartupRecovery = false
+	}
 	shouldSendFIR := false
 	if !lastKeyframe.IsZero() {
 		age := now.Sub(lastKeyframe)
@@ -266,6 +275,47 @@ func (s *Session) KickUplinkKeyframeOnRemoteJoinIfNeeded() bool {
 	s.SendFIRToWebRTC()
 	s.SendPLItoWebRTC()
 	return true
+}
+
+// RecordUplinkKeyframe marks that a WebRTC→SIP IDR was forwarded.
+func (s *Session) RecordUplinkKeyframe() {
+	s.mu.Lock()
+	s.LastUplinkKeyframe = time.Now()
+	s.mu.Unlock()
+}
+
+// HasUplinkKeyframe reports whether any WebRTC→SIP IDR has been forwarded.
+func (s *Session) HasUplinkKeyframe() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return !s.LastUplinkKeyframe.IsZero()
+}
+
+// HasRecentUplinkKeyframe reports whether an uplink IDR was forwarded within maxAge.
+func (s *Session) HasRecentUplinkKeyframe(maxAge time.Duration) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return !s.LastUplinkKeyframe.IsZero() && time.Since(s.LastUplinkKeyframe) <= maxAge
+}
+
+// ShouldStopStartupBrowserPLI is true once the browser encoder is producing
+// parameter sets and at least one IDR. Periodic/startup PLI loops should stop.
+func (s *Session) ShouldStopStartupBrowserPLI() bool {
+	return s.HasCachedSPSPPS() && s.HasUplinkKeyframe()
+}
+
+// ShouldContinueSwitchFeedbackBurst reports whether delayed @switch FIR/PLI
+// retries are still useful. Immediate kick is sent separately.
+func (s *Session) ShouldContinueSwitchFeedbackBurst(generation int, mediaEpoch uint64, requireAuthority bool) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.State == StateEnded || s.State == StateReconnecting {
+		return false
+	}
+	if requireAuthority && (s.MediaEpoch != mediaEpoch || s.SwitchGeneration != generation) {
+		return false
+	}
+	return !s.SwitchFeedbackBurstSatisfied
 }
 
 // SendNACKToWebRTC forwards a NACK (Negative Acknowledgement) to the WebRTC browser

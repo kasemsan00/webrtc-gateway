@@ -94,6 +94,10 @@ type Session struct {
 	PLIBurstUntil                time.Time     `json:"-"`
 	LastSipPLISent               time.Time     `json:"-"`
 	LastSipFIRSent               time.Time     `json:"-"`
+	LastWebRTCPLISent            time.Time     `json:"-"`
+	LastWebRTCFIRSent            time.Time     `json:"-"`
+	LastUplinkKeyframe           time.Time     `json:"-"`
+	SwitchFeedbackBurstSatisfied bool          `json:"-"`
 	VideoRecoveryBurstEnabled    bool          `json:"-"`
 	VideoRecoveryBurstWindow     time.Duration `json:"-"`
 	VideoRecoveryBurstInterval   time.Duration `json:"-"`
@@ -415,19 +419,19 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 	// Create session with both audio and video tracks
 	burstWindow := time.Duration(cfg.SIP.VideoRecoveryBurstWindowMS) * time.Millisecond
 	if burstWindow <= 0 {
-		burstWindow = 12 * time.Second
+		burstWindow = 8 * time.Second
 	}
 	burstInterval := time.Duration(cfg.SIP.VideoRecoveryBurstIntervalMS) * time.Millisecond
 	if burstInterval <= 0 {
-		burstInterval = 800 * time.Millisecond
+		burstInterval = 1000 * time.Millisecond
 	}
 	burstStale := time.Duration(cfg.SIP.VideoRecoveryBurstStaleMS) * time.Millisecond
 	if burstStale <= 0 {
-		burstStale = 1200 * time.Millisecond
+		burstStale = 4000 * time.Millisecond
 	}
 	burstFIRStale := time.Duration(cfg.SIP.VideoRecoveryBurstFIRStaleMS) * time.Millisecond
 	if burstFIRStale <= 0 {
-		burstFIRStale = 2500 * time.Millisecond
+		burstFIRStale = 7000 * time.Millisecond
 	}
 
 	session := &Session{
@@ -1183,7 +1187,7 @@ func (s *Session) PrimeWebRTCVideoForSIPOffer(ctx context.Context, timeout time.
 
 	pollTicker := time.NewTicker(50 * time.Millisecond)
 	defer pollTicker.Stop()
-	kickTicker := time.NewTicker(250 * time.Millisecond)
+	kickTicker := time.NewTicker(400 * time.Millisecond)
 	defer kickTicker.Stop()
 	timeoutTimer := time.NewTimer(timeout)
 	defer timeoutTimer.Stop()

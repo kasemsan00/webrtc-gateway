@@ -450,9 +450,10 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 	const (
 		burstGapTrigger        = 8
 		gapRecoveryMinInterval = 1200 * time.Millisecond
-		startupPLIAttempts     = 6
-		startupPLIInterval     = 150 * time.Millisecond
+		startupPLIAttempts     = 4
+		startupPLIInterval     = 300 * time.Millisecond
 		startupKeyframeFresh   = 800 * time.Millisecond
+		uplinkExtraPLIAttempts = 3
 	)
 
 	fmt.Printf("[%s] Video RTP handler started, VideoTrack is nil: %v\n", sess.ID, sess.VideoTrack == nil)
@@ -690,10 +691,13 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 					// First remote SSRC learn: also kick WebRTC uplink keyframe so
 					// late-joining SIP decoders (e.g. Linphone after long ring) get an IDR.
 					uplinkKick := sess.KickUplinkKeyframeOnRemoteJoinIfNeeded()
-					if uplinkKick {
+					if uplinkKick && !sess.HasRecentUplinkKeyframe(2*time.Second) {
 						go func() {
-							for i := 1; i < startupPLIAttempts; i++ {
+							for i := 1; i < uplinkExtraPLIAttempts; i++ {
 								if sess.GetState() == session.StateEnded {
+									return
+								}
+								if sess.ShouldStopStartupBrowserPLI() {
 									return
 								}
 								time.Sleep(startupPLIInterval)
@@ -974,24 +978,33 @@ func (s *Server) startPeriodicPLIForSession(sess *session.Session) {
 	// Wait a bit for the connection to establish
 	time.Sleep(500 * time.Millisecond)
 
-	// Limit periodic PLI to startup window only.
-	pliDeadline := time.Now().Add(20 * time.Second)
+	// Limit periodic PLI to startup window only. Stop as soon as the browser
+	// is already producing SPS/PPS and an uplink IDR.
+	pliDeadline := time.Now().Add(8 * time.Second)
 
-	// Send at most every 2 seconds.
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 
 	pliCount := 0
+	stopIfReady := func(reason string) bool {
+		if !sess.ShouldStopStartupBrowserPLI() {
+			return false
+		}
+		fmt.Printf("[%s] Stopping periodic PLI sender - %s\n", sess.ID, reason)
+		return true
+	}
 
-	// Small initial burst to kickstart keyframe delivery.
-	for i := 0; i < 5; i++ {
+	for i := 0; i < 3; i++ {
 		state := sess.GetState()
 		if state == session.StateEnded || state == session.StateReconnecting {
 			return
 		}
+		if stopIfReady("uplink keyframe ready") {
+			return
+		}
 		sess.SendPLItoWebRTC()
 		pliCount++
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(400 * time.Millisecond)
 	}
 
 	for range ticker.C {
@@ -1004,13 +1017,14 @@ func (s *Server) startPeriodicPLIForSession(sess *session.Session) {
 			fmt.Printf("[%s] Stopping periodic PLI sender - session reconnecting\n", sess.ID)
 			return
 		}
-
+		if stopIfReady("uplink keyframe ready") {
+			return
+		}
 		if time.Now().After(pliDeadline) {
 			fmt.Printf("[%s] Stopping periodic PLI sender - startup window ended\n", sess.ID)
 			return
 		}
 		pliCount++
-		// Log less frequently after initial period
 		if pliCount <= 20 || pliCount%10 == 0 {
 			fmt.Printf("[%s] 🔄 Periodic PLI #%d to browser\n", sess.ID, pliCount)
 		}

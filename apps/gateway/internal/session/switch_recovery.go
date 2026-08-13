@@ -6,8 +6,8 @@ import (
 )
 
 const (
-	defaultSwitchRecoveryWindow = 5 * time.Second
-	defaultSwitchStableWindow   = 750 * time.Millisecond
+	defaultSwitchRecoveryWindow  = 5 * time.Second
+	defaultSwitchStableWindow    = 750 * time.Millisecond
 	postGateRecoveryStableWindow = 300 * time.Millisecond
 	postGateRTPMinPacketDelta    = 15
 
@@ -133,6 +133,7 @@ func (s *Session) startSwitchVideoRecovery(generation int, mediaEpoch uint64, re
 	s.SwitchVideoRecoveryFirstKeyframeAt = time.Time{}
 	s.SwitchVideoRecoveryStableWindow = stableWindow
 	s.SwitchVideoRecoveryOneShotPLI = true
+	s.SwitchFeedbackBurstSatisfied = false
 	s.SwitchVideoRecoverySummary = VideoRecoverySummary{}
 	s.SwitchVideoRecoveryRTPBaseline = VideoRecoverySummary{}
 	s.SwitchVideoRecoveryRTPBaselineAt = time.Time{}
@@ -180,6 +181,7 @@ func (s *Session) applyPostGateRecoverySofteningLocked(now time.Time) {
 		s.SwitchVideoRTPMinPacketDelta = postGateRTPMinPacketDelta
 	}
 	s.SwitchVideoGateReleasedAt = now
+	s.SwitchFeedbackBurstSatisfied = true
 }
 
 func (s *Session) finishSwitchVideoRecoveryLocked(now time.Time, reason string) {
@@ -313,6 +315,7 @@ func (s *Session) MarkSwitchVideoKeyframe(now time.Time) {
 	}
 	if s.SwitchVideoRecoveryFirstKeyframeAt.IsZero() {
 		s.SwitchVideoRecoveryFirstKeyframeAt = now
+		s.SwitchFeedbackBurstSatisfied = true
 		s.resetSwitchRTPStableBaselineLocked(now, s.SwitchVideoRecoverySummary)
 		fmt.Printf("[%s] switch_recovery_first_keyframe elapsed_ms=%d\n",
 			s.ID, now.Sub(s.SwitchVideoRecoveryStartedAt).Milliseconds())
@@ -328,6 +331,7 @@ func (s *Session) MarkSwitchVideoProgress(now time.Time, isKeyframe bool) {
 	}
 	if isKeyframe && s.SwitchVideoRecoveryFirstKeyframeAt.IsZero() {
 		s.SwitchVideoRecoveryFirstKeyframeAt = now
+		s.SwitchFeedbackBurstSatisfied = true
 		s.resetSwitchRTPStableBaselineLocked(now, s.SwitchVideoRecoverySummary)
 		fmt.Printf("[%s] switch_recovery_first_keyframe elapsed_ms=%d\n",
 			s.ID, now.Sub(s.SwitchVideoRecoveryStartedAt).Milliseconds())

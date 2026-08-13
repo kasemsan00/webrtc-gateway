@@ -378,6 +378,46 @@ func TestHandleSwitchMessage_StaleFeedbackTokenStopsFIRBurst(t *testing.T) {
 	}
 }
 
+func TestHandleSwitchMessage_SkipsBurstAfterKeyframeRecovered(t *testing.T) {
+	cfg := switchStaleHandlerTestConfig(true)
+	mgr := session.NewManager(cfg)
+	sess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+	t.Cleanup(func() { mgr.DeleteSession(sess.ID) })
+	sess.SetCallInfo("outbound", "sip:0900200002@example.com", "1002", "call-1")
+	sess.SetState(session.StateActive)
+
+	stages := make(chan string, 16)
+	srv := &Server{config: cfg.SIP, rtpConfig: cfg.RTP, sessionMgr: mgr}
+	srv.switchHandlerTestHook = func(stage string, decision session.SwitchTargetDecision) {
+		if stage == "fir-burst" {
+			sess.MarkSwitchVideoKeyframe(time.Now())
+		}
+		stages <- stage
+	}
+	srv.handleSwitchMessage("@switch:14131|00025", "sip:0900200002@example.com")
+
+	sawFIRBurst := false
+	for {
+		select {
+		case stage := <-stages:
+			if stage == "fir-burst" {
+				sawFIRBurst = true
+			}
+			if stage == "fir-send" || stage == "pli-burst" || stage == "pli-send" {
+				t.Fatalf("recovered switch still sent delayed burst stage=%s", stage)
+			}
+		default:
+			if !sawFIRBurst {
+				t.Fatal("expected fir-burst hook before skip")
+			}
+			return
+		}
+	}
+}
+
 func switchStaleHandlerTestConfig(normalize bool) *config.Config {
 	return &config.Config{
 		SIP: config.SIPConfig{

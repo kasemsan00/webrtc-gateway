@@ -6,7 +6,6 @@ import (
 	"net"
 	"time"
 
-	"github.com/pion/rtcp"
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
 )
@@ -232,24 +231,17 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 				// 🚀 First video packet to Asterisk - request keyframes from browser
 				go func() {
 					fmt.Printf("[%s] 🚀 Starting video forwarding to Asterisk (SSRC=%d) - requesting keyframes from browser\n", s.ID, s.VideoSSRC)
-					for i := 0; i < 10; i++ {
-						if s.PeerConnection != nil {
-							// Send PLI to browser via PeerConnection
-							for _, receiver := range s.PeerConnection.GetReceivers() {
-								if receiver.Track() != nil && receiver.Track().Kind() == webrtc.RTPCodecTypeVideo {
-									ssrc := uint32(receiver.Track().SSRC())
-									pli := &rtcp.PictureLossIndication{
-										MediaSSRC: ssrc,
-									}
-									if err := s.PeerConnection.WriteRTCP([]rtcp.Packet{pli}); err != nil {
-										fmt.Printf("[%s] Error sending PLI to browser: %v\n", s.ID, err)
-									}
-									break
-								}
-							}
+					for i := 0; i < 4; i++ {
+						if s.GetState() == StateEnded {
+							return
 						}
+						if s.ShouldStopStartupBrowserPLI() {
+							fmt.Printf("[%s] Stopping first-packet PLI burst - uplink keyframe ready\n", s.ID)
+							return
+						}
+						s.SendPLItoWebRTC()
 						select {
-						case <-time.After(200 * time.Millisecond):
+						case <-time.After(400 * time.Millisecond):
 						case <-s.ctx.Done():
 							return
 						}
@@ -309,6 +301,7 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 				}
 
 				if containsIDR {
+					s.RecordUplinkKeyframe()
 					fmt.Printf("[%s] 🔑 KEYFRAME (STAP-A IDR) detected in video packet #%d → Asterisk\n", s.ID, packetCount)
 				}
 
@@ -539,6 +532,7 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 
 			// Logging (re-using NAL type detection mostly for logging)
 			if kind == "video" && isKeyframe {
+				s.RecordUplinkKeyframe()
 				fmt.Printf("[%s] 🔑 KEYFRAME (Forwarded) detected in video packet #%d → Asterisk\n", s.ID, packetCount)
 			}
 

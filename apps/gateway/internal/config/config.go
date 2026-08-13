@@ -138,15 +138,15 @@ type SIPConfig struct {
 	VideoPreserveSTAPA     bool // Preserve STAP-A packets (don't de-aggregate) when they contain SPS+PPS+IDR (default: false)
 	// Keyframe watchdog: request FIR/PLI when keyframes go stale (SIP → WebRTC)
 	VideoKeyframeWatchdogEnabled    bool // Enable keyframe watchdog (default: true)
-	VideoKeyframeWatchdogIntervalMS int  // Check interval in ms (default: 1000)
-	VideoKeyframeStaleMS            int  // Stale threshold for PLI (default: 1500)
-	VideoKeyframeFIRStaleMS         int  // Stale threshold for FIR (default: 3000)
+	VideoKeyframeWatchdogIntervalMS int  // Check interval in ms (default: 2000)
+	VideoKeyframeStaleMS            int  // Stale threshold for PLI (default: 4000)
+	VideoKeyframeFIRStaleMS         int  // Stale threshold for FIR (default: 8000)
 	// Dynamic post-reconnect recovery burst policy (temporary aggressive window)
 	VideoRecoveryBurstEnabled    bool // Enable dynamic burst recovery policy (default: true)
-	VideoRecoveryBurstWindowMS   int  // Burst window duration in ms (default: 12000)
-	VideoRecoveryBurstIntervalMS int  // Burst watchdog interval in ms (default: 800)
-	VideoRecoveryBurstStaleMS    int  // Burst stale threshold for PLI in ms (default: 1200)
-	VideoRecoveryBurstFIRStaleMS int  // Burst stale threshold for FIR in ms (default: 2500)
+	VideoRecoveryBurstWindowMS   int  // Burst window duration in ms (default: 8000)
+	VideoRecoveryBurstIntervalMS int  // Burst watchdog interval in ms (default: 1000)
+	VideoRecoveryBurstStaleMS    int  // Burst stale threshold for PLI in ms (default: 4000)
+	VideoRecoveryBurstFIRStaleMS int  // Burst stale threshold for FIR in ms (default: 7000)
 	MidCallRenegotiationEnable   bool // Enable SIP mid-call re-INVITE/UPDATE negotiation (default: true)
 	SwitchVideoRenegotiateEnable bool // Send WebRTC renegotiate after @switch gate release (default: true)
 	// Inbound audio gain (SIP → WebRTC): decode Opus, apply PCM gain, re-encode Opus
@@ -297,14 +297,14 @@ func Load() (*Config, error) {
 			VideoFeedbackTransport:               getSIPVideoFeedbackTransport(),
 			VideoPreserveSTAPA:                   getEnvAsBool("SIP_VIDEO_PRESERVE_STAPA", false),
 			VideoKeyframeWatchdogEnabled:         getEnvAsBool("SIP_VIDEO_KEYFRAME_WATCHDOG", true),
-			VideoKeyframeWatchdogIntervalMS:      getEnvAsInt("SIP_VIDEO_KEYFRAME_WATCHDOG_INTERVAL_MS", 1500),
-			VideoKeyframeStaleMS:                 getEnvAsInt("SIP_VIDEO_KEYFRAME_STALE_MS", 2000),
-			VideoKeyframeFIRStaleMS:              getEnvAsInt("SIP_VIDEO_KEYFRAME_FIR_STALE_MS", 5000),
+			VideoKeyframeWatchdogIntervalMS:      getEnvAsInt("SIP_VIDEO_KEYFRAME_WATCHDOG_INTERVAL_MS", 2000),
+			VideoKeyframeStaleMS:                 getEnvAsInt("SIP_VIDEO_KEYFRAME_STALE_MS", 4000),
+			VideoKeyframeFIRStaleMS:              getEnvAsInt("SIP_VIDEO_KEYFRAME_FIR_STALE_MS", 8000),
 			VideoRecoveryBurstEnabled:            getEnvAsBool("SIP_VIDEO_RECOVERY_BURST_ENABLED", true),
-			VideoRecoveryBurstWindowMS:           getEnvAsInt("SIP_VIDEO_RECOVERY_BURST_WINDOW_MS", 12000),
-			VideoRecoveryBurstIntervalMS:         getEnvAsInt("SIP_VIDEO_RECOVERY_BURST_INTERVAL_MS", 800),
-			VideoRecoveryBurstStaleMS:            getEnvAsInt("SIP_VIDEO_RECOVERY_BURST_STALE_MS", 1200),
-			VideoRecoveryBurstFIRStaleMS:         getEnvAsInt("SIP_VIDEO_RECOVERY_BURST_FIR_STALE_MS", 2500),
+			VideoRecoveryBurstWindowMS:           getEnvAsInt("SIP_VIDEO_RECOVERY_BURST_WINDOW_MS", 8000),
+			VideoRecoveryBurstIntervalMS:         getEnvAsInt("SIP_VIDEO_RECOVERY_BURST_INTERVAL_MS", 1000),
+			VideoRecoveryBurstStaleMS:            getEnvAsInt("SIP_VIDEO_RECOVERY_BURST_STALE_MS", 4000),
+			VideoRecoveryBurstFIRStaleMS:         getEnvAsInt("SIP_VIDEO_RECOVERY_BURST_FIR_STALE_MS", 7000),
 			MidCallRenegotiationEnable:           getEnvAsBool("SIP_MIDCALL_RENEGOTIATION_ENABLE", true),
 			SwitchVideoRenegotiateEnable:         getEnvAsBool("SIP_SWITCH_VIDEO_RENEGOTIATE_ENABLE", false),
 			AudioInboundGainEnable:               getEnvAsBool("SIP_AUDIO_INBOUND_GAIN_ENABLE", false),

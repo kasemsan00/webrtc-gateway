@@ -14,8 +14,10 @@ import (
 )
 
 const (
-	switchFeedbackBurstCount    = 3
-	switchFeedbackBurstInterval = 50 * time.Millisecond
+	switchFeedbackBurstCount    = 2
+	switchFeedbackBurstInterval = 250 * time.Millisecond
+	sipMessageKeyframeAttempts  = 3
+	sipMessageKeyframeInterval  = 400 * time.Millisecond
 )
 
 // setupHandlers configures SIP request handlers
@@ -1165,19 +1167,16 @@ func (s *Server) handleKeyframeMessage(body string, callerURI string) {
 
 	fmt.Printf("📍 Found session %s for caller %s, sending %s requests...\n", sess.ID, callerUsername, keyframeType)
 
-	// Send keyframe requests to both Browser and Asterisk 1 sec
-	for i := 0; i < 10; i++ {
+	for i := 0; i < sipMessageKeyframeAttempts; i++ {
 		if isFIR {
-			// Send FIR to both browser and Asterisk
 			sess.SendFIRToWebRTC()
 			sess.SendFIRToAsterisk()
 		} else {
-			// Send PLI to both browser and Asterisk
 			sess.SendPLItoWebRTC()
 			sess.SendPLIToAsteriskForced("sip-message")
 		}
 
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(sipMessageKeyframeInterval)
 		if sess.GetState() == session.StateEnded {
 			return
 		}
@@ -1219,9 +1218,6 @@ func (s *Server) handleSwitchMessage(body string, callerURI string) {
 	var switchDecision session.SwitchTargetDecision
 	var gateActivation session.SwitchVideoGateActivation
 	genuineSwitch := queueNumber != "force send PLI"
-	switchAuthorized := func() bool {
-		return !genuineSwitch || sess.IsSwitchVideoAuthority(switchDecision.Generation, switchDecision.MediaEpoch)
-	}
 	if queueNumber != "force send PLI" {
 		debounce := time.Duration(s.config.SwitchDuplicateDebounceMS) * time.Millisecond
 		switchDecision, gateActivation = sess.PrepareAndActivateSwitchVideoTarget(queueNumber, agentUsername, time.Now(), debounce, s.config.SwitchDuplicateDebounceEnabled)
@@ -1311,15 +1307,17 @@ func (s *Server) handleSwitchMessage(body string, callerURI string) {
 	if queueNumber != "force send PLI" {
 		// 3.2 Optional delay (configurable via SWITCH_PLI_DELAY_MS)
 		// Applied after immediate kick so first keyframe request is never delayed.
+		// Poll so a recovered gate/IDR can cancel the delayed burst (production
+		// uses 2000ms and was still firing after a 67ms IDR).
 		delayMs := s.config.SwitchPLIDelayMS
 		if delayMs > 0 {
-			time.Sleep(time.Duration(delayMs) * time.Millisecond)
+			if !s.waitForSwitchFeedbackBurst(sess, genuineSwitch, switchDecision, time.Duration(delayMs)*time.Millisecond) {
+				return
+			}
 		}
 	}
 
-	// 4. Send a bounded FIR burst after the immediate kick. Production gate
-	// releases are normally below one second, so three retries retain recovery
-	// coverage without the previous RTCP volume.
+	// 4. Bounded FIR retries only while the new generation still needs a keyframe.
 	if genuineSwitch {
 		if !sess.IsSwitchVideoAuthority(switchDecision.Generation, switchDecision.MediaEpoch) {
 			return
@@ -1329,9 +1327,14 @@ func (s *Server) handleSwitchMessage(body string, callerURI string) {
 			return
 		}
 	}
+	if !s.switchFeedbackBurstNeeded(sess, genuineSwitch, switchDecision) {
+		fmt.Printf("[%s] switch_feedback_burst_skipped reason=already-recovered\n", sess.ID)
+		return
+	}
 	fmt.Printf("[%s] 🔀 Sending @switch: FIR burst (%dx @ %s)\n", sess.ID, switchFeedbackBurstCount, switchFeedbackBurstInterval)
 	for i := 0; i < switchFeedbackBurstCount; i++ {
-		if sess.GetState() == session.StateEnded || !switchAuthorized() {
+		if !s.switchFeedbackBurstNeeded(sess, genuineSwitch, switchDecision) {
+			fmt.Printf("[%s] switch_feedback_burst_stopped reason=recovered stage=fir i=%d\n", sess.ID, i)
 			return
 		}
 		if genuineSwitch {
@@ -1347,7 +1350,7 @@ func (s *Server) handleSwitchMessage(body string, callerURI string) {
 		time.Sleep(switchFeedbackBurstInterval)
 	}
 
-	// 5. Send the matching bounded PLI burst for redundancy.
+	// 5. Matching PLI retries for redundancy, still aborting once recovered.
 	if genuineSwitch {
 		if !sess.IsSwitchVideoAuthority(switchDecision.Generation, switchDecision.MediaEpoch) {
 			return
@@ -1357,9 +1360,14 @@ func (s *Server) handleSwitchMessage(body string, callerURI string) {
 			return
 		}
 	}
+	if !s.switchFeedbackBurstNeeded(sess, genuineSwitch, switchDecision) {
+		fmt.Printf("[%s] switch_feedback_burst_skipped reason=already-recovered stage=pli\n", sess.ID)
+		return
+	}
 	fmt.Printf("[%s] 🔀 Sending @switch: PLI burst (%dx @ %s)\n", sess.ID, switchFeedbackBurstCount, switchFeedbackBurstInterval)
 	for i := 0; i < switchFeedbackBurstCount; i++ {
-		if sess.GetState() == session.StateEnded || !switchAuthorized() {
+		if !s.switchFeedbackBurstNeeded(sess, genuineSwitch, switchDecision) {
+			fmt.Printf("[%s] switch_feedback_burst_stopped reason=recovered stage=pli i=%d\n", sess.ID, i)
 			return
 		}
 		if genuineSwitch {
@@ -1376,6 +1384,29 @@ func (s *Server) handleSwitchMessage(body string, callerURI string) {
 	}
 
 	fmt.Printf("✅ Sent @switch immediate kick + FIR/PLI bursts (Browser + Asterisk) for session: %s\n", sess.ID)
+}
+
+func (s *Server) switchFeedbackBurstNeeded(sess *session.Session, genuine bool, decision session.SwitchTargetDecision) bool {
+	return sess.ShouldContinueSwitchFeedbackBurst(decision.Generation, decision.MediaEpoch, genuine)
+}
+
+func (s *Server) waitForSwitchFeedbackBurst(sess *session.Session, genuine bool, decision session.SwitchTargetDecision, delay time.Duration) bool {
+	deadline := time.Now().Add(delay)
+	for {
+		if !s.switchFeedbackBurstNeeded(sess, genuine, decision) {
+			fmt.Printf("[%s] switch_feedback_burst_skipped reason=recovered-during-delay\n", sess.ID)
+			return false
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return s.switchFeedbackBurstNeeded(sess, genuine, decision)
+		}
+		sleep := 50 * time.Millisecond
+		if remaining < sleep {
+			sleep = remaining
+		}
+		time.Sleep(sleep)
+	}
 }
 
 func (s *Server) runSwitchHandlerTestHook(stage string, decision session.SwitchTargetDecision) {

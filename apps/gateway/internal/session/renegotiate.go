@@ -358,13 +358,9 @@ func (s *Session) RenegotiatePeerConnection(newOfferSDP string, turnConfig confi
 			// Send FIR first (to request SPS/PPS + IDR), then PLI burst for fast video start
 			go func() {
 				fmt.Printf("[%s] 🚀 Renegotiated - Sending FIR + PLI requests for fast video start (with SPS/PPS)\n", id)
-				// Send FIR first to request full keyframe with parameter sets
 				s.SendFIRToAsterisk()
-				// Then send PLI burst immediately
-				for i := 0; i < 3; i++ {
-					s.SendPLIToAsteriskForced("renegotiated-ice")
-					s.SendPLItoWebRTC() // PLI to browser
-				}
+				s.SendPLIToAsteriskForced("renegotiated-ice")
+				s.SendPLItoWebRTC()
 			}()
 		} else if connectionState == webrtc.ICEConnectionStateFailed {
 			fmt.Printf("[%s] ❌ Renegotiated connection failed\n", id)

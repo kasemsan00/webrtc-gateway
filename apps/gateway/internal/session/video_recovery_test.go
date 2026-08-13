@@ -114,15 +114,15 @@ func TestSendBrowserRecoveryToAsterisk_UsesBothInBurstForWSKeyframe(t *testing.T
 	}
 }
 
-func TestSendBrowserRecoveryToAsterisk_DoesNotSuppressFreshWSKeyframeInBurst(t *testing.T) {
+func TestSendBrowserRecoveryToAsterisk_SuppressesFreshWSKeyframeInBurst(t *testing.T) {
 	sess := newBurstTestSession("burst-fresh-ws-request")
 	makeSIPVideoRecoveryReady(t, sess)
 	sess.LastKeyframe = time.Now()
 	sess.StartVideoRecoveryBurst("unit-test")
 
 	action := sess.SendBrowserRecoveryToAsterisk("ws-request_keyframe")
-	if action == "none" {
-		t.Fatalf("expected startup ws-request_keyframe to force recovery despite fresh keyframe")
+	if action != "none" {
+		t.Fatalf("expected fresh keyframe to suppress startup ws-request_keyframe, got %s", action)
 	}
 }
 
@@ -136,15 +136,27 @@ func TestSendBrowserRecoveryToAsterisk_LegacyFreshRequestRemainsSuppressedOutsid
 	}
 }
 
-func TestSendBrowserRecoveryToAsterisk_DoesNotSuppressFreshBrowserPLIInBurst(t *testing.T) {
+func TestSendBrowserRecoveryToAsterisk_SuppressesFreshBrowserPLIInBurst(t *testing.T) {
 	sess := newBurstTestSession("burst-fresh-browser-pli")
 	makeSIPVideoRecoveryReady(t, sess)
 	sess.LastKeyframe = time.Now()
 	sess.StartVideoRecoveryBurst("unit-test")
 
 	action := sess.SendBrowserRecoveryToAsterisk("browser-pli")
+	if action != "none" {
+		t.Fatalf("expected fresh keyframe to suppress browser PLI during startup, got %s", action)
+	}
+}
+
+func TestSendBrowserRecoveryToAsterisk_ForcesRecoveryWhenBurstKeyframeIsStale(t *testing.T) {
+	sess := newBurstTestSession("burst-stale-browser-pli")
+	makeSIPVideoRecoveryReady(t, sess)
+	sess.LastKeyframe = time.Now().Add(-3 * time.Second)
+	sess.StartVideoRecoveryBurst("unit-test")
+
+	action := sess.SendBrowserRecoveryToAsterisk("browser-pli")
 	if action == "none" {
-		t.Fatalf("expected browser PLI to force recovery during startup despite fresh keyframe")
+		t.Fatalf("expected stale keyframe during burst to still request recovery")
 	}
 }
 
@@ -355,7 +367,7 @@ func TestSwitchPLIBypassSendsFirstPLIInsideThrottle(t *testing.T) {
 	}
 }
 
-func TestSendBrowserRecoveryToAsterisk_ForcesRecoveryAfterFreshKeyframeAndSSRCInBurst(t *testing.T) {
+func TestSendBrowserRecoveryToAsterisk_SuppressesFreshKeyframeAndSSRCInBurst(t *testing.T) {
 	sess := newBurstTestSession("burst-fresh-keyframe-ssrc")
 	makeSIPVideoRecoveryReady(t, sess)
 	now := time.Now()
@@ -365,8 +377,8 @@ func TestSendBrowserRecoveryToAsterisk_ForcesRecoveryAfterFreshKeyframeAndSSRCIn
 	sess.StartVideoRecoveryBurst("unit-test")
 
 	action := sess.SendBrowserRecoveryToAsterisk("ws-request_keyframe")
-	if action == "none" {
-		t.Fatalf("expected fresh keyframe request to force recovery while burst window is active")
+	if action != "none" {
+		t.Fatalf("expected fresh keyframe request to stay quiet while burst window is active, got %s", action)
 	}
 }
 
@@ -459,5 +471,51 @@ func TestFlushPendingBrowserKeyframe_NoopWhenEmpty(t *testing.T) {
 	makeSIPVideoRecoveryReady(t, sess)
 	if got := sess.FlushPendingBrowserKeyframeRequest("ssrc-learn"); got != "none" {
 		t.Fatalf("expected none when no pending, got %s", got)
+	}
+}
+
+func TestShouldStopStartupBrowserPLI(t *testing.T) {
+	sess := newBurstTestSession("startup-browser-pli")
+	if sess.ShouldStopStartupBrowserPLI() {
+		t.Fatal("expected startup PLI to continue before SPS/PPS and uplink IDR")
+	}
+	sess.CachedSPS = []byte{0x67}
+	sess.CachedPPS = []byte{0x68}
+	if sess.ShouldStopStartupBrowserPLI() {
+		t.Fatal("expected startup PLI to continue until an uplink IDR is forwarded")
+	}
+	sess.RecordUplinkKeyframe()
+	if !sess.ShouldStopStartupBrowserPLI() {
+		t.Fatal("expected startup PLI to stop after SPS/PPS and uplink IDR")
+	}
+}
+
+func TestShouldContinueSwitchFeedbackBurstStopsAfterFirstKeyframe(t *testing.T) {
+	sess := newBurstTestSession("switch-burst-stop")
+	sess.StartSwitchVideoRecovery(2*time.Second, 20*time.Millisecond)
+	if !sess.ShouldContinueSwitchFeedbackBurst(0, 0, false) {
+		t.Fatal("expected delayed switch burst before first keyframe")
+	}
+	sess.MarkSwitchVideoKeyframe(time.Now())
+	if sess.ShouldContinueSwitchFeedbackBurst(0, 0, false) {
+		t.Fatal("expected delayed switch burst to stop after first keyframe")
+	}
+}
+
+func TestSIPFIRHonorsMinimumInterval(t *testing.T) {
+	sess := newBurstTestSession("sip-fir-throttle")
+	makeSIPVideoRecoveryReady(t, sess)
+	sess.SendFIRToAsterisk()
+	first := sess.LastSipFIRSent
+	if first.IsZero() {
+		t.Fatal("expected first FIR to send")
+	}
+	count := sess.PLISent
+	sess.SendFIRToAsterisk()
+	if !sess.LastSipFIRSent.Equal(first) {
+		t.Fatal("expected second FIR inside 1s interval to be skipped")
+	}
+	if sess.PLISent != count {
+		t.Fatal("expected throttled FIR not to increment PLISent")
 	}
 }

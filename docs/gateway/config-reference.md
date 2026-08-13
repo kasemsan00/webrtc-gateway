@@ -43,7 +43,7 @@ When `AUTH_ENABLE=true`:
 - `DEBUG_TURN` (default `false`)
 - `DEBUG_SIP_MESSAGE` (default `false`)
 - `DEBUG_SIP_INVITE` (default `false`)
-- `SWITCH_PLI_DELAY_MS` (default `1000`)
+- `SWITCH_PLI_DELAY_MS` (default `0`; delayed `@switch` FIR/PLI retries abort if a complete IDR already arrived)
 - `SIP_AUDIO_USE_AVPF` (default `false`)
 - `SIP_AUDIO_INBOUND_GAIN_ENABLE` (default `false`; requires CGO + libopus in Docker build)
 - `SIP_AUDIO_INBOUND_GAIN` (default `1.0`; linear multiplier, clamped to max)
@@ -58,9 +58,14 @@ When `AUTH_ENABLE=true`:
 - `SIP_SWITCH_VIDEO_BLACKOUT_MAX_WAIT_MS` (default `1200`)
 - `SIP_SWITCH_VIDEO_RENEGOTIATE_ENABLE` (default `true`; after `@switch` gate release, emit WebSocket `renegotiate` with `reason=agent_switch` and a gateway WebRTC offer so existing clients answer in place. Before `CreateOffer`, the gateway restores H.264 codec preferences for the SIP packetization mode so 1.3.7's single remote-PT lock does not ride into the mid-call offer.)
 - `SIP_VIDEO_KEYFRAME_WATCHDOG` (default `true`)
-- `SIP_VIDEO_KEYFRAME_WATCHDOG_INTERVAL_MS` (default `1000`)
-- `SIP_VIDEO_KEYFRAME_STALE_MS` (default `2500`)
-- `SIP_VIDEO_KEYFRAME_FIR_STALE_MS` (default `6000`)
+- `SIP_VIDEO_KEYFRAME_WATCHDOG_INTERVAL_MS` (default `2000`)
+- `SIP_VIDEO_KEYFRAME_STALE_MS` (default `4000`; must stay above a healthy SIP GOP or watchdog PLI never stops)
+- `SIP_VIDEO_KEYFRAME_FIR_STALE_MS` (default `8000`)
+- `SIP_VIDEO_RECOVERY_BURST_ENABLED` (default `true`)
+- `SIP_VIDEO_RECOVERY_BURST_WINDOW_MS` (default `8000`)
+- `SIP_VIDEO_RECOVERY_BURST_INTERVAL_MS` (default `1000`)
+- `SIP_VIDEO_RECOVERY_BURST_STALE_MS` (default `4000`)
+- `SIP_VIDEO_RECOVERY_BURST_FIR_STALE_MS` (default `7000`)
 
 ## TURN
 

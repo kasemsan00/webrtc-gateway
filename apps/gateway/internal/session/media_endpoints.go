@@ -391,6 +391,10 @@ func (s *Session) ResetMediaState() {
 	s.PendingBrowserKeyframeRequest = false
 	s.PendingBrowserKeyframeRequestAt = time.Time{}
 	s.PendingBrowserKeyframeRequestEpoch = 0
+	s.LastUplinkKeyframe = time.Time{}
+	s.LastWebRTCPLISent = time.Time{}
+	s.LastWebRTCFIRSent = time.Time{}
+	s.SwitchFeedbackBurstSatisfied = false
 
 	// Reset learned RTCP routing info
 	s.AsteriskVideoRTCPAddr = nil
