@@ -159,16 +159,14 @@ func TestH264AccessUnitNormalizerResetForSwitchRequiresFreshParameterSetsAndPres
 	if !withFreshSets.ParameterSetsReady || withFreshSets.Generation != 42 {
 		t.Fatalf("expected fresh parameter sets to be ready in generation 42, got %+v", withFreshSets)
 	}
-	if !withFreshSets.InjectedParameterSets || len(withFreshSets.Packets) != 5 {
-		t.Fatalf("expected first post-switch IDR to prefix SPS/PPS even when already present, got %+v", withFreshSets)
+	if !withFreshSets.InjectedParameterSets || len(withFreshSets.Packets) != 3 {
+		t.Fatalf("expected first post-switch IDR to lead with SPS/PPS without duplicating in-band sets, got %+v", withFreshSets)
 	}
 	if withFreshSets.Packets[0].Payload[0]&0x1f != 7 || withFreshSets.Packets[1].Payload[0]&0x1f != 8 ||
-		withFreshSets.Packets[2].Payload[0]&0x1f != 7 || withFreshSets.Packets[3].Payload[0]&0x1f != 8 ||
-		withFreshSets.Packets[4].Payload[0]&0x1f != 5 {
-		t.Fatalf("unexpected post-switch NAL order: %d, %d, %d, %d, %d",
+		withFreshSets.Packets[2].Payload[0]&0x1f != 5 {
+		t.Fatalf("unexpected post-switch NAL order: %d, %d, %d",
 			withFreshSets.Packets[0].Payload[0]&0x1f, withFreshSets.Packets[1].Payload[0]&0x1f,
-			withFreshSets.Packets[2].Payload[0]&0x1f, withFreshSets.Packets[3].Payload[0]&0x1f,
-			withFreshSets.Packets[4].Payload[0]&0x1f)
+			withFreshSets.Packets[2].Payload[0]&0x1f)
 	}
 	if withFreshSets.Packets[0].SequenceNumber != afterFirst.SequenceNumber+1 {
 		t.Fatalf("outbound sequence discontinuity after fresh parameter sets: %d then %d", afterFirst.SequenceNumber, withFreshSets.Packets[0].SequenceNumber)
@@ -209,12 +207,23 @@ func TestH264AccessUnitNormalizerForcePrefixesParameterSetsOnFirstPostSwitchIDR(
 		t.Fatalf("expected one IDR access unit, got %d", len(emitted))
 	}
 	got := emitted[0]
-	if !got.IsIDR || !got.InjectedParameterSets || len(got.Packets) != 5 {
-		t.Fatalf("expected forced SPS/PPS prefix on first post-switch IDR, got %+v", got)
+	if !got.IsIDR || !got.InjectedParameterSets || len(got.Packets) != 3 {
+		t.Fatalf("expected first post-switch IDR to lead with SPS/PPS without duplicates, got %+v", got)
 	}
-	if got.Packets[0].Payload[0]&0x1f != 7 || got.Packets[1].Payload[0]&0x1f != 8 {
-		t.Fatalf("expected prefixed SPS/PPS before in-band sets, got NAL %d then %d",
-			got.Packets[0].Payload[0]&0x1f, got.Packets[1].Payload[0]&0x1f)
+	if got.Packets[0].Payload[0]&0x1f != 7 || got.Packets[1].Payload[0]&0x1f != 8 || got.Packets[2].Payload[0]&0x1f != 5 {
+		t.Fatalf("unexpected NAL order: %d, %d, %d",
+			got.Packets[0].Payload[0]&0x1f, got.Packets[1].Payload[0]&0x1f, got.Packets[2].Payload[0]&0x1f)
+	}
+
+	n.Push(h264Packet(13, 93000, false, []byte{0x67, 0x64, 0x00, 0x29}))
+	n.Push(h264Packet(14, 93000, false, []byte{0x68, 0xee, 0x3c, 0x81}))
+	n.Push(h264Packet(15, 93000, true, []byte{0x65, 0xbb}))
+	if len(emitted) != 2 {
+		t.Fatalf("expected second IDR access unit, got %d", len(emitted))
+	}
+	second := emitted[1]
+	if second.InjectedParameterSets || len(second.Packets) != 3 {
+		t.Fatalf("expected later IDRs to keep in-band sets without a second rewrite, got %+v", second)
 	}
 }
 

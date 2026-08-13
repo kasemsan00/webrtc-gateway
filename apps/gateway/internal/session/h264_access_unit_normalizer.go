@@ -16,10 +16,10 @@ const (
 	// Reassembled parameter sets are reinjected as one RTP payload, so keep
 	// them below the common WebRTC path-MTU-safe payload size.
 	maxCachedFUAParameterSetPayload = 1200
-	// Prefix cached SPS/PPS onto the first post-@switch IDRs even when the AU
-	// already carries parameter sets. Decoders leaving queue still-video often
-	// ignore in-band SPS unless it is the first NAL after the generation change.
-	defaultSwitchParameterSetPrefixCount = 2
+	// Lead the first post-@switch IDR with SPS/PPS. Duplicate in-band copies
+	// are stripped so the decoder reconfigures once instead of stuttering on
+	// SPS, PPS, SPS, PPS, IDR.
+	defaultSwitchParameterSetPrefixCount = 1
 )
 
 // H264AccessUnitNormalizerConfig bounds memory and latency while an H.264
@@ -236,20 +236,9 @@ func (n *H264AccessUnitNormalizer) finishLocked() NormalizedH264AccessUnit {
 	injected := false
 	if isIDR {
 		forcePrefix := n.forceParameterSetPrefixRemaining > 0 && parameterSetsReady
-		prefix := make([]*rtp.Packet, 0, 2)
-		template := packets[0]
-		if (!hasSPS || forcePrefix) && len(n.cachedSPS) > 0 {
-			prefix = append(prefix, parameterSetPacket(template, n.cachedSPS))
-		}
-		if (!hasPPS || forcePrefix) && len(n.cachedPPS) > 0 {
-			prefix = append(prefix, parameterSetPacket(template, n.cachedPPS))
-		}
-		if len(prefix) > 0 {
-			packets = append(prefix, packets...)
-			injected = true
-			if forcePrefix {
-				n.forceParameterSetPrefixRemaining--
-			}
+		packets, injected = prefixParameterSets(packets, n.cachedSPS, n.cachedPPS, hasSPS, hasPPS, forcePrefix)
+		if injected && forcePrefix {
+			n.forceParameterSetPrefixRemaining--
 		}
 	}
 
@@ -552,6 +541,49 @@ func reassembleFUAParameterSet(packets []*rtp.Packet, nalType byte) []byte {
 
 func isSingleNALType(payload []byte, nalType byte) bool {
 	return len(payload) > 1 && payload[0]&0x1f == nalType
+}
+
+func prefixParameterSets(packets []*rtp.Packet, sps, pps []byte, hasSPS, hasPPS, forcePrefix bool) ([]*rtp.Packet, bool) {
+	if len(packets) == 0 {
+		return packets, false
+	}
+	needSPS := (!hasSPS || forcePrefix) && len(sps) > 0
+	needPPS := (!hasPPS || forcePrefix) && len(pps) > 0
+	if !needSPS && !needPPS {
+		return packets, false
+	}
+
+	template := packets[0]
+	prefix := make([]*rtp.Packet, 0, 2)
+	if needSPS {
+		prefix = append(prefix, parameterSetPacket(template, sps))
+	}
+	if needPPS {
+		prefix = append(prefix, parameterSetPacket(template, pps))
+	}
+
+	rest := packets
+	if forcePrefix {
+		stripped := stripSingleNALParameterSets(packets)
+		if len(stripped) > 0 {
+			rest = stripped
+		}
+	}
+	return append(prefix, rest...), true
+}
+
+func stripSingleNALParameterSets(packets []*rtp.Packet) []*rtp.Packet {
+	out := make([]*rtp.Packet, 0, len(packets))
+	for _, packet := range packets {
+		if packet == nil {
+			continue
+		}
+		if isSingleNALType(packet.Payload, 7) || isSingleNALType(packet.Payload, 8) {
+			continue
+		}
+		out = append(out, packet)
+	}
+	return out
 }
 
 func parameterSetPacket(template *rtp.Packet, payload []byte) *rtp.Packet {
