@@ -306,7 +306,7 @@ func Load() (*Config, error) {
 			VideoRecoveryBurstStaleMS:            getEnvAsInt("SIP_VIDEO_RECOVERY_BURST_STALE_MS", 1200),
 			VideoRecoveryBurstFIRStaleMS:         getEnvAsInt("SIP_VIDEO_RECOVERY_BURST_FIR_STALE_MS", 2500),
 			MidCallRenegotiationEnable:           getEnvAsBool("SIP_MIDCALL_RENEGOTIATION_ENABLE", true),
-			SwitchVideoRenegotiateEnable:         getEnvAsBool("SIP_SWITCH_VIDEO_RENEGOTIATE_ENABLE", true),
+			SwitchVideoRenegotiateEnable:         getEnvAsBool("SIP_SWITCH_VIDEO_RENEGOTIATE_ENABLE", false),
 			AudioInboundGainEnable:               getEnvAsBool("SIP_AUDIO_INBOUND_GAIN_ENABLE", false),
 			AudioInboundGain:                     clampInboundGain(getEnvAsFloat32("SIP_AUDIO_INBOUND_GAIN", 1.0), getEnvAsFloat32("SIP_AUDIO_INBOUND_GAIN_MAX", 3.0)),
 			AudioInboundGainMax:                  getEnvAsFloat32("SIP_AUDIO_INBOUND_GAIN_MAX", 3.0),
