@@ -329,6 +329,45 @@ func (n *H264AccessUnitNormalizer) ResetSource() {
 	n.dropCurrentLocked(false)
 }
 
+// RewriteForReplay assigns a new continuous outbound sequence and timestamp to
+// a cached access unit so a decoder-facing IDR replay is not dropped as a duplicate.
+func (n *H264AccessUnitNormalizer) RewriteForReplay(packets []*rtp.Packet) []*rtp.Packet {
+	if len(packets) == 0 {
+		return nil
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
+	if !n.haveOutput {
+		n.haveOutput = true
+		n.nextSeq = packets[0].SequenceNumber
+		n.outputTS = packets[0].Timestamp
+	} else {
+		n.outputTS += defaultH264TimestampStep
+	}
+	n.stepTimestampAfterSwitch = false
+
+	out := make([]*rtp.Packet, 0, len(packets))
+	for i, packet := range packets {
+		if packet == nil {
+			continue
+		}
+		clone := packet.Clone()
+		if clone == nil {
+			header := packet.Header
+			clone = &rtp.Packet{Header: header, Payload: append([]byte(nil), packet.Payload...)}
+		} else {
+			clone.Payload = append([]byte(nil), packet.Payload...)
+		}
+		clone.SequenceNumber = n.nextSeq
+		clone.Timestamp = n.outputTS
+		clone.Marker = i == len(packets)-1
+		n.nextSeq++
+		out = append(out, clone)
+	}
+	return out
+}
+
 // ResetForSwitch drops source-specific state while preserving the continuous
 // outbound sequence/timestamp timeline.
 func (n *H264AccessUnitNormalizer) ResetForSwitch(generation int) {

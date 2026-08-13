@@ -422,6 +422,45 @@ func TestH264AccessUnitNormalizerDropsExpiredAccessUnit(t *testing.T) {
 	}
 }
 
+func TestH264AccessUnitNormalizerRewriteForReplayContinuesTimeline(t *testing.T) {
+	var emitted []NormalizedH264AccessUnit
+	n := NewH264AccessUnitNormalizer(H264AccessUnitNormalizerConfig{}, func(au NormalizedH264AccessUnit) {
+		emitted = append(emitted, au)
+	})
+
+	n.Push(h264Packet(50, 9000, false, []byte{0x67, 0x42}))
+	n.Push(h264Packet(51, 9000, false, []byte{0x68, 0xce}))
+	n.Push(h264Packet(52, 9000, true, []byte{0x65, 0xaa}))
+	if len(emitted) != 1 {
+		t.Fatalf("expected one IDR access unit, got %d", len(emitted))
+	}
+
+	replay := n.RewriteForReplay(cloneRTPPackets(emitted[0].Packets))
+	if len(replay) != len(emitted[0].Packets) {
+		t.Fatalf("replay packet count=%d want %d", len(replay), len(emitted[0].Packets))
+	}
+	lastLive := emitted[0].Packets[len(emitted[0].Packets)-1]
+	if replay[0].SequenceNumber != lastLive.SequenceNumber+1 {
+		t.Fatalf("replay seq=%d want %d", replay[0].SequenceNumber, lastLive.SequenceNumber+1)
+	}
+	if replay[0].Timestamp != lastLive.Timestamp+defaultH264TimestampStep {
+		t.Fatalf("replay timestamp=%d want %d", replay[0].Timestamp, lastLive.Timestamp+defaultH264TimestampStep)
+	}
+	if !replay[len(replay)-1].Marker {
+		t.Fatal("expected marker on last replay packet")
+	}
+
+	n.Push(h264Packet(53, 12000, true, []byte{0x41, 0x01}))
+	if len(emitted) != 2 {
+		t.Fatalf("expected live AU after replay, got %d", len(emitted))
+	}
+	next := emitted[1].Packets[0]
+	lastReplay := replay[len(replay)-1]
+	if next.SequenceNumber != lastReplay.SequenceNumber+1 {
+		t.Fatalf("live seq after replay=%d want %d", next.SequenceNumber, lastReplay.SequenceNumber+1)
+	}
+}
+
 func h264Packet(seq uint16, timestamp uint32, marker bool, payload []byte) *rtp.Packet {
 	return &rtp.Packet{Header: rtp.Header{
 		Version: 2, PayloadType: 96, SequenceNumber: seq, Timestamp: timestamp, SSRC: 1234, Marker: marker,

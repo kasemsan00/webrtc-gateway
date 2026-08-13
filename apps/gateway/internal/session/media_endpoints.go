@@ -90,11 +90,18 @@ func (s *Session) SetVideoRTCPConnection(conn *net.UDPConn, port int) {
 // SetAsteriskEndpoints sets the Asterisk RTP endpoints for forwarding WebRTC → Asterisk
 func (s *Session) SetAsteriskEndpoints(audioAddr, videoAddr *net.UDPAddr) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	videoDestBecameReady := s.AsteriskVideoAddr == nil && videoAddr != nil
 	s.AsteriskAudioAddr = audioAddr
 	s.AsteriskVideoAddr = videoAddr
+	if videoDestBecameReady && s.sipVideoDestReadyAt.IsZero() {
+		s.sipVideoDestReadyAt = time.Now()
+	}
 	s.UpdatedAt = time.Now()
 	fmt.Printf("[%s] Asterisk endpoints set - Audio: %s, Video: %s\n", s.ID, audioAddr, videoAddr)
+	s.mu.Unlock()
+	if videoDestBecameReady {
+		s.KickUplinkKeyframeForSIPDecoder("sip-video-dest-ready")
+	}
 }
 
 func cloneUDPAddr(addr *net.UDPAddr) *net.UDPAddr {
@@ -113,15 +120,17 @@ func (s *Session) inSymmetricRTPTrustWindow(now time.Time) bool {
 // UpdateAsteriskVideoEndpointFromRTP updates the video endpoint based on actual RTP source (symmetric RTP)
 // This handles cases where the actual RTP source port differs from SDP (NAT, symmetric RTP, etc.)
 func (s *Session) UpdateAsteriskVideoEndpointFromRTP(remoteAddr *net.UDPAddr) {
+	kickUplink := false
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	now := time.Now()
 
 	// Only update if session is still active
 	if s.State == StateEnded {
+		s.mu.Unlock()
 		return
 	}
 	if remoteAddr == nil || remoteAddr.IP == nil {
+		s.mu.Unlock()
 		return
 	}
 
@@ -133,6 +142,10 @@ func (s *Session) UpdateAsteriskVideoEndpointFromRTP(remoteAddr *net.UDPAddr) {
 		s.AsteriskVideoAddr = cloneUDPAddr(remoteAddr)
 		s.UpdatedAt = now
 		updatedVideoEndpoint = true
+		kickUplink = true
+		if s.sipVideoDestReadyAt.IsZero() {
+			s.sipVideoDestReadyAt = now
+		}
 		fmt.Printf("[%s] 🔄 Symmetric RTP: Set video endpoint from RTP source: %s\n", s.ID, remoteAddr)
 	} else {
 		// Check if IP matches (or original IP is 0.0.0.0/nil)
@@ -179,6 +192,10 @@ func (s *Session) UpdateAsteriskVideoEndpointFromRTP(remoteAddr *net.UDPAddr) {
 			s.VideoRTCPFallbackUntil = fallbackUntil
 			fmt.Printf("[%s] 🔄 RTCP fallback window refreshed (rtp-source-update) until %s\n", s.ID, s.VideoRTCPFallbackUntil.Format(time.RFC3339Nano))
 		}
+	}
+	s.mu.Unlock()
+	if kickUplink {
+		s.KickUplinkKeyframeForSIPDecoder("sip-video-rtp-learn")
 	}
 }
 
@@ -388,6 +405,8 @@ func (s *Session) ResetMediaState() {
 	s.RemoteVideoSSRC = 0
 	s.remoteVideoReadyNotified = false
 	s.uplinkKeyframeKickOnRemoteJoinDone = false
+	s.uplinkKeyframeKickOnFirstSIPRTCP = false
+	s.sipVideoDestReadyAt = time.Time{}
 	s.PendingBrowserKeyframeRequest = false
 	s.PendingBrowserKeyframeRequestAt = time.Time{}
 	s.PendingBrowserKeyframeRequestEpoch = 0
@@ -419,6 +438,7 @@ func (s *Session) ResetMediaState() {
 	s.SwitchDuplicateCount = 0
 	s.SIPVideoRTPSource = ""
 	s.clearSIPVideoParameterSetsLocked()
+	s.clearSIPVideoIDRCacheLocked()
 	s.resetSwitchVideoGateLocked()
 	s.VideoRTPDisorderLastSummary = VideoRecoverySummary{}
 	s.VideoRTPDisorderLastSummaryAt = time.Time{}

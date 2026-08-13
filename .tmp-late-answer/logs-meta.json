@@ -1,0 +1,64 @@
+{
+  "items": [
+    {
+      "name": "k2-gateway-2026-08-13_13-27-24.log",
+      "size": 336530,
+      "modifiedAt": "2026-08-13T13:30:36.318921753Z",
+      "current": true
+    },
+    {
+      "name": "k2-gateway-2026-08-13_10-28-34.log",
+      "size": 102244,
+      "modifiedAt": "2026-08-13T12:33:34.760743695Z",
+      "current": false
+    },
+    {
+      "name": "k2-gateway-2026-08-13_10-27-15.log",
+      "size": 135910,
+      "modifiedAt": "2026-08-13T10:28:16.596744679Z",
+      "current": false
+    },
+    {
+      "name": "k2-gateway-2026-08-13_10-12-07.log",
+      "size": 275496,
+      "modifiedAt": "2026-08-13T10:26:37.142574308Z",
+      "current": false
+    },
+    {
+      "name": "k2-gateway-2026-08-13_09-53-17.log",
+      "size": 68467,
+      "modifiedAt": "2026-08-13T10:08:17.939800564Z",
+      "current": false
+    },
+    {
+      "name": "k2-gateway-2026-08-13_09-43-51.log",
+      "size": 72485,
+      "modifiedAt": "2026-08-13T09:45:16.858849961Z",
+      "current": false
+    },
+    {
+      "name": "k2-gateway-2026-08-13_09-41-02.log",
+      "size": 70838,
+      "modifiedAt": "2026-08-13T09:43:24.069816728Z",
+      "current": false
+    },
+    {
+      "name": "k2-gateway-2026-08-13_09-13-08.log",
+      "size": 93278,
+      "modifiedAt": "2026-08-13T09:38:08.946983269Z",
+      "current": false
+    },
+    {
+      "name": "k2-gateway-2026-08-13_08-29-48.log",
+      "size": 480972,
+      "modifiedAt": "2026-08-13T08:58:19.884232947Z",
+      "current": false
+    },
+    {
+      "name": "k2-gateway-2026-08-13_08-15-56.log",
+      "size": 106465,
+      "modifiedAt": "2026-08-13T08:26:56.335152917Z",
+      "current": false
+    }
+  ]
+}

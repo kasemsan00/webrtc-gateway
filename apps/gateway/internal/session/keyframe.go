@@ -18,6 +18,10 @@ const (
 	browserFIRInterval   = 1000 * time.Millisecond
 	browserPLIStale      = 600 * time.Millisecond
 	browserFIRStale      = 1500 * time.Millisecond
+	// Keep requesting browser IDRs after the queue/auto-200 IDR so a SIP
+	// decoder that answers several seconds later (Linphone after ring) is
+	// not stuck on P-frames. First-packet PLI still stops on the first IDR.
+	lateJoinBrowserPLIWindow = 12 * time.Second
 )
 
 // shouldSendPLIToAsterisk gates PLI forwarding to avoid flooding.
@@ -62,6 +66,22 @@ func (s *Session) SendPLIToAsteriskForced(trigger string) {
 // Returns action: "none" | "pli" | "fir" | "both".
 func (s *Session) SendBrowserRecoveryToAsterisk(trigger string) string {
 	now := time.Now()
+
+	if isBrowserRecoveryTrigger(trigger) && trigger != "switch" {
+		if s.RequestSIPVideoIDRReplay(trigger) {
+			s.mu.RLock()
+			lastKeyframe := s.LastKeyframe
+			remoteVideoSSRC := s.RemoteVideoSSRC
+			burstActive := s.VideoRecoveryBurstEnabled && !s.VideoRecoveryBurstUntil.IsZero() && now.Before(s.VideoRecoveryBurstUntil)
+			s.mu.RUnlock()
+			keyframeAge := time.Duration(-1)
+			if !lastKeyframe.IsZero() {
+				keyframeAge = now.Sub(lastKeyframe)
+			}
+			s.logBrowserRecoveryDecision(trigger, "replay", burstActive, keyframeAge, remoteVideoSSRC, "cached-idr")
+			return "replay"
+		}
+	}
 
 	s.mu.Lock()
 	lastKeyframe := s.LastKeyframe
@@ -277,7 +297,19 @@ func (s *Session) KickUplinkKeyframeOnRemoteJoinIfNeeded() bool {
 	return true
 }
 
-// RecordUplinkKeyframe marks that a WebRTC→SIP IDR was forwarded.
+// KickUplinkKeyframeOnFirstSIPRTCPIfNeeded claims the first SIP video SR/RR
+// and requests a fresh browser IDR. Queue wait-video often claims the
+// remote-join kick before the human SIP endpoint answers.
+func (s *Session) KickUplinkKeyframeOnFirstSIPRTCPIfNeeded() bool {
+	if !s.TryClaimUplinkKeyframeKickOnFirstSIPRTCP() {
+		return false
+	}
+	s.KickUplinkKeyframeForSIPDecoder("sip-rtcp-first")
+	return true
+}
+
+// RecordUplinkKeyframe marks that a WebRTC→SIP IDR was actually written to SIP.
+// Must not be called while holding s.mu.
 func (s *Session) RecordUplinkKeyframe() {
 	s.mu.Lock()
 	s.LastUplinkKeyframe = time.Now()
@@ -298,10 +330,55 @@ func (s *Session) HasRecentUplinkKeyframe(maxAge time.Duration) bool {
 	return !s.LastUplinkKeyframe.IsZero() && time.Since(s.LastUplinkKeyframe) <= maxAge
 }
 
+// HasUplinkKeyframeSince reports whether an uplink IDR was forwarded at or after t.
+func (s *Session) HasUplinkKeyframeSince(t time.Time) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return !s.LastUplinkKeyframe.IsZero() && !s.LastUplinkKeyframe.Before(t)
+}
+
+// KickUplinkKeyframeForSIPDecoder requests a fresh browser IDR so a SIP decoder
+// that just became reachable (200 OK / first RTP dest) is not stuck on P-frames.
+func (s *Session) KickUplinkKeyframeForSIPDecoder(reason string) {
+	kickAt := time.Now()
+	fmt.Printf("[%s] 📈 uplink_keyframe_kick reason=%s\n", s.ID, reason)
+	s.SendFIRToWebRTC()
+	s.SendPLItoWebRTC()
+	go func() {
+		for i := 0; i < 3; i++ {
+			if s.GetState() == StateEnded {
+				return
+			}
+			if s.HasUplinkKeyframeSince(kickAt) {
+				fmt.Printf("[%s] Stopping %s PLI burst - uplink IDR delivered\n", s.ID, reason)
+				return
+			}
+			time.Sleep(300 * time.Millisecond)
+			s.SendPLItoWebRTC()
+		}
+	}()
+}
+
 // ShouldStopStartupBrowserPLI is true once the browser encoder is producing
-// parameter sets and at least one IDR. Periodic/startup PLI loops should stop.
+// parameter sets and at least one IDR. Used by the short first-packet burst.
 func (s *Session) ShouldStopStartupBrowserPLI() bool {
 	return s.HasCachedSPSPPS() && s.HasUplinkKeyframe()
+}
+
+// ShouldStopPeriodicBrowserPLI is true only after an uplink IDR has been
+// forwarded and the late-join window since SIP video dest-ready has elapsed.
+// Queue auto-answer IDRs must not stop periodic PLI before Linphone answers.
+func (s *Session) ShouldStopPeriodicBrowserPLI() bool {
+	if !s.ShouldStopStartupBrowserPLI() {
+		return false
+	}
+	s.mu.RLock()
+	readyAt := s.sipVideoDestReadyAt
+	s.mu.RUnlock()
+	if readyAt.IsZero() {
+		return false
+	}
+	return time.Since(readyAt) >= lateJoinBrowserPLIWindow
 }
 
 // ShouldContinueSwitchFeedbackBurst reports whether delayed @switch FIR/PLI
@@ -348,16 +425,24 @@ func (s *Session) SendNACKToWebRTC(mediaSSRC uint32, nacks []rtcp.NackPair) {
 func (s *Session) SendNACKToAsterisk(nacks []rtcp.NackPair) {
 	s.mu.RLock()
 	destAddr := s.AsteriskVideoAddr
-	conn := s.VideoRTCPConn
-	if conn == nil {
-		conn = s.VideoRTPConn
-	}
+	rtpConn := s.VideoRTPConn
+	rtcpConn := s.VideoRTCPConn
 	senderSSRC := s.VideoSSRC
 	if senderSSRC == 0 {
 		senderSSRC = 0x87654321 // match SSRC used for video RTP forwarding
 	}
 	mediaSSRC := s.RemoteVideoSSRC
 	s.mu.RUnlock()
+	if rtcpConn == nil {
+		rtcpConn = rtpConn
+	}
+	if rtpConn == nil {
+		rtpConn = rtcpConn
+	}
+	conn := rtcpConn
+	if conn == nil {
+		conn = rtpConn
+	}
 
 	if destAddr != nil && conn != nil && mediaSSRC != 0 {
 		learnedAddr, learnedSource := s.GetLearnedVideoRTCPAddr()
@@ -382,7 +467,11 @@ func (s *Session) SendNACKToAsterisk(nacks []rtcp.NackPair) {
 
 		targets := s.getVideoFeedbackTargets(destAddr, learnedAddr, useFallback)
 		for _, target := range targets {
-			if _, err := conn.WriteToUDP(out, target.Addr); err != nil {
+			writeConn := feedbackConnForTarget(target, rtpConn, rtcpConn)
+			if writeConn == nil {
+				writeConn = conn
+			}
+			if _, err := writeConn.WriteToUDP(out, target.Addr); err != nil {
 				continue
 			}
 

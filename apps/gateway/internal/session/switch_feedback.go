@@ -22,6 +22,8 @@ type sipFeedbackSnapshot struct {
 	ready         bool
 	kind          string
 	conn          *net.UDPConn
+	rtpConn       *net.UDPConn
+	rtcpConn      *net.UDPConn
 	targets       []videoFeedbackTarget
 	senderSSRC    uint32
 	mediaSSRC     uint32
@@ -63,9 +65,17 @@ func (s *Session) prepareSIPFeedbackLocked(kind string, force bool, trigger stri
 	}
 
 	destAddr := cloneUDPAddr(s.AsteriskVideoAddr)
-	conn := s.VideoRTCPConn
+	rtpConn := s.VideoRTPConn
+	rtcpConn := s.VideoRTCPConn
+	if rtcpConn == nil {
+		rtcpConn = rtpConn
+	}
+	if rtpConn == nil {
+		rtpConn = rtcpConn
+	}
+	conn := rtcpConn
 	if conn == nil {
-		conn = s.VideoRTPConn
+		conn = rtpConn
 	}
 	senderSSRC := s.VideoSSRC
 	if senderSSRC == 0 {
@@ -73,6 +83,8 @@ func (s *Session) prepareSIPFeedbackLocked(kind string, force bool, trigger stri
 	}
 	mediaSSRC := s.RemoteVideoSSRC
 	snapshot.conn = conn
+	snapshot.rtpConn = rtpConn
+	snapshot.rtcpConn = rtcpConn
 	snapshot.senderSSRC = senderSSRC
 	snapshot.mediaSSRC = mediaSSRC
 
@@ -144,9 +156,18 @@ func sendPreparedSIPFeedback(id string, snapshot sipFeedbackSnapshot) {
 		return
 	}
 	for _, target := range snapshot.targets {
-		if _, err := snapshot.conn.WriteToUDP(out, target.Addr); err != nil {
-			fmt.Printf("[%s] error sending switch %s to %s: %v\n", id, snapshot.kind, target.Addr, err)
+		conn := feedbackConnForTarget(target, snapshot.rtpConn, snapshot.rtcpConn)
+		if conn == nil {
+			conn = snapshot.conn
 		}
+		if conn == nil {
+			continue
+		}
+		if _, err := conn.WriteToUDP(out, target.Addr); err != nil {
+			fmt.Printf("[%s] error sending %s to %s %s: %v\n", id, snapshot.kind, target.Kind, target.Addr, err)
+			continue
+		}
+		fmt.Printf("[%s] 📡 Sent %s to %s %s (%s)\n", id, strings.ToUpper(snapshot.kind), target.Kind, target.Addr, target.Label)
 	}
 }
 

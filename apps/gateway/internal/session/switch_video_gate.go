@@ -238,6 +238,7 @@ func (s *Session) startSwitchVideoGateLocked(generation int, now time.Time, reas
 	}
 
 	s.clearSwitchVideoGateLocked()
+	s.clearSIPVideoIDRCacheLocked()
 	s.SwitchVideoGateActive = true
 	s.SwitchVideoGateGeneration = generation
 	s.SwitchVideoGateStartedAt = now

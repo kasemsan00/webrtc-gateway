@@ -300,11 +300,6 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 					}
 				}
 
-				if containsIDR {
-					s.RecordUplinkKeyframe()
-					fmt.Printf("[%s] 🔑 KEYFRAME (STAP-A IDR) detected in video packet #%d → Asterisk\n", s.ID, packetCount)
-				}
-
 				// Inject SPS/PPS before STAP-A IDR only when STAP-A does not already carry both.
 				// This avoids duplicate SPS/PPS bursts at call startup that can destabilize decoders.
 				shouldInjectBeforeSTAPA := containsIDR && len(s.CachedSPS) > 0 && len(s.CachedPPS) > 0 && !(containsSPS && containsPPS)
@@ -423,10 +418,20 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 					}
 				}
 
+				stapaForwarded := destAddr != nil && conn != nil && len(pendingWrites) > 0
 				s.mu.Unlock()
-				// Flush buffered writes outside lock
+				// Flush buffered writes outside lock. Never record an uplink
+				// IDR while holding s.mu — RecordUplinkKeyframe takes the same lock.
 				for _, w := range pendingWrites {
-					conn.WriteToUDP(w, destAddr)
+					_, _ = conn.WriteToUDP(w, destAddr)
+				}
+				if containsIDR {
+					if stapaForwarded {
+						s.RecordUplinkKeyframe()
+						fmt.Printf("[%s] 🔑 KEYFRAME (STAP-A IDR) forwarded in video packet #%d → Asterisk\n", s.ID, packetCount)
+					} else {
+						fmt.Printf("[%s] 🔑 KEYFRAME (STAP-A IDR) held in video packet #%d - Asterisk endpoint not set yet\n", s.ID, packetCount)
+					}
 				}
 				continue // STAP-A handled, skip normal forwarding
 			}
@@ -530,12 +535,6 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 				continue
 			}
 
-			// Logging (re-using NAL type detection mostly for logging)
-			if kind == "video" && isKeyframe {
-				s.RecordUplinkKeyframe()
-				fmt.Printf("[%s] 🔑 KEYFRAME (Forwarded) detected in video packet #%d → Asterisk\n", s.ID, packetCount)
-			}
-
 			// Log first few forwarded packets
 			if packetCount <= 5 || packetCount%500 == 0 || isKeyframe {
 				fmt.Printf("[%s] 📤 Re-packetized %s #%d (Seq=%d, SSRC=%d, Size=%d) → %s\n",
@@ -547,6 +546,9 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 				if packetCount <= 5 {
 					fmt.Printf("[%s] Error forwarding %s to Asterisk: %v\n", s.ID, kind, err)
 				}
+			} else if kind == "video" && isKeyframe {
+				s.RecordUplinkKeyframe()
+				fmt.Printf("[%s] 🔑 KEYFRAME (Forwarded) detected in video packet #%d → Asterisk\n", s.ID, packetCount)
 			}
 		} else if packetCount == 1 {
 			fmt.Printf("[%s] ⚠️ Cannot forward %s: Asterisk endpoint not set yet\n", s.ID, kind)

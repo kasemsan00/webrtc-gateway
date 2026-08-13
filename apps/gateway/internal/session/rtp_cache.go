@@ -80,7 +80,7 @@ func (s *Session) RetransmitVideoNACK(nacks []rtcp.NackPair) (int, int) {
 				missing++
 				continue
 			}
-			if _, err := s.VideoTrack.Write(packet); err == nil {
+			if _, err := s.WriteVideoToWebRTC(packet); err == nil {
 				sent++
 			} else {
 				missing++

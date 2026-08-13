@@ -28,8 +28,11 @@ func (s *Session) SetState(state SessionState) {
 	defer s.mu.Unlock()
 	s.State = state
 	s.UpdatedAt = time.Now()
-	if state == StateEnded && s.cancel != nil {
-		s.cancel()
+	if state == StateEnded {
+		s.clearSIPVideoIDRCacheLocked()
+		if s.cancel != nil {
+			s.cancel()
+		}
 	}
 }
 
@@ -113,6 +116,18 @@ func (s *Session) TryClaimUplinkKeyframeKickOnRemoteJoin() bool {
 		return false
 	}
 	s.uplinkKeyframeKickOnRemoteJoinDone = true
+	return true
+}
+
+// TryClaimUplinkKeyframeKickOnFirstSIPRTCP claims the first SIP video SR/RR
+// uplink keyframe kick for this session. Returns true only once.
+func (s *Session) TryClaimUplinkKeyframeKickOnFirstSIPRTCP() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.uplinkKeyframeKickOnFirstSIPRTCP {
+		return false
+	}
+	s.uplinkKeyframeKickOnFirstSIPRTCP = true
 	return true
 }
 

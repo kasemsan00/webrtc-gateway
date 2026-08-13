@@ -253,90 +253,9 @@ func (s *Server) MakeCall(destination, from string, sess *session.Session) error
 				continue
 
 			case res.StatusCode == 200:
-				// Answered - call established
-				sess.UpdateState(session.StateActive)
-				s.notifySessionStateChange(sess, session.StateActive)
-				sess.StartVideoRecoveryBurst("sip-200-ok")
-				s.logEvent(&logstore.Event{
-					Timestamp:     time.Now(),
-					SessionID:     sess.ID,
-					Category:      "sip",
-					Name:          "sip_200_ok",
-					SIPStatusCode: res.StatusCode,
-					State:         string(session.StateActive),
-					SIPCallID:     inviteReq.CallID().Value(),
-				})
-				fmt.Printf("[%s] Call answered!\n", sess.ID)
-
-				// Extract dialog state for BYE requests using helper
-				dialogState, err := ExtractDialogStateFromResponse(res)
-				if err != nil {
-					return fmt.Errorf("failed to extract dialog state: %w", err)
+				if err := s.completeOutboundInvite200(ctx, inviteReq, res, sess, params, 1, false); err != nil {
+					return err
 				}
-
-				// Extract fromTag from INVITE request (our tag)
-				fromTag := ""
-				if fromHeader := inviteReq.From(); fromHeader != nil && fromHeader.Params != nil {
-					if tag, ok := fromHeader.Params.Get("tag"); ok {
-						fromTag = tag
-					}
-				}
-
-				// Store dialog state in session for BYE
-				sess.SetSIPDialogState(fromTag, dialogState.ToTag, dialogState.RemoteContact, params.Domain, params.Port, 1, dialogState.RouteSet)
-				fmt.Printf("[%s] Dialog state captured - FromTag: %s, ToTag: %s, Contact: %s, RouteSet: %v\n",
-					sess.ID, fromTag, dialogState.ToTag, dialogState.RemoteContact, dialogState.RouteSet)
-				s.logDialogSnapshot(ctx, sess)
-
-				// Log SDP from Asterisk
-				if len(res.Body()) > 0 {
-					fmt.Printf("=== SDP Answer from Asterisk ===\n%s\n================================\n", string(res.Body()))
-
-					answerPayloadID := s.storePayload(ctx, &logstore.PayloadRecord{
-						SessionID:   sess.ID,
-						Timestamp:   time.Now(),
-						Kind:        "sip_sdp_answer",
-						ContentType: "application/sdp",
-						BodyText:    string(res.Body()),
-					})
-					s.logEvent(&logstore.Event{
-						Timestamp:     time.Now(),
-						SessionID:     sess.ID,
-						Category:      "sip",
-						Name:          "sip_sdp_answer_received",
-						PayloadID:     answerPayloadID,
-						SIPStatusCode: res.StatusCode,
-						SIPCallID:     inviteReq.CallID().Value(),
-					})
-
-					// Parse Opus PT from 200 OK SDP answer (in case Asterisk uses different PT)
-					opusPT := parseOpusPayloadType(res.Body())
-					if opusPT > 0 && opusPT != sess.SIPOpusPT {
-						fmt.Printf("[%s] 🎵 Updated Opus PT from answer: %d → %d\n", sess.ID, sess.SIPOpusPT, opusPT)
-						sess.SIPOpusPT = opusPT
-						s.logEvent(&logstore.Event{
-							Timestamp: time.Now(),
-							SessionID: sess.ID,
-							Category:  "sip",
-							Name:      "sip_opus_pt_updated",
-							Data:      map[string]interface{}{"opus_pt": opusPT},
-						})
-					}
-
-					// Parse Asterisk SDP to get RTP ports for forwarding WebRTC → Asterisk
-					s.parseAsteriskSDPAndSetEndpoints(res.Body(), sess)
-				}
-
-				// Send ACK
-				s.sendAckForInvite(inviteReq, res)
-				s.logEvent(&logstore.Event{
-					Timestamp: time.Now(),
-					SessionID: sess.ID,
-					Category:  "sip",
-					Name:      "sip_ack_sent",
-					SIPCallID: inviteReq.CallID().Value(),
-				})
-				s.logSessionSnapshot(ctx, sess, "")
 				cleanupOnError = false
 				return nil
 
@@ -495,6 +414,10 @@ func (s *Server) handleInviteAuth(ctx context.Context, originalReq *sip.Request,
 
 	fmt.Printf("[%s] Sending authenticated INVITE with new Via/CSeq\n", sess.ID)
 
+	// Keep the authenticated INVITE so retransmitted 200 OKs can be ACKed
+	// after DoDigestAuth consumes the client transaction.
+	sess.SetOutboundInvite(nil, authReq)
+
 	// Use DoDigestAuth with the cloned request
 	res, err := s.sipClient.DoDigestAuth(ctx, authReq, challenge, digest)
 	if err != nil {
@@ -525,64 +448,9 @@ func (s *Server) handleInviteAuth(ctx context.Context, originalReq *sip.Request,
 		return nil
 
 	case res.StatusCode == 200:
-		// Answered - call established
-		sess.UpdateState(session.StateActive)
-		s.notifySessionStateChange(sess, session.StateActive)
-		fmt.Printf("[%s] Call answered (authenticated)!\n", sess.ID)
-
-		// Extract dialog state for BYE requests using helper
-		dialogState, err := ExtractDialogStateFromResponse(res)
-		if err != nil {
-			return fmt.Errorf("failed to extract dialog state: %w", err)
+		if err := s.completeOutboundInvite200(ctx, authReq, res, sess, params, 2, true); err != nil {
+			return err
 		}
-
-		// Extract fromTag from INVITE request (our tag)
-		fromTag := ""
-		if fromHeader := authReq.From(); fromHeader != nil && fromHeader.Params != nil {
-			if tag, ok := fromHeader.Params.Get("tag"); ok {
-				fromTag = tag
-			}
-		}
-
-		// Store dialog state in session for BYE
-		sess.SetSIPDialogState(fromTag, dialogState.ToTag, dialogState.RemoteContact, params.Domain, params.Port, 2, dialogState.RouteSet)
-		fmt.Printf("[%s] Dialog state captured - FromTag: %s, ToTag: %s, Contact: %s, RouteSet: %v\n",
-			sess.ID, fromTag, dialogState.ToTag, dialogState.RemoteContact, dialogState.RouteSet)
-		s.logDialogSnapshot(ctx, sess)
-
-		// Log SDP from Asterisk
-		if len(res.Body()) > 0 {
-			fmt.Printf("=== SDP Answer from Asterisk ===\n%s\n================================\n", string(res.Body()))
-
-			answerPayloadID := s.storePayload(ctx, &logstore.PayloadRecord{
-				SessionID:   sess.ID,
-				Timestamp:   time.Now(),
-				Kind:        "sip_sdp_answer",
-				ContentType: "application/sdp",
-				BodyText:    string(res.Body()),
-			})
-			s.logEvent(&logstore.Event{
-				Timestamp:     time.Now(),
-				SessionID:     sess.ID,
-				Category:      "sip",
-				Name:          "sip_sdp_answer_received",
-				PayloadID:     answerPayloadID,
-				SIPStatusCode: res.StatusCode,
-			})
-
-			// Parse Asterisk SDP to get RTP ports for forwarding WebRTC → Asterisk
-			s.parseAsteriskSDPAndSetEndpoints(res.Body(), sess)
-		}
-
-		// Send ACK (use authReq for proper Via/CSeq)
-		s.sendAckForInvite(authReq, res)
-		s.logEvent(&logstore.Event{
-			Timestamp: time.Now(),
-			SessionID: sess.ID,
-			Category:  "sip",
-			Name:      "sip_ack_sent",
-		})
-		s.logSessionSnapshot(ctx, sess, "")
 		return nil
 
 	case res.StatusCode == 401 || res.StatusCode == 407:
@@ -704,19 +572,8 @@ func (s *Server) Hangup(sess *session.Session) error {
 	sess.UpdateState(session.StateEnded)
 	s.notifySessionStateChange(sess, session.StateEnded)
 
-	// Close media transports (RTP/RTCP UDP sockets) for this session.
 	sess.CloseMediaTransports()
-
-	// Close the WebRTC PeerConnection so the browser ICE/DTLS connection is
-	// torn down immediately – without this the browser side stays connected
-	// even after receiving the SIP BYE 200 OK.
-	if sess.PeerConnection != nil {
-		if err := sess.PeerConnection.Close(); err != nil {
-			fmt.Printf("[%s] Warning: PeerConnection.Close() error: %v\n", sess.ID, err)
-		} else {
-			fmt.Printf("[%s] ✅ PeerConnection closed\n", sess.ID)
-		}
-	}
+	session.ClosePeerConnectionAsync(sess.DetachPeerConnection(), sess.ID)
 
 	fmt.Printf("[%s] 📈 hangup_cleanup_end postState=%s\n", sess.ID, sess.GetState())
 
@@ -1596,15 +1453,154 @@ func (s *Server) sendAckForInvite(inviteReq *sip.Request, res *sip.Response) {
 		ackReq.SetDestination(dest)
 	}
 
-	// CRITICAL: Force transport to match INVITE (prevent transport mismatch)
 	ackReq.SetTransport(transport)
 
-	// Send ACK
+	if s.sipClient == nil {
+		fmt.Printf("ACK not sent: sipClient is nil (Request-URI: %s)\n", recipient.String())
+		return
+	}
 	if err := s.sipClient.WriteRequest(ackReq); err != nil {
 		fmt.Printf("Error sending ACK: %v\n", err)
 	} else {
 		fmt.Printf("ACK sent successfully (Request-URI: %s)\n", recipient.String())
 	}
+}
+
+// completeOutboundInvite200 ACKs the 200 immediately, then finishes dialog/media
+// setup. ACK must not wait on DB snapshots or SDP parsing — a delayed ACK makes
+// Asterisk retransmit 200s and BYE the call.
+func (s *Server) completeOutboundInvite200(
+	ctx context.Context,
+	inviteReq *sip.Request,
+	res *sip.Response,
+	sess *session.Session,
+	params sipAuthParams,
+	dialogCSeq int,
+	authenticated bool,
+) error {
+	s.sendAckForInvite(inviteReq, res)
+	callIDValue := ""
+	if callID := inviteReq.CallID(); callID != nil {
+		callIDValue = callID.Value()
+	}
+
+	dialogState, err := ExtractDialogStateFromResponse(res)
+	if err != nil {
+		return fmt.Errorf("failed to extract dialog state: %w", err)
+	}
+
+	fromTag := ""
+	if fromHeader := inviteReq.From(); fromHeader != nil && fromHeader.Params != nil {
+		if tag, ok := fromHeader.Params.Get("tag"); ok {
+			fromTag = tag
+		}
+	}
+
+	sess.SetSIPDialogState(fromTag, dialogState.ToTag, dialogState.RemoteContact, params.Domain, params.Port, dialogCSeq, dialogState.RouteSet)
+	fmt.Printf("[%s] Dialog state captured - FromTag: %s, ToTag: %s, Contact: %s, RouteSet: %v\n",
+		sess.ID, fromTag, dialogState.ToTag, dialogState.RemoteContact, dialogState.RouteSet)
+
+	opusUpdated := false
+	var opusPT uint8
+	if len(res.Body()) > 0 {
+		fmt.Printf("=== SDP Answer from Asterisk ===\n%s\n================================\n", string(res.Body()))
+		opusPT = parseOpusPayloadType(res.Body())
+		if opusPT > 0 && opusPT != sess.SIPOpusPT {
+			fmt.Printf("[%s] 🎵 Updated Opus PT from answer: %d → %d\n", sess.ID, sess.SIPOpusPT, opusPT)
+			sess.SIPOpusPT = opusPT
+			opusUpdated = true
+		}
+		s.parseAsteriskSDPAndSetEndpoints(res.Body(), sess)
+	}
+
+	sess.UpdateState(session.StateActive)
+	s.notifySessionStateChange(sess, session.StateActive)
+	sess.StartVideoRecoveryBurst("sip-200-ok")
+	if authenticated {
+		fmt.Printf("[%s] Call answered (authenticated)!\n", sess.ID)
+	} else {
+		fmt.Printf("[%s] Call answered!\n", sess.ID)
+	}
+
+	s.logEvent(&logstore.Event{
+		Timestamp: time.Now(),
+		SessionID: sess.ID,
+		Category:  "sip",
+		Name:      "sip_ack_sent",
+		SIPCallID: callIDValue,
+	})
+	if !authenticated {
+		s.logEvent(&logstore.Event{
+			Timestamp:     time.Now(),
+			SessionID:     sess.ID,
+			Category:      "sip",
+			Name:          "sip_200_ok",
+			SIPStatusCode: res.StatusCode,
+			State:         string(session.StateActive),
+			SIPCallID:     callIDValue,
+		})
+	}
+	if len(res.Body()) > 0 {
+		answerPayloadID := s.storePayload(ctx, &logstore.PayloadRecord{
+			SessionID:   sess.ID,
+			Timestamp:   time.Now(),
+			Kind:        "sip_sdp_answer",
+			ContentType: "application/sdp",
+			BodyText:    string(res.Body()),
+		})
+		s.logEvent(&logstore.Event{
+			Timestamp:     time.Now(),
+			SessionID:     sess.ID,
+			Category:      "sip",
+			Name:          "sip_sdp_answer_received",
+			PayloadID:     answerPayloadID,
+			SIPStatusCode: res.StatusCode,
+			SIPCallID:     callIDValue,
+		})
+		if opusUpdated {
+			s.logEvent(&logstore.Event{
+				Timestamp: time.Now(),
+				SessionID: sess.ID,
+				Category:  "sip",
+				Name:      "sip_opus_pt_updated",
+				Data:      map[string]interface{}{"opus_pt": opusPT},
+			})
+		}
+	}
+
+	s.logDialogSnapshot(ctx, sess)
+	s.logSessionSnapshot(ctx, sess, "")
+	return nil
+}
+
+// handleUnhandledSIPResponse ACKs INVITE 200 retransmits after sipgo has already
+// consumed the client transaction (typical after DoDigestAuth).
+func (s *Server) handleUnhandledSIPResponse(res *sip.Response) {
+	if res == nil || res.StatusCode != 200 {
+		return
+	}
+	cseq := res.CSeq()
+	if cseq == nil || cseq.MethodName != sip.INVITE {
+		return
+	}
+	callIDValue := ""
+	if callID := res.CallID(); callID != nil {
+		callIDValue = callID.Value()
+	}
+	if callIDValue == "" || s.sessionMgr == nil {
+		return
+	}
+	sess, ok := s.sessionMgr.GetSessionBySIPCallID(callIDValue)
+	if !ok || sess == nil {
+		return
+	}
+	_, storedReq := sess.GetOutboundInvite()
+	inviteReq, _ := storedReq.(*sip.Request)
+	if inviteReq == nil {
+		return
+	}
+	fmt.Printf("[%s] ACK retransmit for unhandled INVITE 200\n", sess.ID)
+	s.sendAckForInvite(inviteReq, res)
 }
 
 // trySendCancel sends a best-effort SIP CANCEL for an in-progress INVITE.

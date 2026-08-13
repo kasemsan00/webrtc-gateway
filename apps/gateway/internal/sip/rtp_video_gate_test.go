@@ -132,3 +132,25 @@ func TestWriteNormalizedVideoAccessUnitRejectsStaleGenerationAfterRelease(t *tes
 		t.Fatalf("stale generation passed after release: writes=%d", writes)
 	}
 }
+
+func TestWriteNormalizedVideoAccessUnitCachesIDRAfterTrackWriteFailure(t *testing.T) {
+	sess := &session.Session{ID: "idr-write-fail", VideoAUNormalizeEnabled: true}
+	result := writeNormalizedVideoAccessUnit(sess, normalizedVideoAU(0, true, true, 2), time.Now(), func([]byte) (int, error) {
+		return 0, errors.New("DTLS transport has not started yet")
+	})
+	if result.emitted {
+		t.Fatal("expected write failure")
+	}
+	if !sess.HasPendingSIPVideoIDRWrite() {
+		t.Fatal("expected failed IDR to remain queued for replay")
+	}
+
+	writes := 0
+	wrote, reason := sess.WritePendingSIPVideoIDR(func(b []byte) (int, error) {
+		writes++
+		return len(b), nil
+	})
+	if !wrote || writes != 2 {
+		t.Fatalf("wrote=%v writes=%d reason=%s", wrote, writes, reason)
+	}
+}

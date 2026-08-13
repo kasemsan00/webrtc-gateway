@@ -37,23 +37,54 @@ func TestGetVideoFeedbackTargets_DualMode_RTPFirst(t *testing.T) {
 	}
 }
 
-func TestGetVideoFeedbackTargets_AutoMode_LegacyFallback(t *testing.T) {
+func TestGetVideoFeedbackTargets_AutoMode_AlwaysIncludesRTP(t *testing.T) {
 	sess := &Session{VideoFeedbackTransport: "auto"}
 	dest := &net.UDPAddr{IP: net.ParseIP("203.150.245.42"), Port: 18576}
 	learned := &net.UDPAddr{IP: net.ParseIP("203.150.245.42"), Port: 19000}
 
-	targets := sess.getVideoFeedbackTargets(dest, learned, true)
+	targets := sess.getVideoFeedbackTargets(dest, learned, false)
+	if len(targets) != 2 {
+		t.Fatalf("expected 2 targets in auto mode without fallback, got %d", len(targets))
+	}
+	if !targets[0].IsPrimary || targets[0].Kind != "rtp" || targets[0].Addr.Port != 18576 {
+		t.Fatalf("unexpected primary target: %+v", targets[0])
+	}
+	if targets[1].Kind != "rtcp" || targets[1].Addr.Port != 19000 {
+		t.Fatalf("unexpected rtcp target: %+v", targets[1])
+	}
+
+	targets = sess.getVideoFeedbackTargets(dest, learned, true)
 	if len(targets) != 3 {
 		t.Fatalf("expected 3 targets in auto fallback mode, got %d", len(targets))
 	}
-	if !targets[0].IsPrimary || targets[0].Kind != "rtcp" || targets[0].Addr.Port != 19000 {
-		t.Fatalf("unexpected primary target: %+v", targets[0])
+	if targets[0].Kind != "rtp" || targets[0].Addr.Port != 18576 {
+		t.Fatalf("expected RTP first in auto fallback, got %+v", targets[0])
 	}
-	if targets[1].Kind != "rtcp" || targets[1].Addr.Port != 18577 {
-		t.Fatalf("unexpected rtcp fallback target: %+v", targets[1])
+	if targets[1].Kind != "rtcp" || targets[1].Addr.Port != 19000 {
+		t.Fatalf("unexpected learned rtcp target: %+v", targets[1])
 	}
-	if targets[2].Kind != "rtp" || targets[2].Addr.Port != 18576 {
-		t.Fatalf("unexpected rtp fallback target: %+v", targets[2])
+	if targets[2].Kind != "rtcp" || targets[2].Addr.Port != 18577 {
+		t.Fatalf("unexpected rtcp+1 fallback target: %+v", targets[2])
+	}
+}
+
+func TestFeedbackConnForTargetPrefersMatchingSocket(t *testing.T) {
+	rtpConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+	if err != nil {
+		t.Fatalf("listen rtp: %v", err)
+	}
+	t.Cleanup(func() { _ = rtpConn.Close() })
+	rtcpConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+	if err != nil {
+		t.Fatalf("listen rtcp: %v", err)
+	}
+	t.Cleanup(func() { _ = rtcpConn.Close() })
+
+	if got := feedbackConnForTarget(videoFeedbackTarget{Kind: "rtp"}, rtpConn, rtcpConn); got != rtpConn {
+		t.Fatal("expected RTP target to use RTP socket")
+	}
+	if got := feedbackConnForTarget(videoFeedbackTarget{Kind: "rtcp"}, rtpConn, rtcpConn); got != rtcpConn {
+		t.Fatal("expected RTCP target to use RTCP socket")
 	}
 }
 

@@ -114,13 +114,8 @@ func (m *Manager) DeleteSession(id string) {
 	// Signal all session goroutines to stop (calls cancel() internally)
 	session.SetState(StateEnded)
 
-	// Close media transports outside map lock (reuses existing safe close pattern)
 	session.CloseMediaTransports()
-
-	// Close peer connection outside map lock (can block during ICE cleanup)
-	if session.PeerConnection != nil {
-		session.PeerConnection.Close()
-	}
+	ClosePeerConnectionAsync(session.DetachPeerConnection(), session.ID)
 
 	fmt.Printf("[%s] Deleted session\n", id)
 }
@@ -181,9 +176,7 @@ func (m *Manager) cleanupEndedSessions() {
 	// Safety net: ensure resources are released outside lock
 	for _, sess := range toCleanup {
 		sess.CloseMediaTransports()
-		if sess.PeerConnection != nil {
-			sess.PeerConnection.Close()
-		}
+		ClosePeerConnectionAsync(sess.DetachPeerConnection(), sess.ID)
 	}
 
 	if len(toDeleteIDs) > 0 {

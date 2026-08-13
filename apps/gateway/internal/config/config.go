@@ -130,10 +130,10 @@ type SIPConfig struct {
 	AudioUseAVPF                         bool   // Use RTP/AVPF profile for audio with RTCP feedback (default: false)
 	VideoUseAVPF                         bool   // Use RTP/AVPF profile for video with RTCP feedback (PLI/FIR/NACK) (default: true)
 	// SIP-side transport target for outbound video feedback packets (PLI/FIR/NACK): auto|rtp|rtcp|dual
-	// - auto: legacy learned-RTCP + fallback-window behavior
+	// - dual: always send to both RTP and RTCP (RTP first). Required for chan_sip.
+	// - auto: same RTP+RTCP pair as dual; fallback window may add rtp+1
 	// - rtp:  always send to SIP video RTP port (rtcp-mux style)
 	// - rtcp: always send to learned/rtp+1 RTCP target only
-	// - dual: always send to both RTP and RTCP targets (RTP first)
 	VideoFeedbackTransport string
 	VideoPreserveSTAPA     bool // Preserve STAP-A packets (don't de-aggregate) when they contain SPS+PPS+IDR (default: false)
 	// Keyframe watchdog: request FIR/PLI when keyframes go stale (SIP → WebRTC)
@@ -627,13 +627,13 @@ func (c *Config) Display() {
 }
 
 func getSIPVideoFeedbackTransport() string {
-	value := strings.ToLower(strings.TrimSpace(getEnvWithDefault("SIP_VIDEO_FEEDBACK_TRANSPORT", SIPVideoFeedbackTransportAuto)))
+	value := strings.ToLower(strings.TrimSpace(getEnvWithDefault("SIP_VIDEO_FEEDBACK_TRANSPORT", SIPVideoFeedbackTransportDual)))
 	switch value {
 	case SIPVideoFeedbackTransportAuto, SIPVideoFeedbackTransportRTP, SIPVideoFeedbackTransportRTCP, SIPVideoFeedbackTransportDual:
 		return value
 	default:
-		fmt.Printf("Warning: invalid SIP_VIDEO_FEEDBACK_TRANSPORT=%q, using %q\n", value, SIPVideoFeedbackTransportAuto)
-		return SIPVideoFeedbackTransportAuto
+		fmt.Printf("Warning: invalid SIP_VIDEO_FEEDBACK_TRANSPORT=%q, using %q\n", value, SIPVideoFeedbackTransportDual)
+		return SIPVideoFeedbackTransportDual
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/emiago/sipgo"
+	sipgoSip "github.com/emiago/sipgo/sip"
 	"github.com/pion/webrtc/v4"
 
 	"k2-gateway/internal/config"
@@ -66,27 +67,27 @@ type DTMFNotifier interface {
 
 // Server represents a SIP server
 type Server struct {
-	sipServer        *sipgo.Server
-	sipClient        *sipgo.Client
-	sipUserAgent     *sipgo.UserAgent
-	config           config.SIPConfig
-	rtpConfig        config.RTPConfig
-	turnConfig       config.TURNConfig // For creating sessions for incoming calls
-	audioTrack       *webrtc.TrackLocalStaticRTP
-	unicastAddress   string
-	publicAddress    string // Public IP address for NAT traversal
-	sipPort          int
-	sessionMgr       SessionManager // For finding sessions by Call-ID
-	sessionCreator   SessionCreator // For creating sessions for incoming calls
-	stateNotifier              StateNotifier // For notifying WebSocket clients
+	sipServer                  *sipgo.Server
+	sipClient                  *sipgo.Client
+	sipUserAgent               *sipgo.UserAgent
+	config                     config.SIPConfig
+	rtpConfig                  config.RTPConfig
+	turnConfig                 config.TURNConfig // For creating sessions for incoming calls
+	audioTrack                 *webrtc.TrackLocalStaticRTP
+	unicastAddress             string
+	publicAddress              string // Public IP address for NAT traversal
+	sipPort                    int
+	sessionMgr                 SessionManager // For finding sessions by Call-ID
+	sessionCreator             SessionCreator // For creating sessions for incoming calls
+	stateNotifier              StateNotifier  // For notifying WebSocket clients
 	midCallNotifier            MidCallRenegotiationNotifier
 	remoteMediaNotifier        RemoteMediaNotifier
 	switchRenegotiationStarter SwitchVideoRenegotiationStarter
 	incomingNotifier           IncomingCallNotifier // For notifying incoming calls
 	messageNotifier            MessageNotifier      // For notifying incoming SIP messages
 	dtmfNotifier               DTMFNotifier         // For notifying received DTMF
-	logStore         logstore.LogStore
-	logFullSIP       bool
+	logStore                   logstore.LogStore
+	logFullSIP                 bool
 	// Registration fields
 	mu sync.RWMutex
 	// SIP Public & Trunk management
@@ -101,8 +102,16 @@ type Server struct {
 
 // NewServer creates a new SIP server
 func NewServer(cfg config.SIPConfig, rtpCfg config.RTPConfig, audioTrack *webrtc.TrackLocalStaticRTP, unicastAddress string, sipPort int) (*Server, error) {
-	// Create SIP user agent
-	sipUserAgent, err := sipgo.NewUA()
+	var server *Server
+	sipUserAgent, err := sipgo.NewUA(
+		sipgo.WithUserAgentTransactionLayerOptions(
+			sipgoSip.WithTransactionLayerUnhandledResponseHandler(func(res *sipgoSip.Response) {
+				if server != nil {
+					server.handleUnhandledSIPResponse(res)
+				}
+			}),
+		),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create SIP user agent: %w", err)
 	}
@@ -122,7 +131,7 @@ func NewServer(cfg config.SIPConfig, rtpCfg config.RTPConfig, audioTrack *webrtc
 		fmt.Printf("No Public IP configured, using local address: %s\n", publicAddr)
 	}
 
-	server := &Server{
+	server = &Server{
 		sipServer:      sipServer,
 		sipUserAgent:   sipUserAgent,
 		config:         cfg,

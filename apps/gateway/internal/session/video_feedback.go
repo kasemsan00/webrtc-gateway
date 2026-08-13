@@ -138,12 +138,28 @@ func buildVideoFeedbackTargets(mode string, destAddr, learnedAddr *net.UDPAddr, 
 		add(videoFeedbackTarget{Addr: rtpAddr, Kind: "rtp", Label: "RTP port", IsPrimary: true})
 		add(videoFeedbackTarget{Addr: primaryRTCP, Kind: "rtcp", Label: primaryLabel, IsPrimary: false})
 	default:
-		add(videoFeedbackTarget{Addr: primaryRTCP, Kind: "rtcp", Label: primaryLabel, IsPrimary: true})
+		// auto: always hit the media/RTP port. chan_sip (and many NAT paths)
+		// only forwards RTCP feedback that arrives on the RTP 5-tuple; the
+		// dedicated RTCP port is extra, not a replacement.
+		add(videoFeedbackTarget{Addr: rtpAddr, Kind: "rtp", Label: "RTP port", IsPrimary: true})
+		add(videoFeedbackTarget{Addr: primaryRTCP, Kind: "rtcp", Label: primaryLabel, IsPrimary: false})
 		if useFallback {
 			add(videoFeedbackTarget{Addr: rtcpAddr, Kind: "rtcp", Label: "RTCP port", IsPrimary: false})
-			add(videoFeedbackTarget{Addr: rtpAddr, Kind: "rtp", Label: "RTP port", IsPrimary: false})
 		}
 	}
 
 	return targets
+}
+
+func feedbackConnForTarget(target videoFeedbackTarget, rtpConn, rtcpConn *net.UDPConn) *net.UDPConn {
+	if target.Kind == "rtp" && rtpConn != nil {
+		return rtpConn
+	}
+	if target.Kind == "rtcp" && rtcpConn != nil {
+		return rtcpConn
+	}
+	if rtcpConn != nil {
+		return rtcpConn
+	}
+	return rtpConn
 }

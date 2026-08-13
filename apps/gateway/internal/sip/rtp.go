@@ -30,6 +30,10 @@ func writeNormalizedVideoAccessUnit(
 	now time.Time,
 	write func([]byte) (int, error),
 ) normalizedVideoWriteResult {
+	if write != nil && sess.HasPendingSIPVideoIDRWrite() {
+		_, _ = sess.WritePendingSIPVideoIDR(write)
+	}
+
 	decision := sess.EvaluateSwitchVideoAccessUnit(au, now)
 	if !decision.Emit {
 		return normalizedVideoWriteResult{}
@@ -50,14 +54,23 @@ func writeNormalizedVideoAccessUnit(
 		if err != nil {
 			fmt.Printf("[%s] h264_au_write_error stage=marshal seq=%d error=%v\n", sess.ID, packet.SequenceNumber, err)
 			abort("marshal-failed")
+			if au.IsIDR {
+				sess.RememberSIPVideoIDR(au, false)
+			}
 			return normalizedVideoWriteResult{}
 		}
 		if _, err := write(data); err != nil {
 			fmt.Printf("[%s] h264_au_write_error stage=track seq=%d error=%v\n", sess.ID, packet.SequenceNumber, err)
 			abort("track-write-failed")
+			if au.IsIDR {
+				sess.RememberSIPVideoIDR(au, false)
+			}
 			return normalizedVideoWriteResult{}
 		}
 		sess.CacheVideoRTPPacket(packet.SequenceNumber, data)
+	}
+	if au.IsIDR {
+		sess.RememberSIPVideoIDR(au, true)
 	}
 
 	if decision.Reservation != 0 {
@@ -499,10 +512,13 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 	if sess.VideoAUNormalizeEnabled {
 		auNormalizer = session.NewH264AccessUnitNormalizer(session.H264AccessUnitNormalizerConfig{}, func(au session.NormalizedH264AccessUnit) {
 			if sess.VideoTrack == nil {
+				if au.IsIDR {
+					sess.RememberSIPVideoIDR(au, false)
+				}
 				return
 			}
 			now := time.Now()
-			result := writeNormalizedVideoAccessUnit(sess, au, now, sess.VideoTrack.Write)
+			result := writeNormalizedVideoAccessUnit(sess, au, now, sess.WriteVideoToWebRTC)
 			if !result.emitted {
 				return
 			}
@@ -527,7 +543,9 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 			auNormalizer.SetParameterSets(sps, pps)
 		}
 		sess.BindH264AUParameterSetSeeder(auNormalizer.SetParameterSets)
+		sess.BindH264AUReplayRewriter(auNormalizer.RewriteForReplay)
 		defer sess.BindH264AUParameterSetSeeder(nil)
+		defer sess.BindH264AUReplayRewriter(nil)
 	}
 	reorderBuf := session.NewVideoReorderBuffer(sess.ID, func(data []byte, isKeyframe bool) {
 		if sess.VideoTrack == nil {
@@ -546,10 +564,21 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 		packet := &rtp.Packet{}
 		if err := packet.Unmarshal(data); err == nil {
 			sess.CacheVideoRTPPacket(packet.SequenceNumber, data)
-			_, _ = sess.VideoTrack.Write(data)
+			_, _ = sess.WriteVideoToWebRTC(data)
 		}
 	})
 	lastSwitchGeneration := sess.GetSwitchGeneration()
+	idrReplayNotify := sess.SIPVideoIDRReplayNotify()
+	idrReplayTicker := time.NewTicker(250 * time.Millisecond)
+	defer idrReplayTicker.Stop()
+	tryWritePendingSIPVideoIDR := func() {
+		if sess.GetState() == session.StateEnded || sess.VideoTrack == nil || !sess.HasPendingSIPVideoIDRWrite() {
+			return
+		}
+		if wrote, reason := sess.WritePendingSIPVideoIDR(sess.WriteVideoToWebRTC); wrote {
+			fmt.Printf("[%s] sip_video_idr_flushed reason=%s\n", sess.ID, reason)
+		}
+	}
 	defer func() {
 		reorderBuf.Drain()
 		if auNormalizer != nil {
@@ -579,8 +608,11 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 	}
 
 	for {
+		tryWritePendingSIPVideoIDR()
 		var ingress videoUDPIngress
 		select {
+		case <-sess.Done():
+			return
 		case err := <-udpErr:
 			if sess.GetState() == session.StateEnded {
 				return
@@ -589,6 +621,10 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 			return
 		case ingress = <-udpPackets:
 		case ingress = <-rescue:
+		case <-idrReplayNotify:
+			continue
+		case <-idrReplayTicker.C:
+			continue
 		}
 
 		n := copy(buffer, ingress.data)
@@ -691,13 +727,14 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 					// First remote SSRC learn: also kick WebRTC uplink keyframe so
 					// late-joining SIP decoders (e.g. Linphone after long ring) get an IDR.
 					uplinkKick := sess.KickUplinkKeyframeOnRemoteJoinIfNeeded()
-					if uplinkKick && !sess.HasRecentUplinkKeyframe(2*time.Second) {
+					if uplinkKick {
+						kickAt := time.Now()
 						go func() {
 							for i := 1; i < uplinkExtraPLIAttempts; i++ {
 								if sess.GetState() == session.StateEnded {
 									return
 								}
-								if sess.ShouldStopStartupBrowserPLI() {
+								if sess.HasUplinkKeyframeSince(kickAt) {
 									return
 								}
 								time.Sleep(startupPLIInterval)
@@ -898,7 +935,7 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 
 			if sess.VideoTrack != nil && auNormalizer == nil {
 				sess.CacheVideoRTPPacket(packet.SequenceNumber, buffer[:n])
-				_, _ = sess.VideoTrack.Write(buffer[:n])
+				_, _ = sess.WriteVideoToWebRTC(buffer[:n])
 			}
 		}
 	}
@@ -937,6 +974,7 @@ func (s *Server) handleRTCPFromSIP(data []byte, sess *session.Session, rtcpCount
 		return
 	}
 
+	sawSIPVideoReport := false
 	for _, pkt := range packets {
 		switch p := pkt.(type) {
 		case *rtcp.PictureLossIndication:
@@ -948,11 +986,13 @@ func (s *Server) handleRTCPFromSIP(data []byte, sess *session.Session, rtcpCount
 			sess.SendPLItoWebRTC()
 
 		case *rtcp.ReceiverReport:
+			sawSIPVideoReport = true
 			if rtcpCount <= 3 {
 				fmt.Printf("[%s] Received RR from Linphone (SSRC=%d)\n", sess.ID, p.SSRC)
 			}
 
 		case *rtcp.SenderReport:
+			sawSIPVideoReport = true
 			if rtcpCount <= 3 {
 				fmt.Printf("[%s] Received SR from Linphone (SSRC=%d)\n", sess.ID, p.SSRC)
 			}
@@ -969,6 +1009,9 @@ func (s *Server) handleRTCPFromSIP(data []byte, sess *session.Session, rtcpCount
 			}
 		}
 	}
+	if sawSIPVideoReport {
+		sess.KickUplinkKeyframeOnFirstSIPRTCPIfNeeded()
+	}
 }
 
 // startPeriodicPLIForSession sends PLI requests to the browser at regular intervals
@@ -978,16 +1021,18 @@ func (s *Server) startPeriodicPLIForSession(sess *session.Session) {
 	// Wait a bit for the connection to establish
 	time.Sleep(500 * time.Millisecond)
 
-	// Limit periodic PLI to startup window only. Stop as soon as the browser
-	// is already producing SPS/PPS and an uplink IDR.
-	pliDeadline := time.Now().Add(8 * time.Second)
+	// Keep requesting browser IDRs through the late-join window so a SIP
+	// decoder that answers after queue auto-200 (Linphone after 5–10s ring)
+	// is not stuck on P-frames. Stop once dest-ready + 12s has elapsed and
+	// an uplink IDR has already been forwarded.
+	pliDeadline := time.Now().Add(15 * time.Second)
 
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 
 	pliCount := 0
 	stopIfReady := func(reason string) bool {
-		if !sess.ShouldStopStartupBrowserPLI() {
+		if !sess.ShouldStopPeriodicBrowserPLI() {
 			return false
 		}
 		fmt.Printf("[%s] Stopping periodic PLI sender - %s\n", sess.ID, reason)
@@ -999,7 +1044,7 @@ func (s *Server) startPeriodicPLIForSession(sess *session.Session) {
 		if state == session.StateEnded || state == session.StateReconnecting {
 			return
 		}
-		if stopIfReady("uplink keyframe ready") {
+		if stopIfReady("late-join window elapsed") {
 			return
 		}
 		sess.SendPLItoWebRTC()
@@ -1017,7 +1062,7 @@ func (s *Server) startPeriodicPLIForSession(sess *session.Session) {
 			fmt.Printf("[%s] Stopping periodic PLI sender - session reconnecting\n", sess.ID)
 			return
 		}
-		if stopIfReady("uplink keyframe ready") {
+		if stopIfReady("late-join window elapsed") {
 			return
 		}
 		if time.Now().After(pliDeadline) {

@@ -675,16 +675,6 @@ func (s *Server) handleBYE(req *sip.Request, tx sip.ServerTransaction) {
 		fmt.Printf("Call-ID: %s\n", callIDValue)
 	}
 
-	var fullPayloadID *int64
-	if s.logFullSIP {
-		fullPayloadID = s.storePayload(ctx, &logstore.PayloadRecord{
-			SessionID:   "",
-			Timestamp:   time.Now(),
-			Kind:        "sip_message",
-			ContentType: "application/sip",
-			BodyText:    req.String(),
-		})
-	}
 	if cseq := req.CSeq(); cseq != nil {
 		fmt.Printf("CSeq: %s\n", cseq.Value())
 	}
@@ -720,79 +710,56 @@ func (s *Server) handleBYE(req *sip.Request, tx sip.ServerTransaction) {
 	if sess != nil {
 		byeSessionID = sess.ID
 	}
-	s.logEvent(&logstore.Event{
-		Timestamp: time.Now(),
-		SessionID: byeSessionID,
-		Category:  "sip",
-		Name:      "sip_bye_received",
-		SIPMethod: string(req.Method),
-		SIPCallID: callIDValue,
-		PayloadID: fullPayloadID,
-	})
 
-	// Create response
 	res := sip.NewResponseFromRequest(req, 200, "OK", nil)
 	fmt.Printf("\n=== Sending BYE Response ===\n")
 	fmt.Printf("Status: 200 OK\n")
-
-	// Log response Via headers (should match request)
-	fmt.Printf("Response Via Headers:\n")
-	for i, via := range res.GetHeaders("Via") {
-		fmt.Printf("  Via[%d]: %s\n", i, via.Value())
-	}
-
-	// Send response
 	if err := tx.Respond(res); err != nil {
 		fmt.Printf("❌ ERROR responding to BYE: %v\n", err)
 	} else {
 		fmt.Printf("✅ BYE 200 OK sent via ServerTransaction\n")
 	}
 
+	if sess != nil {
+		sess.UpdateState(session.StateEnded)
+		s.notifySessionStateChange(sess, session.StateEnded)
+		fmt.Printf("✅ State change notification sent to client\n")
+	}
+
+	var fullPayloadID *int64
+	if s.logFullSIP {
+		fullPayloadID = s.storePayload(ctx, &logstore.PayloadRecord{
+			SessionID:   byeSessionID,
+			Timestamp:   time.Now(),
+			Kind:        "sip_message",
+			ContentType: "application/sip",
+			BodyText:    req.String(),
+		})
+	}
 	s.logEvent(&logstore.Event{
 		Timestamp:     time.Now(),
 		SessionID:     byeSessionID,
 		Category:      "sip",
-		Name:          "sip_bye_responded",
-		SIPStatusCode: 200,
+		Name:          "sip_bye_received",
+		SIPMethod:     string(req.Method),
 		SIPCallID:     callIDValue,
+		PayloadID:     fullPayloadID,
+		SIPStatusCode: 200,
 	})
 
-	// Clean up session and notify clients
 	if sess != nil {
-		fmt.Printf("🔔 Notifying clients about hangup (session %s)\n", sess.ID)
-
-		// Decrement public account refcount if applicable (before deleting session)
+		fmt.Printf("🔔 Cleaning up session %s after remote BYE\n", sess.ID)
 		authMode, accountKey, _, _, _, _, _ := sess.GetSIPAuthContext()
 		if authMode == "public" && accountKey != "" && s.publicRegistry != nil {
 			s.publicRegistry.DecrementRefCount(accountKey)
 		}
-
-		// Close media transports (RTP/RTCP) immediately so audio/video stops
-		// flowing on both sides before we notify the browser.
 		sess.CloseMediaTransports()
-
-		// Close the WebRTC PeerConnection so the browser ICE/DTLS connection is
-		// torn down right away – this is the reason only one side was cut before.
-		if sess.PeerConnection != nil {
-			if err := sess.PeerConnection.Close(); err != nil {
-				fmt.Printf("⚠️ [%s] PeerConnection.Close() error: %v\n", sess.ID, err)
-			} else {
-				fmt.Printf("✅ [%s] PeerConnection closed\n", sess.ID)
-			}
-		}
-
-		// Update session state and notify WebSocket/SSE clients
-		sess.UpdateState(session.StateEnded)
-		s.notifySessionStateChange(sess, session.StateEnded)
-		s.logSessionSnapshot(ctx, sess, "sip_bye_received")
-
-		fmt.Printf("✅ State change notification sent to client\n")
-
-		// Delete session and cleanup any remaining resources
+		session.ClosePeerConnectionAsync(sess.DetachPeerConnection(), sess.ID)
 		if s.sessionMgr != nil {
 			s.sessionMgr.DeleteSession(sess.ID)
 			fmt.Printf("✅ Session cleaned up\n")
 		}
+		s.logSessionSnapshot(ctx, sess, "sip_bye_received")
 	}
 
 	fmt.Printf("============================\n\n")

@@ -153,3 +153,13 @@ func TestKickUplinkKeyframeOnRemoteJoinIfNeeded_OncePerSession(t *testing.T) {
 		t.Fatal("later SSRC change must not re-arm first-join kick")
 	}
 }
+
+func TestKickUplinkKeyframeOnFirstSIPRTCPIfNeeded_OncePerSession(t *testing.T) {
+	sess := &Session{ID: "s-uplink-kick-rtcp"}
+	if !sess.KickUplinkKeyframeOnFirstSIPRTCPIfNeeded() {
+		t.Fatal("first SIP SR/RR kick should claim")
+	}
+	if sess.KickUplinkKeyframeOnFirstSIPRTCPIfNeeded() {
+		t.Fatal("later SIP SR/RR must not re-arm first-report kick")
+	}
+}

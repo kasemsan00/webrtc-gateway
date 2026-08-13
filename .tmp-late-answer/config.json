@@ -1,0 +1,166 @@
+{
+  "instanceId": "dev-instance-1",
+  "source": "env",
+  "sections": {
+    "turn": {
+      "Server": "turn:turn.ttrs.or.th:3478?transport=udp",
+      "Username": "turn01",
+      "Password": "****"
+    },
+    "sip": {
+      "Domain": "",
+      "Username": "",
+      "Password": "",
+      "Port": 5090,
+      "LocalPort": 5090,
+      "LocalIP": "0.0.0.0",
+      "PublicIP": "203.151.21.121",
+      "ListenTCP": true,
+      "ListenUDP": true,
+      "DebugSIPMessage": false,
+      "DebugSIPInvite": true,
+      "SwitchPLIDelayMS": 2000,
+      "SwitchVideoTransitionMode": "preserve",
+      "SwitchVideoBlackoutEnabled": true,
+      "SwitchVideoBlackoutMS": 300,
+      "SwitchVideoBlackoutMaxWaitMS": 1200,
+      "SwitchVideoRecoveryWindowMS": 5000,
+      "SwitchVideoRecoveryStableMS": 750,
+      "SwitchVideoRTPStabilityEnabled": true,
+      "SwitchVideoRTPMinPacketDelta": 30,
+      "SwitchVideoRTPMaxGapDelta": 12,
+      "SwitchVideoRTPMaxMissingDelta": 20,
+      "SwitchVideoRTPMaxOutOfOrderDelta": 20,
+      "SwitchVideoRTPMaxReorderDropDelta": 0,
+      "SwitchVideoRTPMaxReorderTimeoutDelta": 5,
+      "SwitchDuplicateDebounceEnabled": true,
+      "SwitchDuplicateDebounceMS": 60000,
+      "VideoRTPDisorderMonitorEnabled": true,
+      "VideoRTPDisorderMinPacketDelta": 300,
+      "VideoRTPDisorderMaxGapDelta": 45,
+      "VideoRTPDisorderMaxMissingDelta": 80,
+      "VideoRTPDisorderMaxOutOfOrderDelta": 80,
+      "VideoRTPDisorderMaxReorderTimeout": 20,
+      "VideoRTPDisorderConsecutiveWindows": 3,
+      "VideoRTPDisorderLogIntervalMS": 5000,
+      "VideoRTPDisorderContainmentEnabled": false,
+      "VideoRTPDisorderContainmentMS": 10000,
+      "VideoAUNormalizeEnabled": true,
+      "AudioUseAVPF": false,
+      "VideoUseAVPF": false,
+      "VideoFeedbackTransport": "dual",
+      "VideoPreserveSTAPA": true,
+      "VideoKeyframeWatchdogEnabled": true,
+      "VideoKeyframeWatchdogIntervalMS": 2000,
+      "VideoKeyframeStaleMS": 4000,
+      "VideoKeyframeFIRStaleMS": 8000,
+      "VideoRecoveryBurstEnabled": true,
+      "VideoRecoveryBurstWindowMS": 8000,
+      "VideoRecoveryBurstIntervalMS": 1000,
+      "VideoRecoveryBurstStaleMS": 4000,
+      "VideoRecoveryBurstFIRStaleMS": 7000,
+      "MidCallRenegotiationEnable": true,
+      "SwitchVideoRenegotiateEnable": false,
+      "AudioInboundGainEnable": false,
+      "AudioInboundGain": 1,
+      "AudioInboundGainMax": 3
+    },
+    "api": {
+      "Port": 7089,
+      "EnableWS": true,
+      "EnablePublicWS": true,
+      "EnableAgentWS": true,
+      "EnableREST": true,
+      "CORSOrigins": "*",
+      "DebugWebSocket": false,
+      "DebugTURN": true,
+      "IncomingRingTimeoutSeconds": 30,
+      "IncomingOfflinePolicy": "push_then_480",
+      "TrunkPNAppID": "th.or.nectec.kasemsan.softphone",
+      "MobileSIPAuthRegisterURL": "https://sipclient-auth.ttrs.or.th/auth/register",
+      "MobileSIPAuthTimeoutMS": 5000
+    },
+    "auth": {
+      "Enable": false,
+      "TimeoutMS": 5000,
+      "User": {
+        "JWKSURL": "https://accounts.ttrs.or.th/auth/realms/TTRS-Users/protocol/openid-connect/certs",
+        "JWTIssuer": "",
+        "JWTAudience": ""
+      },
+      "Employee": {
+        "JWKSURL": "https://accounts.ttrs.or.th/auth/realms/TTRS-Employees/protocol/openid-connect/certs",
+        "JWTIssuer": "",
+        "JWTAudience": ""
+      }
+    },
+    "rtp": {
+      "PortMin": 20000,
+      "PortMax": 20050,
+      "BufferSize": 60000
+    },
+    "db": {
+      "Enable": true,
+      "DSN": "postgres://k2user:****@postgres:5432/k2_gateway?sslmode=disable",
+      "StatsIntervalMS": 5000,
+      "LogFullSIP": true,
+      "BatchSize": 100,
+      "BatchIntervalMS": 1000,
+      "PartitionLookaheadDays": 7,
+      "RetentionPayloadsDays": 730,
+      "RetentionEventsDays": 730,
+      "RetentionStatsDays": 730,
+      "RetentionSessionsDays": 730
+    },
+    "sipPublic": {
+      "RegisterExpiresSeconds": 3600,
+      "RegisterTimeoutSeconds": 10,
+      "IdleTTLSeconds": 600,
+      "CleanupIntervalSeconds": 30,
+      "MaxAccounts": 1000
+    },
+    "sipTrunk": {
+      "Enable": true,
+      "LeaseTTLSeconds": 60,
+      "LeaseRenewInterval": 20,
+      "RegisterTimeout": 10
+    },
+    "gateway": {
+      "InstanceID": "dev-instance-1",
+      "PublicWSURL": "wss://k2-gateway.kasemsan.com/ws"
+    },
+    "sessionDir": {
+      "TTLSeconds": 7200,
+      "CleanupIntervalSec": 300
+    },
+    "push": {
+      "Enable": true,
+      "TTRSAPIURL": "http://203.150.245.35:8040",
+      "TTRSAPITimeoutMS": 5000,
+      "TTRSKeycloakTokenURL": "https://accounts.ttrs.or.th/auth/realms/TTRS-Employees/protocol/openid-connect/token",
+      "TTRSTokenGrantType": "client_credentials",
+      "TTRSClientID": "TTRS_WebRTC_Gateway",
+      "TTRSClientSecret": "****",
+      "FirebaseCredentialsFile": "****",
+      "FirebaseProjectID": "643558767688",
+      "APNSEnable": true,
+      "APNSEnvironment": "production",
+      "APNSAuthMode": "certificate",
+      "APNSKeyFile": "",
+      "APNSKeyID": "",
+      "APNSTeamID": "",
+      "APNSCertFile": "****",
+      "APNSCertKeyFile": "****",
+      "APNSBundleID": "th.or.nectec.kasemsan.softphone",
+      "APNSTopic": "th.or.nectec.kasemsan.softphone.voip"
+    },
+    "translator": {
+      "Enable": true,
+      "Addr": "122.8.149.219:5000",
+      "SourceLang": "en-US",
+      "TargetLang": "th",
+      "TTSVoice": "th-TH-PremwadeeNeural",
+      "OpusBitrate": 24000
+    }
+  }
+}

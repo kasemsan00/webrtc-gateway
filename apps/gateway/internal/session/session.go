@@ -69,7 +69,11 @@ type Session struct {
 	remoteVideoReadyNotified bool `json:"-"`
 	remoteAudioReadyNotified bool `json:"-"`
 	// One-shot WebRTC→SIP keyframe kick when remote SIP video first appears.
-	uplinkKeyframeKickOnRemoteJoinDone bool      `json:"-"`
+	uplinkKeyframeKickOnRemoteJoinDone bool `json:"-"`
+	// One-shot WebRTC→SIP keyframe kick on the first SIP video SR/RR.
+	uplinkKeyframeKickOnFirstSIPRTCP bool `json:"-"`
+	// When SIP video dest first became reachable (200 OK / first RTP dest).
+	sipVideoDestReadyAt time.Time `json:"-"`
 	Direction                          string    `json:"direction"` // "inbound" or "outbound"
 	From                               string    `json:"from,omitempty"`
 	To                                 string    `json:"to,omitempty"`
@@ -199,6 +203,15 @@ type Session struct {
 	SIPCachedSPS             []byte                `json:"-"`
 	SIPCachedPPS             []byte                `json:"-"`
 	h264AUParameterSetSeeder func(sps, pps []byte) `json:"-"`
+	// Last complete SIP→WebRTC IDR. Queue/wait video is often a still with one
+	// IDR; if that frame is missed because DTLS/ICE is not writable yet, PLI to
+	// Asterisk does not produce another one. Replay this AU onto the WebRTC track.
+	sipVideoIDR               *sipVideoIDRCache
+	sipVideoIDRReplayPending  bool
+	sipVideoIDRReplayNotify   chan struct{}
+	sipVideoIDRReplayRewriter func([]*rtp.Packet) []*rtp.Packet
+	videoEgressMu             sync.Mutex
+	videoEgressClosed         bool
 	// @switch controlled SPS/PPS injection (inject 3 copies before each of first 3 IDRs after @switch)
 	SwitchSPSPPSInjectRemaining int       `json:"-"` // Number of IDR frames left to inject SPS/PPS (0 = disabled, 3 = inject next 3 IDRs)
 	SwitchReceivedAt            time.Time `json:"-"` // Timestamp when @switch message was received (for debugging)
@@ -474,6 +487,7 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 		VideoRTPDisorderContainmentEnabled:   cfg.SIP.VideoRTPDisorderContainmentEnabled,
 		VideoRTPDisorderContainmentDuration:  time.Duration(cfg.SIP.VideoRTPDisorderContainmentMS) * time.Millisecond,
 		VideoAUNormalizeEnabled:              cfg.SIP.VideoAUNormalizeEnabled,
+		sipVideoIDRReplayNotify:              make(chan struct{}, 1),
 	}
 	session.initVideoRTPHistory()
 	session.ctx, session.cancel = context.WithCancel(context.Background())
@@ -577,6 +591,7 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 		session.mu.Lock()
 		session.UpdatedAt = time.Now()
 		startRecoveryBurstReason := ""
+		replayIDRReason := ""
 		isTerminalCleanup := isTerminalCleanupState(session.State, session.TerminalAction)
 
 		switch connectionState {
@@ -642,16 +657,19 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 			if recoveryReason != "" {
 				startRecoveryBurstReason = recoveryReason
 			}
-			// Send a conservative FIR + single forced PLI for startup recovery.
-			// Keep this lightweight to avoid over-driving upstream encoder adaptation
-			// during source/resolution transitions (e.g. switch VGA -> CIF).
-			// If RemoteVideoSSRC is still unknown here, rtp.go triggers follow-up once learned.
+			replayIDRReason = "ice-connected"
 			go func() {
 				fmt.Printf("[%s] 🚀 ICE Connected - Sending conservative FIR + PLI startup recovery\n", id)
-				// Wait briefly for first SIP RTP to arrive and learn SSRC
 				time.Sleep(300 * time.Millisecond)
+				if session.GetState() == StateEnded {
+					return
+				}
+				session.RequestSIPVideoIDRReplay("ice-connected")
 				session.SendFIRToAsterisk()
 				time.Sleep(250 * time.Millisecond)
+				if session.GetState() == StateEnded {
+					return
+				}
 				session.SendPLIToAsteriskForced("ice-connected")
 				session.SendPLItoWebRTC()
 			}()
@@ -736,6 +754,9 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 			}
 		}
 		session.mu.Unlock()
+		if replayIDRReason != "" {
+			session.RequestSIPVideoIDRReplay(replayIDRReason)
+		}
 		if startRecoveryBurstReason != "" {
 			session.StartVideoRecoveryBurst(startRecoveryBurstReason)
 		}

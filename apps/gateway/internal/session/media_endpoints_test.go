@@ -87,6 +87,8 @@ func TestResetMediaStateClearsSIPEndpointsKeepsCachedSPSPPS(t *testing.T) {
 		remoteAudioReadyNotified:           true,
 		remoteVideoReadyNotified:           true,
 		uplinkKeyframeKickOnRemoteJoinDone: true,
+		uplinkKeyframeKickOnFirstSIPRTCP:   true,
+		sipVideoDestReadyAt:                time.Now(),
 	}
 
 	sess.ResetMediaState()
@@ -114,6 +116,12 @@ func TestResetMediaStateClearsSIPEndpointsKeepsCachedSPSPPS(t *testing.T) {
 	}
 	if !sess.TryClaimUplinkKeyframeKickOnRemoteJoin() {
 		t.Fatalf("expected uplink keyframe kick to be re-armed after reset")
+	}
+	if !sess.TryClaimUplinkKeyframeKickOnFirstSIPRTCP() {
+		t.Fatalf("expected first SIP RTCP uplink kick to be re-armed after reset")
+	}
+	if !sess.sipVideoDestReadyAt.IsZero() {
+		t.Fatalf("expected sipVideoDestReadyAt to be cleared after reset")
 	}
 }
 
@@ -198,4 +206,16 @@ func TestResetMediaStateClearsSIPParameterSetsAndSwitchGateWithoutReusingLease(t
 	if decision.Reservation != 42 {
 		t.Fatalf("expected monotonic reservation 42 after reset, got %d", decision.Reservation)
 	}
+}
+
+func TestSetAsteriskEndpointsKicksUplinkOnFirstVideoDest(t *testing.T) {
+	sess := &Session{ID: "sip-dest-ready"}
+	sess.SetAsteriskEndpoints(
+		&net.UDPAddr{IP: net.ParseIP("203.150.245.41"), Port: 20000},
+		&net.UDPAddr{IP: net.ParseIP("203.150.245.41"), Port: 20002},
+	)
+	if sess.AsteriskVideoAddr == nil || sess.AsteriskVideoAddr.Port != 20002 {
+		t.Fatalf("expected video dest to be stored, got %#v", sess.AsteriskVideoAddr)
+	}
+	sess.SetState(StateEnded)
 }

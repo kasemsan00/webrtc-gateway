@@ -486,7 +486,32 @@ func TestShouldStopStartupBrowserPLI(t *testing.T) {
 	}
 	sess.RecordUplinkKeyframe()
 	if !sess.ShouldStopStartupBrowserPLI() {
-		t.Fatal("expected startup PLI to stop after SPS/PPS and uplink IDR")
+		t.Fatal("expected first-packet PLI to stop after SPS/PPS and uplink IDR")
+	}
+	if sess.ShouldStopPeriodicBrowserPLI() {
+		t.Fatal("expected periodic PLI to continue until the late-join window elapses")
+	}
+	sess.sipVideoDestReadyAt = time.Now()
+	if sess.ShouldStopPeriodicBrowserPLI() {
+		t.Fatal("expected periodic PLI to continue while dest-ready window is still open")
+	}
+	sess.sipVideoDestReadyAt = time.Now().Add(-lateJoinBrowserPLIWindow - time.Millisecond)
+	if !sess.ShouldStopPeriodicBrowserPLI() {
+		t.Fatal("expected periodic PLI to stop after dest-ready late-join window")
+	}
+}
+
+func TestHasUplinkKeyframeSinceIgnoresOlderIDR(t *testing.T) {
+	sess := newBurstTestSession("uplink-since")
+	before := time.Now()
+	time.Sleep(2 * time.Millisecond)
+	sess.RecordUplinkKeyframe()
+	if !sess.HasUplinkKeyframeSince(before) {
+		t.Fatal("expected uplink IDR after kick start to count")
+	}
+	later := time.Now().Add(time.Second)
+	if sess.HasUplinkKeyframeSince(later) {
+		t.Fatal("expected older uplink IDR not to satisfy a later kick")
 	}
 }
 
