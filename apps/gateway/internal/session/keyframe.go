@@ -22,6 +22,10 @@ const (
 	// decoder that answers several seconds later (Linphone after ring) is
 	// not stuck on P-frames. First-packet PLI still stops on the first IDR.
 	lateJoinBrowserPLIWindow = 12 * time.Second
+	// After @switch the SIP dest often does not change, so Linphone joins
+	// mid-GOP. Keep asking the browser for an IDR until one is forwarded
+	// after the switch, even if the late-join window already elapsed.
+	postSwitchUplinkPLIWindow = 8 * time.Second
 )
 
 // shouldSendPLIToAsterisk gates PLI forwarding to avoid flooding.
@@ -342,8 +346,8 @@ func (s *Session) HasUplinkKeyframeSince(t time.Time) bool {
 func (s *Session) KickUplinkKeyframeForSIPDecoder(reason string) {
 	kickAt := time.Now()
 	fmt.Printf("[%s] 📈 uplink_keyframe_kick reason=%s\n", s.ID, reason)
-	s.SendFIRToWebRTC()
-	s.SendPLItoWebRTC()
+	s.sendWebRTCFeedbackWithForce("fir", true, nil)
+	s.sendWebRTCFeedbackWithForce("pli", true, nil)
 	go func() {
 		for i := 0; i < 3; i++ {
 			if s.GetState() == StateEnded {
@@ -354,7 +358,7 @@ func (s *Session) KickUplinkKeyframeForSIPDecoder(reason string) {
 				return
 			}
 			time.Sleep(300 * time.Millisecond)
-			s.SendPLItoWebRTC()
+			s.sendWebRTCFeedbackWithForce("pli", true, nil)
 		}
 	}()
 }
@@ -374,11 +378,33 @@ func (s *Session) ShouldStopPeriodicBrowserPLI() bool {
 	}
 	s.mu.RLock()
 	readyAt := s.sipVideoDestReadyAt
+	needPostSwitch := s.needsPostSwitchUplinkKeyframeLocked(time.Now())
 	s.mu.RUnlock()
+	if needPostSwitch {
+		return false
+	}
 	if readyAt.IsZero() {
 		return false
 	}
 	return time.Since(readyAt) >= lateJoinBrowserPLIWindow
+}
+
+// NeedsPostSwitchUplinkKeyframe is true until a WebRTC→SIP IDR is forwarded
+// after @switch, or the post-switch request window elapses.
+func (s *Session) NeedsPostSwitchUplinkKeyframe() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.needsPostSwitchUplinkKeyframeLocked(time.Now())
+}
+
+func (s *Session) needsPostSwitchUplinkKeyframeLocked(now time.Time) bool {
+	if s.SwitchTargetReceivedAt.IsZero() {
+		return false
+	}
+	if now.Sub(s.SwitchTargetReceivedAt) > postSwitchUplinkPLIWindow {
+		return false
+	}
+	return s.LastUplinkKeyframe.IsZero() || s.LastUplinkKeyframe.Before(s.SwitchTargetReceivedAt)
 }
 
 // ShouldContinueSwitchFeedbackBurst reports whether delayed @switch FIR/PLI

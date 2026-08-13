@@ -133,6 +133,60 @@ func TestWriteNormalizedVideoAccessUnitRejectsStaleGenerationAfterRelease(t *tes
 	}
 }
 
+func TestWriteNormalizedVideoAccessUnitDoesNotBurnSeqOnGateReject(t *testing.T) {
+	now := time.Unix(400, 0)
+	normalizer := session.NewH264AccessUnitNormalizer(session.H264AccessUnitNormalizerConfig{}, nil)
+	sess := &session.Session{ID: "gate-seq-hole", VideoAUNormalizeEnabled: true, SwitchGeneration: 1}
+	sess.BindH264AUNumberer(normalizer.NumberAccessUnit)
+	t.Cleanup(func() { sess.BindH264AUNumberer(nil) })
+	sess.VideoRTPHistorySize = 1024
+	sess.VideoRTPHistoryPackets = make([][]byte, sess.VideoRTPHistorySize)
+	sess.VideoRTPHistorySeq = make([]uint16, sess.VideoRTPHistorySize)
+
+	var seqs []uint16
+	write := func(b []byte) (int, error) {
+		pkt := &rtp.Packet{}
+		if err := pkt.Unmarshal(b); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		seqs = append(seqs, pkt.SequenceNumber)
+		return len(b), nil
+	}
+
+	pre := normalizedVideoAU(0, false, true, 7)
+	if !writeNormalizedVideoAccessUnit(sess, pre, now, write).emitted {
+		t.Fatal("expected pre-gate P-frame to emit")
+	}
+	if len(seqs) != 7 || seqs[0] != 100 || seqs[6] != 106 {
+		t.Fatalf("pre-gate seqs=%v", seqs)
+	}
+
+	if !sess.StartSwitchVideoGate(1, now.Add(time.Second), "test") {
+		t.Fatal("expected gate start")
+	}
+	if writeNormalizedVideoAccessUnit(sess, normalizedVideoAU(1, false, true, 7), now.Add(2*time.Second), write).emitted {
+		t.Fatal("expected gated P-frame to be rejected")
+	}
+	if writeNormalizedVideoAccessUnit(sess, normalizedVideoAU(1, false, true, 7), now.Add(3*time.Second), write).emitted {
+		t.Fatal("expected second gated P-frame to be rejected")
+	}
+	if len(seqs) != 7 {
+		t.Fatalf("gate reject wrote packets: seqs=%v", seqs)
+	}
+
+	idr := normalizedVideoAU(1, true, true, 7)
+	result := writeNormalizedVideoAccessUnit(sess, idr, now.Add(4*time.Second), write)
+	if !result.emitted || !result.gateReleased {
+		t.Fatalf("expected IDR to release gate: %+v", result)
+	}
+	if len(seqs) != 14 {
+		t.Fatalf("expected 14 written packets, got %d seqs=%v", len(seqs), seqs)
+	}
+	if seqs[7] != 107 || seqs[13] != 113 {
+		t.Fatalf("gate reject burned outbound seq, got %v", seqs[7:])
+	}
+}
+
 func TestWriteNormalizedVideoAccessUnitCachesIDRAfterTrackWriteFailure(t *testing.T) {
 	sess := &session.Session{ID: "idr-write-fail", VideoAUNormalizeEnabled: true}
 	result := writeNormalizedVideoAccessUnit(sess, normalizedVideoAU(0, true, true, 2), time.Now(), func([]byte) (int, error) {

@@ -135,6 +135,14 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 			destAddr = s.AsteriskAudioAddr
 			conn = s.RTPConn
 
+			if !s.mediaForwardReady {
+				s.mu.Unlock()
+				if packetCount == 1 || packetCount == 10 || packetCount%200 == 0 {
+					fmt.Printf("[%s] deferring WebRTC→SIP audio until media forward ready (packet #%d)\n", s.ID, packetCount)
+				}
+				continue
+			}
+
 			// Initialize SSRC if needed
 			if s.AudioSSRC == 0 {
 				s.AudioSSRC = generateSSRC()        // Random SSRC
@@ -199,6 +207,17 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 		} else {
 			destAddr = s.AsteriskVideoAddr
 			conn = s.VideoRTPConn
+
+			if !s.mediaForwardReady {
+				if isSTAPA && len(packet.Payload) > 1 {
+					s.cacheSTAPAParameterSetsLocked(packet.Payload[1:], packetCount)
+				}
+				s.mu.Unlock()
+				if packetCount == 1 || packetCount == 10 || packetCount%200 == 0 {
+					fmt.Printf("[%s] deferring WebRTC→SIP video until media forward ready (packet #%d)\n", s.ID, packetCount)
+				}
+				continue
+			}
 
 			// PHASE 4 DEBUG: Log NAL types from first 100 WebRTC packets to diagnose SPS/PPS timing
 			if packetCount <= 100 && len(packet.Payload) > 0 {
@@ -552,6 +571,38 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 			}
 		} else if packetCount == 1 {
 			fmt.Printf("[%s] ⚠️ Cannot forward %s: Asterisk endpoint not set yet\n", s.ID, kind)
+		}
+	}
+}
+
+func (s *Session) cacheSTAPAParameterSetsLocked(payload []byte, packetCount int) {
+	offset := 0
+	for offset+2 <= len(payload) {
+		nalSize := int(payload[offset])<<8 | int(payload[offset+1])
+		offset += 2
+		if offset+nalSize > len(payload) {
+			break
+		}
+		nalUnit := payload[offset : offset+nalSize]
+		offset += nalSize
+		if len(nalUnit) == 0 {
+			continue
+		}
+		switch nalUnit[0] & 0x1F {
+		case 7:
+			if len(s.CachedSPS) == 0 || !bytes.Equal(s.CachedSPS, nalUnit) {
+				s.CachedSPS = append([]byte(nil), nalUnit...)
+				if packetCount <= 50 {
+					fmt.Printf("[%s] 💾 Cached SPS from STAP-A (%d bytes)\n", s.ID, len(nalUnit))
+				}
+			}
+		case 8:
+			if len(s.CachedPPS) == 0 || !bytes.Equal(s.CachedPPS, nalUnit) {
+				s.CachedPPS = append([]byte(nil), nalUnit...)
+				if packetCount <= 50 {
+					fmt.Printf("[%s] 💾 Cached PPS from STAP-A (%d bytes)\n", s.ID, len(nalUnit))
+				}
+			}
 		}
 	}
 }

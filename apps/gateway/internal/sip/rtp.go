@@ -49,6 +49,8 @@ func writeNormalizedVideoAccessUnit(
 		return normalizedVideoWriteResult{}
 	}
 
+	sess.NumberSIPVideoAccessUnit(&au)
+
 	for _, packet := range au.Packets {
 		data, err := packet.Marshal()
 		if err != nil {
@@ -234,6 +236,7 @@ func (s *Server) startRTPListenerForSession(sess *session.Session) (int, error) 
 		fmt.Printf("[%s] 📞 Audio RTCP listener started on port: %d\n", sess.ID, audioRTCPPort)
 		fmt.Printf("[%s] 📞 Video RTP listener started on port: %d\n", sess.ID, videoPort)
 		fmt.Printf("[%s] 📞 Video RTCP listener started on port: %d\n", sess.ID, videoRTCPPort)
+		sess.MarkMediaForwardReady()
 		return port, nil
 	}
 
@@ -544,8 +547,10 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 		}
 		sess.BindH264AUParameterSetSeeder(auNormalizer.SetParameterSets)
 		sess.BindH264AUReplayRewriter(auNormalizer.RewriteForReplay)
+		sess.BindH264AUNumberer(auNormalizer.NumberAccessUnit)
 		defer sess.BindH264AUParameterSetSeeder(nil)
 		defer sess.BindH264AUReplayRewriter(nil)
+		defer sess.BindH264AUNumberer(nil)
 	}
 	reorderBuf := session.NewVideoReorderBuffer(sess.ID, func(data []byte, isKeyframe bool) {
 		if sess.VideoTrack == nil {
@@ -1065,7 +1070,7 @@ func (s *Server) startPeriodicPLIForSession(sess *session.Session) {
 		if stopIfReady("late-join window elapsed") {
 			return
 		}
-		if time.Now().After(pliDeadline) {
+		if time.Now().After(pliDeadline) && !sess.NeedsPostSwitchUplinkKeyframe() {
 			fmt.Printf("[%s] Stopping periodic PLI sender - startup window ended\n", sess.ID)
 			return
 		}

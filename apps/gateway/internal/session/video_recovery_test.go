@@ -501,6 +501,42 @@ func TestShouldStopStartupBrowserPLI(t *testing.T) {
 	}
 }
 
+func TestShouldStopPeriodicBrowserPLIKeepsGoingUntilPostSwitchUplinkIDR(t *testing.T) {
+	sess := newBurstTestSession("post-switch-browser-pli")
+	sess.CachedSPS = []byte{0x67}
+	sess.CachedPPS = []byte{0x68}
+	sess.RecordUplinkKeyframe()
+	sess.sipVideoDestReadyAt = time.Now().Add(-lateJoinBrowserPLIWindow - time.Second)
+	if !sess.ShouldStopPeriodicBrowserPLI() {
+		t.Fatal("expected periodic PLI to stop after late-join window before @switch")
+	}
+
+	time.Sleep(2 * time.Millisecond)
+	sess.SwitchTargetReceivedAt = time.Now()
+	if sess.ShouldStopPeriodicBrowserPLI() {
+		t.Fatal("expected periodic PLI to continue until a post-@switch uplink IDR")
+	}
+	if !sess.NeedsPostSwitchUplinkKeyframe() {
+		t.Fatal("expected NeedsPostSwitchUplinkKeyframe before the post-switch IDR")
+	}
+
+	sess.RecordUplinkKeyframe()
+	if sess.NeedsPostSwitchUplinkKeyframe() {
+		t.Fatal("expected post-switch uplink IDR to satisfy Linphone decoder join")
+	}
+	if !sess.ShouldStopPeriodicBrowserPLI() {
+		t.Fatal("expected periodic PLI to stop after post-switch uplink IDR and late-join window")
+	}
+}
+
+func TestNeedsPostSwitchUplinkKeyframeExpires(t *testing.T) {
+	sess := newBurstTestSession("post-switch-expired")
+	sess.SwitchTargetReceivedAt = time.Now().Add(-postSwitchUplinkPLIWindow - time.Millisecond)
+	if sess.NeedsPostSwitchUplinkKeyframe() {
+		t.Fatal("expected post-switch uplink request window to expire")
+	}
+}
+
 func TestHasUplinkKeyframeSinceIgnoresOlderIDR(t *testing.T) {
 	sess := newBurstTestSession("uplink-since")
 	before := time.Now()

@@ -12,6 +12,10 @@ const (
 	sipVideoIDRMaxReplays        = 8
 	sipVideoIDRMaxPackets        = 512
 	sipVideoIDRMaxBytes          = 512 * 1024
+	// Do not rewrite a delivered queue still-IDR into a live timeline once
+	// the cached keyframe is stale. Near @switch that poisons the decoder
+	// just before the agent camera IDR arrives.
+	sipVideoIDRStaleReplayMaxAge = time.Second
 )
 
 type sipVideoIDRCache struct {
@@ -100,6 +104,28 @@ func (s *Session) BindH264AUReplayRewriter(rewriter func([]*rtp.Packet) []*rtp.P
 	s.sipVideoIDRReplayRewriter = rewriter
 }
 
+// BindH264AUNumberer registers outbound RTP numbering so sequence/timestamp
+// are assigned only after the switch video gate accepts an access unit.
+func (s *Session) BindH264AUNumberer(numberer func(*NormalizedH264AccessUnit)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sipVideoAUNumberer = numberer
+}
+
+// NumberSIPVideoAccessUnit assigns outbound RTP sequence and timestamp for an
+// access unit that will actually be written. No-op when no normalizer is bound.
+func (s *Session) NumberSIPVideoAccessUnit(au *NormalizedH264AccessUnit) {
+	if au == nil {
+		return
+	}
+	s.mu.RLock()
+	numberer := s.sipVideoAUNumberer
+	s.mu.RUnlock()
+	if numberer != nil {
+		numberer(au)
+	}
+}
+
 // WritePendingSIPVideoIDR writes a queued or never-delivered cached IDR.
 // rewrite=true assigns new sequence numbers through the bound normalizer.
 func (s *Session) WritePendingSIPVideoIDR(write func([]byte) (int, error)) (bool, string) {
@@ -119,7 +145,7 @@ func (s *Session) WritePendingSIPVideoIDR(write func([]byte) (int, error)) (bool
 	}
 	cache := s.sipVideoIDR
 	rewriter := s.sipVideoIDRReplayRewriter
-	gateActive := s.SwitchVideoGateActive
+	skipReplay := s.shouldSkipSIPVideoIDRReplayLocked(time.Now())
 	reason := "undelivered"
 	if cache.delivered {
 		reason = "decoder-replay"
@@ -128,7 +154,7 @@ func (s *Session) WritePendingSIPVideoIDR(write func([]byte) (int, error)) (bool
 	s.sipVideoIDRReplayPending = false
 	s.mu.Unlock()
 
-	if gateActive {
+	if skipReplay {
 		return false, ""
 	}
 	if rewriter != nil {
@@ -180,7 +206,10 @@ func (s *Session) markSIPVideoIDRWriteResult(ok bool) {
 }
 
 func (s *Session) canQueueSIPVideoIDRReplayLocked(now time.Time) bool {
-	if s.State == StateEnded || s.sipVideoIDR == nil || len(s.sipVideoIDR.packets) == 0 || s.SwitchVideoGateActive {
+	if s.State == StateEnded || s.sipVideoIDR == nil || len(s.sipVideoIDR.packets) == 0 {
+		return false
+	}
+	if s.shouldSkipSIPVideoIDRReplayLocked(now) {
 		return false
 	}
 	if s.hasPendingSIPVideoIDRWriteLocked() && !s.sipVideoIDR.delivered {
@@ -195,8 +224,27 @@ func (s *Session) canQueueSIPVideoIDRReplayLocked(now time.Time) bool {
 	return true
 }
 
+func (s *Session) shouldSkipSIPVideoIDRReplayLocked(now time.Time) bool {
+	if s.SwitchVideoGateActive || s.isSwitchVideoRecoveryActiveLocked(now) {
+		return true
+	}
+	if s.sipVideoIDR == nil {
+		return false
+	}
+	if s.SwitchGeneration > s.sipVideoIDR.generation {
+		return true
+	}
+	if s.sipVideoIDR.delivered && !s.LastKeyframe.IsZero() && now.Sub(s.LastKeyframe) > sipVideoIDRStaleReplayMaxAge {
+		return true
+	}
+	return false
+}
+
 func (s *Session) hasPendingSIPVideoIDRWriteLocked() bool {
-	if s.State == StateEnded || s.sipVideoIDR == nil || len(s.sipVideoIDR.packets) == 0 || s.SwitchVideoGateActive {
+	if s.State == StateEnded || s.sipVideoIDR == nil || len(s.sipVideoIDR.packets) == 0 {
+		return false
+	}
+	if s.shouldSkipSIPVideoIDRReplayLocked(time.Now()) {
 		return false
 	}
 	return s.sipVideoIDRReplayPending || !s.sipVideoIDR.delivered

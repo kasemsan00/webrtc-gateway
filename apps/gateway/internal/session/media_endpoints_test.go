@@ -49,12 +49,16 @@ func TestCloseMediaTransportsClearsAndCloses(t *testing.T) {
 		AudioRTCPPort: audioRTCPPort,
 		VideoRTCPPort: videoRTCPPort,
 	}
+	sess.MarkMediaForwardReady()
 
 	sess.CloseMediaTransports()
 
 	status := sess.GetMediaEndpointStatus()
 	if status.AudioRTPReady || status.VideoRTPReady || status.AudioRTCPReady || status.VideoRTCPReady {
 		t.Fatalf("expected all RTP/RTCP transports to be cleared, got %+v", status)
+	}
+	if sess.IsMediaForwardReady() {
+		t.Fatal("expected media forward ready to be cleared when RTP sockets close")
 	}
 	if status.AudioRTPPort != 0 || status.VideoRTPPort != 0 || status.AudioRTCPPort != 0 || status.VideoRTCPPort != 0 {
 		t.Fatalf("expected media ports to be reset, got %+v", status)
@@ -122,6 +126,13 @@ func TestResetMediaStateClearsSIPEndpointsKeepsCachedSPSPPS(t *testing.T) {
 	}
 	if !sess.sipVideoDestReadyAt.IsZero() {
 		t.Fatalf("expected sipVideoDestReadyAt to be cleared after reset")
+	}
+	if sess.IsMediaForwardReady() {
+		t.Fatal("expected media forward ready to be cleared on ResetMediaState")
+	}
+	sess.MarkMediaForwardReady()
+	if !sess.IsMediaForwardReady() {
+		t.Fatal("expected MarkMediaForwardReady to arm uplink forwarding")
 	}
 }
 

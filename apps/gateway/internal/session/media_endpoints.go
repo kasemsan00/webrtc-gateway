@@ -21,6 +21,7 @@ func (s *Session) CloseMediaTransports() {
 	s.VideoRTPConn = nil
 	s.AudioRTCPConn = nil
 	s.VideoRTCPConn = nil
+	s.mediaForwardReady = false
 
 	s.RTPPort = 0
 	s.VideoRTPPort = 0
@@ -464,8 +465,24 @@ func (s *Session) ResetMediaState() {
 	// even before RTP starts flowing. Early RTP parsing will still overwrite within the first packets.
 	s.LastSPSPPSInjectionTime = time.Time{}
 
+	s.mediaForwardReady = false
 	s.UpdatedAt = time.Now()
 	fmt.Printf("[%s] 🔄 Media state reset (Audio + Video) for new call\n", s.ID)
+}
+
+// MarkMediaForwardReady allows WebRTC→SIP RTP forwarding after RTP sockets exist.
+func (s *Session) MarkMediaForwardReady() {
+	s.mu.Lock()
+	s.mediaForwardReady = true
+	s.mu.Unlock()
+	fmt.Printf("[%s] media_forward_ready\n", s.ID)
+}
+
+// IsMediaForwardReady reports whether uplink RTP may bind SSRC and send.
+func (s *Session) IsMediaForwardReady() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.mediaForwardReady
 }
 
 // GetAudioRTPInfo returns the audio RTP connection details for DTMF transmission

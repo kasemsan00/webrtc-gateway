@@ -37,6 +37,7 @@ type sipFeedbackSnapshot struct {
 type webRTCFeedbackSnapshot struct {
 	authorized bool
 	ready      bool
+	throttled  bool
 	kind       string
 	pc         *webrtc.PeerConnection
 	ssrc       uint32
@@ -171,7 +172,7 @@ func sendPreparedSIPFeedback(id string, snapshot sipFeedbackSnapshot) {
 	}
 }
 
-func (s *Session) prepareWebRTCFeedbackLocked(kind string, authority *switchFeedbackAuthority) webRTCFeedbackSnapshot {
+func (s *Session) prepareWebRTCFeedbackLocked(kind string, force bool, authority *switchFeedbackAuthority) webRTCFeedbackSnapshot {
 	snapshot := webRTCFeedbackSnapshot{authorized: s.feedbackAuthorityLocked(authority), kind: kind}
 	if !snapshot.authorized {
 		return snapshot
@@ -181,11 +182,15 @@ func (s *Session) prepareWebRTCFeedbackLocked(kind string, authority *switchFeed
 		return snapshot
 	}
 	now := time.Now()
-	if kind == "pli" && !s.LastWebRTCPLISent.IsZero() && now.Sub(s.LastWebRTCPLISent) < webrtcPLIMinInterval {
-		return snapshot
-	}
-	if kind == "fir" && !s.LastWebRTCFIRSent.IsZero() && now.Sub(s.LastWebRTCFIRSent) < webrtcFIRMinInterval {
-		return snapshot
+	if !force {
+		if kind == "pli" && !s.LastWebRTCPLISent.IsZero() && now.Sub(s.LastWebRTCPLISent) < webrtcPLIMinInterval {
+			snapshot.throttled = true
+			return snapshot
+		}
+		if kind == "fir" && !s.LastWebRTCFIRSent.IsZero() && now.Sub(s.LastWebRTCFIRSent) < webrtcFIRMinInterval {
+			snapshot.throttled = true
+			return snapshot
+		}
 	}
 	for _, receiver := range pc.GetReceivers() {
 		track := receiver.Track()
@@ -244,12 +249,20 @@ func (s *Session) sendSIPFeedback(kind string, force bool, trigger string, autho
 }
 
 func (s *Session) sendWebRTCFeedback(kind string, authority *switchFeedbackAuthority) bool {
+	return s.sendWebRTCFeedbackWithForce(kind, false, authority)
+}
+
+func (s *Session) sendWebRTCFeedbackWithForce(kind string, force bool, authority *switchFeedbackAuthority) bool {
 	s.mu.Lock()
-	snapshot := s.prepareWebRTCFeedbackLocked(kind, authority)
+	snapshot := s.prepareWebRTCFeedbackLocked(kind, force, authority)
 	id := s.ID
 	s.mu.Unlock()
 	if !snapshot.authorized {
 		return false
+	}
+	if snapshot.throttled {
+		fmt.Printf("[%s] webrtc_%s_throttled force=%v\n", id, kind, force)
+		return true
 	}
 	sendPreparedWebRTCFeedback(id, snapshot)
 	return true
@@ -264,11 +277,11 @@ func (s *Session) SendSwitchPLIToAsteriskForced(generation int, mediaEpoch uint6
 }
 
 func (s *Session) SendSwitchFIRToWebRTC(generation int, mediaEpoch uint64) bool {
-	return s.sendWebRTCFeedback("fir", &switchFeedbackAuthority{generation, mediaEpoch})
+	return s.sendWebRTCFeedbackWithForce("fir", true, &switchFeedbackAuthority{generation, mediaEpoch})
 }
 
 func (s *Session) SendSwitchPLIToWebRTC(generation int, mediaEpoch uint64) bool {
-	return s.sendWebRTCFeedback("pli", &switchFeedbackAuthority{generation, mediaEpoch})
+	return s.sendWebRTCFeedbackWithForce("pli", true, &switchFeedbackAuthority{generation, mediaEpoch})
 }
 
 // FlushPendingBrowserKeyframeRequestForSwitch atomically claims only a pending

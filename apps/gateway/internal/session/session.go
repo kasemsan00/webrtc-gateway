@@ -61,8 +61,11 @@ type Session struct {
 	VideoRTPConn   *net.UDPConn                `json:"-"`
 	AudioRTCPConn  *net.UDPConn                `json:"-"` // Dedicated RTCP port for audio (RTP+1)
 	VideoRTCPConn  *net.UDPConn                `json:"-"` // Dedicated RTCP port for video (RTP+1)
-	SIPCallID      string                      `json:"sipCallId,omitempty"`
-	State          SessionState                `json:"state"`
+	// mediaForwardReady is set after ResetMediaState and RTP listeners are bound.
+	// OnTrack can fire before MakeCall/AcceptCall finishes that setup.
+	mediaForwardReady bool         `json:"-"`
+	SIPCallID         string       `json:"sipCallId,omitempty"`
+	State             SessionState `json:"state"`
 	// lastNotifiedProgressState dedupes consecutive identical WS call-progress notifies.
 	lastNotifiedProgressState SessionState `json:"-"`
 	// One-shot remote media-ready notifies (SIP→WebRTC presence, not call progress).
@@ -74,15 +77,15 @@ type Session struct {
 	uplinkKeyframeKickOnFirstSIPRTCP bool `json:"-"`
 	// When SIP video dest first became reachable (200 OK / first RTP dest).
 	sipVideoDestReadyAt time.Time `json:"-"`
-	Direction                          string    `json:"direction"` // "inbound" or "outbound"
-	From                               string    `json:"from,omitempty"`
-	To                                 string    `json:"to,omitempty"`
-	RTPPort                            int       `json:"rtpPort,omitempty"`
-	VideoRTPPort                       int       `json:"videoRtpPort,omitempty"`
-	AudioRTCPPort                      int       `json:"audioRtcpPort,omitempty"`
-	VideoRTCPPort                      int       `json:"videoRtcpPort,omitempty"`
-	CreatedAt                          time.Time `json:"createdAt"`
-	UpdatedAt                          time.Time `json:"updatedAt"`
+	Direction           string    `json:"direction"` // "inbound" or "outbound"
+	From                string    `json:"from,omitempty"`
+	To                  string    `json:"to,omitempty"`
+	RTPPort             int       `json:"rtpPort,omitempty"`
+	VideoRTPPort        int       `json:"videoRtpPort,omitempty"`
+	AudioRTCPPort       int       `json:"audioRtcpPort,omitempty"`
+	VideoRTCPPort       int       `json:"videoRtcpPort,omitempty"`
+	CreatedAt           time.Time `json:"createdAt"`
+	UpdatedAt           time.Time `json:"updatedAt"`
 	// ICE-lite credentials for SIP side
 	ICEUfrag string `json:"-"`
 	ICEPwd   string `json:"-"`
@@ -210,6 +213,7 @@ type Session struct {
 	sipVideoIDRReplayPending  bool
 	sipVideoIDRReplayNotify   chan struct{}
 	sipVideoIDRReplayRewriter func([]*rtp.Packet) []*rtp.Packet
+	sipVideoAUNumberer        func(*NormalizedH264AccessUnit)
 	videoEgressMu             sync.Mutex
 	videoEgressClosed         bool
 	// @switch controlled SPS/PPS injection (inject 3 copies before each of first 3 IDRs after @switch)

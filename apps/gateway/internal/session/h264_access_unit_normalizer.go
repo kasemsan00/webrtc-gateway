@@ -16,6 +16,10 @@ const (
 	// Reassembled parameter sets are reinjected as one RTP payload, so keep
 	// them below the common WebRTC path-MTU-safe payload size.
 	maxCachedFUAParameterSetPayload = 1200
+	// Prefix cached SPS/PPS onto the first post-@switch IDRs even when the AU
+	// already carries parameter sets. Decoders leaving queue still-video often
+	// ignore in-band SPS unless it is the first NAL after the generation change.
+	defaultSwitchParameterSetPrefixCount = 2
 )
 
 // H264AccessUnitNormalizerConfig bounds memory and latency while an H.264
@@ -63,9 +67,10 @@ type H264AccessUnitNormalizer struct {
 	lastSourceTS             uint32
 	stepTimestampAfterSwitch bool
 
-	cachedSPS  []byte
-	cachedPPS  []byte
-	generation int
+	cachedSPS                        []byte
+	cachedPPS                        []byte
+	generation                       int
+	forceParameterSetPrefixRemaining int
 
 	droppedIncomplete uint64
 	droppedOverflow   uint64
@@ -230,27 +235,26 @@ func (n *H264AccessUnitNormalizer) finishLocked() NormalizedH264AccessUnit {
 
 	injected := false
 	if isIDR {
+		forcePrefix := n.forceParameterSetPrefixRemaining > 0 && parameterSetsReady
 		prefix := make([]*rtp.Packet, 0, 2)
 		template := packets[0]
-		if !hasSPS && len(n.cachedSPS) > 0 {
+		if (!hasSPS || forcePrefix) && len(n.cachedSPS) > 0 {
 			prefix = append(prefix, parameterSetPacket(template, n.cachedSPS))
 		}
-		if !hasPPS && len(n.cachedPPS) > 0 {
+		if (!hasPPS || forcePrefix) && len(n.cachedPPS) > 0 {
 			prefix = append(prefix, parameterSetPacket(template, n.cachedPPS))
 		}
 		if len(prefix) > 0 {
 			packets = append(prefix, packets...)
 			injected = true
+			if forcePrefix {
+				n.forceParameterSetPrefixRemaining--
+			}
 		}
 	}
 
-	outTS := n.mapTimestampLocked(sourceTimestamp)
-	for _, packet := range packets {
-		packet.SequenceNumber = n.nextSeq
-		packet.Timestamp = outTS
-		n.nextSeq++
-	}
-	n.emitted++
+	// Outbound RTP sequence/timestamp are assigned later by NumberAccessUnit
+	// only after the switch video gate accepts the access unit.
 	n.resetCurrentLocked()
 	return NormalizedH264AccessUnit{
 		Packets: packets, IsIDR: isIDR, InjectedParameterSets: injected,
@@ -258,10 +262,24 @@ func (n *H264AccessUnitNormalizer) finishLocked() NormalizedH264AccessUnit {
 	}
 }
 
-func (n *H264AccessUnitNormalizer) mapTimestampLocked(source uint32) uint32 {
+// NumberAccessUnit assigns the continuous outbound RTP sequence and timestamp
+// after the caller has decided to emit the access unit. Gate-rejected AUs must
+// not call this, or they burn sequence numbers the decoder will NACK as loss.
+func (n *H264AccessUnitNormalizer) NumberAccessUnit(au *NormalizedH264AccessUnit) {
+	if au == nil || len(au.Packets) == 0 {
+		return
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	ts := n.mapTimestampLocked(au.SourceTimestamp, au.Packets[0].SequenceNumber)
+	n.applyOutboundRTPLocked(au.Packets, ts)
+	n.emitted++
+}
+
+func (n *H264AccessUnitNormalizer) mapTimestampLocked(source uint32, firstSeq uint16) uint32 {
 	if !n.haveOutput {
 		n.haveOutput = true
-		n.nextSeq = n.packets[0].SequenceNumber
+		n.nextSeq = firstSeq
 		n.outputTS = source
 		n.lastSourceTS = source
 		n.stepTimestampAfterSwitch = false
@@ -280,6 +298,17 @@ func (n *H264AccessUnitNormalizer) mapTimestampLocked(source uint32) uint32 {
 	n.outputTS += delta
 	n.lastSourceTS = source
 	return n.outputTS
+}
+
+func (n *H264AccessUnitNormalizer) applyOutboundRTPLocked(packets []*rtp.Packet, ts uint32) {
+	for _, packet := range packets {
+		if packet == nil {
+			continue
+		}
+		packet.SequenceNumber = n.nextSeq
+		packet.Timestamp = ts
+		n.nextSeq++
+	}
 }
 
 func (n *H264AccessUnitNormalizer) dropCurrentLocked(overflow bool) {
@@ -339,13 +368,11 @@ func (n *H264AccessUnitNormalizer) RewriteForReplay(packets []*rtp.Packet) []*rt
 	defer n.mu.Unlock()
 
 	if !n.haveOutput {
-		n.haveOutput = true
-		n.nextSeq = packets[0].SequenceNumber
-		n.outputTS = packets[0].Timestamp
+		n.outputTS = n.mapTimestampLocked(packets[0].Timestamp, packets[0].SequenceNumber)
 	} else {
 		n.outputTS += defaultH264TimestampStep
+		n.stepTimestampAfterSwitch = false
 	}
-	n.stepTimestampAfterSwitch = false
 
 	out := make([]*rtp.Packet, 0, len(packets))
 	for i, packet := range packets {
@@ -359,12 +386,10 @@ func (n *H264AccessUnitNormalizer) RewriteForReplay(packets []*rtp.Packet) []*rt
 		} else {
 			clone.Payload = append([]byte(nil), packet.Payload...)
 		}
-		clone.SequenceNumber = n.nextSeq
-		clone.Timestamp = n.outputTS
 		clone.Marker = i == len(packets)-1
-		n.nextSeq++
 		out = append(out, clone)
 	}
+	n.applyOutboundRTPLocked(out, n.outputTS)
 	return out
 }
 
@@ -378,6 +403,7 @@ func (n *H264AccessUnitNormalizer) ResetForSwitch(generation int) {
 	n.cachedPPS = nil
 	n.generation = generation
 	n.stepTimestampAfterSwitch = true
+	n.forceParameterSetPrefixRemaining = defaultSwitchParameterSetPrefixCount
 }
 
 func inspectAccessUnit(packets []*rtp.Packet) (hasSPS, hasPPS, isIDR bool) {

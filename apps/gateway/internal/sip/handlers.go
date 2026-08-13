@@ -1245,6 +1245,10 @@ func (s *Server) handleSwitchMessage(body string, callerURI string) {
 		sess.SendPLIToAsteriskForced("switch")
 	}
 	fmt.Printf("[%s] 🔀 Sent @switch: immediate FIR + PLI kick to both endpoints\n", sess.ID)
+	// SIP dest/SSRC often stay the same across queue→agent, so Linphone
+	// joins mid-GOP. Keep requesting a browser IDR until one is forwarded
+	// after this switch — independent of SIP→WebRTC gate recovery.
+	sess.KickUplinkKeyframeForSIPDecoder("switch")
 
 	// 3.1 Enable temporary @switch transition hold on SIP->WebRTC video path (if enabled).
 	// Preserve mode avoids forcing a black screen by gating only unsafe packets
