@@ -8,17 +8,21 @@ import (
 )
 
 const (
-	defaultH264AUMaxPackets       = 2048
-	defaultH264AUMaxBytes         = 4 * 1024 * 1024
-	defaultH264AUMaxAge           = 500 * time.Millisecond
-	defaultH264TimestampStep      = uint32(3000)
+	defaultH264AUMaxPackets  = 2048
+	defaultH264AUMaxBytes    = 4 * 1024 * 1024
+	defaultH264AUMaxAge      = 500 * time.Millisecond
+	defaultH264TimestampStep = uint32(3000)
+	// First AU after @switch must not look like the next queue frame.
+	// 3000 (~33ms) kept n1669 on the queue decoder state, so Linphone SPS
+	// never reconfigured and the picture stayed black (28C0e8PMWgRx).
+	switchH264TimestampStep       = uint32(90000)
 	maxReasonableH264TimestampGap = uint32(900000)
 	// Reassembled parameter sets are reinjected as one RTP payload, so keep
 	// them below the common WebRTC path-MTU-safe payload size.
 	maxCachedFUAParameterSetPayload = 1200
-	// Lead the first post-@switch IDR with SPS/PPS. Duplicate in-band copies
-	// are stripped so the decoder reconfigures once instead of stuttering on
-	// SPS, PPS, SPS, PPS, IDR.
+	// Prefix SPS/PPS on the first post-@switch IDR only when the AU itself
+	// is missing them. Forcing a rewrite when they are already present
+	// duplicates STAP-A/FU-A parameter sets and blacks n1669 (28C0e8PMWgRx).
 	defaultSwitchParameterSetPrefixCount = 1
 )
 
@@ -235,11 +239,9 @@ func (n *H264AccessUnitNormalizer) finishLocked() NormalizedH264AccessUnit {
 
 	injected := false
 	if isIDR {
-		forcePrefix := n.forceParameterSetPrefixRemaining > 0 && parameterSetsReady
+		missingSets := !hasSPS || !hasPPS
+		forcePrefix := n.forceParameterSetPrefixRemaining > 0 && parameterSetsReady && missingSets
 		packets, injected = prefixParameterSets(packets, n.cachedSPS, n.cachedPPS, hasSPS, hasPPS, forcePrefix)
-		if injected && forcePrefix {
-			n.forceParameterSetPrefixRemaining--
-		}
 	}
 
 	// Outbound RTP sequence/timestamp are assigned later by NumberAccessUnit
@@ -262,6 +264,9 @@ func (n *H264AccessUnitNormalizer) NumberAccessUnit(au *NormalizedH264AccessUnit
 	defer n.mu.Unlock()
 	ts := n.mapTimestampLocked(au.SourceTimestamp, au.Packets[0].SequenceNumber)
 	n.applyOutboundRTPLocked(au.Packets, ts)
+	if au.InjectedParameterSets && n.forceParameterSetPrefixRemaining > 0 {
+		n.forceParameterSetPrefixRemaining--
+	}
 	n.emitted++
 }
 
@@ -275,7 +280,7 @@ func (n *H264AccessUnitNormalizer) mapTimestampLocked(source uint32, firstSeq ui
 		return n.outputTS
 	}
 	if n.stepTimestampAfterSwitch {
-		n.outputTS += defaultH264TimestampStep
+		n.outputTS += switchH264TimestampStep
 		n.lastSourceTS = source
 		n.stepTimestampAfterSwitch = false
 		return n.outputTS

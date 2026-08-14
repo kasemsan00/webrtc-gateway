@@ -451,9 +451,108 @@ func TestSwitchVideoGateCommitStopsTransitionHold(t *testing.T) {
 	}
 }
 
+func TestSwitchVideoGateHoldsUndersizedIDRUntilFullGOP(t *testing.T) {
+	start := time.Unix(1_700_000_000, 0)
+	sess := &Session{VideoAUNormalizeEnabled: true, SwitchGeneration: 3}
+	sess.StartSwitchVideoGate(3, start, "switch")
+
+	tiny := gateTestAUWithPackets(3, true, true, 99, 5)
+	held := sess.EvaluateSwitchVideoAccessUnit(tiny, start.Add(75*time.Millisecond))
+	if held.Emit || held.Reason != "undersized-idr" {
+		t.Fatalf("tiny IDR should be held, got %+v", held)
+	}
+	if !sess.IsSwitchVideoGateActive() {
+		t.Fatal("undersized IDR released the gate")
+	}
+
+	pframe := sess.EvaluateSwitchVideoAccessUnit(gateTestAUWithPackets(3, false, true, 99, 4), start.Add(200*time.Millisecond))
+	if pframe.Emit || pframe.Reason != "non-idr" {
+		t.Fatalf("P-frame passed while holding: %+v", pframe)
+	}
+
+	full := gateTestAUWithPackets(3, true, true, 99, MinSwitchVideoGateIDRPackets)
+	reserved := sess.EvaluateSwitchVideoAccessUnit(full, start.Add(400*time.Millisecond))
+	if !reserved.Emit || reserved.Reason != "complete-idr-reserved" || reserved.Reservation == 0 {
+		t.Fatalf("full IDR did not reserve: %+v", reserved)
+	}
+}
+
+func TestSwitchVideoGateHolds22PacketPLIFlushIDR(t *testing.T) {
+	start := time.Unix(1_700_000_000, 0)
+	sess := &Session{VideoAUNormalizeEnabled: true, SwitchGeneration: 3}
+	sess.StartSwitchVideoGate(3, start, "switch")
+
+	// CAoRE65fuUZG: 800ms PLI produced a 22-packet IDR that blacked n1669.
+	flush := gateTestAUWithPackets(3, true, true, 99, 22)
+	held := sess.EvaluateSwitchVideoAccessUnit(flush, start.Add(882*time.Millisecond))
+	if held.Emit || held.Reason != "undersized-idr" {
+		t.Fatalf("22-packet PLI flush should be held, got %+v", held)
+	}
+
+	next := gateTestAUWithPackets(3, true, true, 99, 27)
+	reserved := sess.EvaluateSwitchVideoAccessUnit(next, start.Add(1900*time.Millisecond))
+	if !reserved.Emit || reserved.Reason != "complete-idr-reserved" {
+		t.Fatalf("27-packet GOP should reserve: %+v", reserved)
+	}
+}
+
+func TestSwitchVideoGateAcceptsUndersizedIDRAfterStall(t *testing.T) {
+	start := time.Unix(1_700_000_000, 0)
+	sess := &Session{VideoAUNormalizeEnabled: true, SwitchGeneration: 3}
+	sess.StartSwitchVideoGate(3, start, "switch")
+
+	tiny := gateTestAUWithPackets(3, true, true, 99, 5)
+	held := sess.EvaluateSwitchVideoAccessUnit(tiny, start.Add(time.Second))
+	if held.Emit || held.Reason != "undersized-idr" {
+		t.Fatalf("tiny IDR before stall should be held: %+v", held)
+	}
+
+	late := sess.EvaluateSwitchVideoAccessUnit(tiny, start.Add(switchVideoGateStallThreshold))
+	if !late.Emit || late.Reason != "complete-idr-reserved" {
+		t.Fatalf("tiny IDR after stall did not reserve: %+v", late)
+	}
+}
+
+func TestSwitchVideoGateSchedulesRetryPLIOnStart(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	sess := &Session{VideoAUNormalizeEnabled: true, SwitchGeneration: 3, LastSipPLISent: now}
+	sess.StartSwitchVideoGate(3, now, "switch")
+	if !sess.SwitchVideoUndersizedIDRPLIScheduled || sess.SwitchVideoUndersizedIDRPLIGeneration != 3 {
+		t.Fatalf("expected gate start to schedule retry PLI, scheduled=%v gen=%d",
+			sess.SwitchVideoUndersizedIDRPLIScheduled, sess.SwitchVideoUndersizedIDRPLIGeneration)
+	}
+	if delay, ok := sess.scheduleUndersizedIDRPLI(3, now.Add(75*time.Millisecond)); ok {
+		t.Fatalf("second schedule after gate start, delay=%s", delay)
+	}
+
+	if !sess.StopSwitchVideoGate(3, now.Add(time.Second), "test") {
+		t.Fatal("expected gate stop")
+	}
+	if sess.SwitchVideoUndersizedIDRPLIScheduled || sess.SwitchVideoUndersizedIDRPLIGeneration != 0 {
+		t.Fatalf("expected schedule cleared with gate, scheduled=%v gen=%d",
+			sess.SwitchVideoUndersizedIDRPLIScheduled, sess.SwitchVideoUndersizedIDRPLIGeneration)
+	}
+}
+
+func TestSwitchVideoGateDoesNotScheduleUndersizedIDRPLIWhenInactive(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	sess := &Session{VideoAUNormalizeEnabled: true, SwitchGeneration: 3}
+	if _, ok := sess.scheduleUndersizedIDRPLI(3, now); ok {
+		t.Fatal("inactive gate scheduled undersized IDR PLI")
+	}
+}
+
 func gateTestAU(generation int, idr, parameterSetsReady bool, ssrc uint32) NormalizedH264AccessUnit {
+	return gateTestAUWithPackets(generation, idr, parameterSetsReady, ssrc, MinSwitchVideoGateIDRPackets)
+}
+
+func gateTestAUWithPackets(generation int, idr, parameterSetsReady bool, ssrc uint32, n int) NormalizedH264AccessUnit {
+	packets := make([]*rtp.Packet, n)
+	for i := range packets {
+		packets[i] = &rtp.Packet{Header: rtp.Header{SSRC: ssrc}}
+	}
 	return NormalizedH264AccessUnit{
-		Packets:            []*rtp.Packet{{Header: rtp.Header{SSRC: ssrc}}},
+		Packets:            packets,
 		IsIDR:              idr,
 		ParameterSetsReady: parameterSetsReady,
 		Generation:         generation,

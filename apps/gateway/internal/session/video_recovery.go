@@ -116,6 +116,68 @@ func (s *Session) GetVideoRecoveryPolicy(interval, stale, firStale time.Duration
 	return s.getVideoRecoveryPolicy(now, interval, stale, firStale)
 }
 
+const (
+	KeyframeWatchdogNone = "none"
+	KeyframeWatchdogPLI  = "pli"
+	KeyframeWatchdogFIR  = "fir"
+)
+
+// KeyframeWatchdogDecision is the SIP→WebRTC keyframe watchdog action for one tick.
+type KeyframeWatchdogDecision struct {
+	Action string
+	Reason string
+}
+
+// KeyframeWatchdogInput is one watchdog tick. BurstActive and GateActive must
+// be sampled after the sleep, not before.
+type KeyframeWatchdogInput struct {
+	Now          time.Time
+	LastKeyframe time.Time
+	LastRTP      time.Time
+	LastSipPLI   time.Time
+	LastSipFIR   time.Time
+	Stale        time.Duration
+	FIRStale     time.Duration
+	Interval     time.Duration
+	BurstActive  bool
+	GateActive   bool
+	HealthyIDR   bool
+}
+
+// DecideKeyframeWatchdog chooses PLI/FIR only when video has actually stalled.
+// After the burst window, a long GOP with packets still arriving is not a stall
+// (2wEu56CA9cGy: Linphone GOP ~6s, stale=4s forced an IDR every ~6s for the
+// whole call and n1669 stuttered). Do not treat RTP as healthy during an
+// active switch gate or before a full post-switch GOP (Al8uLPjnbirH).
+func DecideKeyframeWatchdog(in KeyframeWatchdogInput) KeyframeWatchdogDecision {
+	keyframeAge := in.Now.Sub(in.LastKeyframe)
+	if in.LastKeyframe.IsZero() {
+		keyframeAge = in.Stale + time.Second
+	}
+	if keyframeAge < in.Stale {
+		return KeyframeWatchdogDecision{Action: KeyframeWatchdogNone, Reason: "fresh-keyframe"}
+	}
+
+	rtpFlowing := !in.LastRTP.IsZero() && in.Now.Sub(in.LastRTP) < in.Stale
+	if !in.BurstActive && !in.GateActive && in.HealthyIDR && rtpFlowing {
+		return KeyframeWatchdogDecision{Action: KeyframeWatchdogNone, Reason: "rtp-flowing"}
+	}
+
+	if keyframeAge >= in.FIRStale {
+		if !in.LastSipFIR.IsZero() && in.Now.Sub(in.LastSipFIR) < in.Interval {
+			return KeyframeWatchdogDecision{Action: KeyframeWatchdogNone, Reason: "fir-throttled"}
+		}
+		return KeyframeWatchdogDecision{Action: KeyframeWatchdogFIR, Reason: "keyframe-stale"}
+	}
+	if !in.LastSipPLI.IsZero() && in.Now.Sub(in.LastSipPLI) < in.Interval {
+		return KeyframeWatchdogDecision{Action: KeyframeWatchdogNone, Reason: "pli-throttled"}
+	}
+	if in.BurstActive {
+		return KeyframeWatchdogDecision{Action: KeyframeWatchdogPLI, Reason: "burst-stale"}
+	}
+	return KeyframeWatchdogDecision{Action: KeyframeWatchdogPLI, Reason: "keyframe-stale"}
+}
+
 // IsVideoRecoveryBurstActive reports whether the temporary startup/recovery window is active.
 func (s *Session) IsVideoRecoveryBurstActive() bool {
 	now := time.Now()

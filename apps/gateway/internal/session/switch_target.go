@@ -34,7 +34,6 @@ func (s *Session) PrepareAndActivateSwitchVideoTarget(queue, agent string, now t
 	debounceWindow = normalizePositiveDuration(debounceWindow, defaultSwitchDuplicateDebounce)
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	currentSSRC := s.RemoteVideoSSRC
 	currentSource := s.SIPVideoRTPSource
@@ -67,11 +66,13 @@ func (s *Session) PrepareAndActivateSwitchVideoTarget(queue, agent string, now t
 		decision.Reason = "duplicate-target"
 		decision.Generation = s.SwitchGeneration
 		decision.DuplicateCount = s.SwitchDuplicateCount
-		return decision, SwitchVideoGateActivation{
+		activation := SwitchVideoGateActivation{
 			Active: s.SwitchVideoGateActive, Outcome: SwitchVideoGateActivationUnchanged,
 			Generation: s.SwitchVideoGateGeneration, StartedAt: s.SwitchVideoGateStartedAt,
 			FeedbackBaseline: s.SwitchVideoGateFeedbackBaseline,
 		}
+		s.mu.Unlock()
+		return decision, activation
 	}
 
 	reason := "new-target"
@@ -98,6 +99,12 @@ func (s *Session) PrepareAndActivateSwitchVideoTarget(queue, agent string, now t
 	decision.MediaGeneration = fmt.Sprintf("ssrc=%d source=%s", currentSSRC, currentSource)
 	s.clearSIPVideoParameterSetsLocked()
 	activation := s.startSwitchVideoGateLocked(decision.Generation, now, "agent-switch")
+	s.mu.Unlock()
+	// Production @switch uses this path, not StartSwitchVideoGate. Arm the
+	// delayed PLI here so P-frame-only joins still get a real GOP.
+	if activation.NewStart {
+		s.RequestSIPKeyframeAfterUndersizedSwitchIDR(activation.Generation, now)
+	}
 	return decision, activation
 }
 

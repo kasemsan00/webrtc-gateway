@@ -580,3 +580,99 @@ func TestSIPFIRHonorsMinimumInterval(t *testing.T) {
 		t.Fatal("expected throttled FIR not to increment PLISent")
 	}
 }
+
+func TestDecideKeyframeWatchdogSkipsWhenRTPFlowingAfterBurst(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	got := DecideKeyframeWatchdog(KeyframeWatchdogInput{
+		Now: now, LastKeyframe: now.Add(-6 * time.Second), LastRTP: now.Add(-20 * time.Millisecond),
+		Stale: 4 * time.Second, FIRStale: 8 * time.Second, Interval: 2 * time.Second, HealthyIDR: true,
+	})
+	if got.Action != KeyframeWatchdogNone || got.Reason != "rtp-flowing" {
+		t.Fatalf("expected rtp-flowing skip, got %+v", got)
+	}
+}
+
+func TestDecideKeyframeWatchdogSendsPLIDuringBurstEvenIfRTPFlowing(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	got := DecideKeyframeWatchdog(KeyframeWatchdogInput{
+		Now: now, LastKeyframe: now.Add(-5 * time.Second), LastRTP: now.Add(-10 * time.Millisecond),
+		Stale: 4 * time.Second, FIRStale: 8 * time.Second, Interval: 2 * time.Second, BurstActive: true, HealthyIDR: true,
+	})
+	if got.Action != KeyframeWatchdogPLI || got.Reason != "burst-stale" {
+		t.Fatalf("expected burst PLI, got %+v", got)
+	}
+}
+
+func TestDecideKeyframeWatchdogSendsPLIWhenRTPStalled(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	got := DecideKeyframeWatchdog(KeyframeWatchdogInput{
+		Now: now, LastKeyframe: now.Add(-6 * time.Second), LastRTP: now.Add(-5 * time.Second),
+		Stale: 4 * time.Second, FIRStale: 8 * time.Second, Interval: 2 * time.Second, HealthyIDR: true,
+	})
+	if got.Action != KeyframeWatchdogPLI || got.Reason != "keyframe-stale" {
+		t.Fatalf("expected stall PLI, got %+v", got)
+	}
+}
+
+func TestDecideKeyframeWatchdogSendsFIRWhenVeryStaleAndNoRTP(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	got := DecideKeyframeWatchdog(KeyframeWatchdogInput{
+		Now: now, LastKeyframe: now.Add(-9 * time.Second), LastRTP: now.Add(-9 * time.Second),
+		Stale: 4 * time.Second, FIRStale: 8 * time.Second, Interval: 2 * time.Second, HealthyIDR: true,
+	})
+	if got.Action != KeyframeWatchdogFIR || got.Reason != "keyframe-stale" {
+		t.Fatalf("expected stall FIR, got %+v", got)
+	}
+}
+
+func TestDecideKeyframeWatchdogDoesNotSkipDuringGateOrBeforeHealthyIDR(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	in := KeyframeWatchdogInput{
+		Now: now, LastKeyframe: now.Add(-6 * time.Second), LastRTP: now.Add(-10 * time.Millisecond),
+		Stale: 4 * time.Second, FIRStale: 8 * time.Second, Interval: 2 * time.Second,
+	}
+	in.GateActive = true
+	got := DecideKeyframeWatchdog(in)
+	if got.Action != KeyframeWatchdogPLI {
+		t.Fatalf("expected PLI while gate active, got %+v", got)
+	}
+	in.GateActive = false
+	got = DecideKeyframeWatchdog(in)
+	if got.Action != KeyframeWatchdogPLI {
+		t.Fatalf("expected PLI before healthy IDR, got %+v", got)
+	}
+}
+
+func TestNoteSIPVideoRTPClearedOnResetMediaState(t *testing.T) {
+	sess := &Session{ID: "rtp-arrival"}
+	now := time.Unix(1_700_000_000, 0)
+	sess.NoteSIPVideoRTP(now)
+	if got := sess.LastSIPVideoRTPAt(); !got.Equal(now) {
+		t.Fatalf("LastSIPVideoRTPAt = %v, want %v", got, now)
+	}
+	sess.ResetMediaState()
+	if !sess.LastSIPVideoRTPAt().IsZero() {
+		t.Fatalf("expected RTP arrival cleared on ResetMediaState, got %v", sess.LastSIPVideoRTPAt())
+	}
+}
+
+func TestHasHealthySIPVideoIDRAfterSwitchRequiresFullGOP(t *testing.T) {
+	sess := &Session{ID: "healthy-idr", VideoAUNormalizeEnabled: true, SwitchGeneration: 1}
+	if !sess.HasHealthySIPVideoIDR() {
+		t.Fatal("expected healthy before first switch")
+	}
+	if !sess.StartSwitchVideoGate(1, time.Unix(1, 0), "switch") {
+		t.Fatal("gate start")
+	}
+	if sess.HasHealthySIPVideoIDR() {
+		t.Fatal("expected unhealthy until a full GOP after switch")
+	}
+	sess.MarkSIPVideoIDRSize(MinSwitchVideoGateIDRPackets - 1)
+	if sess.HasHealthySIPVideoIDR() {
+		t.Fatal("undersized IDR should not count as healthy")
+	}
+	sess.MarkSIPVideoIDRSize(MinSwitchVideoGateIDRPackets)
+	if !sess.HasHealthySIPVideoIDR() {
+		t.Fatal("expected healthy after full GOP")
+	}
+}

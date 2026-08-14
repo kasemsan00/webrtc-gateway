@@ -41,13 +41,14 @@ func TestWriteNormalizedVideoAccessUnitCommitsGateAfterAllPackets(t *testing.T) 
 	}
 
 	writes := 0
-	result := writeNormalizedVideoAccessUnit(sess, normalizedVideoAU(3, true, true, 3), now.Add(time.Second), func([]byte) (int, error) {
+	packets := session.MinSwitchVideoGateIDRPackets
+	result := writeNormalizedVideoAccessUnit(sess, normalizedVideoAU(3, true, true, packets), now.Add(time.Second), func([]byte) (int, error) {
 		writes++
 		return 1, nil
 	})
 
-	if !result.emitted || writes != 3 {
-		t.Fatalf("emitted=%v writes=%d, want true/3", result.emitted, writes)
+	if !result.emitted || writes != packets {
+		t.Fatalf("emitted=%v writes=%d, want true/%d", result.emitted, writes, packets)
 	}
 	if !result.gateReleased {
 		t.Fatal("expected gate release")
@@ -63,7 +64,7 @@ func TestWriteNormalizedVideoAccessUnitAbortsReservationOnWriteFailure(t *testin
 	sess.StartSwitchVideoGate(4, now, "test")
 
 	writes := 0
-	result := writeNormalizedVideoAccessUnit(sess, normalizedVideoAU(4, true, true, 3), now.Add(time.Second), func([]byte) (int, error) {
+	result := writeNormalizedVideoAccessUnit(sess, normalizedVideoAU(4, true, true, session.MinSwitchVideoGateIDRPackets), now.Add(time.Second), func([]byte) (int, error) {
 		writes++
 		if writes == 2 {
 			return 0, errors.New("track failed")
@@ -95,7 +96,8 @@ func TestWriteNormalizedVideoAccessUnitPreservesPacketSSRC(t *testing.T) {
 	}
 
 	var gotSSRCs []uint32
-	result := writeNormalizedVideoAccessUnit(sess, normalizedVideoAU(1, true, true, 3), now.Add(time.Second), func(b []byte) (int, error) {
+	packets := session.MinSwitchVideoGateIDRPackets
+	result := writeNormalizedVideoAccessUnit(sess, normalizedVideoAU(1, true, true, packets), now.Add(time.Second), func(b []byte) (int, error) {
 		pkt := &rtp.Packet{}
 		if err := pkt.Unmarshal(b); err != nil {
 			t.Fatalf("unmarshal: %v", err)
@@ -106,8 +108,8 @@ func TestWriteNormalizedVideoAccessUnitPreservesPacketSSRC(t *testing.T) {
 	if !result.emitted {
 		t.Fatal("expected write success")
 	}
-	if len(gotSSRCs) != 3 {
-		t.Fatalf("expected 3 packets, got %d", len(gotSSRCs))
+	if len(gotSSRCs) != packets {
+		t.Fatalf("expected %d packets, got %d", packets, len(gotSSRCs))
 	}
 	for i, gotSSRC := range gotSSRCs {
 		if gotSSRC != 4242 {
@@ -120,7 +122,7 @@ func TestWriteNormalizedVideoAccessUnitRejectsStaleGenerationAfterRelease(t *tes
 	now := time.Unix(300, 0)
 	sess := &session.Session{ID: "gate-stale", VideoAUNormalizeEnabled: true, SwitchGeneration: 5}
 	sess.StartSwitchVideoGate(5, now, "test")
-	if !writeNormalizedVideoAccessUnit(sess, normalizedVideoAU(5, true, true, 1), now, func([]byte) (int, error) { return 1, nil }).gateReleased {
+	if !writeNormalizedVideoAccessUnit(sess, normalizedVideoAU(5, true, true, session.MinSwitchVideoGateIDRPackets), now, func([]byte) (int, error) { return 1, nil }).gateReleased {
 		t.Fatal("expected generation 5 release")
 	}
 
@@ -174,16 +176,55 @@ func TestWriteNormalizedVideoAccessUnitDoesNotBurnSeqOnGateReject(t *testing.T) 
 		t.Fatalf("gate reject wrote packets: seqs=%v", seqs)
 	}
 
-	idr := normalizedVideoAU(1, true, true, 7)
+	idrPackets := session.MinSwitchVideoGateIDRPackets
+	idr := normalizedVideoAU(1, true, true, idrPackets)
 	result := writeNormalizedVideoAccessUnit(sess, idr, now.Add(4*time.Second), write)
 	if !result.emitted || !result.gateReleased {
 		t.Fatalf("expected IDR to release gate: %+v", result)
 	}
-	if len(seqs) != 14 {
-		t.Fatalf("expected 14 written packets, got %d seqs=%v", len(seqs), seqs)
+	if len(seqs) != 7+idrPackets {
+		t.Fatalf("expected %d written packets, got %d seqs=%v", 7+idrPackets, len(seqs), seqs)
 	}
-	if seqs[7] != 107 || seqs[13] != 113 {
+	if seqs[7] != 107 || seqs[6+idrPackets] != uint16(100+6+idrPackets) {
 		t.Fatalf("gate reject burned outbound seq, got %v", seqs[7:])
+	}
+}
+
+func TestWriteNormalizedVideoAccessUnitHoldsUndersizedIDR(t *testing.T) {
+	now := time.Unix(500, 0)
+	sess := &session.Session{ID: "gate-tiny-idr", VideoAUNormalizeEnabled: true, SwitchGeneration: 1}
+	if !sess.StartSwitchVideoGate(1, now, "test") {
+		t.Fatal("expected gate start")
+	}
+
+	writes := 0
+	result := writeNormalizedVideoAccessUnit(sess, normalizedVideoAU(1, true, true, 5), now.Add(75*time.Millisecond), func([]byte) (int, error) {
+		writes++
+		return 1, nil
+	})
+	if result.emitted || result.gateReleased || writes != 0 || !sess.IsSwitchVideoGateActive() {
+		t.Fatalf("tiny IDR hold: emitted=%v released=%v writes=%d active=%v",
+			result.emitted, result.gateReleased, writes, sess.IsSwitchVideoGateActive())
+	}
+	if !sess.SwitchVideoUndersizedIDRPLIScheduled || sess.SwitchVideoUndersizedIDRPLIGeneration != 1 {
+		t.Fatalf("expected undersized IDR to schedule a SIP PLI retry, scheduled=%v gen=%d",
+			sess.SwitchVideoUndersizedIDRPLIScheduled, sess.SwitchVideoUndersizedIDRPLIGeneration)
+	}
+
+	pWrites := 0
+	pframe := writeNormalizedVideoAccessUnit(sess, normalizedVideoAU(1, false, true, 4), now.Add(200*time.Millisecond), func([]byte) (int, error) {
+		pWrites++
+		return 1, nil
+	})
+	if pframe.emitted || pWrites != 0 {
+		t.Fatalf("P-frame passed while holding: emitted=%v writes=%d", pframe.emitted, pWrites)
+	}
+
+	full := writeNormalizedVideoAccessUnit(sess, normalizedVideoAU(1, true, true, session.MinSwitchVideoGateIDRPackets), now.Add(400*time.Millisecond), func([]byte) (int, error) {
+		return 1, nil
+	})
+	if !full.emitted || !full.gateReleased {
+		t.Fatalf("full IDR did not release gate: %+v", full)
 	}
 }
 

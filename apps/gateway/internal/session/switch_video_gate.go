@@ -10,7 +10,19 @@ const switchVideoGateRejectLogInterval = time.Second
 const (
 	switchVideoGateStallThreshold = 2 * time.Second
 	switchVideoGateStallInterval  = 2 * time.Second
+	// Linphone ignores a PLI ~300ms after its post-answer flush IDR. Wait for
+	// the encoder to finish that GOP before asking again (CYeTDJRl22lP: 300ms
+	// PLI produced no IDR; the real 23-packet GOP arrived ~1.6s later).
+	undersizedIDRRetryPLIDelay = 800 * time.Millisecond
 )
+
+// MinSwitchVideoGateIDRPackets is the smallest post-switch IDR the gate treats
+// as a real camera GOP before the stall timeout. Linphone's 800ms PLI reply is
+// sometimes a 22-packet flush (CAoRE65fuUZG) that blacks n1669, while the same
+// phone paints when the first IDR is 30–40 packets (kNmvwqMU4rXK, ws2AHWfsi171).
+// After the stall timeout the gate accepts a smaller IDR so the picture is not
+// held forever.
+const MinSwitchVideoGateIDRPackets = 24
 
 const (
 	SwitchVideoGateActivationActive    = "active"
@@ -92,6 +104,7 @@ func (s *Session) EvaluateSwitchVideoAccessUnit(au NormalizedH264AccessUnit, now
 	}
 
 	generation := s.SwitchVideoGateGeneration
+	elapsed := switchVideoGateElapsed(s.SwitchVideoGateStartedAt, now)
 	reason := ""
 	switch {
 	case switchVideoTransitionBlocksGateReleaseLocked(s, now):
@@ -104,6 +117,8 @@ func (s *Session) EvaluateSwitchVideoAccessUnit(au NormalizedH264AccessUnit, now
 		reason = "non-idr"
 	case !au.ParameterSetsReady:
 		reason = "parameter-sets-not-ready"
+	case len(au.Packets) < MinSwitchVideoGateIDRPackets && elapsed < switchVideoGateStallThreshold:
+		reason = "undersized-idr"
 	case s.SwitchVideoGateLeaseNonce == ^uint64(0):
 		reason = "reservation-exhausted"
 	}
@@ -111,7 +126,6 @@ func (s *Session) EvaluateSwitchVideoAccessUnit(au NormalizedH264AccessUnit, now
 	if reason != "" {
 		s.SwitchVideoGateRejectedCount++
 		rejected := s.SwitchVideoGateRejectedCount
-		elapsed := switchVideoGateElapsed(s.SwitchVideoGateStartedAt, now)
 		shouldLog := s.SwitchVideoGateLastRejectLogAt.IsZero() || now.Before(s.SwitchVideoGateLastRejectLogAt) ||
 			now.Sub(s.SwitchVideoGateLastRejectLogAt) >= switchVideoGateRejectLogInterval
 		s.SwitchVideoGateLastRejectReason = reason
@@ -119,10 +133,11 @@ func (s *Session) EvaluateSwitchVideoAccessUnit(au NormalizedH264AccessUnit, now
 			s.SwitchVideoGateLastRejectLogAt = now
 		}
 		id := s.ID
+		packets := len(au.Packets)
 		s.mu.Unlock()
 		if shouldLog {
-			fmt.Printf("[%s] switch_video_gate_reject generation=%d auGeneration=%d reason=%s elapsedMs=%d rejected=%d\n",
-				id, generation, au.Generation, reason, elapsed.Milliseconds(), rejected)
+			fmt.Printf("[%s] switch_video_gate_reject generation=%d auGeneration=%d reason=%s elapsedMs=%d rejected=%d packets=%d\n",
+				id, generation, au.Generation, reason, elapsed.Milliseconds(), rejected, packets)
 		}
 		return SwitchVideoGateDecision{Reason: reason, Generation: generation}
 	}
@@ -212,6 +227,7 @@ func (s *Session) StartSwitchVideoGate(generation int, now time.Time, reason str
 	if activation.NewStart {
 		fmt.Printf("[%s] switch_video_gate_start generation=%d reason=%s feedbackBaseline=%d\n",
 			id, activation.Generation, reason, activation.FeedbackBaseline)
+		s.RequestSIPKeyframeAfterUndersizedSwitchIDR(activation.Generation, now)
 	}
 	return activation.Outcome == SwitchVideoGateActivationActive
 }
@@ -239,6 +255,8 @@ func (s *Session) startSwitchVideoGateLocked(generation int, now time.Time, reas
 
 	s.clearSwitchVideoGateLocked()
 	s.clearSIPVideoIDRCacheLocked()
+	s.sipVideoRequireHealthyIDR.Store(true)
+	s.sipVideoHealthyIDR.Store(false)
 	s.SwitchVideoGateActive = true
 	s.SwitchVideoGateGeneration = generation
 	s.SwitchVideoGateStartedAt = now
@@ -305,7 +323,76 @@ func (s *Session) clearSwitchVideoGateLocked() {
 	s.SwitchVideoGateLastRejectReason = ""
 	s.SwitchVideoGateLastRejectLogAt = time.Time{}
 	s.SwitchVideoGateLastStallLogAt = time.Time{}
+	s.SwitchVideoUndersizedIDRPLIScheduled = false
+	s.SwitchVideoUndersizedIDRPLIGeneration = 0
+	s.SwitchVideoGateStillEmitted = false
 	s.clearSwitchVideoGateReservationLocked()
+}
+
+// RequestSIPKeyframeAfterUndersizedSwitchIDR asks Linphone for a real GOP after
+// @switch. Immediate PLI often yields only a flush IDR or P-frames; waiting
+// undersizedIDRRetryPLIDelay lets the encoder finish that GOP. Armed on gate
+// start so P-frame-only switches (vgm4WIlaRByW) still get the retry.
+func (s *Session) RequestSIPKeyframeAfterUndersizedSwitchIDR(generation int, now time.Time) {
+	delay, ok := s.scheduleUndersizedIDRPLI(generation, now)
+	if !ok {
+		return
+	}
+	id := s.ID
+	fmt.Printf("[%s] switch_video_gate_undersized_idr_pli generation=%d delayMs=%d\n",
+		id, generation, delay.Milliseconds())
+	send := func() { s.sendScheduledUndersizedIDRPLI(generation) }
+	if delay <= 0 {
+		send()
+		return
+	}
+	time.AfterFunc(delay, send)
+}
+
+func (s *Session) scheduleUndersizedIDRPLI(generation int, now time.Time) (time.Duration, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.SwitchVideoGateActive || s.SwitchVideoGateReleasing || s.SwitchVideoGateGeneration != generation {
+		return 0, false
+	}
+	if s.SwitchVideoUndersizedIDRPLIScheduled && s.SwitchVideoUndersizedIDRPLIGeneration == generation {
+		return 0, false
+	}
+	s.SwitchVideoUndersizedIDRPLIScheduled = true
+	s.SwitchVideoUndersizedIDRPLIGeneration = generation
+	wait := undersizedIDRRetryPLIDelay
+	if !s.LastSipPLISent.IsZero() {
+		elapsed := now.Sub(s.LastSipPLISent)
+		if elapsed < pliForceMinInterval {
+			if throttle := pliForceMinInterval - elapsed + time.Millisecond; throttle > wait {
+				wait = throttle
+			}
+		}
+	}
+	return wait, true
+}
+
+func (s *Session) ClearSwitchVideoGateStillEmitted() {
+	s.mu.Lock()
+	s.SwitchVideoGateStillEmitted = false
+	s.mu.Unlock()
+}
+
+func (s *Session) sendScheduledUndersizedIDRPLI(generation int) {
+	s.mu.Lock()
+	if !s.SwitchVideoGateActive || s.SwitchVideoGateReleasing || s.SwitchVideoGateGeneration != generation {
+		s.mu.Unlock()
+		return
+	}
+	epoch := s.MediaEpoch
+	id := s.ID
+	s.mu.Unlock()
+	if s.GetState() == StateEnded {
+		return
+	}
+	if s.SendSwitchPLIToAsteriskForced(generation, epoch, "undersized-idr") {
+		fmt.Printf("[%s] switch_video_gate_undersized_idr_pli_sent generation=%d\n", id, generation)
+	}
 }
 
 func (s *Session) clearSwitchVideoGateReservationLocked() {

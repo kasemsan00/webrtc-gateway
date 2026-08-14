@@ -36,6 +36,9 @@ func writeNormalizedVideoAccessUnit(
 
 	decision := sess.EvaluateSwitchVideoAccessUnit(au, now)
 	if !decision.Emit {
+		if decision.Reason == "undersized-idr" {
+			sess.RequestSIPKeyframeAfterUndersizedSwitchIDR(decision.Generation, now)
+		}
 		return normalizedVideoWriteResult{}
 	}
 
@@ -529,6 +532,7 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 				s.switchRenegotiationStarter.StartSwitchVideoRenegotiation(sess.ID, result.generation)
 			}
 			if au.IsIDR {
+				sess.MarkSIPVideoIDRSize(len(au.Packets))
 				isPLIResponse, responseTime, pliSent, pliResponse := sess.RecordKeyframe()
 				sess.MarkSwitchVideoKeyframe(now)
 				sess.MarkSwitchVideoProgress(now, false)
@@ -676,6 +680,7 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 			}
 			continue
 		}
+		sess.NoteSIPVideoRTP(time.Now())
 
 		// A switch generation is authoritative even when RTPengine preserves the
 		// SIP-side SSRC. Reset queued/source-specific state before classifying or
@@ -1109,6 +1114,10 @@ func (s *Server) startKeyframeWatchdogForSession(sess *session.Session) {
 		if sess.GetState() == session.StateEnded {
 			return
 		}
+		// Re-read after sleep. Sampling before sleep used a stale burst flag
+		// (Al8uLPjnbirH: skip rtp-flowing 370ms after @switch because the
+		// previous tick still thought burst was over).
+		interval, stale, firStale, burstActive = sess.GetVideoRecoveryPolicy(baseInterval, baseStale, baseFirStale)
 
 		// Only start after we have a remote video SSRC (video is flowing)
 		if sess.GetRemoteVideoSSRC() == 0 {
@@ -1118,40 +1127,46 @@ func (s *Server) startKeyframeWatchdogForSession(sess *session.Session) {
 		lastKeyframe, _ := sess.GetKeyframeTimes()
 		lastSipPLI, lastSipFIR := sess.GetSIPRecoveryTimes()
 		now := time.Now()
+		decision := session.DecideKeyframeWatchdog(session.KeyframeWatchdogInput{
+			Now:          now,
+			LastKeyframe: lastKeyframe,
+			LastRTP:      sess.LastSIPVideoRTPAt(),
+			LastSipPLI:   lastSipPLI,
+			LastSipFIR:   lastSipFIR,
+			Stale:        stale,
+			FIRStale:     firStale,
+			Interval:     interval,
+			BurstActive:  burstActive,
+			GateActive:   sess.IsSwitchVideoGateActive(),
+			HealthyIDR:   sess.HasHealthySIPVideoIDR(),
+		})
 
-		// If we never saw a keyframe, treat it as stale
 		keyframeAge := now.Sub(lastKeyframe)
 		if lastKeyframe.IsZero() {
 			keyframeAge = stale + time.Second
 		}
 
-		if keyframeAge < stale {
-			continue
-		}
-
-		if keyframeAge >= firStale {
-			if !lastSipFIR.IsZero() && now.Sub(lastSipFIR) < interval {
-				continue
+		switch decision.Action {
+		case session.KeyframeWatchdogNone:
+			if decision.Reason == "rtp-flowing" {
+				fmt.Printf("[%s] keyframe_watchdog_skip reason=rtp-flowing keyframeAge=%v stale=%v\n",
+					sess.ID, keyframeAge, stale)
 			}
+			continue
+		case session.KeyframeWatchdogFIR:
 			fmt.Printf("[%s] ⚠️ Keyframe stale for %v (>= %v) - sending FIR to SIP\n",
 				sess.ID, keyframeAge, firStale)
 			sess.SendFIRToAsterisk()
-			continue
+		default:
+			if burstActive {
+				fmt.Printf("[%s] ⚠️ (burst) Keyframe stale for %v (>= %v) - sending PLI to SIP\n",
+					sess.ID, keyframeAge, stale)
+			} else {
+				fmt.Printf("[%s] ⚠️ Keyframe stale for %v (>= %v) - sending PLI to SIP\n",
+					sess.ID, keyframeAge, stale)
+			}
+			sess.SendPLIToAsterisk()
 		}
-
-		// Throttle PLI requests using last SIP-side request time to avoid flooding.
-		if !lastSipPLI.IsZero() && now.Sub(lastSipPLI) < interval {
-			continue
-		}
-
-		if burstActive {
-			fmt.Printf("[%s] ⚠️ (burst) Keyframe stale for %v (>= %v) - sending PLI to SIP\n",
-				sess.ID, keyframeAge, stale)
-		} else {
-			fmt.Printf("[%s] ⚠️ Keyframe stale for %v (>= %v) - sending PLI to SIP\n",
-				sess.ID, keyframeAge, stale)
-		}
-		sess.SendPLIToAsterisk()
 	}
 }
 

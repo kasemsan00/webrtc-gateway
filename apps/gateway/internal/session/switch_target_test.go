@@ -206,3 +206,19 @@ func TestPrepareAndActivateSwitchVideoTargetNormalizationDisabledUsesLegacyOutco
 		t.Fatalf("disabled-normalization switch token should remain authoritative")
 	}
 }
+
+func TestPrepareAndActivateSwitchVideoTargetSchedulesRetryPLI(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	sess := newBurstTestSession("switch-target-retry-pli")
+	sess.VideoAUNormalizeEnabled = true
+	sess.LastSipPLISent = now
+
+	_, activation := sess.PrepareAndActivateSwitchVideoTarget("14131", "00025", now, time.Minute, true)
+	if !activation.NewStart || !activation.Active {
+		t.Fatalf("expected new active gate, got %+v", activation)
+	}
+	if !sess.SwitchVideoUndersizedIDRPLIScheduled || sess.SwitchVideoUndersizedIDRPLIGeneration != activation.Generation {
+		t.Fatalf("production @switch path did not arm retry PLI: scheduled=%v gen=%d want=%d",
+			sess.SwitchVideoUndersizedIDRPLIScheduled, sess.SwitchVideoUndersizedIDRPLIGeneration, activation.Generation)
+	}
+}

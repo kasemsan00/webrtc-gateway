@@ -112,8 +112,8 @@ func TestH264AccessUnitNormalizerUsesDefaultTimestampStepForFirstAUAfterSwitch(t
 	}
 	firstTimestamp := (*emitted)[0].Packets[0].Timestamp
 	secondTimestamp := (*emitted)[1].Packets[0].Timestamp
-	if got := secondTimestamp - firstTimestamp; got != defaultH264TimestampStep {
-		t.Fatalf("expected first post-switch timestamp step %d, got %d", defaultH264TimestampStep, got)
+	if got := secondTimestamp - firstTimestamp; got != switchH264TimestampStep {
+		t.Fatalf("expected first post-switch timestamp step %d, got %d", switchH264TimestampStep, got)
 	}
 }
 
@@ -159,8 +159,8 @@ func TestH264AccessUnitNormalizerResetForSwitchRequiresFreshParameterSetsAndPres
 	if !withFreshSets.ParameterSetsReady || withFreshSets.Generation != 42 {
 		t.Fatalf("expected fresh parameter sets to be ready in generation 42, got %+v", withFreshSets)
 	}
-	if !withFreshSets.InjectedParameterSets || len(withFreshSets.Packets) != 3 {
-		t.Fatalf("expected first post-switch IDR to lead with SPS/PPS without duplicating in-band sets, got %+v", withFreshSets)
+	if withFreshSets.InjectedParameterSets || len(withFreshSets.Packets) != 3 {
+		t.Fatalf("expected in-band SPS/PPS to pass through without a rewrite, got %+v", withFreshSets)
 	}
 	if withFreshSets.Packets[0].Payload[0]&0x1f != 7 || withFreshSets.Packets[1].Payload[0]&0x1f != 8 ||
 		withFreshSets.Packets[2].Payload[0]&0x1f != 5 {
@@ -198,9 +198,8 @@ func TestH264AccessUnitNormalizerForcePrefixesParameterSetsOnFirstPostSwitchIDR(
 		emitted = append(emitted, au)
 	})
 	n.ResetForSwitch(9)
+	n.SetParameterSets([]byte{0x67, 0x64, 0x00, 0x28}, []byte{0x68, 0xee, 0x3c, 0x80})
 
-	n.Push(h264Packet(10, 90000, false, []byte{0x67, 0x64, 0x00, 0x28}))
-	n.Push(h264Packet(11, 90000, false, []byte{0x68, 0xee, 0x3c, 0x80}))
 	n.Push(h264Packet(12, 90000, true, []byte{0x65, 0xaa}))
 
 	if len(emitted) != 1 {
@@ -208,12 +207,14 @@ func TestH264AccessUnitNormalizerForcePrefixesParameterSetsOnFirstPostSwitchIDR(
 	}
 	got := emitted[0]
 	if !got.IsIDR || !got.InjectedParameterSets || len(got.Packets) != 3 {
-		t.Fatalf("expected first post-switch IDR to lead with SPS/PPS without duplicates, got %+v", got)
+		t.Fatalf("expected first post-switch IDR missing sets to be prefixed, got %+v", got)
 	}
 	if got.Packets[0].Payload[0]&0x1f != 7 || got.Packets[1].Payload[0]&0x1f != 8 || got.Packets[2].Payload[0]&0x1f != 5 {
 		t.Fatalf("unexpected NAL order: %d, %d, %d",
 			got.Packets[0].Payload[0]&0x1f, got.Packets[1].Payload[0]&0x1f, got.Packets[2].Payload[0]&0x1f)
 	}
+
+	n.NumberAccessUnit(&emitted[0])
 
 	n.Push(h264Packet(13, 93000, false, []byte{0x67, 0x64, 0x00, 0x29}))
 	n.Push(h264Packet(14, 93000, false, []byte{0x68, 0xee, 0x3c, 0x81}))
@@ -223,7 +224,53 @@ func TestH264AccessUnitNormalizerForcePrefixesParameterSetsOnFirstPostSwitchIDR(
 	}
 	second := emitted[1]
 	if second.InjectedParameterSets || len(second.Packets) != 3 {
-		t.Fatalf("expected later IDRs to keep in-band sets without a second rewrite, got %+v", second)
+		t.Fatalf("expected later IDRs not to force a second rewrite, got %+v", second)
+	}
+}
+
+func TestH264AccessUnitNormalizerKeepsForcePrefixUntilNumbered(t *testing.T) {
+	var emitted []NormalizedH264AccessUnit
+	n := NewH264AccessUnitNormalizer(H264AccessUnitNormalizerConfig{}, func(au NormalizedH264AccessUnit) {
+		emitted = append(emitted, au)
+	})
+	n.ResetForSwitch(9)
+	n.SetParameterSets([]byte{0x67, 0x64, 0x00, 0x28}, []byte{0x68, 0xee, 0x3c, 0x80})
+
+	n.Push(h264Packet(12, 90000, true, []byte{0x65, 0xaa}))
+	if len(emitted) != 1 || !emitted[0].InjectedParameterSets {
+		t.Fatalf("expected first IDR to be prefixed, got %+v", emitted)
+	}
+
+	n.Push(h264Packet(15, 93000, true, []byte{0x65, 0xbb}))
+	if len(emitted) != 2 {
+		t.Fatalf("expected second IDR, got %d", len(emitted))
+	}
+	if !emitted[1].InjectedParameterSets || len(emitted[1].Packets) != 3 {
+		t.Fatalf("expected gate-rejected first IDR not to burn the switch prefix, got %+v", emitted[1])
+	}
+}
+
+func TestH264AccessUnitNormalizerDoesNotRewriteInBandSetsAfterSwitch(t *testing.T) {
+	var emitted []NormalizedH264AccessUnit
+	n := NewH264AccessUnitNormalizer(H264AccessUnitNormalizerConfig{}, func(au NormalizedH264AccessUnit) {
+		emitted = append(emitted, au)
+	})
+	n.ResetForSwitch(9)
+
+	n.Push(h264Packet(10, 90000, false, []byte{0x67, 0x64, 0x00, 0x28}))
+	n.Push(h264Packet(11, 90000, false, []byte{0x68, 0xee, 0x3c, 0x80}))
+	n.Push(h264Packet(12, 90000, true, []byte{0x65, 0xaa}))
+
+	if len(emitted) != 1 {
+		t.Fatalf("expected one IDR, got %d", len(emitted))
+	}
+	got := emitted[0]
+	if got.InjectedParameterSets || len(got.Packets) != 3 {
+		t.Fatalf("in-band SPS/PPS after switch must not be stripped and re-prefixed, got %+v", got)
+	}
+	if got.Packets[0].Payload[0]&0x1f != 7 || got.Packets[1].Payload[0]&0x1f != 8 || got.Packets[2].Payload[0]&0x1f != 5 {
+		t.Fatalf("unexpected NAL order: %d, %d, %d",
+			got.Packets[0].Payload[0]&0x1f, got.Packets[1].Payload[0]&0x1f, got.Packets[2].Payload[0]&0x1f)
 	}
 }
 

@@ -449,6 +449,9 @@ func (s *Session) ResetMediaState() {
 	s.VideoRTPDisorderContainmentStartedAt = time.Time{}
 	s.VideoRTPDisorderContainmentReason = ""
 	s.VideoRTPDisorderContainmentSummary = VideoRecoverySummary{}
+	s.sipVideoRTPUnixNano.Store(0)
+	s.sipVideoRequireHealthyIDR.Store(false)
+	s.sipVideoHealthyIDR.Store(false)
 	s.SwitchVideoBlackoutStarted = time.Time{}
 	s.SwitchVideoBlackoutUntil = time.Time{}
 	s.SwitchVideoBlackoutMaxWait = time.Time{}
@@ -536,6 +539,43 @@ func (s *Session) RecordKeyframe() (bool, time.Duration, int, int) {
 	s.mu.Unlock()
 
 	return isPLIResponse, responseTime, pliSent, pliResponse
+}
+
+// NoteSIPVideoRTP records that a SIP video RTP packet arrived. The watchdog
+// uses this to distinguish a long GOP from an actual media stall.
+func (s *Session) NoteSIPVideoRTP(now time.Time) {
+	if now.IsZero() {
+		return
+	}
+	s.sipVideoRTPUnixNano.Store(now.UnixNano())
+}
+
+// LastSIPVideoRTPAt returns the last SIP video RTP arrival time.
+func (s *Session) LastSIPVideoRTPAt() time.Time {
+	n := s.sipVideoRTPUnixNano.Load()
+	if n == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, n)
+}
+
+// MarkSIPVideoIDRSize records whether the last delivered SIP→WebRTC IDR was a
+// full GOP. After @switch the watchdog must keep requesting keyframes until one
+// of these lands; RTP flowing alone is not enough (Al8uLPjnbirH still-IDR).
+func (s *Session) MarkSIPVideoIDRSize(packets int) {
+	if packets >= MinSwitchVideoGateIDRPackets {
+		s.sipVideoHealthyIDR.Store(true)
+	}
+}
+
+// HasHealthySIPVideoIDR reports whether rtp-flowing watchdog skips are allowed.
+// Before the first @switch this is true so a long queue GOP is not treated as a
+// stall. After @switch it stays false until a full camera GOP is delivered.
+func (s *Session) HasHealthySIPVideoIDR() bool {
+	if !s.sipVideoRequireHealthyIDR.Load() {
+		return true
+	}
+	return s.sipVideoHealthyIDR.Load()
 }
 
 // GetKeyframeTimes returns last keyframe and last PLI/FIR send time (thread-safe)

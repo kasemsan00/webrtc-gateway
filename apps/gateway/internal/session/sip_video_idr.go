@@ -16,6 +16,9 @@ const (
 	// the cached keyframe is stale. Near @switch that poisons the decoder
 	// just before the agent camera IDR arrives.
 	sipVideoIDRStaleReplayMaxAge = time.Second
+	// Replaying a delivered IDR within this window (vgm4WIlaRByW: 17ms)
+	// resets the n1669 decoder on a frame it just painted.
+	sipVideoIDRFreshReplayMinAge = sipVideoIDRReplayMinInterval
 )
 
 type sipVideoIDRCache struct {
@@ -67,7 +70,7 @@ func (s *Session) RememberSIPVideoIDR(au NormalizedH264AccessUnit, delivered boo
 func (s *Session) RequestSIPVideoIDRReplay(reason string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.canQueueSIPVideoIDRReplayLocked(time.Now()) {
+	if !s.canQueueSIPVideoIDRReplayLocked(time.Now(), reason) {
 		return false
 	}
 	alreadyQueued := s.sipVideoIDRReplayPending
@@ -205,11 +208,16 @@ func (s *Session) markSIPVideoIDRWriteResult(ok bool) {
 	s.wakeSIPVideoIDRReplayLocked()
 }
 
-func (s *Session) canQueueSIPVideoIDRReplayLocked(now time.Time) bool {
+func (s *Session) canQueueSIPVideoIDRReplayLocked(now time.Time, reason string) bool {
 	if s.State == StateEnded || s.sipVideoIDR == nil || len(s.sipVideoIDR.packets) == 0 {
 		return false
 	}
 	if s.shouldSkipSIPVideoIDRReplayLocked(now) {
+		return false
+	}
+	if s.sipVideoIDR.delivered && !s.LastKeyframe.IsZero() &&
+		now.Sub(s.LastKeyframe) < sipVideoIDRFreshReplayMinAge &&
+		reason != "ice-connected" && reason != "renegotiated-ice-connected" {
 		return false
 	}
 	if s.hasPendingSIPVideoIDRWriteLocked() && !s.sipVideoIDR.delivered {

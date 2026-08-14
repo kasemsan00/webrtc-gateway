@@ -88,7 +88,7 @@ func TestRequestSIPVideoIDRReplayThrottlesDeliveredRepeats(t *testing.T) {
 }
 
 func TestStartSwitchVideoGateClearsCachedWaitVideoIDR(t *testing.T) {
-	sess := &Session{ID: "idr-switch", VideoAUNormalizeEnabled: true, SwitchGeneration: 2, LastKeyframe: time.Now()}
+	sess := &Session{ID: "idr-switch", VideoAUNormalizeEnabled: true, SwitchGeneration: 2, LastKeyframe: time.Now().Add(-500 * time.Millisecond)}
 	sess.RememberSIPVideoIDR(testIDRAccessUnit(2, 90000), true)
 	if !sess.RequestSIPVideoIDRReplay("ws-request_keyframe") {
 		t.Fatal("expected same-generation replay before the switch gate starts")
@@ -129,6 +129,22 @@ func TestRequestSIPVideoIDRReplaySkipsOlderGenerationAfterSwitch(t *testing.T) {
 	}
 }
 
+func TestRequestSIPVideoIDRReplaySkipsFreshDeliveredBrowserPLI(t *testing.T) {
+	sess := &Session{ID: "idr-too-fresh", LastKeyframe: time.Now()}
+	sess.RememberSIPVideoIDR(testIDRAccessUnit(0, 2700), true)
+	if sess.RequestSIPVideoIDRReplay("browser-pli") {
+		t.Fatal("must not replay an IDR the decoder just painted")
+	}
+}
+
+func TestRequestSIPVideoIDRReplayAllowsAgedDeliveredCache(t *testing.T) {
+	sess := &Session{ID: "idr-aged", LastKeyframe: time.Now().Add(-500 * time.Millisecond)}
+	sess.RememberSIPVideoIDR(testIDRAccessUnit(0, 2700), true)
+	if !sess.RequestSIPVideoIDRReplay("browser-pli") {
+		t.Fatal("expected replay after the fresh window and before stale skip")
+	}
+}
+
 func TestRequestSIPVideoIDRReplayAllowsFreshDeliveredCache(t *testing.T) {
 	sess := &Session{ID: "idr-fresh", LastKeyframe: time.Now()}
 	sess.RememberSIPVideoIDR(testIDRAccessUnit(0, 90000), true)
@@ -141,7 +157,7 @@ func TestSendBrowserRecoveryToAsteriskReplaysCachedIDRInsteadOfPLI(t *testing.T)
 	sess := newBurstTestSession("idr-fresh-replay")
 	makeSIPVideoRecoveryReady(t, sess)
 	sess.StartVideoRecoveryBurst("unit-test")
-	sess.LastKeyframe = time.Now()
+	sess.LastKeyframe = time.Now().Add(-500 * time.Millisecond)
 	sess.RememberSIPVideoIDR(testIDRAccessUnit(0, 90000), true)
 
 	if action := sess.SendBrowserRecoveryToAsterisk("ws-request_keyframe"); action != "replay" {

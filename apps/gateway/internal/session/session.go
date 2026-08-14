@@ -8,6 +8,7 @@ import (
 	"net"
 	"strings" // Used for SPS/PPS parsing in OnTrack
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pion/rtcp"
@@ -114,68 +115,71 @@ type Session struct {
 	VideoRecoveryBurstStartedAt  time.Time     `json:"-"`
 	VideoRecoveryBurstLastReason string        `json:"-"`
 	// @switch recovery state (SIP->WebRTC): bounded keyframe recovery after agent switch.
-	SwitchVideoRecoveryStartedAt         time.Time            `json:"-"`
-	SwitchVideoRecoveryUntil             time.Time            `json:"-"`
-	SwitchVideoRecoveryFirstKeyframeAt   time.Time            `json:"-"`
-	SwitchVideoRecoveryStableWindow      time.Duration        `json:"-"`
-	SwitchVideoRecoveryOneShotPLI        bool                 `json:"-"`
-	SwitchVideoRecoverySummary           VideoRecoverySummary `json:"-"`
-	SwitchVideoRecoveryRTPBaseline       VideoRecoverySummary `json:"-"`
-	SwitchVideoRecoveryRTPBaselineAt     time.Time            `json:"-"`
-	SwitchVideoRecoveryLastUnstableLog   time.Time            `json:"-"`
-	SwitchVideoRecoveryUnstableCount     int                  `json:"-"`
-	SwitchVideoRTPStabilityEnabled       bool                 `json:"-"`
-	SwitchVideoRTPMinPacketDelta         int                  `json:"-"`
-	SwitchVideoRTPMaxGapDelta            int                  `json:"-"`
-	SwitchVideoRTPMaxMissingDelta        int                  `json:"-"`
-	SwitchVideoRTPMaxOutOfOrderDelta     int                  `json:"-"`
-	SwitchVideoRTPMaxReorderDropDelta    int                  `json:"-"`
-	SwitchVideoRTPMaxReorderTimeoutDelta int                  `json:"-"`
-	SwitchTargetQueue                    string               `json:"-"`
-	SwitchTargetAgent                    string               `json:"-"`
-	SwitchTargetReceivedAt               time.Time            `json:"-"`
-	MediaEpoch                           uint64               `json:"-"`
-	SwitchGeneration                     int                  `json:"-"`
-	SwitchMediaSSRC                      uint32               `json:"-"`
-	SwitchMediaSource                    string               `json:"-"`
-	SwitchDuplicateCount                 int                  `json:"-"`
-	SIPVideoRTPSource                    string               `json:"-"`
-	VideoRTPDisorderMonitorEnabled       bool                 `json:"-"`
-	VideoRTPDisorderMinPacketDelta       int                  `json:"-"`
-	VideoRTPDisorderMaxGapDelta          int                  `json:"-"`
-	VideoRTPDisorderMaxMissingDelta      int                  `json:"-"`
-	VideoRTPDisorderMaxOutOfOrderDelta   int                  `json:"-"`
-	VideoRTPDisorderMaxReorderTimeout    int                  `json:"-"`
-	VideoRTPDisorderConsecutiveWindows   int                  `json:"-"`
-	VideoRTPDisorderLogInterval          time.Duration        `json:"-"`
-	VideoRTPDisorderContainmentEnabled   bool                 `json:"-"`
-	VideoRTPDisorderContainmentDuration  time.Duration        `json:"-"`
-	VideoAUNormalizeEnabled              bool                 `json:"-"`
-	SwitchVideoGateActive                bool                 `json:"-"`
-	SwitchVideoGateReleasing             bool                 `json:"-"`
-	SwitchVideoGateGeneration            int                  `json:"-"`
-	SwitchVideoGateAcceptedGeneration    int                  `json:"-"`
-	SwitchVideoGateStartedAt             time.Time            `json:"-"`
-	SwitchVideoGateStartReason           string               `json:"-"`
-	SwitchVideoGateFeedbackBaseline      int                  `json:"-"`
-	SwitchVideoGateRejectedCount         int                  `json:"-"`
-	SwitchVideoGateLastRejectReason      string               `json:"-"`
-	SwitchVideoGateLastRejectLogAt       time.Time            `json:"-"`
-	SwitchVideoGateLastStallLogAt        time.Time            `json:"-"`
-	SwitchVideoGateLeaseNonce            uint64               `json:"-"`
-	SwitchVideoGateReservation           uint64               `json:"-"`
-	SwitchVideoGateReservedPackets       int                  `json:"-"`
-	SwitchVideoGateReservedSSRC          uint32               `json:"-"`
-	SwitchVideoGateReservedInjection     bool                 `json:"-"`
-	SwitchVideoGateReleasedAt            time.Time            `json:"-"`
-	VideoRTPDisorderLastSummary          VideoRecoverySummary `json:"-"`
-	VideoRTPDisorderLastSummaryAt        time.Time            `json:"-"`
-	VideoRTPDisorderConsecutiveBad       int                  `json:"-"`
-	VideoRTPDisorderLastLogAt            time.Time            `json:"-"`
-	VideoRTPDisorderContainmentUntil     time.Time            `json:"-"`
-	VideoRTPDisorderContainmentStartedAt time.Time            `json:"-"`
-	VideoRTPDisorderContainmentReason    string               `json:"-"`
-	VideoRTPDisorderContainmentSummary   VideoRecoverySummary `json:"-"`
+	SwitchVideoRecoveryStartedAt          time.Time            `json:"-"`
+	SwitchVideoRecoveryUntil              time.Time            `json:"-"`
+	SwitchVideoRecoveryFirstKeyframeAt    time.Time            `json:"-"`
+	SwitchVideoRecoveryStableWindow       time.Duration        `json:"-"`
+	SwitchVideoRecoveryOneShotPLI         bool                 `json:"-"`
+	SwitchVideoRecoverySummary            VideoRecoverySummary `json:"-"`
+	SwitchVideoRecoveryRTPBaseline        VideoRecoverySummary `json:"-"`
+	SwitchVideoRecoveryRTPBaselineAt      time.Time            `json:"-"`
+	SwitchVideoRecoveryLastUnstableLog    time.Time            `json:"-"`
+	SwitchVideoRecoveryUnstableCount      int                  `json:"-"`
+	SwitchVideoRTPStabilityEnabled        bool                 `json:"-"`
+	SwitchVideoRTPMinPacketDelta          int                  `json:"-"`
+	SwitchVideoRTPMaxGapDelta             int                  `json:"-"`
+	SwitchVideoRTPMaxMissingDelta         int                  `json:"-"`
+	SwitchVideoRTPMaxOutOfOrderDelta      int                  `json:"-"`
+	SwitchVideoRTPMaxReorderDropDelta     int                  `json:"-"`
+	SwitchVideoRTPMaxReorderTimeoutDelta  int                  `json:"-"`
+	SwitchTargetQueue                     string               `json:"-"`
+	SwitchTargetAgent                     string               `json:"-"`
+	SwitchTargetReceivedAt                time.Time            `json:"-"`
+	MediaEpoch                            uint64               `json:"-"`
+	SwitchGeneration                      int                  `json:"-"`
+	SwitchMediaSSRC                       uint32               `json:"-"`
+	SwitchMediaSource                     string               `json:"-"`
+	SwitchDuplicateCount                  int                  `json:"-"`
+	SIPVideoRTPSource                     string               `json:"-"`
+	VideoRTPDisorderMonitorEnabled        bool                 `json:"-"`
+	VideoRTPDisorderMinPacketDelta        int                  `json:"-"`
+	VideoRTPDisorderMaxGapDelta           int                  `json:"-"`
+	VideoRTPDisorderMaxMissingDelta       int                  `json:"-"`
+	VideoRTPDisorderMaxOutOfOrderDelta    int                  `json:"-"`
+	VideoRTPDisorderMaxReorderTimeout     int                  `json:"-"`
+	VideoRTPDisorderConsecutiveWindows    int                  `json:"-"`
+	VideoRTPDisorderLogInterval           time.Duration        `json:"-"`
+	VideoRTPDisorderContainmentEnabled    bool                 `json:"-"`
+	VideoRTPDisorderContainmentDuration   time.Duration        `json:"-"`
+	VideoAUNormalizeEnabled               bool                 `json:"-"`
+	SwitchVideoGateActive                 bool                 `json:"-"`
+	SwitchVideoGateReleasing              bool                 `json:"-"`
+	SwitchVideoGateGeneration             int                  `json:"-"`
+	SwitchVideoGateAcceptedGeneration     int                  `json:"-"`
+	SwitchVideoGateStartedAt              time.Time            `json:"-"`
+	SwitchVideoGateStartReason            string               `json:"-"`
+	SwitchVideoGateFeedbackBaseline       int                  `json:"-"`
+	SwitchVideoGateRejectedCount          int                  `json:"-"`
+	SwitchVideoGateLastRejectReason       string               `json:"-"`
+	SwitchVideoGateLastRejectLogAt        time.Time            `json:"-"`
+	SwitchVideoGateLastStallLogAt         time.Time            `json:"-"`
+	SwitchVideoGateLeaseNonce             uint64               `json:"-"`
+	SwitchVideoGateReservation            uint64               `json:"-"`
+	SwitchVideoGateReservedPackets        int                  `json:"-"`
+	SwitchVideoGateReservedSSRC           uint32               `json:"-"`
+	SwitchVideoGateReservedInjection      bool                 `json:"-"`
+	SwitchVideoGateReleasedAt             time.Time            `json:"-"`
+	SwitchVideoUndersizedIDRPLIScheduled  bool                 `json:"-"`
+	SwitchVideoUndersizedIDRPLIGeneration int                  `json:"-"`
+	SwitchVideoGateStillEmitted           bool                 `json:"-"`
+	VideoRTPDisorderLastSummary           VideoRecoverySummary `json:"-"`
+	VideoRTPDisorderLastSummaryAt         time.Time            `json:"-"`
+	VideoRTPDisorderConsecutiveBad        int                  `json:"-"`
+	VideoRTPDisorderLastLogAt             time.Time            `json:"-"`
+	VideoRTPDisorderContainmentUntil      time.Time            `json:"-"`
+	VideoRTPDisorderContainmentStartedAt  time.Time            `json:"-"`
+	VideoRTPDisorderContainmentReason     string               `json:"-"`
+	VideoRTPDisorderContainmentSummary    VideoRecoverySummary `json:"-"`
 	// @switch transition hold (SIP->WebRTC): blackout (default) blocks gate release
 	// until minimum elapsed; preserve is rollback that keeps last frame visible.
 	SwitchVideoTransitionMode        string    `json:"-"`
@@ -264,12 +268,15 @@ type Session struct {
 	RemoteVideoDirection        string                     `json:"-"`
 	MidCallHasActiveVideo       bool                       `json:"-"`
 	// PLI (Picture Loss Indication) tracking
-	PLISent       int       `json:"pliSent"`     // Number of PLIs sent to SIP
-	PLIResponse   int       `json:"pliResponse"` // Number of keyframes received after PLI
-	LastPLISent   time.Time `json:"-"`           // Timestamp of last PLI sent
-	LastKeyframe  time.Time `json:"-"`           // Timestamp of last keyframe received
-	FIRSeq        uint8     `json:"-"`           // FIR sequence number (0-255, wraps around)
-	RTPBufferSize int       `json:"-"`           // RTP/RTCP packet buffer size (from Config.RTP.BufferSize, minimum 1500)
+	PLISent                   int          `json:"pliSent"`
+	PLIResponse               int          `json:"pliResponse"`
+	LastPLISent               time.Time    `json:"-"`
+	LastKeyframe              time.Time    `json:"-"`
+	sipVideoRTPUnixNano       atomic.Int64 `json:"-"`
+	sipVideoRequireHealthyIDR atomic.Bool  `json:"-"`
+	sipVideoHealthyIDR        atomic.Bool  `json:"-"`
+	FIRSeq                    uint8        `json:"-"`
+	RTPBufferSize             int          `json:"-"` // RTP/RTCP packet buffer size (from Config.RTP.BufferSize, minimum 1500)
 	// Video RTP retransmission cache (for WebRTC NACK handling)
 	VideoRTPHistoryPackets [][]byte `json:"-"`
 	VideoRTPHistorySeq     []uint16 `json:"-"`
