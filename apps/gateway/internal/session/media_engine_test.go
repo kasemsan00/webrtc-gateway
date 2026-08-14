@@ -244,3 +244,78 @@ func testCustomMediaEngineAnswersBrowserLikeOffer(t *testing.T, addAudio, addVid
 		t.Fatalf("browser-like offer must be answerable: %v", err)
 	}
 }
+
+func TestPreferWebRTCH264PacketizationModeSkipsAudioOnlyOffer(t *testing.T) {
+	sdp := "v=0\r\n" +
+		"o=- 0 0 IN IP4 127.0.0.1\r\n" +
+		"s=-\r\n" +
+		"t=0 0\r\n" +
+		"m=audio 9 UDP/TLS/RTP/SAVPF 111\r\n" +
+		"a=rtpmap:111 opus/48000/2\r\n" +
+		"a=sendrecv\r\n" +
+		"m=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n" +
+		"a=sctp-port:5000\r\n"
+	if err := PreferWebRTCH264PacketizationMode(nil, sdp, 1); err != nil {
+		t.Fatalf("audio-only offer must not require H264 packetization selection: %v", err)
+	}
+}
+
+func TestPreferWebRTCH264PacketizationModeAnswersAudioOnlyBrowserOffer(t *testing.T) {
+	offerer, err := webrtc.NewPeerConnection(webrtc.Configuration{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer offerer.Close()
+
+	audioTrack, err := webrtc.NewTrackLocalStaticRTP(
+		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus},
+		"audio",
+		"browser-audio",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := offerer.AddTrack(audioTrack); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := offerer.CreateDataChannel("data", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	offer, err := offerer.CreateOffer(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := offerer.SetLocalDescription(offer); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(offer.SDP, "m=video") {
+		t.Fatalf("audio-only offer must omit m=video:\n%s", offer.SDP)
+	}
+
+	answerer := newGatewayH264Answerer(t)
+	defer answerer.Close()
+	if err := answerer.SetRemoteDescription(offer); err != nil {
+		t.Fatal(err)
+	}
+	if err := PreferWebRTCH264PacketizationMode(answerer, offer.SDP, 1); err != nil {
+		t.Fatalf("audio-only offer must skip H264 preference: %v", err)
+	}
+
+	answer, err := answerer.CreateAnswer(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(answer.SDP, "m=video") {
+		t.Fatalf("audio-only answer must omit m=video:\n%s", answer.SDP)
+	}
+	if !strings.Contains(answer.SDP, "m=audio") {
+		t.Fatalf("audio-only answer must keep m=audio:\n%s", answer.SDP)
+	}
+	if err := answerer.SetLocalDescription(answer); err != nil {
+		t.Fatalf("audio-only offer must be answerable: %v", err)
+	}
+	if err := offerer.SetRemoteDescription(answer); err != nil {
+		t.Fatalf("browser must accept the audio-only answer: %v\n%s", err, answer.SDP)
+	}
+}

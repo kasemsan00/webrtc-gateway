@@ -2,7 +2,6 @@ package session
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -17,66 +16,10 @@ import (
 const RENEGOTIATE_ICE_GATHER_TIMEOUT = 3 * time.Second
 const renegotiateVideoOnTrackWatchdog = 3 * time.Second
 
-type renegotiateVideoOfferDiagnostics struct {
-	HasVideoMLine     bool
-	VideoPort         int
-	VideoDirection    string
-	ExpectVideoUplink bool
-}
+type renegotiateVideoOfferDiagnostics = OfferVideoDiagnostics
 
-func analyzeRenegotiateVideoOffer(sdp string) renegotiateVideoOfferDiagnostics {
-	diag := renegotiateVideoOfferDiagnostics{
-		HasVideoMLine:     false,
-		VideoPort:         -1,
-		VideoDirection:    "unspecified",
-		ExpectVideoUplink: false,
-	}
-	if sdp == "" {
-		return diag
-	}
-
-	inVideoSection := false
-	lines := strings.Split(sdp, "\n")
-	for _, raw := range lines {
-		line := strings.TrimSpace(strings.TrimSuffix(raw, "\r"))
-		if line == "" {
-			continue
-		}
-
-		if strings.HasPrefix(line, "m=") {
-			inVideoSection = strings.HasPrefix(line, "m=video ")
-			if inVideoSection {
-				diag.HasVideoMLine = true
-				fields := strings.Fields(line)
-				if len(fields) >= 2 {
-					if port, err := strconv.Atoi(fields[1]); err == nil {
-						diag.VideoPort = port
-					}
-				}
-			}
-			continue
-		}
-
-		if !inVideoSection {
-			continue
-		}
-
-		switch line {
-		case "a=sendrecv":
-			diag.VideoDirection = "sendrecv"
-		case "a=sendonly":
-			diag.VideoDirection = "sendonly"
-		case "a=recvonly":
-			diag.VideoDirection = "recvonly"
-		case "a=inactive":
-			diag.VideoDirection = "inactive"
-		}
-	}
-
-	diag.ExpectVideoUplink = diag.HasVideoMLine && diag.VideoPort != 0 &&
-		(diag.VideoDirection == "sendrecv" || diag.VideoDirection == "sendonly")
-
-	return diag
+func analyzeRenegotiateVideoOffer(sdp string) OfferVideoDiagnostics {
+	return AnalyzeOfferVideo(sdp)
 }
 
 func waitForGatheringComplete(gatherComplete <-chan struct{}, timeout time.Duration) bool {

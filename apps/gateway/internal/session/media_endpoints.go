@@ -430,6 +430,7 @@ func (s *Session) ResetMediaState() {
 	s.SwitchVideoRecoveryRTPBaselineAt = time.Time{}
 	s.SwitchVideoRecoveryLastUnstableLog = time.Time{}
 	s.SwitchVideoRecoveryUnstableCount = 0
+	s.sipOfferIncludeVideo = nil
 	s.SwitchTargetQueue = ""
 	s.SwitchTargetAgent = ""
 	s.SwitchTargetReceivedAt = time.Time{}

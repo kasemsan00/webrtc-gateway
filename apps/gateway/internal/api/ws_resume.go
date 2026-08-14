@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"strconv"
-	"strings"
 	"time"
 
 	"k2-gateway/internal/session"
@@ -16,66 +14,14 @@ const (
 	resumeSlowLogThreshold = 3 * time.Second
 )
 
-type resumeVideoOfferDiagnostics struct {
-	HasVideoMLine  bool
-	VideoPort      int
-	VideoDirection string
-}
+type resumeVideoOfferDiagnostics = session.OfferVideoDiagnostics
 
-func analyzeResumeOfferVideoSDP(sdp string) resumeVideoOfferDiagnostics {
-	diag := resumeVideoOfferDiagnostics{
-		HasVideoMLine:  false,
-		VideoPort:      -1,
-		VideoDirection: "unspecified",
-	}
-	if sdp == "" {
-		return diag
-	}
-
-	inVideoSection := false
-	lines := strings.Split(sdp, "\n")
-	for _, raw := range lines {
-		line := strings.TrimSpace(strings.TrimSuffix(raw, "\r"))
-		if line == "" {
-			continue
-		}
-
-		if strings.HasPrefix(line, "m=") {
-			inVideoSection = strings.HasPrefix(line, "m=video ")
-			if inVideoSection {
-				diag.HasVideoMLine = true
-				fields := strings.Fields(line)
-				if len(fields) >= 2 {
-					if port, err := strconv.Atoi(fields[1]); err == nil {
-						diag.VideoPort = port
-					}
-				}
-			}
-			continue
-		}
-
-		if !inVideoSection {
-			continue
-		}
-
-		switch line {
-		case "a=sendrecv":
-			diag.VideoDirection = "sendrecv"
-		case "a=sendonly":
-			diag.VideoDirection = "sendonly"
-		case "a=recvonly":
-			diag.VideoDirection = "recvonly"
-		case "a=inactive":
-			diag.VideoDirection = "inactive"
-		}
-	}
-
-	return diag
+func analyzeResumeOfferVideoSDP(sdp string) session.OfferVideoDiagnostics {
+	return session.AnalyzeOfferVideo(sdp)
 }
 
 func hasActiveVideoMedia(sdp string) bool {
-	diag := analyzeResumeOfferVideoSDP(sdp)
-	return diag.HasVideoMLine && diag.VideoPort > 0 && diag.VideoDirection != "inactive"
+	return session.AnalyzeOfferVideo(sdp).HasActiveVideo()
 }
 
 // handleWSResume handles WebSocket resume messages for reconnecting after network change

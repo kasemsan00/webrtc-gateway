@@ -176,7 +176,11 @@ func h264PacketizationModeFromFMTP(fmtpLine string) uint8 {
 // first compatible codec/PT from the WebRTC offer for the RFC 6184 mode
 // negotiated on the SIP leg. This must run after SetRemoteDescription and
 // before CreateAnswer so the answer preserves the offerer's payload mapping.
+// Audio-only offers have no video m-line and must not fail H264 selection.
 func PreferWebRTCH264PacketizationMode(pc *webrtc.PeerConnection, offerSDP string, mode uint8) error {
+	if !AnalyzeOfferVideo(offerSDP).HasVideoMLine {
+		return nil
+	}
 	codec, err := offeredH264CodecForPacketizationMode(offerSDP, mode)
 	if err != nil {
 		return err

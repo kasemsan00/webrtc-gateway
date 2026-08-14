@@ -99,6 +99,54 @@ func TestCreateSDPAnswerForInvite_PreservesOfferedPacketizationMode1(t *testing.
 	}
 }
 
+func TestCreateSDPOffer_OmitsVideoWhenFlagFalse(t *testing.T) {
+	s := &Server{
+		config:        config.SIPConfig{},
+		publicAddress: "203.0.113.10",
+	}
+	sess := &session.Session{ID: "test-audio-only"}
+	sess.SetSIPOfferIncludeVideo(false)
+
+	offer := string(s.createSDPOffer(12000, sess))
+	if strings.Contains(offer, "m=video") {
+		t.Fatalf("audio-only SIP offer must omit m=video\nSDP:\n%s", offer)
+	}
+	if got := strings.Count(offer, "a=rtcp-mux"); got != 1 {
+		t.Fatalf("expected 1 rtcp-mux line (audio only), got %d\nSDP:\n%s", got, offer)
+	}
+	if !strings.Contains(offer, "m=audio 12000 RTP/AVP 111 101") {
+		t.Fatalf("expected audio m-line in audio-only SDP\nSDP:\n%s", offer)
+	}
+}
+
+func TestCreateSDPAnswerForInvite_KeepsVideoWhenInviteHasVideo(t *testing.T) {
+	s := &Server{config: config.SIPConfig{}, publicAddress: "203.0.113.10"}
+	sess := &session.Session{ID: "test-inbound-video"}
+	invite := []byte("v=0\r\nm=audio 4000 RTP/AVP 107\r\na=rtpmap:107 opus/48000/2\r\nm=video 4002 RTP/AVP 96\r\na=rtpmap:96 H264/90000\r\na=fmtp:96 profile-level-id=42E01F;packetization-mode=1\r\na=sendrecv\r\n")
+
+	answer := string(s.createSDPAnswerForInvite(12000, sess, invite))
+	if !strings.Contains(answer, "m=video 12002 RTP/AVP 96") {
+		t.Fatalf("inbound video INVITE must keep m=video in the answer\nSDP:\n%s", answer)
+	}
+	if !sess.SIPOfferIncludeVideo() {
+		t.Fatalf("session must keep SIPOfferIncludeVideo after a video INVITE")
+	}
+}
+
+func TestCreateSDPAnswerForInvite_OmitsVideoWhenInviteIsAudioOnly(t *testing.T) {
+	s := &Server{config: config.SIPConfig{}, publicAddress: "203.0.113.10"}
+	sess := &session.Session{ID: "test-inbound-audio"}
+	invite := []byte("v=0\r\nm=audio 4000 RTP/AVP 107\r\na=rtpmap:107 opus/48000/2\r\na=sendrecv\r\n")
+
+	answer := string(s.createSDPAnswerForInvite(12000, sess, invite))
+	if strings.Contains(answer, "m=video") {
+		t.Fatalf("audio-only INVITE must not get m=video in the answer\nSDP:\n%s", answer)
+	}
+	if sess.SIPOfferIncludeVideo() {
+		t.Fatalf("audio-only INVITE must clear SIPOfferIncludeVideo")
+	}
+}
+
 func TestSDPFmtpHasParameter(t *testing.T) {
 	tests := []struct {
 		line string

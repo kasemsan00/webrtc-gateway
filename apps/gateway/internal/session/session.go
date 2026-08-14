@@ -267,6 +267,10 @@ type Session struct {
 	RemoteAudioDirection        string                     `json:"-"`
 	RemoteVideoDirection        string                     `json:"-"`
 	MidCallHasActiveVideo       bool                       `json:"-"`
+	// sipOfferIncludeVideo is nil until explicitly set. Nil defaults to true so
+	// existing callers that build SIP SDP without analyzing the WebRTC offer
+	// keep advertising video.
+	sipOfferIncludeVideo *bool
 	// PLI (Picture Loss Indication) tracking
 	PLISent                   int          `json:"pliSent"`
 	PLIResponse               int          `json:"pliResponse"`

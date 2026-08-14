@@ -6,6 +6,15 @@ import (
 	"time"
 )
 
+func TestShouldPrimeVideoForSIPOffer_SkipsWhenNoUplink(t *testing.T) {
+	if ShouldPrimeVideoForSIPOffer("v=0\r\nm=video 9 RTP/AVP 96\r\na=recvonly\r\n") {
+		t.Fatalf("recvonly must skip PrimeWebRTCVideoForSIPOffer")
+	}
+	if ShouldPrimeVideoForSIPOffer("v=0\r\nm=audio 9 RTP/AVP 111\r\na=sendrecv\r\n") {
+		t.Fatalf("audio-only must skip PrimeWebRTCVideoForSIPOffer")
+	}
+}
+
 func TestPrimeWebRTCVideoForSIPOffer_ReturnsReadyWhenSPSPPSCached(t *testing.T) {
 	sess := &Session{
 		ID:        "prime-ready",

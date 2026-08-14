@@ -72,27 +72,30 @@ func (s *Server) createSDPOffer(rtpPort int, sess *session.Session) []byte {
 	// - Some endpoints are strict about profile-level-id matching the actual SPS.
 	// - Android can send very small SPS/PPS early (often inside STAP-A) that indicate a different level
 	//   than our previous hardcoded profile-level-id. Mismatch can lead to black screen.
+	includeVideo := sess.SIPOfferIncludeVideo()
 	defaultProfileLevelID := "42E01F"
 	videoProfileLevelID := defaultProfileLevelID
 	videoFmtp := fmt.Sprintf("a=fmtp:96 profile-level-id=%s;packetization-mode=1", videoProfileLevelID)
-	if sps, pps, ok := sess.GetCachedSPSPPS(); ok {
-		// Derive profile-level-id from SPS if possible.
-		// SPS layout: [NAL header][profile_idc][constraints][level_idc]...
-		derived := ""
-		if len(sps) >= 4 {
-			derived = fmt.Sprintf("%02X%02X%02X", sps[1], sps[2], sps[3])
-			if strings.HasPrefix(strings.ToUpper(derived), "42E0") {
-				videoProfileLevelID = derived
-			} else if derived != "" {
-				fmt.Printf("[%s] ⚠ Ignoring derived non-baseline profile-level-id=%s, keeping %s\n", sess.ID, derived, defaultProfileLevelID)
+	if includeVideo {
+		if sps, pps, ok := sess.GetCachedSPSPPS(); ok {
+			// Derive profile-level-id from SPS if possible.
+			// SPS layout: [NAL header][profile_idc][constraints][level_idc]...
+			derived := ""
+			if len(sps) >= 4 {
+				derived = fmt.Sprintf("%02X%02X%02X", sps[1], sps[2], sps[3])
+				if strings.HasPrefix(strings.ToUpper(derived), "42E0") {
+					videoProfileLevelID = derived
+				} else if derived != "" {
+					fmt.Printf("[%s] ⚠ Ignoring derived non-baseline profile-level-id=%s, keeping %s\n", sess.ID, derived, defaultProfileLevelID)
+				}
 			}
-		}
 
-		// Base64 encode SPS and PPS for SDP
-		b64sps := base64.StdEncoding.EncodeToString(sps)
-		b64pps := base64.StdEncoding.EncodeToString(pps)
-		videoFmtp = fmt.Sprintf("a=fmtp:96 profile-level-id=%s;packetization-mode=1;sprop-parameter-sets=%s,%s", videoProfileLevelID, b64sps, b64pps)
-		fmt.Printf("[%s] 🎬 Including sprop-parameter-sets in SDP (SPS: %d bytes, PPS: %d bytes)\n", sess.ID, len(sps), len(pps))
+			// Base64 encode SPS and PPS for SDP
+			b64sps := base64.StdEncoding.EncodeToString(sps)
+			b64pps := base64.StdEncoding.EncodeToString(pps)
+			videoFmtp = fmt.Sprintf("a=fmtp:96 profile-level-id=%s;packetization-mode=1;sprop-parameter-sets=%s,%s", videoProfileLevelID, b64sps, b64pps)
+			fmt.Printf("[%s] 🎬 Including sprop-parameter-sets in SDP (SPS: %d bytes, PPS: %d bytes)\n", sess.ID, len(sps), len(pps))
+		}
 	}
 
 	// Get username for SDP origin field (o=) from session auth context
@@ -119,16 +122,19 @@ a=fmtp:101 0-16
 a=ptime:20
 a=rtcp-mux
 a=sendrecv
-m=video %d %s 96
+`, sdpUsername, sessionID, sessionID, s.publicAddress,
+		s.publicAddress,
+		rtpPort, audioProfile,
+		opusPT, opusPT, opusPT)
+
+	if includeVideo {
+		sdp += fmt.Sprintf(`m=video %d %s 96
 a=rtpmap:96 H264/90000
 %s
 a=rtcp-mux
 %sa=sendrecv
-`, sdpUsername, sessionID, sessionID, s.publicAddress,
-		s.publicAddress,
-		rtpPort, audioProfile,
-		opusPT, opusPT, opusPT,
-		videoPort, videoProfile, videoFmtp, rtcpFbLines)
+`, videoPort, videoProfile, videoFmtp, rtcpFbLines)
+	}
 
 	profileNote := "AVP"
 	if s.config.AudioUseAVPF || s.config.VideoUseAVPF {
@@ -142,7 +148,7 @@ a=rtcp-mux
 		profileNote = fmt.Sprintf("AVPF (%s)", strings.Join(profiles, ", "))
 	}
 	fmt.Printf("=== SDP Offer to Asterisk (Plain RTP, no SRTP, Opus PT=%d, Profile=%s) ===\n%s\n=============================\n", opusPT, profileNote, sdp)
-	if s.config.VideoUseAVPF {
+	if includeVideo && s.config.VideoUseAVPF {
 		fmt.Printf("📋 AVPF SDP Details: Profile=%s, RTCP Feedback: rtcp-fb:* ccm fir (matching Linphone Mobile)\n", videoProfile)
 	}
 	return []byte(sdp)
@@ -156,6 +162,7 @@ func (s *Server) createSDPAnswerForInvite(rtpPort int, sess *session.Session, in
 	audioRtcpMux := false
 	videoRtcpMux := false
 	videoPacketizationMode := sipVideoPacketizationMode(inviteSDP) == 1
+	sess.SetSIPOfferIncludeVideo(session.AnalyzeOfferVideo(string(inviteSDP)).HasVideoMLine)
 
 	if len(inviteSDP) > 0 {
 		currentMedia := ""

@@ -148,9 +148,16 @@ func (s *Server) MakeCall(destination, from string, sess *session.Session) error
 		}
 	}()
 
-	// Actively prime the WebRTC encoder before SIP INVITE so the outbound SDP
-	// can include H.264 sprop-parameter-sets on cold first calls.
-	sess.PrimeWebRTCVideoForSIPOffer(ctx, 5*time.Second)
+	remoteSDP := webrtcRemoteSDP(sess)
+	includeVideo := session.ShouldPrimeVideoForSIPOffer(remoteSDP)
+	sess.SetSIPOfferIncludeVideo(includeVideo)
+	if includeVideo {
+		// Actively prime the WebRTC encoder before SIP INVITE so the outbound SDP
+		// can include H.264 sprop-parameter-sets on cold first calls.
+		sess.PrimeWebRTCVideoForSIPOffer(ctx, 5*time.Second)
+	} else {
+		fmt.Printf("[%s] 📈 video_prime_skip reason=no-video-uplink\n", sess.ID)
+	}
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -1684,4 +1691,15 @@ func createCancelRequestFromInvite(inviteReq *sip.Request) (*sip.Request, error)
 	cancelReq.SetDestination(inviteReq.Destination())
 	cancelReq.Laddr = inviteReq.Laddr
 	return cancelReq, nil
+}
+
+func webrtcRemoteSDP(sess *session.Session) string {
+	if sess == nil || sess.PeerConnection == nil {
+		return ""
+	}
+	desc := sess.PeerConnection.RemoteDescription()
+	if desc == nil {
+		return ""
+	}
+	return desc.SDP
 }
