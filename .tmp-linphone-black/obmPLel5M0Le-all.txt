@@ -1,0 +1,322 @@
+2026-08-13 14:32:45.205 [obmPLel5M0Le] Created new session
+2026-08-13 14:32:45.211 [obmPLel5M0Le] 🎬 WebRTC H264 answer restricted to packetization-mode=1 (SIP leg)
+2026-08-13 14:32:45.211 [obmPLel5M0Le] ICE Connection State: checking
+2026-08-13 14:32:45.212 [obmPLel5M0Le] 🧊 ICE Gathering State: gathering
+2026-08-13 14:32:45.212 [obmPLel5M0Le] 🧊 ICE Candidate: type=host address=192.168.80.3:47381 protocol=udp count=1 elapsed=6.746814ms
+2026-08-13 14:32:45.214 [obmPLel5M0Le] 🧊 ICE Candidate: type=srflx address=203.151.21.121:60716 protocol=udp count=2 elapsed=9.344764ms
+2026-08-13 14:32:45.216 [obmPLel5M0Le] 🧊 ICE Candidate: type=relay address=203.150.245.38:43709 protocol=udp count=3 elapsed=10.404851ms
+2026-08-13 14:32:45.229 [obmPLel5M0Le] 🧊 ICE Gathering State: complete
+2026-08-13 14:32:45.229 [obmPLel5M0Le] 🧊 ICE Candidate gathering complete
+2026-08-13 14:32:45.422 [obmPLel5M0Le] ICE Connection State: connected
+2026-08-13 14:32:45.422 [obmPLel5M0Le] 🧊 ICE diagnostics trigger=connected pair=candidate:JX++4F2ju0uTVLc6Y+3CUojLAPmIQQNz-candidate:aAd++ZPwn5Tuov3ckXX6FyPyVGk7eXH/ state=succeeded relay=false gathering=complete local=srflx/udp/203.151.21.121:60716 remote=srflx/udp/14.207.37.152:64019
+2026-08-13 14:32:45.422 [obmPLel5M0Le] 🧊 Selected Candidate Pair:
+2026-08-13 14:32:45.422 [obmPLel5M0Le]   Local:  type=srflx address=203.151.21.121:60716 protocol=udp
+2026-08-13 14:32:45.422 [obmPLel5M0Le]   Remote: type=srflx address=14.207.37.152:64019 protocol=udp
+2026-08-13 14:32:45.422 [obmPLel5M0Le] ✅ ICE connected - starting initial call recovery burst (call state=connecting)
+2026-08-13 14:32:45.422 [obmPLel5M0Le] 📈 video_recovery_window_start reason=initial-call until=2026-08-13T14:32:53.422708035Z
+2026-08-13 14:32:45.422 [obmPLel5M0Le] 📈 recovery_policy interval=1s stale=4s firStale=7s
+2026-08-13 14:32:45.422 [obmPLel5M0Le] 🚀 ICE Connected - Sending conservative FIR + PLI startup recovery
+2026/08/13 14:32:45.610272 [obmPLel5M0Le] 📡 WS call-progress type=state state=connecting reason=ws-call-ack
+2026/08/13 14:32:45.610435 [obmPLel5M0Le] 🧊 Remote ICE candidate added type=host count=1 elapsed=404.863474ms
+2026/08/13 14:32:45.610551 [obmPLel5M0Le] 🧊 Remote ICE candidate added type=host count=2 elapsed=404.980887ms
+2026-08-13 14:32:45.610 [obmPLel5M0Le] 🔄 Media state reset (Audio + Video) for new call2026/08/13 14:32:45.610645 [obmPLel5M0Le] 🧊 Remote ICE candidate added type=host count=3 elapsed=405.073947ms
+2026/08/13 14:32:45.610767 [obmPLel5M0Le] 🧊 Remote ICE candidate added type=host count=4 elapsed=405.196616ms
+2026-08-13 14:32:45.610 [obmPLel5M0Le] 🔄 RTCP fallback window enabled (call-start) until 2026-08-13T14:32:49.610524732Z
+2026-08-13 14:32:45.610 [obmPLel5M0Le] 📞 Audio RTP listener started on port: 200002026/08/13 14:32:45.610888 [obmPLel5M0Le] 🧊 Remote ICE candidate added type=host count=5 elapsed=405.316658ms
+2026-08-13 14:32:45.610 [obmPLel5M0Le] 📞 Audio RTCP listener started on port: 20001
+2026-08-13 14:32:45.610 [obmPLel5M0Le] 📞 Video RTP listener started on port: 20002
+2026-08-13 14:32:45.611 [obmPLel5M0Le] 📞 Video RTCP listener started on port: 20003
+2026-08-13 14:32:45.611 [obmPLel5M0Le] media_forward_ready
+2026-08-13 14:32:45.611 [obmPLel5M0Le] 📈 video_prime_start timeout=5s
+2026-08-13 14:32:45.611 2026/08/13 14:32:45.610996 [obmPLel5M0Le] 🧊 Remote ICE candidate added type=host count=6 elapsed=405.4253ms
+[obmPLel5M0Le] 📨 Audio RTCP handler started (dedicated port for non-muxed RTCP)
+2026-08-13 14:32:45.611 [obmPLel5M0Le] 🔄 Starting periodic PLI sender for fast video start
+2026/08/13 14:32:45.611283 [obmPLel5M0Le] 🧊 Remote ICE candidate added type=host count=7 elapsed=405.711923ms
+2026-08-13 14:32:45.611 [obmPLel5M0Le] 📨 Video RTCP handler started (dedicated port for non-muxed RTCP)
+2026-08-13 14:32:45.611 [obmPLel5M0Le] Audio RTP handler started, AudioTrack is nil: false
+2026-08-13 14:32:45.611 [obmPLel5M0Le] Video RTP handler started, VideoTrack is nil: false
+2026/08/13 14:32:45.611501 [obmPLel5M0Le] 🧊 Remote ICE candidate added type=host count=8 elapsed=405.930003ms
+2026/08/13 14:32:45.611643 [obmPLel5M0Le] 🧊 Remote ICE candidate added type=host count=9 elapsed=406.072522ms
+2026/08/13 14:32:45.611757 [obmPLel5M0Le] 🧊 Remote ICE candidate added type=srflx count=10 elapsed=406.186589ms
+2026/08/13 14:32:45.611859 [obmPLel5M0Le] 🧊 Remote ICE candidate added type=srflx count=11 elapsed=406.288416ms
+2026/08/13 14:32:45.611956 [obmPLel5M0Le] 🧊 Remote ICE candidate added type=srflx count=12 elapsed=406.385105ms
+2026/08/13 14:32:45.612076 [obmPLel5M0Le] 🧊 Remote ICE candidate added type=srflx count=13 elapsed=406.505623ms
+2026/08/13 14:32:45.612175 [obmPLel5M0Le] 🧊 Remote ICE candidate added type=srflx count=14 elapsed=406.604558ms
+2026/08/13 14:32:45.612261 [obmPLel5M0Le] 🧊 Remote ICE candidate added type=srflx count=15 elapsed=406.690702ms
+2026/08/13 14:32:45.612360 [obmPLel5M0Le] 🧊 Remote ICE candidate added type=srflx count=16 elapsed=406.789074ms
+2026/08/13 14:32:45.612474 [obmPLel5M0Le] 🧊 Remote ICE candidate added type=srflx count=17 elapsed=406.903083ms
+2026/08/13 14:32:45.612572 [obmPLel5M0Le] 🧊 Remote ICE candidate added type=srflx count=18 elapsed=407.001432ms
+2026/08/13 14:32:45.612674 [obmPLel5M0Le] 🧊 Remote ICE candidate added type=srflx count=19 elapsed=407.103073ms
+2026/08/13 14:32:45.612775 [obmPLel5M0Le] 🧊 Remote ICE candidate added type=srflx count=20 elapsed=407.203857ms
+2026/08/13 14:32:45.612892 [obmPLel5M0Le] 🧊 Remote ICE candidate added type=srflx count=21 elapsed=407.321248ms
+2026/08/13 14:32:45.612995 [obmPLel5M0Le] 🧊 Remote ICE candidate added type=relay count=22 elapsed=407.424029ms
+2026/08/13 14:32:45.613091 [obmPLel5M0Le] 🧊 Remote ICE candidate added type=relay count=23 elapsed=407.520418ms
+2026/08/13 14:32:45.613187 [obmPLel5M0Le] 🧊 Remote ICE candidate added type=relay count=24 elapsed=407.616565ms
+2026/08/13 14:32:45.613309 [obmPLel5M0Le] 🧊 Remote ICE candidate added type=relay count=25 elapsed=407.738058ms
+2026/08/13 14:32:45.613404 [obmPLel5M0Le] 🧊 Remote ICE candidate added type=relay count=26 elapsed=407.833351ms
+2026/08/13 14:32:45.613496 [obmPLel5M0Le] 🧊 Remote ICE candidate added type=relay count=27 elapsed=407.925523ms
+2026-08-13 14:32:46.113 [obmPLel5M0Le] 🎬 OnTrack: kind=video mime=video/H264 pt=103 ssrc=3382540916 clockRate=90000 fmtp="level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f"
+2026-08-13 14:32:46.113 [obmPLel5M0Le] 🎬 WebRTC video codec details: video/H264 (fmtp: level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f)
+2026-08-13 14:32:46.113 [obmPLel5M0Le] 📦 STAP-A detected in packet #1 (936 bytes) - will de-aggregate
+2026-08-13 14:32:46.113 [obmPLel5M0Le] 🔍 WebRTC Video Packet #1: NAL Type=24 (STAP-A), NRI=3, Size=936 bytes
+2026-08-13 14:32:46.113 [obmPLel5M0Le] 💾 Cached SPS from STAP-A (13 bytes)
+2026-08-13 14:32:46.113 [obmPLel5M0Le] 💾 Cached PPS from STAP-A (4 bytes)
+2026-08-13 14:32:46.113 [obmPLel5M0Le] 🔑 KEYFRAME (STAP-A IDR) held in video packet #1 - Asterisk endpoint not set yet
+2026-08-13 14:32:46.113 [obmPLel5M0Le] 🚀 Starting video forwarding to Asterisk (SSRC=3140363931) - requesting keyframes from browser
+2026-08-13 14:32:46.120 [obmPLel5M0Le] 📦 STAP-A detected in packet #2 (22 bytes) - will de-aggregate
+2026-08-13 14:32:46.120 [obmPLel5M0Le] 🔍 WebRTC Video Packet #2: NAL Type=24 (STAP-A), NRI=3, Size=22 bytes
+2026-08-13 14:32:46.120 [obmPLel5M0Le] 🔍 WebRTC Video Packet #3: NAL Type=28 (FU-A), NRI=3, Size=766 bytes
+2026-08-13 14:32:46.130 [obmPLel5M0Le] 🔍 WebRTC Video Packet #4: NAL Type=28 (FU-A), NRI=3, Size=766 bytes
+2026-08-13 14:32:46.140 [obmPLel5M0Le] 🔍 WebRTC Video Packet #8: NAL Type=1 (P-slice), NRI=3, Size=77 bytes
+2026-08-13 14:32:46.161 [obmPLel5M0Le] 📈 video_prime_spspps_ready source=webrtc kicks=2 sps=13 pps=4
+2026-08-13 14:32:46.161 [obmPLel5M0Le] ⚠ Ignoring derived non-baseline profile-level-id=42C01E, keeping 42E01F
+2026-08-13 14:32:46.161 [obmPLel5M0Le] 🎬 Including sprop-parameter-sets in SDP (SPS: 13 bytes, PPS: 4 bytes)
+2026-08-13 14:32:46.168 [obmPLel5M0Le] Making outbound call to 14131
+2026-08-13 14:32:46.169 [obmPLel5M0Le] Received SIP response: 407 Proxy Authentication Required
+2026-08-13 14:32:46.169 [obmPLel5M0Le] Authentication required for INVITE
+2026-08-13 14:32:46.169 [obmPLel5M0Le] Creating authenticated INVITE request
+2026-08-13 14:32:46.169 [obmPLel5M0Le] Using credentials - Username: 0000178661765, Password length: 20
+2026-08-13 14:32:46.170 [obmPLel5M0Le] Request URI: sip:14131@sipclient.ttrs.or.th
+2026-08-13 14:32:46.170 [obmPLel5M0Le] Auth request body length: 460
+2026-08-13 14:32:46.170 [obmPLel5M0Le] Content-Type headers count: 1
+2026-08-13 14:32:46.170 [obmPLel5M0Le] Sending authenticated INVITE with new Via/CSeq
+2026-08-13 14:32:46.172 [obmPLel5M0Le] 🔍 WebRTC Video Packet #26: NAL Type=1 (P-slice), NRI=3, Size=18 bytes
+2026-08-13 14:32:46.183 [obmPLel5M0Le] 🎬 OnTrack: kind=audio mime=audio/opus pt=111 ssrc=1087052286 clockRate=48000 fmtp="minptime=10;useinbandfec=1"
+2026-08-13 14:32:46.183 [obmPLel5M0Le] 🎵 Audio packet #1: PT=111, payload=32 bytes
+2026-08-13 14:32:46.183 [obmPLel5M0Le] ⚠️ Cannot forward audio: Asterisk endpoint not set yet
+2026-08-13 14:32:46.186 [obmPLel5M0Le] 🎵 Audio packet #2: PT=111, payload=34 bytes
+2026-08-13 14:32:46.205 [obmPLel5M0Le] 🎵 Audio packet #3: PT=111, payload=35 bytes
+2026-08-13 14:32:46.229 [obmPLel5M0Le] 🎵 Audio packet #4: PT=111, payload=36 bytes
+2026-08-13 14:32:46.251 [obmPLel5M0Le] 🔍 WebRTC Video Packet #38: NAL Type=1 (P-slice), NRI=3, Size=16 bytes
+2026-08-13 14:32:46.251 [obmPLel5M0Le] 🎵 Audio packet #5: PT=111, payload=36 bytes
+2026-08-13 14:32:46.251 [obmPLel5M0Le] 🔍 WebRTC Video Packet #39: NAL Type=1 (P-slice), NRI=3, Size=21 bytes
+2026-08-13 14:32:46.272 [obmPLel5M0Le] 🔍 WebRTC Video Packet #40: NAL Type=1 (P-slice), NRI=3, Size=13 bytes
+2026-08-13 14:32:46.305 [obmPLel5M0Le] 🔍 WebRTC Video Packet #41: NAL Type=1 (P-slice), NRI=3, Size=9 bytes
+2026-08-13 14:32:46.343 [obmPLel5M0Le] 🔍 WebRTC Video Packet #42: NAL Type=1 (P-slice), NRI=3, Size=9 bytes
+2026-08-13 14:32:46.376 [obmPLel5M0Le] 🔍 WebRTC Video Packet #43: NAL Type=1 (P-slice), NRI=3, Size=9 bytes
+2026-08-13 14:32:46.383 [obmPLel5M0Le] Auth INVITE response: 200 OK
+2026-08-13 14:32:46.383 [obmPLel5M0Le] SIP Dialog state set - FromTag: 5pbE0kllU2aJdDqp, ToTag: as2426bc6d, Domain: sipclient.ttrs.or.th, RouteSet: [<sip:203.150.245.39;transport=tcp;r2=on;lr=on;did=989.a65;rtp=bridge> <sip:203.150.245.39;r2=on;lr=on;did=989.a65;rtp=bridge>]
+2026-08-13 14:32:46.383 [obmPLel5M0Le] Dialog state captured - FromTag: 5pbE0kllU2aJdDqp, ToTag: as2426bc6d, Contact: <sip:614131@203.150.245.41:5060>, RouteSet: [<sip:203.150.245.39;transport=tcp;r2=on;lr=on;did=989.a65;rtp=bridge> <sip:203.150.245.39;r2=on;lr=on;did=989.a65;rtp=bridge>]
+2026/08/13 14:32:46.384049 [obmPLel5M0Le] 📡 WS call-progress type=state state=active reason=session-state
+2026-08-13 14:32:46.385 [obmPLel5M0Le] Asterisk endpoints set - Audio: 203.150.245.39:25830, Video: 203.150.245.39:25860
+2026-08-13 14:32:46.385 [obmPLel5M0Le] 📈 uplink_keyframe_kick reason=sip-video-dest-ready
+2026-08-13 14:32:46.385 [obmPLel5M0Le] ✅ Asterisk RTP endpoints configured - Audio: 203.150.245.39:25830, Video: 203.150.245.39:25860
+2026-08-13 14:32:46.385 [obmPLel5M0Le] 📈 video_recovery_window_start reason=sip-200-ok until=2026-08-13T14:32:54.384171705Z
+2026-08-13 14:32:46.385 [obmPLel5M0Le] 📈 recovery_policy interval=1s stale=4s firStale=7s
+2026-08-13 14:32:46.385 [obmPLel5M0Le] Call answered (authenticated)!
+2026/08/13 14:32:46.406463 [obmPLel5M0Le] 🎤 Translation enabled via WS: outbound ko → th (voice: th-TH-PremwadeeNeural), inbound th → ko (voice: ko-KR-SunHiNeural)
+2026-08-13 14:32:46.406 [obmPLel5M0Le] 🎤 Translation enabled: outbound ko → th (voice: th-TH-PremwadeeNeural), inbound th → ko (voice: ko-KR-SunHiNeural)
+2026-08-13 14:32:46.408 [obmPLel5M0Le] 🔍 WebRTC Video Packet #44: NAL Type=1 (P-slice), NRI=3, Size=9 bytes
+2026-08-13 14:32:46.458 [obmPLel5M0Le] 🔍 WebRTC Video Packet #45: NAL Type=1 (P-slice), NRI=3, Size=9 bytes
+2026-08-13 14:32:46.482 [obmPLel5M0Le] 🔍 WebRTC Video Packet #46: NAL Type=1 (P-slice), NRI=3, Size=9 bytes
+2026-08-13 14:32:46.509 [obmPLel5M0Le] 🔍 WebRTC Video Packet #47: NAL Type=1 (P-slice), NRI=3, Size=11 bytes
+2026-08-13 14:32:46.554 [obmPLel5M0Le] 🔍 WebRTC Video Packet #49: NAL Type=24 (STAP-A), NRI=3, Size=22 bytes
+2026-08-13 14:32:46.554 [obmPLel5M0Le] 📤 De-aggregated STAP-A NAL #1 type=7 (Seq=47408, Size=25, Marker=false)
+2026-08-13 14:32:46.554 [obmPLel5M0Le] 📤 De-aggregated STAP-A NAL #2 type=8 (Seq=47409, Size=16, Marker=false)
+2026-08-13 14:32:46.554 [obmPLel5M0Le] 🔍 WebRTC Video Packet #50: NAL Type=28 (FU-A), NRI=3, Size=953 bytes
+2026-08-13 14:32:46.554 [obmPLel5M0Le] 💉 Injected SPS (NRI=3) copy 1/2 (Seq=47410, Size=25, Keyframe=true)
+2026-08-13 14:32:46.554 [obmPLel5M0Le] 💉 Injected PPS (NRI=3) copy 1/2 (Seq=47411, Size=16, Keyframe=true)
+2026-08-13 14:32:46.554 [obmPLel5M0Le] 💉 Injected SPS (NRI=3) copy 2/2 (Seq=47412, Size=25, Keyframe=true)
+2026-08-13 14:32:46.554 [obmPLel5M0Le] 💉 Injected PPS (NRI=3) copy 2/2 (Seq=47413, Size=16, Keyframe=true)
+2026-08-13 14:32:46.554 [obmPLel5M0Le] 📤 Re-packetized video #50 (Seq=47414, SSRC=3140363931, Size=965) → 203.150.245.39:25860
+2026-08-13 14:32:46.554 [obmPLel5M0Le] 🔑 KEYFRAME (Forwarded) detected in video packet #50 → Asterisk
+2026-08-13 14:32:46.556 [obmPLel5M0Le] 🔍 WebRTC Video Packet #51: NAL Type=28 (FU-A), NRI=3, Size=954 bytes
+2026-08-13 14:32:46.593 [obmPLel5M0Le] 🔍 WebRTC Video Packet #64: NAL Type=1 (P-slice), NRI=3, Size=407 bytes
+2026-08-13 14:32:46.609 [obmPLel5M0Le] 🔍 WebRTC Video Packet #65: NAL Type=1 (P-slice), NRI=3, Size=92 bytes
+2026-08-13 14:32:46.651 [obmPLel5M0Le] 🔍 WebRTC Video Packet #66: NAL Type=1 (P-slice), NRI=3, Size=65 bytes
+2026-08-13 14:32:46.681 [obmPLel5M0Le] 🔍 WebRTC Video Packet #67: NAL Type=1 (P-slice), NRI=3, Size=34 bytes
+2026-08-13 14:32:46.684 [obmPLel5M0Le] Stopping sip-video-dest-ready PLI burst - uplink IDR delivered
+2026-08-13 14:32:46.712 [obmPLel5M0Le] 🔍 WebRTC Video Packet #68: NAL Type=1 (P-slice), NRI=3, Size=20 bytes
+2026-08-13 14:32:46.748 [obmPLel5M0Le] 🔍 WebRTC Video Packet #69: NAL Type=1 (P-slice), NRI=3, Size=19 bytes
+2026-08-13 14:32:46.780 [obmPLel5M0Le] 🔍 WebRTC Video Packet #70: NAL Type=1 (P-slice), NRI=3, Size=16 bytes
+2026-08-13 14:32:46.808 [obmPLel5M0Le] 🔍 WebRTC Video Packet #71: NAL Type=1 (P-slice), NRI=3, Size=9 bytes
+2026-08-13 14:32:46.841 [obmPLel5M0Le] 🔍 WebRTC Video Packet #72: NAL Type=1 (P-slice), NRI=3, Size=9 bytes
+2026-08-13 14:32:46.879 [obmPLel5M0Le] 🔍 WebRTC Video Packet #73: NAL Type=1 (P-slice), NRI=3, Size=9 bytes
+2026-08-13 14:32:46.908 [obmPLel5M0Le] 🔍 WebRTC Video Packet #74: NAL Type=1 (P-slice), NRI=3, Size=9 bytes
+2026-08-13 14:32:46.914 [obmPLel5M0Le] Stopping first-packet PLI burst - uplink keyframe ready
+2026-08-13 14:32:46.948 [obmPLel5M0Le] 🔍 WebRTC Video Packet #75: NAL Type=24 (STAP-A), NRI=3, Size=22 bytes
+2026-08-13 14:32:46.948 [obmPLel5M0Le] 🔍 WebRTC Video Packet #76: NAL Type=28 (FU-A), NRI=3, Size=951 bytes
+2026-08-13 14:32:46.948 [obmPLel5M0Le] 💉 Injected SPS (NRI=3) copy 1/2 (Seq=47441, Size=25, Keyframe=true)
+2026-08-13 14:32:46.948 [obmPLel5M0Le] 💉 Injected PPS (NRI=3) copy 1/2 (Seq=47442, Size=16, Keyframe=true)
+2026-08-13 14:32:46.948 [obmPLel5M0Le] 💉 Injected SPS (NRI=3) copy 2/2 (Seq=47443, Size=25, Keyframe=true)
+2026-08-13 14:32:46.948 [obmPLel5M0Le] 💉 Injected PPS (NRI=3) copy 2/2 (Seq=47444, Size=16, Keyframe=true)
+2026-08-13 14:32:46.948 [obmPLel5M0Le] 📤 Re-packetized video #76 (Seq=47445, SSRC=3140363931, Size=963) → 203.150.245.39:25860
+2026-08-13 14:32:46.948 [obmPLel5M0Le] 🔑 KEYFRAME (Forwarded) detected in video packet #76 → Asterisk
+2026-08-13 14:32:46.948 [obmPLel5M0Le] 🔍 WebRTC Video Packet #77: NAL Type=28 (FU-A), NRI=3, Size=951 bytes
+2026-08-13 14:32:46.978 [obmPLel5M0Le] 🔍 WebRTC Video Packet #78: NAL Type=1 (P-slice), NRI=3, Size=342 bytes
+2026-08-13 14:32:47.009 [obmPLel5M0Le] 🔍 WebRTC Video Packet #79: NAL Type=1 (P-slice), NRI=3, Size=110 bytes
+2026-08-13 14:32:47.042 [obmPLel5M0Le] 🔍 WebRTC Video Packet #80: NAL Type=1 (P-slice), NRI=3, Size=80 bytes
+2026-08-13 14:32:47.086 [obmPLel5M0Le] 🔍 WebRTC Video Packet #81: NAL Type=1 (P-slice), NRI=3, Size=33 bytes
+2026-08-13 14:32:47.108 [obmPLel5M0Le] 🔍 WebRTC Video Packet #82: NAL Type=1 (P-slice), NRI=3, Size=20 bytes
+2026-08-13 14:32:47.143 [obmPLel5M0Le] 🔍 WebRTC Video Packet #83: NAL Type=1 (P-slice), NRI=3, Size=9 bytes
+2026-08-13 14:32:47.177 [obmPLel5M0Le] 🔍 WebRTC Video Packet #84: NAL Type=1 (P-slice), NRI=3, Size=379 bytes
+2026-08-13 14:32:47.209 [obmPLel5M0Le] 🔍 WebRTC Video Packet #85: NAL Type=1 (P-slice), NRI=3, Size=279 bytes
+2026-08-13 14:32:47.242 [obmPLel5M0Le] 🔍 WebRTC Video Packet #86: NAL Type=1 (P-slice), NRI=3, Size=143 bytes
+2026-08-13 14:32:47.276 [obmPLel5M0Le] 🔍 WebRTC Video Packet #87: NAL Type=1 (P-slice), NRI=3, Size=82 bytes
+2026-08-13 14:32:47.309 [obmPLel5M0Le] 🔍 WebRTC Video Packet #88: NAL Type=1 (P-slice), NRI=3, Size=42 bytes
+2026-08-13 14:32:47.341 [obmPLel5M0Le] 🔍 WebRTC Video Packet #89: NAL Type=1 (P-slice), NRI=3, Size=27 bytes
+2026-08-13 14:32:47.376 [obmPLel5M0Le] 🔍 WebRTC Video Packet #90: NAL Type=1 (P-slice), NRI=3, Size=17 bytes
+2026-08-13 14:32:47.408 [obmPLel5M0Le] 🔍 WebRTC Video Packet #91: NAL Type=1 (P-slice), NRI=3, Size=9 bytes
+2026-08-13 14:32:47.442 [obmPLel5M0Le] 🔍 WebRTC Video Packet #92: NAL Type=1 (P-slice), NRI=3, Size=9 bytes
+2026-08-13 14:32:47.480 [obmPLel5M0Le] 🔍 WebRTC Video Packet #93: NAL Type=1 (P-slice), NRI=3, Size=9 bytes
+2026-08-13 14:32:47.512 [obmPLel5M0Le] 🔍 WebRTC Video Packet #94: NAL Type=1 (P-slice), NRI=3, Size=9 bytes
+2026-08-13 14:32:47.549 [obmPLel5M0Le] 🔍 WebRTC Video Packet #95: NAL Type=1 (P-slice), NRI=3, Size=9 bytes
+2026-08-13 14:32:47.582 [obmPLel5M0Le] 🔍 WebRTC Video Packet #96: NAL Type=1 (P-slice), NRI=3, Size=14 bytes
+2026-08-13 14:32:47.616 [obmPLel5M0Le] 🔍 WebRTC Video Packet #97: NAL Type=1 (P-slice), NRI=3, Size=9 bytes
+2026-08-13 14:32:47.649 [obmPLel5M0Le] 🔍 WebRTC Video Packet #98: NAL Type=1 (P-slice), NRI=3, Size=9 bytes
+2026-08-13 14:32:47.685 [obmPLel5M0Le] 🔍 WebRTC Video Packet #99: NAL Type=1 (P-slice), NRI=3, Size=9 bytes
+2026-08-13 14:32:47.717 [obmPLel5M0Le] 🔍 WebRTC Video Packet #100: NAL Type=1 (P-slice), NRI=3, Size=9 bytes
+2026-08-13 14:32:48.112 [obmPLel5M0Le] 🔄 Periodic PLI #4 to browser
+2026-08-13 14:32:48.157 [obmPLel5M0Le] 💉 Injected SPS (NRI=3) copy 1/2 (Seq=47484, Size=25, Keyframe=true)
+2026-08-13 14:32:48.157 [obmPLel5M0Le] 💉 Injected PPS (NRI=3) copy 1/2 (Seq=47485, Size=16, Keyframe=true)
+2026-08-13 14:32:48.157 [obmPLel5M0Le] 📤 Re-packetized video #114 (Seq=47488, SSRC=3140363931, Size=979) → 203.150.245.39:25860
+2026-08-13 14:32:48.157 [obmPLel5M0Le] 🔑 KEYFRAME (Forwarded) detected in video packet #114 → Asterisk
+2026-08-13 14:32:48.527 [obmPLel5M0Le] Audio RTP packet #1 received: 84 bytes from 203.150.245.39:25830
+2026-08-13 14:32:48.527 [obmPLel5M0Le] 🎤 Inbound translation pending for packet #1 (suppressing original audio)
+2026-08-13 14:32:48.527 [obmPLel5M0Le] 📍 Seeded SIP Video RTCP addr from RTP source: 203.150.245.39:25860
+2026-08-13 14:32:48.527 [obmPLel5M0Le] 📈 sip_video_rtp_source_changed source=203.150.245.39:25860 previous= switchGeneration=0
+2026-08-13 14:32:48.527 [obmPLel5M0Le] ⚠️ Small RTP video packet #1: 23 bytes, PT=96 from 203.150.245.39:25860
+2026-08-13 14:32:48.527 [obmPLel5M0Le] Learned Remote Video SSRC: 966890685 (previous: 0)
+2026-08-13 14:32:48.527 [obmPLel5M0Le] 📈 sip_video_ssrc_learned ssrc=966890685 previous=0
+2026-08-13 14:32:48.527 [obmPLel5M0Le] 🔄 RTCP fallback window enabled (ssrc-learn) until 2026-08-13T14:32:54.384171705Z
+2026-08-13 14:32:48.527 [obmPLel5M0Le] ⚠️ Small RTP video packet #2: 25 bytes, PT=96 from 203.150.245.39:25860
+2026-08-13 14:32:48.527 [obmPLel5M0Le] ⚠️ Small RTP video packet #3: 25 bytes, PT=96 from 203.150.245.39:25860
+2026-08-13 14:32:48.527 [obmPLel5M0Le] ⚠️ Small RTP video packet #4: 25 bytes, PT=96 from 203.150.245.39:25860
+2026-08-13 14:32:48.527 [obmPLel5M0Le] 📈 uplink_keyframe_kick reason=remote-ssrc-learn
+2026-08-13 14:32:48.527 [obmPLel5M0Le] 🚀 Sending startup FIR + guarded PLI burst
+2026-08-13 14:32:48.527 [obmPLel5M0Le] 📡 Sent FIR to rtp 203.150.245.39:25860 (RTP port)
+2026-08-13 14:32:48.527 [obmPLel5M0Le] ⚠️ Small RTP video packet #5: 26 bytes, PT=96 from 203.150.245.39:25860
+2026-08-13 14:32:48.527 [obmPLel5M0Le] 📦 SPS (parameter set) received in packet #5 (size: 14 bytes, seq=22105)
+2026-08-13 14:32:48.528 [obmPLel5M0Le] ⚠️ Small RTP video packet #6: 16 bytes, PT=96 from 203.150.245.39:25860
+2026-08-13 14:32:48.528 [obmPLel5M0Le] 📦 PPS (parameter set) received in packet #6 (size: 4 bytes, seq=22106)
+2026/08/13 14:32:48.528916 [obmPLel5M0Le] 📡 WS media kind=video direction=remote state=receiving
+2026-08-13 14:32:48.528 [obmPLel5M0Le] h264_au_normalized status=complete-idr packets=11 injected_parameter_sets=false source_timestamp=2700 pli_response=true response_time=1.214462ms pli_sent=3 pli_responses=1
+2026-08-13 14:32:48.533 [obmPLel5M0Le] ⚠️ Small RTP video packet #20: 29 bytes, PT=96 from 203.150.245.39:25860
+2026-08-13 14:32:48.547 [obmPLel5M0Le] Audio RTP packet #2 received: 79 bytes from 203.150.245.39:25830
+2026-08-13 14:32:48.547 [obmPLel5M0Le] 🎤 Inbound translation pending for packet #2 (suppressing original audio)
+2026-08-13 14:32:48.556 [obmPLel5M0Le] 📸 Received PLI from browser for video (RTPSender)
+2026-08-13 14:32:48.556 [obmPLel5M0Le] sip_video_idr_replay_queued reason=browser-pli generation=0 delivered=true
+2026-08-13 14:32:48.556 [obmPLel5M0Le] 📈 browser_recovery_handled trigger=browser-pli action=replay burst=true keyframeAge=27.399491ms remoteVideoSSRC=966890685 target=rtp-learn/203.150.245.39:25860 reason=cached-idr
+2026-08-13 14:32:48.557 [obmPLel5M0Le] sip_video_idr_replay reason=decoder-replay-rewritten packets=11 generation=0
+2026-08-13 14:32:48.557 [obmPLel5M0Le] sip_video_idr_flushed reason=decoder-replay-rewritten
+2026-08-13 14:32:48.567 [obmPLel5M0Le] Audio RTP packet #3 received: 140 bytes from 203.150.245.39:25830
+2026-08-13 14:32:48.567 [obmPLel5M0Le] 🎤 Inbound translation pending for packet #3 (suppressing original audio)
+2026-08-13 14:32:48.583 [obmPLel5M0Le] 💉 Injected SPS (NRI=3) copy 1/1 (Seq=47504, Size=25, Keyframe=true)
+2026-08-13 14:32:48.583 [obmPLel5M0Le] 💉 Injected PPS (NRI=3) copy 1/1 (Seq=47505, Size=16, Keyframe=true)
+2026-08-13 14:32:48.583 [obmPLel5M0Le] 📤 Re-packetized video #129 (Seq=47506, SSRC=3140363931, Size=969) → 203.150.245.39:25860
+2026-08-13 14:32:48.583 [obmPLel5M0Le] 🔑 KEYFRAME (Forwarded) detected in video packet #129 → Asterisk
+2026-08-13 14:32:48.587 [obmPLel5M0Le] Audio RTP packet #4 received: 152 bytes from 203.150.245.39:25830
+2026-08-13 14:32:48.587 [obmPLel5M0Le] 🎤 Inbound translation pending for packet #4 (suppressing original audio)
+2026-08-13 14:32:48.607 [obmPLel5M0Le] Audio RTP packet #5 received: 121 bytes from 203.150.245.39:25830
+2026-08-13 14:32:48.607 [obmPLel5M0Le] 🎤 Inbound translation pending for packet #5 (suppressing original audio)
+2026-08-13 14:32:48.828 [obmPLel5M0Le] ✅ Startup recovery settled after keyframe; stopping PLI burst
+2026-08-13 14:32:49.747 [obmPLel5M0Le] h264_au_normalized status=complete-idr packets=12 injected_parameter_sets=false source_timestamp=202950 pli_response=true response_time=1.220105855s pli_sent=3 pli_responses=2
+2026-08-13 14:32:50.112 [obmPLel5M0Le] 🔄 Periodic PLI #5 to browser
+2026-08-13 14:32:50.126 [obmPLel5M0Le] 📊 SIP→WebRTC video stats: packets=300 gaps=37 missing=46 ooo=46 dup=0 reorder(buf=67 rel=299 drop=0 to=0 pend=0) keyframeAge=400ms
+2026-08-13 14:32:50.126 [obmPLel5M0Le] h264_au_stats emitted=71 dropped_incomplete=0 dropped_overflow=0 pending_packets=0
+2026-08-13 14:32:50.153 [obmPLel5M0Le] 💉 Injected SPS (NRI=3) copy 1/1 (Seq=47556, Size=25, Keyframe=true)
+2026-08-13 14:32:50.153 [obmPLel5M0Le] 💉 Injected PPS (NRI=3) copy 1/1 (Seq=47557, Size=16, Keyframe=true)
+2026-08-13 14:32:50.153 [obmPLel5M0Le] 📤 Re-packetized video #178 (Seq=47558, SSRC=3140363931, Size=965) → 203.150.245.39:25860
+2026-08-13 14:32:50.153 [obmPLel5M0Le] 🔑 KEYFRAME (Forwarded) detected in video packet #178 → Asterisk
+2026-08-13 14:32:50.881 [obmPLel5M0Le] 📊 SIP→WebRTC video stats: packets=600 gaps=64 missing=78 ooo=78 dup=0 reorder(buf=106 rel=599 drop=0 to=0 pend=0) keyframeAge=1.1s
+2026-08-13 14:32:50.881 [obmPLel5M0Le] h264_au_stats emitted=146 dropped_incomplete=0 dropped_overflow=0 pending_packets=0
+2026-08-13 14:32:51.409 [obmPLel5M0Le] 📨 Video RTCP packet #1 received: 100 bytes from 203.150.245.39:25860
+2026-08-13 14:32:51.409 [obmPLel5M0Le] Received SR from Linphone (SSRC=966890685)
+2026-08-13 14:32:51.409 [obmPLel5M0Le] Received RTCP type *rtcp.SourceDescription from Linphone
+2026-08-13 14:32:51.409 [obmPLel5M0Le] 📈 uplink_keyframe_kick reason=sip-rtcp-first
+2026-08-13 14:32:51.457 [obmPLel5M0Le] 💉 Injected SPS (NRI=3) copy 1/1 (Seq=47600, Size=25, Keyframe=true)
+2026-08-13 14:32:51.457 [obmPLel5M0Le] 💉 Injected PPS (NRI=3) copy 1/1 (Seq=47601, Size=16, Keyframe=true)
+2026-08-13 14:32:51.457 [obmPLel5M0Le] 📤 Re-packetized video #219 (Seq=47602, SSRC=3140363931, Size=959) → 203.150.245.39:25860
+2026-08-13 14:32:51.457 [obmPLel5M0Le] 🔑 KEYFRAME (Forwarded) detected in video packet #219 → Asterisk
+2026-08-13 14:32:51.521 [obmPLel5M0Le] 💉 Injected SPS (NRI=3) copy 1/1 (Seq=47607, Size=26, Keyframe=true)
+2026-08-13 14:32:51.521 [obmPLel5M0Le] 💉 Injected PPS (NRI=3) copy 1/1 (Seq=47608, Size=16, Keyframe=true)
+2026-08-13 14:32:51.521 [obmPLel5M0Le] 📤 Re-packetized video #223 (Seq=47609, SSRC=3140363931, Size=1030) → 203.150.245.39:25860
+2026-08-13 14:32:51.521 [obmPLel5M0Le] 🔑 KEYFRAME (Forwarded) detected in video packet #223 → Asterisk
+2026-08-13 14:32:51.709 [obmPLel5M0Le] Stopping sip-rtcp-first PLI burst - uplink IDR delivered
+2026-08-13 14:32:52.112 [obmPLel5M0Le] 🔄 Periodic PLI #6 to browser
+2026-08-13 14:32:52.164 [obmPLel5M0Le] 💉 Injected SPS (NRI=3) copy 1/1 (Seq=47631, Size=26, Keyframe=true)
+2026-08-13 14:32:52.164 [obmPLel5M0Le] 💉 Injected PPS (NRI=3) copy 1/1 (Seq=47632, Size=16, Keyframe=true)
+2026-08-13 14:32:52.164 [obmPLel5M0Le] 📤 Re-packetized video #244 (Seq=47633, SSRC=3140363931, Size=920) → 203.150.245.39:25860
+2026-08-13 14:32:52.164 [obmPLel5M0Le] 🔑 KEYFRAME (Forwarded) detected in video packet #244 → Asterisk
+2026/08/13 14:32:53.307767 [obmPLel5M0Le] 📡 WS media kind=audio direction=remote state=receiving
+2026-08-13 14:32:54.112 [obmPLel5M0Le] 🔄 Periodic PLI #7 to browser
+2026-08-13 14:32:54.168 [obmPLel5M0Le] 💉 Injected SPS (NRI=3) copy 1/1 (Seq=47697, Size=26, Keyframe=true)
+2026-08-13 14:32:54.168 [obmPLel5M0Le] 💉 Injected PPS (NRI=3) copy 1/1 (Seq=47698, Size=16, Keyframe=true)
+2026-08-13 14:32:54.168 [obmPLel5M0Le] 📤 Re-packetized video #307 (Seq=47699, SSRC=3140363931, Size=1067) → 203.150.245.39:25860
+2026-08-13 14:32:54.168 [obmPLel5M0Le] 🔑 KEYFRAME (Forwarded) detected in video packet #307 → Asterisk
+2026-08-13 14:32:54.542 [obmPLel5M0Le] 📸 Received PLI from browser for video (RTPSender)
+2026-08-13 14:32:54.542 [obmPLel5M0Le] 📈 video_recovery_window_end reason=timeout keyframe_recovery_ms=8158
+2026-08-13 14:32:54.542 [obmPLel5M0Le] 📡 Sent FIR to rtp 203.150.245.39:25860 (RTP port)
+2026-08-13 14:32:54.542 [obmPLel5M0Le] 📈 browser_recovery_handled trigger=browser-pli action=fir burst=false keyframeAge=4.79481741s remoteVideoSSRC=966890685 target=rtp-learn/203.150.245.39:25860 reason=fir-stale
+2026-08-13 14:32:56.111 [obmPLel5M0Le] 🔄 Periodic PLI #8 to browser
+2026-08-13 14:32:56.171 [obmPLel5M0Le] 💉 Injected SPS (NRI=3) copy 1/1 (Seq=47763, Size=26, Keyframe=true)
+2026-08-13 14:32:56.171 [obmPLel5M0Le] 💉 Injected PPS (NRI=3) copy 1/1 (Seq=47764, Size=16, Keyframe=true)
+2026-08-13 14:32:56.171 [obmPLel5M0Le] 📤 Re-packetized video #370 (Seq=47765, SSRC=3140363931, Size=1049) → 203.150.245.39:25860
+2026-08-13 14:32:56.171 [obmPLel5M0Le] 🔑 KEYFRAME (Forwarded) detected in video packet #370 → Asterisk
+2026-08-13 14:32:56.409 [obmPLel5M0Le] 📨 Video RTCP packet #2 received: 80 bytes from 203.150.245.39:25860
+2026-08-13 14:32:56.409 [obmPLel5M0Le] Received RR from Linphone (SSRC=966890685)
+2026-08-13 14:32:56.410 [obmPLel5M0Le] Received RTCP type *rtcp.SourceDescription from Linphone
+2026-08-13 14:32:56.572 [obmPLel5M0Le] switch_target_honored queue=14131 agent=00025 generation=1 mediaEpoch=1 reason=new-target ssrc=966890685 source=203.150.245.39:25860 duplicateCount=0 debounceMs=60000 mediaGeneration=ssrc=966890685 source=203.150.245.39:25860
+2026-08-13 14:32:56.572 [obmPLel5M0Le] switch_video_gate_activation generation=1 mediaEpoch=1 outcome=active active=true feedbackBaseline=5 rejectReason=
+2026-08-13 14:32:56.572 [obmPLel5M0Le] switch_sps_pps_inject_armed generation=1 remaining=3
+2026-08-13 14:32:56.572 [obmPLel5M0Le] switch_recovery_start until=2026-08-13T14:33:01.572136352Z stableWindow=750ms
+2026-08-13 14:32:56.572 [obmPLel5M0Le] 📈 video_recovery_window_start reason=switch until=2026-08-13T14:33:01.572136352Z
+2026-08-13 14:32:56.572 [obmPLel5M0Le] 📈 recovery_policy interval=1s stale=4s firStale=7s
+2026-08-13 14:32:56.572 [obmPLel5M0Le] 📡 Sent FIR to rtp 203.150.245.39:25860 (RTP port)
+2026-08-13 14:32:56.572 [obmPLel5M0Le] 📡 Sent PLI to rtp 203.150.245.39:25860 (RTP port)
+2026-08-13 14:32:56.572 [obmPLel5M0Le] 🔀 Sent @switch: immediate FIR + PLI kick to both endpoints
+2026-08-13 14:32:56.572 [obmPLel5M0Le] switch_transition_hold_start mode=preserve reason=switch blackoutUntil=2026-08-13T14:32:56.572708217Z maxWaitUntil=2026-08-13T14:32:57.772708217Z
+2026-08-13 14:32:56.627 [obmPLel5M0Le] 💉 Injected SPS (NRI=3) copy 1/1 (Seq=47783, Size=26, Keyframe=true)
+2026-08-13 14:32:56.628 [obmPLel5M0Le] 💉 Injected PPS (NRI=3) copy 1/1 (Seq=47784, Size=16, Keyframe=true)
+2026-08-13 14:32:56.628 [obmPLel5M0Le] 📤 Re-packetized video #387 (Seq=47785, SSRC=3140363931, Size=1049) → 203.150.245.39:25860
+2026-08-13 14:32:56.628 [obmPLel5M0Le] 🔑 KEYFRAME (Forwarded) detected in video packet #387 → Asterisk
+2026-08-13 14:32:56.646 [obmPLel5M0Le] h264_au_source_reset reason=switch-generation previous_generation=0 generation=1
+2026-08-13 14:32:56.647 [obmPLel5M0Le] switch_transition_hold_end mode=preserve reason=gate-released heldMs=74 firstKeyframeMs=-1
+2026-08-13 14:32:56.647 [obmPLel5M0Le] switch_video_gate_release generation=1 waitMs=74 ssrc=966890685 packets=7 injection=true rejected=0 feedback=3
+2026-08-13 14:32:56.647 [obmPLel5M0Le] switch_recovery_first_keyframe elapsed_ms=74
+2026-08-13 14:32:56.647 [obmPLel5M0Le] h264_au_normalized status=complete-idr packets=7 injected_parameter_sets=true source_timestamp=1000008990 pli_response=true response_time=74.434256ms pli_sent=8 pli_responses=3
+2026-08-13 14:32:56.674 [obmPLel5M0Le] switch_feedback_burst_skipped reason=recovered-during-delay
+2026-08-13 14:32:56.997 [obmPLel5M0Le] switch_recovery_unstable_rtp reason=insufficient-packet-progress elapsed_ms=425 window_ms=350 delta(packets=7 gaps=0 missing=0 ooo=0 drop=0 to=0) threshold(minPackets=15 maxGap=12 maxMissing=20 maxOOO=20 maxDrop=0 maxTimeout=5) total(packets=761 gaps=76 missing=93 ooo=93 drop=0 to=0)
+2026-08-13 14:32:57.658 [obmPLel5M0Le] switch_recovery_unstable_rtp reason=gap-delta elapsed_ms=1086 window_ms=312 delta(packets=82 gaps=13 missing=23 ooo=23 drop=0 to=0) threshold(minPackets=15 maxGap=12 maxMissing=20 maxOOO=20 maxDrop=0 maxTimeout=5) total(packets=850 gaps=89 missing=116 ooo=116 drop=0 to=0)
+2026-08-13 14:32:57.909 [obmPLel5M0Le] 📊 SIP→WebRTC video stats: packets=900 gaps=101 missing=133 ooo=133 dup=0 reorder(buf=169 rel=897 drop=0 to=0 pend=0) keyframeAge=1.3s
+2026-08-13 14:32:57.909 [obmPLel5M0Le] h264_au_stats emitted=208 dropped_incomplete=0 dropped_overflow=0 pending_packets=0
+2026-08-13 14:32:58.008 [obmPLel5M0Le] 📈 video_recovery_window_end reason=stable-rtp keyframe_recovery_ms=1436
+2026-08-13 14:32:58.008 [obmPLel5M0Le] switch_recovery_end reason=stable-rtp recovery_ms=1436 first_keyframe_ms=74 packets=912 gaps=101 missing=133 ooo=133 dup=0 reorder(buf=169 rel=909 drop=0 to=0 pend=0) keyframeAge=1.361561233s
+2026-08-13 14:32:58.111 [obmPLel5M0Le] 🔄 Periodic PLI #9 to browser
+2026-08-13 14:32:58.170 [obmPLel5M0Le] 💉 Injected SPS (NRI=3) copy 1/1 (Seq=47843, Size=26, Keyframe=true)
+2026-08-13 14:32:58.170 [obmPLel5M0Le] 💉 Injected PPS (NRI=3) copy 1/1 (Seq=47844, Size=16, Keyframe=true)
+2026-08-13 14:32:58.170 [obmPLel5M0Le] 📤 Re-packetized video #444 (Seq=47845, SSRC=3140363931, Size=1070) → 203.150.245.39:25860
+2026-08-13 14:32:58.170 [obmPLel5M0Le] 🔑 KEYFRAME (Forwarded) detected in video packet #444 → Asterisk
+2026-08-13 14:32:58.652 [obmPLel5M0Le] h264_au_normalized status=complete-idr packets=18 injected_parameter_sets=true source_timestamp=1000188990 pli_response=false response_time=2.079345555s pli_sent=8 pli_responses=3
+2026-08-13 14:32:58.732 [obmPLel5M0Le] 📤 Re-packetized video #500 (Seq=47901, SSRC=3140363931, Size=1175) → 203.150.245.39:25860
+2026-08-13 14:33:00.112 [obmPLel5M0Le] Stopping periodic PLI sender - late-join window elapsed
+2026-08-13 14:33:00.559 [obmPLel5M0Le] 📊 SIP→WebRTC video stats: packets=1200 gaps=132 missing=177 ooo=177 dup=0 reorder(buf=215 rel=1191 drop=0 to=0 pend=6) keyframeAge=1.9s
+2026-08-13 14:33:00.559 [obmPLel5M0Le] h264_au_stats emitted=261 dropped_incomplete=0 dropped_overflow=0 pending_packets=2
+2026-08-13 14:33:00.654 [obmPLel5M0Le] h264_au_normalized status=complete-idr packets=22 injected_parameter_sets=false source_timestamp=1000368990 pli_response=false response_time=4.081420782s pli_sent=8 pli_responses=3
+2026/08/13 14:33:01.076982 [obmPLel5M0Le] 🎤 Translation disabled via WS
+2026-08-13 14:33:01.077 [obmPLel5M0Le] 🎤 Translation disabled
+2026-08-13 14:33:01.104 === [obmPLel5M0Le] Hangup Request ===
+2026-08-13 14:33:01.104 [obmPLel5M0Le] Direction: 'outbound'
+2026-08-13 14:33:01.104 [obmPLel5M0Le] SIPCallID: 'mVku2c9lCrnRzYOu@203.151.21.121'
+2026-08-13 14:33:01.104 [obmPLel5M0Le] SIPFromTag: '5pbE0kllU2aJdDqp'
+2026-08-13 14:33:01.104 [obmPLel5M0Le] SIPToTag: 'as2426bc6d'
+2026-08-13 14:33:01.104 [obmPLel5M0Le] SIPRemoteContact: '<sip:614131@203.150.245.41:5060>'
+2026-08-13 14:33:01.104 [obmPLel5M0Le] SIPCSeq: 2
+2026-08-13 14:33:01.104 [obmPLel5M0Le] From: '0000178661765', To: '14131'
+2026-08-13 14:33:01.104 [obmPLel5M0Le] sipClient is nil: false
+2026-08-13 14:33:01.104 [obmPLel5M0Le] ✅ Proceeding to send SIP BYE to Asterisk
+2026-08-13 14:33:01.104 [obmPLel5M0Le] BYE target source=dialog domain=sipclient.ttrs.or.th port=5060
+2026-08-13 14:33:01.110 [obmPLel5M0Le] BYE Request-URI: sip:614131@203.150.245.41:5060
+2026-08-13 14:33:01.110 [obmPLel5M0Le] Adding 2 Route headers to BYE
+2026-08-13 14:33:01.111 [obmPLel5M0Le] Created BYE request - Call-ID: mVku2c9lCrnRzYOu@203.151.21.121, CSeq: 3
+2026-08-13 14:33:01.113 [obmPLel5M0Le] Error reading audio from WebRTC: EOF
+2026-08-13 14:33:01.113 [obmPLel5M0Le] Error reading video from WebRTC: EOF
+2026-08-13 14:33:01.119 2026/08/13 14:33:01.119166 [obmPLel5M0Le] 📡 WS call-progress type=state state=ended reason=session-state
+[obmPLel5M0Le] BYE response: 200 OK
+2026-08-13 14:33:01.119 [obmPLel5M0Le] 📈 hangup_cleanup_start preState=active
+2026-08-13 14:33:01.119 [obmPLel5M0Le] 📈 hangup_cleanup_end postState=ended
+2026-08-13 14:33:01.119 [obmPLel5M0Le] ✅ PeerConnection closed
+2026-08-13 14:33:01.121 [obmPLel5M0Le] Call terminated
+2026-08-13 14:33:01.121 [obmPLel5M0Le] Deleted session
+2026-08-13 14:33:01.514 [obmPLel5M0Le] ICE Connection State: closed
+2026-08-13 14:33:01.514 [obmPLel5M0Le] 🧊 ICE closed ignored during terminal cleanup (state=ended action=bye)
