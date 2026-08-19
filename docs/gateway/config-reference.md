@@ -75,6 +75,13 @@ When `AUTH_ENABLE=true`:
 
 - `DB_ENABLE` (default `false`)
 - `DB_DSN`
+- `DB_BOOTSTRAP_ON_START` (default `false`; runs the serialized bootstrap/migration operation before this gateway process starts. Use only for local or single-instance deployment.)
+- `DB_BOOTSTRAP_LOCK_TIMEOUT` (default `30s`; maximum time to wait for the database-scoped bootstrap advisory lock)
+- `DB_BOOTSTRAP_MIGRATION_TIMEOUT` (default `5m`; maximum duration for Goose migration execution)
+- `DB_BOOTSTRAP_BASELINE` (default `./schema/bootstrap-baseline.sql`; normally set only by tests or custom image layouts)
+- `DB_BOOTSTRAP_MIGRATIONS_DIR` (default `./migrations`; normally set only by tests or custom image layouts)
+- `DB_BOOTSTRAP_GOOSE_BINARY` (default `./goose`; normally set only by tests or custom image layouts)
+- `DB_AUTO_MIGRATE` (**deprecated**; when `DB_BOOTSTRAP_ON_START` is unset, `true` maps to startup bootstrap and prints a warning)
 - `DB_STATS_INTERVAL_MS` (default `5000`)
 - `DB_LOG_FULL_SIP` (default `false`)
 - `DB_BATCH_SIZE` (default `100`)

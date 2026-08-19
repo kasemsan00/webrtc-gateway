@@ -1,5 +1,36 @@
 package session
 
+const defaultSIPVideoPayloadType uint8 = 96
+
+// SetSIPVideoPayloadType stores the H.264 RTP payload type negotiated with the
+// SIP peer. A zero value clears the negotiated value and restores PT 96 as the
+// compatibility fallback.
+func (s *Session) SetSIPVideoPayloadType(payloadType uint8) {
+	s.mu.Lock()
+	s.SIPVideoPT = payloadType
+	s.mu.Unlock()
+}
+
+// GetSIPVideoPayloadType returns the negotiated H.264 RTP payload type. PT 96
+// remains the fallback for outbound offers and peers without an explicit
+// H.264 rtpmap.
+func (s *Session) GetSIPVideoPayloadType() uint8 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.sipVideoPayloadTypeLocked()
+}
+
+// sipVideoPayloadTypeLocked returns the effective SIP H.264 payload type when
+// the caller already holds s.mu. Keeping this separate prevents recursive
+// RWMutex acquisition in RTP hot paths while preserving synchronized access
+// for callers that use GetSIPVideoPayloadType.
+func (s *Session) sipVideoPayloadTypeLocked() uint8 {
+	if s.SIPVideoPT == 0 {
+		return defaultSIPVideoPayloadType
+	}
+	return s.SIPVideoPT
+}
+
 // SetSIPOfferIncludeVideo controls whether outbound SIP SDP includes an m=video
 // section. Audio-only and recvonly WebRTC offers must set this to false.
 func (s *Session) SetSIPOfferIncludeVideo(include bool) {

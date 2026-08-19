@@ -9,9 +9,11 @@ export PROXY_PORT GATEWAY_PORT FRONTEND_PORT
 
 gateway_pid=""
 frontend_pid=""
+nginx_pid=""
 
 shutdown() {
   echo "Shutting down k2-stack..."
+  if [ -n "$nginx_pid" ]; then kill "$nginx_pid" 2>/dev/null || true; fi
   if [ -n "$frontend_pid" ]; then kill "$frontend_pid" 2>/dev/null || true; fi
   if [ -n "$gateway_pid" ]; then kill "$gateway_pid" 2>/dev/null || true; fi
 }
@@ -19,7 +21,8 @@ shutdown() {
 trap shutdown INT TERM
 
 cd /app/gateway
-su-exec k2 ./docker-entrypoint.sh ./k2-gateway &
+# Run as root so docker-entrypoint.sh can chown a mounted logs volume, then su-exec k2.
+./docker-entrypoint.sh ./k2-gateway &
 gateway_pid=$!
 
 cd /app/frontend
@@ -31,10 +34,30 @@ frontend_pid=$!
 
 sleep 2
 
+if ! kill -0 "$gateway_pid" 2>/dev/null; then
+  echo "Gateway exited during startup" >&2
+  exit 1
+fi
+if ! kill -0 "$frontend_pid" 2>/dev/null; then
+  echo "Frontend exited during startup" >&2
+  shutdown
+  exit 1
+fi
+
 envsubst '${PROXY_PORT} ${GATEWAY_PORT} ${FRONTEND_PORT}' \
   < /etc/nginx/nginx.conf.template \
   > /etc/nginx/nginx.conf
 
 echo "k2-stack listening on :${STACK_PROXY_PORT} (gateway :${GATEWAY_PORT}, frontend :${FRONTEND_PORT})"
 
-exec nginx -g 'daemon off;'
+nginx -g 'daemon off;' &
+nginx_pid=$!
+
+while kill -0 "$gateway_pid" 2>/dev/null && kill -0 "$frontend_pid" 2>/dev/null && kill -0 "$nginx_pid" 2>/dev/null; do
+  sleep 1
+done
+
+echo "A required k2-stack process exited unexpectedly" >&2
+shutdown
+wait "$gateway_pid" "$frontend_pid" "$nginx_pid" 2>/dev/null || true
+exit 1

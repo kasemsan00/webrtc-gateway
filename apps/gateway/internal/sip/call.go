@@ -1517,6 +1517,13 @@ func (s *Server) completeOutboundInvite200(
 			sess.SIPOpusPT = opusPT
 			opusUpdated = true
 		}
+		if videoPT, ok := parseH264PayloadType(res.Body()); ok {
+			previousVideoPT := sess.GetSIPVideoPayloadType()
+			sess.SetSIPVideoPayloadType(videoPT)
+			if previousVideoPT != videoPT {
+				fmt.Printf("[%s] 🎬 Updated H264 PT from answer: %d → %d\n", sess.ID, previousVideoPT, videoPT)
+			}
+		}
 		s.parseAsteriskSDPAndSetEndpoints(res.Body(), sess)
 	}
 

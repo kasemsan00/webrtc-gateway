@@ -207,6 +207,9 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 		} else {
 			destAddr = s.AsteriskVideoAddr
 			conn = s.VideoRTPConn
+			// s.mu is already held here. Do not call the public getter because it
+			// acquires s.mu.RLock and would self-deadlock on the first video packet.
+			videoPT := s.sipVideoPayloadTypeLocked()
 
 			if !s.mediaForwardReady {
 				if isSTAPA && len(packet.Payload) > 1 {
@@ -340,7 +343,7 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 						spsPacket := &rtp.Packet{
 							Header: rtp.Header{
 								Version:        2,
-								PayloadType:    96,
+								PayloadType:    videoPT,
 								SequenceNumber: s.VideoSeq,
 								Timestamp:      packet.Header.Timestamp,
 								SSRC:           s.VideoSSRC,
@@ -363,7 +366,7 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 						ppsPacket := &rtp.Packet{
 							Header: rtp.Header{
 								Version:        2,
-								PayloadType:    96,
+								PayloadType:    videoPT,
 								SequenceNumber: s.VideoSeq,
 								Timestamp:      packet.Header.Timestamp,
 								SSRC:           s.VideoSSRC,
@@ -410,7 +413,7 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 						nalPacket := &rtp.Packet{
 							Header: rtp.Header{
 								Version:        2,
-								PayloadType:    96,
+								PayloadType:    videoPT,
 								SequenceNumber: s.VideoSeq,
 								Timestamp:      packet.Header.Timestamp,
 								SSRC:           s.VideoSSRC,
@@ -483,7 +486,7 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 					spsPacket := &rtp.Packet{
 						Header: rtp.Header{
 							Version:        2,
-							PayloadType:    96,
+							PayloadType:    videoPT,
 							SequenceNumber: s.VideoSeq,
 							Timestamp:      packet.Header.Timestamp,
 							SSRC:           s.VideoSSRC,
@@ -508,7 +511,7 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 					ppsPacket := &rtp.Packet{
 						Header: rtp.Header{
 							Version:        2,
-							PayloadType:    96,
+							PayloadType:    videoPT,
 							SequenceNumber: s.VideoSeq,
 							Timestamp:      packet.Header.Timestamp,
 							SSRC:           s.VideoSSRC,
@@ -533,7 +536,7 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 			s.VideoSeq++
 			packet.Header.SSRC = s.VideoSSRC
 			packet.Header.SequenceNumber = s.VideoSeq
-			packet.Header.PayloadType = 96 // H264
+			packet.Header.PayloadType = videoPT // H264 negotiated with the SIP peer
 			packet.Header.Extension = false
 			packet.Header.Extensions = nil
 			packet.Header.CSRC = nil

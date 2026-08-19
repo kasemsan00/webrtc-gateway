@@ -24,20 +24,24 @@ COPY apps/gateway/ .
 
 # Build the application (CGO required for libopus decode/encode)
 # -ldflags="-w -s" to reduce binary size
-RUN CGO_ENABLED=1 GOOS=linux go build -ldflags="-w -s" -o k2-gateway .
+ARG TARGETARCH
+RUN CGO_ENABLED=1 GOOS=linux GOARCH=${TARGETARCH} go build -ldflags="-w -s" -o k2-gateway . && \
+    CGO_ENABLED=1 GOOS=linux GOARCH=${TARGETARCH} go build -ldflags="-w -s" -o db-bootstrap ./cmd/db-bootstrap
 
 # Stage 2: Runtime
 FROM alpine:latest
 
-# Install ca-certificates for HTTPS/TLS and libopus runtime
-RUN apk --no-cache add ca-certificates opus
+# Install ca-certificates for HTTPS/TLS, libopus runtime, and su-exec for privilege drop
+RUN apk --no-cache add ca-certificates opus su-exec
 
 WORKDIR /app
 
 # Copy binary from builder
 COPY --from=builder /build/k2-gateway .
+COPY --from=builder /build/db-bootstrap .
 COPY --from=builder /go/bin/goose .
 COPY --from=builder /build/migrations ./migrations
+COPY --from=builder /build/schema ./schema
 COPY --from=builder /build/scripts/docker-entrypoint.sh .
 
 # Copy .env file (optional - can be provided via volume mount)
@@ -63,18 +67,16 @@ EXPOSE 5060/udp
 # The actual port range is controlled by RTP_PORT_MIN and RTP_PORT_MAX environment variables.
 EXPOSE ${RTP_PORT_MIN}-${RTP_PORT_MAX}/udp
 
-# Create non-root user for security
+# Remain root so the entrypoint can chown a mounted logs volume, then su-exec k2.
 RUN chmod +x /app/docker-entrypoint.sh && \
     addgroup -g 1000 k2 && \
     adduser -D -u 1000 -G k2 k2 && \
+    mkdir -p /app/logs && \
     chown -R k2:k2 /app
-
-# Switch to non-root user
-USER k2
 
 # Health check (optional - check if process is running)
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-    CMD pgrep k2-gateway || exit 1
+    CMD pgrep -x k2-gateway >/dev/null || exit 1
 
 # Run optional migrations, then the application
 ENTRYPOINT ["./docker-entrypoint.sh"]

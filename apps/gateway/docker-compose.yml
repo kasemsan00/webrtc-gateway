@@ -12,7 +12,7 @@ services:
       POSTGRES_PASSWORD: k2pass
       POSTGRES_INITDB_ARGS: "--encoding=UTF8"
     volumes:
-      - ./init.sql:/docker-entrypoint-initdb.d/01-schema.sql
+      - ./schema/bootstrap-baseline.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
       - postgres_data:/var/lib/postgresql/data
     ports:
       - "5432:5432"
@@ -76,7 +76,7 @@ services:
       # Database Configuration
       - DB_ENABLE=${DB_ENABLE:-true}
       - DB_DSN=postgres://k2user:k2pass@postgres:5432/k2_gateway?sslmode=disable
-      - DB_AUTO_MIGRATE=${DB_AUTO_MIGRATE:-true}
+      - DB_BOOTSTRAP_ON_START=${DB_BOOTSTRAP_ON_START:-true}
       - DB_STATS_INTERVAL_MS=${DB_STATS_INTERVAL_MS:-5000}
       - DB_LOG_FULL_SIP=${DB_LOG_FULL_SIP:-true}
       - DB_BATCH_SIZE=${DB_BATCH_SIZE:-100}

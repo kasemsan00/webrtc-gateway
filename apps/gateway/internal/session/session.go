@@ -234,6 +234,7 @@ type Session struct {
 	Held             bool     `json:"held,omitempty"`
 	// SIP Codec Payload Types (for RTP rewriting between SIP <-> WebRTC)
 	SIPOpusPT                 uint8 `json:"-"` // Opus payload type negotiated with SIP peer (e.g., 107, 111)
+	SIPVideoPT                uint8 `json:"-"` // H.264 payload type negotiated with SIP peer (e.g., 96, 99, 103)
 	SIPVideoPacketizationMode uint8 `json:"-"` // RFC 6184 packetization-mode negotiated with SIP peer (0 or 1)
 	// Incoming call state
 	IncomingSIPTx   interface{} `json:"-"` // Store SIP ServerTransaction for delayed response
@@ -338,6 +339,7 @@ type Snapshot struct {
 	AudioRTCPPort             int
 	VideoRTCPPort             int
 	SIPOpusPT                 uint8
+	SIPVideoPT                uint8
 	CreatedAt                 time.Time
 	UpdatedAt                 time.Time
 	TranslatorEnabled         bool
@@ -366,6 +368,7 @@ func (s *Session) Snapshot() Snapshot {
 		AudioRTCPPort:             s.AudioRTCPPort,
 		VideoRTCPPort:             s.VideoRTCPPort,
 		SIPOpusPT:                 s.SIPOpusPT,
+		SIPVideoPT:                s.SIPVideoPT,
 		CreatedAt:                 s.CreatedAt,
 		UpdatedAt:                 s.UpdatedAt,
 		TranslatorEnabled:         s.TranslatorEnabled,

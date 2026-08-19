@@ -133,6 +133,34 @@ func TestCreateSDPAnswerForInvite_KeepsVideoWhenInviteHasVideo(t *testing.T) {
 	}
 }
 
+func TestCreateSDPAnswerForInvite_MirrorsDynamicH264PayloadType(t *testing.T) {
+	s := &Server{config: config.SIPConfig{}, publicAddress: "203.0.113.10"}
+	sess := &session.Session{ID: "test-inbound-video-pt99"}
+	invite := []byte("v=0\r\nm=audio 18072 RTP/AVP 107\r\na=rtpmap:107 opus/48000/2\r\nm=video 18074 RTP/AVP 99\r\na=rtpmap:99 H264/90000\r\na=fmtp:99 packetization-mode=1;profile-level-id=42E01F\r\na=sendrecv\r\n")
+
+	answer := string(s.createSDPAnswerForInvite(25004, sess, invite))
+	for _, want := range []string{
+		"m=video 25006 RTP/AVP 99",
+		"a=rtpmap:99 H264/90000",
+		"a=fmtp:99 profile-level-id=42E01F;packetization-mode=1",
+	} {
+		if !strings.Contains(answer, want) {
+			t.Fatalf("answer does not preserve offered H264 PT 99 (%q missing)\nSDP:\n%s", want, answer)
+		}
+	}
+	if got := sess.GetSIPVideoPayloadType(); got != 99 {
+		t.Fatalf("session H264 payload type = %d, want 99", got)
+	}
+}
+
+func TestParseH264PayloadTypeScopesMappingToVideoSection(t *testing.T) {
+	sdp := []byte("v=0\r\nm=audio 4000 RTP/AVP 96\r\na=rtpmap:96 opus/48000/2\r\nm=video 4002 RTP/AVP 103\r\na=rtpmap:103 h264/90000\r\n")
+	got, ok := parseH264PayloadType(sdp)
+	if !ok || got != 103 {
+		t.Fatalf("parseH264PayloadType() = (%d, %v), want (103, true)", got, ok)
+	}
+}
+
 func TestCreateSDPAnswerForInvite_OmitsVideoWhenInviteIsAudioOnly(t *testing.T) {
 	s := &Server{config: config.SIPConfig{}, publicAddress: "203.0.113.10"}
 	sess := &session.Session{ID: "test-inbound-audio"}

@@ -53,5 +53,8 @@ Create a new migration:
 
 ## Multi-instance deploy rule
 
-Run migration once as a dedicated deploy step before rolling out gateway instances.
-Do not run schema migration from every gateway instance at startup.
+Run the image's `db-bootstrap` command once as a dedicated deploy step before rolling out gateway instances. It acquires a PostgreSQL advisory lock, installs the baseline schema for a fresh database, and applies pending Goose migrations.
+
+Do not run schema migration from every gateway instance at startup. Production compose profiles provide a one-shot `db-bootstrap` service and gateway instances start only after it succeeds. Use `DB_BOOTSTRAP_ON_START=true` only for a local or explicitly single-instance deployment.
+
+For a fresh PostgreSQL database, use the matching release image; it contains the canonical `schema/bootstrap-baseline.sql`, migrations, Goose binary, and bootstrap executable. Do not manually apply `init.sql` followed by an uncoordinated migration command.

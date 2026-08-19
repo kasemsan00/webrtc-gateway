@@ -1,5 +1,7 @@
-$branch = $env:BRANCH ?? "latest"
+$branch = $env:BRANCH ?? "1.4.0"
 $registry = $env:REGISTRY ?? "registry.kasemsan.com"
+# $platforms = $env:PLATFORMS ?? "linux/amd64,linux/arm64"
+$platforms = $env:PLATFORMS ?? "linux/amd64"
 
 if ($env:RUN_MIGRATIONS -eq "true") {
   if (-not $env:DB_DSN) {
@@ -15,7 +17,8 @@ if ($env:RUN_MIGRATIONS -eq "true") {
 
 $viteBasePath = if ($env:VITE_BASE_PATH) { $env:VITE_BASE_PATH } else { "/admin/" }
 
-# docker build --push `
+# docker buildx build --push `
+#   --platform $platforms `
 #   -t $registry/k2-frontend:$branch `
 #   --build-arg VITE_GATEWAY_URL=$env:VITE_GATEWAY_URL `
 #   --build-arg VITE_TURN_URL=$env:VITE_TURN_URL `
@@ -27,9 +30,10 @@ $viteBasePath = if ($env:VITE_BASE_PATH) { $env:VITE_BASE_PATH } else { "/admin/
 #   --build-arg VITE_BASE_PATH=$viteBasePath `
 #   -f apps/frontend/Dockerfile .
 
-# docker build --push -t $registry/k2-gateway:$branch -f apps/gateway/Dockerfile .
+# docker buildx build --push --platform $platforms -t $registry/k2-gateway:$branch -f apps/gateway/Dockerfile .
 
-docker build --push `
+docker buildx build --push `
+  --platform $platforms `
   -t $registry/k2-stack:$branch `
   --build-arg VITE_GATEWAY_URL=$env:VITE_GATEWAY_URL `
   --build-arg VITE_TURN_URL=$env:VITE_TURN_URL `

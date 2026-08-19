@@ -26,6 +26,7 @@ func (s *Server) createSDPOffer(rtpPort int, sess *session.Session) []byte {
 	if opusPT == 0 {
 		opusPT = 111 // Default for outbound calls
 	}
+	videoPT := sess.GetSIPVideoPayloadType()
 
 	// Plain RTP SDP without crypto attributes (like Linphone Desktop)
 	// Asterisk will send plain RTP, k2-gateway will forward to WebRTC as SRTP
@@ -75,7 +76,7 @@ func (s *Server) createSDPOffer(rtpPort int, sess *session.Session) []byte {
 	includeVideo := sess.SIPOfferIncludeVideo()
 	defaultProfileLevelID := "42E01F"
 	videoProfileLevelID := defaultProfileLevelID
-	videoFmtp := fmt.Sprintf("a=fmtp:96 profile-level-id=%s;packetization-mode=1", videoProfileLevelID)
+	videoFmtp := fmt.Sprintf("a=fmtp:%d profile-level-id=%s;packetization-mode=1", videoPT, videoProfileLevelID)
 	if includeVideo {
 		if sps, pps, ok := sess.GetCachedSPSPPS(); ok {
 			// Derive profile-level-id from SPS if possible.
@@ -93,7 +94,7 @@ func (s *Server) createSDPOffer(rtpPort int, sess *session.Session) []byte {
 			// Base64 encode SPS and PPS for SDP
 			b64sps := base64.StdEncoding.EncodeToString(sps)
 			b64pps := base64.StdEncoding.EncodeToString(pps)
-			videoFmtp = fmt.Sprintf("a=fmtp:96 profile-level-id=%s;packetization-mode=1;sprop-parameter-sets=%s,%s", videoProfileLevelID, b64sps, b64pps)
+			videoFmtp = fmt.Sprintf("a=fmtp:%d profile-level-id=%s;packetization-mode=1;sprop-parameter-sets=%s,%s", videoPT, videoProfileLevelID, b64sps, b64pps)
 			fmt.Printf("[%s] 🎬 Including sprop-parameter-sets in SDP (SPS: %d bytes, PPS: %d bytes)\n", sess.ID, len(sps), len(pps))
 		}
 	}
@@ -128,12 +129,12 @@ a=sendrecv
 		opusPT, opusPT, opusPT)
 
 	if includeVideo {
-		sdp += fmt.Sprintf(`m=video %d %s 96
-a=rtpmap:96 H264/90000
+		sdp += fmt.Sprintf(`m=video %d %s %d
+a=rtpmap:%d H264/90000
 %s
 a=rtcp-mux
 %sa=sendrecv
-`, videoPort, videoProfile, videoFmtp, rtcpFbLines)
+`, videoPort, videoProfile, videoPT, videoPT, videoFmtp, rtcpFbLines)
 	}
 
 	profileNote := "AVP"
@@ -163,6 +164,11 @@ func (s *Server) createSDPAnswerForInvite(rtpPort int, sess *session.Session, in
 	videoRtcpMux := false
 	videoPacketizationMode := sipVideoPacketizationMode(inviteSDP) == 1
 	sess.SetSIPOfferIncludeVideo(session.AnalyzeOfferVideo(string(inviteSDP)).HasVideoMLine)
+	if videoPT, ok := parseH264PayloadType(inviteSDP); ok {
+		sess.SetSIPVideoPayloadType(videoPT)
+	} else {
+		sess.SetSIPVideoPayloadType(0)
+	}
 
 	if len(inviteSDP) > 0 {
 		currentMedia := ""
@@ -222,7 +228,7 @@ func (s *Server) createSDPAnswerForInvite(rtpPort int, sess *session.Session, in
 		sdp = strings.Replace(sdp, "a=rtcp-mux\na=sendrecv", "a=sendrecv", 1)
 		// Explicit RTCP port when mux is off (RFC 3605). Avoids peers guessing wrong.
 		rtcpPort := videoPort + 1
-		videoLine := fmt.Sprintf("m=video %d %s 96\n", videoPort, videoProfile)
+		videoLine := fmt.Sprintf("m=video %d %s %d\n", videoPort, videoProfile, sess.GetSIPVideoPayloadType())
 		if strings.Contains(sdp, videoLine) {
 			sdp = strings.Replace(sdp, videoLine, fmt.Sprintf("%sa=rtcp:%d\n", videoLine, rtcpPort), 1)
 		}
@@ -424,4 +430,36 @@ func parseOpusPayloadType(sdpBody []byte) uint8 {
 		}
 	}
 	return 0 // Not found
+}
+
+// parseH264PayloadType returns the RTP payload type mapped to H.264 in the
+// video media section. SIP answers must preserve this mapping for strict
+// chan_sip peers, and WebRTC->SIP RTP must use the same negotiated value.
+func parseH264PayloadType(sdpBody []byte) (uint8, bool) {
+	currentMedia := ""
+	for _, rawLine := range strings.Split(string(sdpBody), "\n") {
+		line := strings.TrimSpace(rawLine)
+		if strings.HasPrefix(line, "m=") {
+			fields := strings.Fields(line)
+			currentMedia = ""
+			if len(fields) > 0 {
+				currentMedia = strings.TrimPrefix(strings.ToLower(fields[0]), "m=")
+			}
+			continue
+		}
+		if currentMedia != "video" || !strings.HasPrefix(strings.ToLower(line), "a=rtpmap:") {
+			continue
+		}
+
+		fields := strings.Fields(line)
+		if len(fields) < 2 || !strings.EqualFold(fields[1], "H264/90000") {
+			continue
+		}
+		ptText := strings.TrimPrefix(strings.ToLower(fields[0]), "a=rtpmap:")
+		pt, err := strconv.ParseUint(ptText, 10, 8)
+		if err == nil {
+			return uint8(pt), true
+		}
+	}
+	return 0, false
 }

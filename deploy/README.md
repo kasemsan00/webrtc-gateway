@@ -40,6 +40,8 @@ docker compose -f deploy/docker-compose.split.yml up -d
 
 Services use `network_mode: host` (SIP/RTP).
 
+Before application services start, Compose runs the one-shot `db-bootstrap` service from the same release image. It safely initializes an empty gateway schema or applies pending migrations to an existing schema. If it fails, the rollout is blocked. Keep `DB_BOOTSTRAP_ON_START=false` for production application services; use `DB_BOOTSTRAP_ON_START=true` only when deliberately running a single instance without the compose job.
+
 Configure external nginx/Coolify using [`nginx.external.conf.example`](nginx.external.conf.example) — route `/admin/` to `127.0.0.1:4173` and `/api`+`/ws` to `127.0.0.1:8080`.
 
 ### Split environment
@@ -67,6 +69,8 @@ Run:
 ```bash
 docker compose -f deploy/docker-compose.unified.yml up -d
 ```
+
+The unified profile also runs `db-bootstrap` before the `k2-stack` service. A failed bootstrap or a gateway process that exits during startup makes the stack fail instead of serving an admin frontend without a working gateway.
 
 External proxy forwards the **entire host** to `STACK_PROXY_PORT` (default **8088**).
 
