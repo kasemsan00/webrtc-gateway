@@ -48,7 +48,7 @@ Gateway env is loaded via `godotenv`; `AUTH_ENABLE` triggers fail-fast startup c
 - **Never edit generated files:** `apps/frontend/src/routeTree.gen.ts`
 - **SDP/media/SIP changes in `apps/gateway` are high risk** — invariants: Opus audio passthrough (no transcoding), H.264 video only, SPS/PPS caching and keyframe injection preserved
 - **Pion (`github.com/pion/webrtc/v4`) is the WebRTC stack** — do not replace or mix stacks without explicit request
-- **Keep WS/API contract compatibility** across frontend and mobile clients; if you add/change a message type, update both `internal/api/server.go` and the frontend `gateway-store.ts`
+- **Keep WS/API contract compatibility** across mobile clients; if you add/change a message type, update `internal/api/server.go` and `docs/gateway/ws-contract.md`
 - **Trunks are soft-deleted** (`enabled=false`), never hard-deleted from `sip_trunks`
 - **No panics in hot paths** — RTP/RTCP/SIP loops should log and continue
 - **Avoid cross-app refactors** — scope changes to the target app or package

@@ -142,3 +142,15 @@ func TestVideoAUNormalizationConfigCanBeDisabled(t *testing.T) {
 		t.Fatal("expected SIP video AU normalization rollback switch to disable the path")
 	}
 }
+
+func TestFrontendPasswordConfigIsTrimmed(t *testing.T) {
+	t.Setenv("FRONTEND_PASSWORD", " ops-secret ")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Auth.FrontendPassword != "ops-secret" {
+		t.Fatalf("expected trimmed FRONTEND_PASSWORD, got %q", cfg.Auth.FrontendPassword)
+	}
+}

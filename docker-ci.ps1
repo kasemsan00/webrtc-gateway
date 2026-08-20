@@ -1,4 +1,4 @@
-$branch = $env:BRANCH ?? "1.4.0"
+$branch = $env:BRANCH ?? "1.4.1"
 $registry = $env:REGISTRY ?? "registry.kasemsan.com"
 $platforms = $env:PLATFORMS ?? "linux/amd64,linux/arm64"
 # $platforms = $env:PLATFORMS ?? "linux/amd64"
@@ -17,30 +17,10 @@ if ($env:RUN_MIGRATIONS -eq "true") {
 
 $viteBasePath = if ($env:VITE_BASE_PATH) { $env:VITE_BASE_PATH } else { "/admin/" }
 
-# docker buildx build --push `
-#   --platform $platforms `
-#   -t $registry/k2-frontend:$branch `
-#   --build-arg VITE_GATEWAY_URL=$env:VITE_GATEWAY_URL `
-#   --build-arg VITE_TURN_URL=$env:VITE_TURN_URL `
-#   --build-arg VITE_TURN_USERNAME=$env:VITE_TURN_USERNAME `
-#   --build-arg VITE_KEYCLOAK_URL=$env:VITE_KEYCLOAK_URL `
-#   --build-arg VITE_KEYCLOAK_REALM=$env:VITE_KEYCLOAK_REALM `
-#   --build-arg VITE_KEYCLOAK_CLIENT=$env:VITE_KEYCLOAK_CLIENT `
-#   --build-arg VITE_CONFIG_AUTORECORD=$env:VITE_CONFIG_AUTORECORD `
-#   --build-arg VITE_BASE_PATH=$viteBasePath `
-#   -f apps/frontend/Dockerfile .
-
-# docker buildx build --push --platform $platforms -t $registry/k2-gateway:$branch -f apps/gateway/Dockerfile .
-
 docker buildx build --push `
   --platform $platforms `
   -t $registry/k2-stack:$branch `
   --build-arg VITE_GATEWAY_URL=$env:VITE_GATEWAY_URL `
-  --build-arg VITE_TURN_URL=$env:VITE_TURN_URL `
-  --build-arg VITE_TURN_USERNAME=$env:VITE_TURN_USERNAME `
-  --build-arg VITE_KEYCLOAK_URL=$env:VITE_KEYCLOAK_URL `
-  --build-arg VITE_KEYCLOAK_REALM=$env:VITE_KEYCLOAK_REALM `
-  --build-arg VITE_KEYCLOAK_CLIENT=$env:VITE_KEYCLOAK_CLIENT `
   --build-arg VITE_CONFIG_AUTORECORD=$env:VITE_CONFIG_AUTORECORD `
   --build-arg VITE_BASE_PATH=$viteBasePath `
   -f deploy/Dockerfile.unified .

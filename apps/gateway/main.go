@@ -200,6 +200,10 @@ func runAPIMode(ctx context.Context, cfg *config.Config, unicastAddress string, 
 	}
 	apiServer := api.NewServer(cfg.API, cfg.TURN, cfg.Gateway, cfg.Translator, sessionMgr, sipServer, publicRegistry, trunkMgrInterface, store)
 	apiServer.SetRuntimeConfig(cfg)
+	if cfg.Auth.FrontendPassword != "" {
+		apiServer.SetAdminPassword(cfg.Auth.FrontendPassword)
+		log.Printf("Admin REST password auth enabled")
+	}
 	if cfg.API.MobileSIPAuthRegisterURL != "" {
 		if trunkManager == nil {
 			log.Printf("⚠️ Warning: Mobile SIP provisioning disabled — trunk manager is not available")

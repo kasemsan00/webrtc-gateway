@@ -48,12 +48,15 @@ func (c *Config) PublicView() PublicConfigView {
 	push.APNSCertFile = redactSecret(push.APNSCertFile)
 	push.APNSCertKeyFile = redactSecret(push.APNSCertKeyFile)
 
+	auth := c.Auth
+	auth.FrontendPassword = redactSecret(auth.FrontendPassword)
+
 	return PublicConfigView{
 		Sections: PublicConfigSections{
 			TURN:       turn,
 			SIP:        sip,
 			API:        c.API,
-			Auth:       c.Auth,
+			Auth:       auth,
 			RTP:        c.RTP,
 			DB:         db,
 			SIPPublic:  c.SIPPublic,

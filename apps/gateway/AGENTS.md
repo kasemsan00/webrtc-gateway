@@ -164,7 +164,7 @@ When modifying this codebase:
 **Agent rules:**
 
 1. Use the file map — do not read `server.go` wholesale for WS handler work.
-2. WS message changes: update `ws_dispatch.go` + handler file + `docs/gateway/ws-contract.md` + frontend `gateway-store.ts`.
+2. WS message changes: update `ws_dispatch.go` + handler file + `docs/gateway/ws-contract.md`.
 3. New files should stay ≤ ~600 lines; split further if exceeded.
 4. Do not merge unrelated handlers back into monolith files.
 5. Mechanical moves only — no behavior changes unless explicitly requested.

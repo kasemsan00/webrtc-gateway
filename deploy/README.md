@@ -98,12 +98,13 @@ Same as split, plus:
 STACK_PROXY_PORT=8088
 ```
 
-## Keycloak
+## Admin password
 
-Register redirect / web origins for the admin base path:
+Set `FRONTEND_PASSWORD` on both the frontend and gateway processes (unified `env_file` already shared). The admin UI shows a password-only login. After login it sends that value as `Authorization: Bearer` on `/api/*`.
 
-- `https://k2-gateway.kasemsan.com/admin/*`
-- Web origin: `https://k2-gateway.kasemsan.com`
+`AUTH_ENABLE` and Keycloak JWKS stay for mobile `/ws` and JWT REST clients. The admin UI does not use Keycloak.
+
+The frontend process exits if `FRONTEND_PASSWORD` is empty. Do not set `VITE_FRONTEND_PASSWORD`.
 
 ## Images
 

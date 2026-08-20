@@ -1,6 +1,5 @@
 import { Link } from '@tanstack/react-router'
 import { AnimatePresence, motion } from 'motion/react'
-import { toast } from 'sonner'
 
 import {
   RiAccountCircleLine,
@@ -12,7 +11,6 @@ import {
   RiHistoryLine,
   RiLogoutBoxLine,
   RiMenuLine,
-  RiPhoneLine,
   RiPulseLine,
   RiRouteLine,
   RiRouterLine,
@@ -21,34 +19,19 @@ import {
 } from '@remixicon/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-import { useKeycloakAuth } from '@/features/auth/keycloak-provider'
+import { usePasswordAuth } from '@/features/auth/password-provider'
 import { Button } from '@/components/ui/button'
 
 export default function Header({ children }: { children?: React.ReactNode }) {
   const [isOpen, setIsOpen] = useState(false)
-  const [isLoggingOut, setIsLoggingOut] = useState(false)
   const openButtonRef = useRef<HTMLButtonElement>(null)
   const closeButtonRef = useRef<HTMLButtonElement>(null)
   const shouldRestoreFocusRef = useRef(false)
-  const { user, logout } = useKeycloakAuth()
+  const { logout } = usePasswordAuth()
 
-  const userLabel = user?.displayName || 'Unknown user'
-  const usernameLabel = user?.username || '-'
-
-  const handleLogout = useCallback(async () => {
-    if (isLoggingOut) return
-
-    setIsLoggingOut(true)
-    try {
-      await logout()
-    } catch (error) {
-      toast.error('Logout failed', {
-        description:
-          error instanceof Error ? error.message : 'Please try again',
-      })
-      setIsLoggingOut(false)
-    }
-  }, [isLoggingOut, logout])
+  const handleLogout = useCallback(() => {
+    logout()
+  }, [logout])
 
   const close = useCallback(() => {
     shouldRestoreFocusRef.current = true
@@ -88,27 +71,14 @@ export default function Header({ children }: { children?: React.ReactNode }) {
         </Link>
         <div className="ml-auto flex items-center gap-2">
           {children}
-          <div className="hidden min-w-0 items-center gap-2 rounded-md border border-border/60 bg-muted/40 px-2 py-1 md:flex">
-            <RiAccountCircleLine className="size-4 text-muted-foreground" />
-            <div className="min-w-0">
-              <p className="truncate text-[11px] text-muted-foreground">
-                {usernameLabel}
-              </p>
-            </div>
-          </div>
           <Button
             size="sm"
             variant="outline"
             className="h-7 gap-1 px-2 text-xs"
-            onClick={() => {
-              void handleLogout()
-            }}
-            disabled={isLoggingOut}
+            onClick={handleLogout}
           >
             <RiLogoutBoxLine className="size-3.5" />
-            <span className="hidden sm:inline">
-              {isLoggingOut ? 'Logging out...' : 'Logout'}
-            </span>
+            <span className="hidden sm:inline">Logout</span>
           </Button>
         </div>
       </header>
@@ -171,18 +141,6 @@ export default function Header({ children }: { children?: React.ReactNode }) {
                 >
                   <RiBarChartGroupedLine size={16} />
                   <span className="font-medium">Dashboard</span>
-                </Link>
-                <Link
-                  to="/console"
-                  onClick={close}
-                  className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors hover:bg-muted"
-                  activeProps={{
-                    className:
-                      'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm bg-cyan-600/10 text-cyan-700 dark:bg-cyan-600/20 dark:text-cyan-300 hover:bg-cyan-600/20 dark:hover:bg-cyan-600/30 transition-colors',
-                  }}
-                >
-                  <RiPhoneLine size={16} />
-                  <span className="font-medium">Gateway Console</span>
                 </Link>
                 <Link
                   to="/trunks"
@@ -307,23 +265,14 @@ export default function Header({ children }: { children?: React.ReactNode }) {
               </nav>
 
               <div className="border-t border-border px-4 py-3">
-                <div className="mb-3 rounded-md border border-border/60 bg-muted/40 p-2">
-                  <div className="mb-1 flex items-center gap-2">
-                    <RiAccountCircleLine className="size-4 text-muted-foreground" />
-                    <p className="truncate text-sm font-medium">{userLabel}</p>
-                  </div>
-                </div>
                 <Button
                   size="sm"
                   variant="outline"
                   className="h-8 w-full justify-start gap-2 text-xs"
-                  onClick={() => {
-                    void handleLogout()
-                  }}
-                  disabled={isLoggingOut}
+                  onClick={handleLogout}
                 >
                   <RiLogoutBoxLine className="size-3.5" />
-                  {isLoggingOut ? 'Logging out...' : 'Logout'}
+                  Logout
                 </Button>
                 <p className="mt-3 text-xs text-muted-foreground/60">
                   WebRTC Gateway

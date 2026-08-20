@@ -7,7 +7,7 @@ React + TypeScript + TanStack Start frontend for gateway operations UI inside th
 ## Project Structure
 
 - `src/routes/`: TanStack file-based routes (`index.tsx`, `trunks.tsx`, `instances.tsx`, `sessions*.tsx`, `session-directory.tsx`).
-- `src/features/`: domain modules (`gateway`, `gateway-instances`, `trunk`, `session-history`, `session-detail`, `session-directory`).
+- `src/features/`: domain modules (`auth`, `gateway-instances`, `trunk`, `session-history`, `session-detail`, `session-directory`).
 - `src/components/` and `src/components/ui/`: shared UI and primitives.
 - `src/lib/`: shared utilities, store helpers, theme/provider utilities.
 - Generated file: `src/routeTree.gen.ts` (do not edit manually).

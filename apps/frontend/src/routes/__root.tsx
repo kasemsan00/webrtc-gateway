@@ -6,7 +6,8 @@ import {
   createRootRoute,
 } from '@tanstack/react-router'
 import { Toaster } from '@/components/ui/sonner'
-import { KeycloakAuthProvider } from '@/features/auth/keycloak-provider'
+import { PasswordAuthProvider } from '@/features/auth/password-provider'
+import { verifyFrontendPassword } from '@/features/auth/verify-password'
 
 import '../styles.css'
 
@@ -57,11 +58,16 @@ function RootDocument({ children }: { children: React.ReactNode }) {
 
 function RootLayout() {
   return (
-    <KeycloakAuthProvider>
+    <PasswordAuthProvider verifyPassword={verifyAdminPassword}>
       <Outlet />
       <Toaster />
-    </KeycloakAuthProvider>
+    </PasswordAuthProvider>
   )
+}
+
+async function verifyAdminPassword(password: string) {
+  const result = await verifyFrontendPassword({ data: { password } })
+  return result.ok
 }
 
 function RootNotFound() {

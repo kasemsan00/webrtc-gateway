@@ -65,10 +65,11 @@ const DefaultTrunkPNAppID = "th.or.ttrs.video.prod"
 
 // AuthConfig holds JWT/JWKS authentication settings.
 type AuthConfig struct {
-	Enable    bool
-	TimeoutMS int
-	User      AuthRealmConfig
-	Employee  AuthRealmConfig
+	Enable           bool
+	TimeoutMS        int
+	FrontendPassword string // Shared admin REST password (FRONTEND_PASSWORD)
+	User             AuthRealmConfig
+	Employee         AuthRealmConfig
 }
 
 // AuthRealmConfig holds JWT verification settings for one realm.
@@ -327,8 +328,9 @@ func Load() (*Config, error) {
 			MobileSIPAuthTimeoutMS:     getEnvAsInt("SIPCLIENT_AUTH_TIMEOUT_MS", 5000),
 		},
 		Auth: AuthConfig{
-			Enable:    getEnvAsBool("AUTH_ENABLE", false),
-			TimeoutMS: getEnvAsInt("AUTH_JWKS_TIMEOUT_MS", 5000),
+			Enable:           getEnvAsBool("AUTH_ENABLE", false),
+			TimeoutMS:        getEnvAsInt("AUTH_JWKS_TIMEOUT_MS", 5000),
+			FrontendPassword: strings.TrimSpace(os.Getenv("FRONTEND_PASSWORD")),
 			User: AuthRealmConfig{
 				JWKSURL:     os.Getenv("AUTH_TTRS_USERS_JWKS_URL"),
 				JWTIssuer:   os.Getenv("AUTH_TTRS_USERS_JWT_ISSUER"),
@@ -520,6 +522,11 @@ func (c *Config) Display() {
 	// Display Auth Configuration
 	fmt.Println("\nAuth Configuration:")
 	fmt.Printf("  Enabled: %v\n", c.Auth.Enable)
+	if c.Auth.FrontendPassword != "" {
+		fmt.Println("  Frontend password: configured")
+	} else {
+		fmt.Println("  Frontend password: not set")
+	}
 	if c.Auth.Enable {
 		fmt.Printf("  JWKS Timeout: %d ms\n", c.Auth.TimeoutMS)
 		fmt.Printf("  User JWKS URL: %s\n", c.Auth.User.JWKSURL)

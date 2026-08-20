@@ -1,6 +1,6 @@
 # Gateway Frontend
 
-React + TypeScript + Vite frontend สำหรับควบคุม WebRTC call ผ่าน `gateway`.
+React + TypeScript + Vite operations UI for the WebRTC gateway.
 
 ## Run
 
@@ -15,6 +15,8 @@ pnpm dev
 pnpm dev:frontend
 ```
 
+`FRONTEND_PASSWORD` must be set in `apps/frontend/.env` (not a `VITE_` variable). Copy `.env.example` first. Set the same value on the gateway process so `/api/*` accepts the login bearer.
+
 ## Build And Test
 
 ```bash
@@ -27,56 +29,17 @@ pnpm test
 
 ตั้งค่าใน `.env` (หรือคัดลอกจาก `.env.example`):
 
+- `FRONTEND_PASSWORD` (required; server-side only, used for login and as the REST bearer)
 - `VITE_GATEWAY_URL`
 - `VITE_BASE_PATH` (optional; production single-domain default `/admin/`, see `../../deploy/README.md`)
-- `VITE_TURN_URL`
-- `VITE_TURN_USERNAME`
-- `VITE_TURN_CREDENTIAL`
-- `VITE_KEYCLOAK_URL`
-- `VITE_KEYCLOAK_REALM`
-- `VITE_KEYCLOAK_CLIENT`
 - `VITE_CONFIG_AUTORECORD`
 
 > สำหรับ deployment ด้วย Docker/Coolify: ค่ากลุ่ม `VITE_*` รองรับทั้งตอน build และตอน runtime ของ container
 > (ตั้งใน Coolify Environment Variables ได้โดยไม่ต้อง rebuild image)
 >
+> `FRONTEND_PASSWORD` is runtime-only. The frontend server and gateway both need it.
+>
 > Single-domain deploy (`k2-gateway.kasemsan.com/admin`): see [`deploy/README.md`](../../deploy/README.md) — **split** (2 containers + external path routing) or **unified** (`k2-stack`, one external upstream → `:8088`).
-
-## Supported Operation Flows
-
-1. Browser Frontend -> Gateway -> Kamailio/Asterisk -> Linphone Desktop
-2. Browser Frontend A -> Gateway -> Kamailio/Asterisk -> Gateway -> Browser Frontend B
-
-## Runtime Behavior (Current)
-
-- ค่า default mode เป็น `siptrunk`
-- เมื่อ WebSocket connected/reconnected ระบบจะพยายาม `trunk_resolve` อัตโนมัติ (ถ้ามี trunk id/credentials ที่ resolve ได้)
-- เมื่อมี `incoming` แล้ว local media ยังไม่พร้อม ระบบจะสร้าง media session อัตโนมัติก่อนส่ง `accept`
-- รองรับ `resume` สำหรับ reconnect และ redirect ตาม backend contract
-
-## Key WebSocket Messages
-
-Client -> Server:
-
-- `offer`
-- `trunk_resolve`
-- `call`
-- `accept`
-- `reject`
-- `hangup`
-- `resume`
-
-Server -> Client:
-
-- `answer`
-- `incoming`
-- `state`
-- `trunk_resolved`
-- `trunk_redirect`
-- `resume_redirect`
-- `resumed`
-- `resume_failed`
-- `error`
 
 ## References
 

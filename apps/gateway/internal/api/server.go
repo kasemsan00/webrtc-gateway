@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,6 +27,7 @@ type Server struct {
 	sessionMgr         *session.Manager
 	sipMaker           SIPCallMaker
 	tokenVerifier      TokenVerifier
+	adminPassword      string
 	publicRegistry     PublicAccountRegistry
 	trunkManager       TrunkManager
 	logStore           logstore.LogStore
@@ -228,6 +230,15 @@ func (s *Server) SetTokenVerifier(verifier TokenVerifier) {
 	s.tokenVerifier = verifier
 }
 
+// SetAdminPassword enables shared-password auth for authenticated REST routes.
+func (s *Server) SetAdminPassword(password string) {
+	s.adminPassword = strings.TrimSpace(password)
+}
+
+func (s *Server) restAuthEnabled() bool {
+	return s.tokenVerifier != nil || s.adminPassword != ""
+}
+
 // SetPushService enables push notifications on incoming calls.
 func (s *Server) SetPushService(svc *push.Service) {
 	s.pushService = svc
@@ -272,7 +283,7 @@ func (s *Server) Start(ctx context.Context) error {
 		router.HandleFunc("/api/client-diagnostics/payloads/{payloadId}", s.handleGetClientDiagnosticPayload).Methods("GET", "OPTIONS")
 
 		api := router.PathPrefix("/api").Subrouter()
-		if s.tokenVerifier != nil {
+		if s.restAuthEnabled() {
 			api.Use(s.authMiddleware)
 		}
 		api.HandleFunc("/logs", s.handleListLogFiles).Methods("GET", "OPTIONS")

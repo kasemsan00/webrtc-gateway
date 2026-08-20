@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -22,15 +23,41 @@ func withAuthClaims(r *http.Request, claims *auth.VerifiedClaims) *http.Request 
 	return r.WithContext(context.WithValue(r.Context(), authClaimsContextKey{}, claims))
 }
 
+func adminPasswordClaims() *auth.VerifiedClaims {
+	return &auth.VerifiedClaims{
+		Subject:           "admin",
+		PreferredUsername: "admin",
+		Realm:             auth.TokenRealmUnknown,
+	}
+}
+
+func bearerMatchesAdminPassword(bearer, password string) bool {
+	if password == "" || bearer == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(bearer), []byte(password)) == 1
+}
+
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodOptions || s.tokenVerifier == nil {
+		if r.Method == http.MethodOptions {
 			next.ServeHTTP(w, r)
 			return
 		}
 
-		token, ok := extractBearerToken(r.Header.Get("Authorization"))
-		if !ok {
+		token, hasToken := extractBearerToken(r.Header.Get("Authorization"))
+		if hasToken && bearerMatchesAdminPassword(token, s.adminPassword) {
+			log.Printf("REST auth accepted: path=%s realm=admin sub=admin", r.URL.Path)
+			next.ServeHTTP(w, withAuthClaims(r, adminPasswordClaims()))
+			return
+		}
+
+		if s.tokenVerifier == nil {
+			writeUnauthorized(w)
+			return
+		}
+
+		if !hasToken {
 			writeUnauthorized(w)
 			return
 		}

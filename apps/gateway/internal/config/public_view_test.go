@@ -35,6 +35,9 @@ func TestPublicViewRedactsSecrets(t *testing.T) {
 			Port:     8000,
 			EnableWS: true,
 		},
+		Auth: AuthConfig{
+			FrontendPassword: "admin-plain-password",
+		},
 	}
 
 	view := cfg.PublicView()
@@ -53,6 +56,7 @@ func TestPublicViewRedactsSecrets(t *testing.T) {
 		"/secrets/apns.p8",
 		"/secrets/apns.pem",
 		"/secrets/apns-key.pem",
+		"admin-plain-password",
 	}
 	for _, secret := range secrets {
 		if strings.Contains(body, secret) {
@@ -71,6 +75,9 @@ func TestPublicViewRedactsSecrets(t *testing.T) {
 	}
 	if view.Sections.Push.TTRSClientSecret != RedactedValue {
 		t.Fatalf("expected redacted TTRS client secret, got %q", view.Sections.Push.TTRSClientSecret)
+	}
+	if view.Sections.Auth.FrontendPassword != RedactedValue {
+		t.Fatalf("expected redacted frontend password, got %q", view.Sections.Auth.FrontendPassword)
 	}
 }
 

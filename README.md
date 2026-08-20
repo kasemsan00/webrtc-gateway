@@ -294,7 +294,8 @@ go test ./...
 | `SIP_TRUNK_ENABLE`                                | เปิดใช้ trunk-based routing                       |
 | `GATEWAY_INSTANCE_ID`                             | ID คงที่ของ instance (สำหรับ HA)                  |
 | `GATEWAY_PUBLIC_WS_URL`                           | Public URL สำหรับ redirect/recovery ข้าม instance |
-| `AUTH_ENABLE` / `AUTH_JWKS_URL`                   | JWT authentication                                |
+| `AUTH_ENABLE` / JWKS URLs                          | JWT authentication for mobile `/ws` and JWT REST  |
+| `FRONTEND_PASSWORD`                               | Shared admin UI login and REST bearer             |
 
 สำหรับ flow browser-to-browser ผ่าน SIP core ต้องใช้ trunk/DB:
 

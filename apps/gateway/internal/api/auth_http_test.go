@@ -532,3 +532,169 @@ func TestWebSocketAuthSkipsMobileProvisioningForEmployeeRealm(t *testing.T) {
 		t.Fatalf("did not expect employee realm to be auto-provisioned")
 	}
 }
+
+func TestAdminPasswordAuthForREST(t *testing.T) {
+	t.Parallel()
+
+	const adminPassword = "ops-secret"
+
+	newRouter := func(srv *Server) *mux.Router {
+		router := mux.NewRouter()
+		router.HandleFunc("/api/client-diagnostics", func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}).Methods("GET")
+		apiRouter := router.PathPrefix("/api").Subrouter()
+		if srv.restAuthEnabled() {
+			apiRouter.Use(srv.authMiddleware)
+		}
+		apiRouter.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+			claims, ok := AuthClaimsFromContext(r.Context())
+			if !ok {
+				t.Fatalf("expected claims in context")
+			}
+			if claims.PreferredUsername == "" {
+				t.Fatalf("expected preferred username on claims")
+			}
+			w.WriteHeader(http.StatusOK)
+		})
+		return router
+	}
+
+	t.Run("password only accepts matching bearer", func(t *testing.T) {
+		srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, nil, nil, nil, nil, nil)
+		srv.SetAdminPassword(adminPassword)
+		router := newRouter(srv)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/health", nil)
+		req.Header.Set("Authorization", "Bearer "+adminPassword)
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", rr.Code)
+		}
+	})
+
+	t.Run("password set rejects wrong bearer when jwt disabled", func(t *testing.T) {
+		srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, nil, nil, nil, nil, nil)
+		srv.SetAdminPassword(adminPassword)
+		router := newRouter(srv)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/health", nil)
+		req.Header.Set("Authorization", "Bearer wrong-secret")
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		if rr.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401, got %d", rr.Code)
+		}
+	})
+
+	t.Run("jwt still works when password is also set", func(t *testing.T) {
+		srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, nil, nil, nil, nil, nil)
+		srv.SetAdminPassword(adminPassword)
+		srv.SetTokenVerifier(tokenVerifierStub{
+			verify: func(_ context.Context, raw string, _ auth.TokenRealm) (*auth.VerifiedClaims, error) {
+				if raw == "valid-token" {
+					return &auth.VerifiedClaims{Subject: "user-1", PreferredUsername: "alice", Realm: auth.TokenRealmUser}, nil
+				}
+				return nil, errors.New("invalid")
+			},
+		})
+		router := newRouter(srv)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/health", nil)
+		req.Header.Set("Authorization", "Bearer valid-token")
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", rr.Code)
+		}
+	})
+
+	t.Run("jwt still required when password unset", func(t *testing.T) {
+		srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, nil, nil, nil, nil, nil)
+		srv.SetTokenVerifier(tokenVerifierStub{
+			verify: func(_ context.Context, raw string, _ auth.TokenRealm) (*auth.VerifiedClaims, error) {
+				if raw == "valid-token" {
+					return &auth.VerifiedClaims{Subject: "user-1", PreferredUsername: "alice", Realm: auth.TokenRealmUser}, nil
+				}
+				return nil, errors.New("invalid")
+			},
+		})
+		router := newRouter(srv)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/health", nil)
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		if rr.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401, got %d", rr.Code)
+		}
+
+		req = httptest.NewRequest(http.MethodGet, "/api/health", nil)
+		req.Header.Set("Authorization", "Bearer valid-token")
+		rr = httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", rr.Code)
+		}
+	})
+
+	t.Run("public get client diagnostics stays unauthenticated", func(t *testing.T) {
+		srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, nil, nil, nil, nil, nil)
+		srv.SetAdminPassword(adminPassword)
+		router := newRouter(srv)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/client-diagnostics", nil)
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("expected 200 without auth, got %d", rr.Code)
+		}
+	})
+}
+
+func TestWebSocketRejectsAdminPassword(t *testing.T) {
+	t.Parallel()
+
+	const adminPassword = "ops-secret"
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, nil, nil, nil, nil, nil)
+	srv.SetAdminPassword(adminPassword)
+	srv.SetTokenVerifier(tokenVerifierStub{
+		verify: func(_ context.Context, raw string, _ auth.TokenRealm) (*auth.VerifiedClaims, error) {
+			if raw == "valid-token" {
+				return &auth.VerifiedClaims{Subject: "user-1", Realm: auth.TokenRealmUser}, nil
+			}
+			return nil, errors.New("invalid")
+		},
+	})
+
+	httpServer := httptest.NewServer(http.HandlerFunc(srv.handleWebSocket))
+	defer httpServer.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(httpServer.URL, "http")
+	dialer := websocket.Dialer{HandshakeTimeout: 2 * time.Second}
+
+	conn, resp, err := dialer.Dial(wsURL+"?access_token="+adminPassword, nil)
+	if conn != nil {
+		_ = conn.Close()
+	}
+	if err == nil {
+		t.Fatalf("expected dial error for admin password")
+	}
+	if resp == nil || resp.StatusCode != http.StatusUnauthorized {
+		status := 0
+		if resp != nil {
+			status = resp.StatusCode
+		}
+		t.Fatalf("expected 401, got %d", status)
+	}
+
+	conn, resp, err = dialer.Dial(wsURL+"?access_token=valid-token", nil)
+	if err != nil {
+		status := 0
+		if resp != nil {
+			status = resp.StatusCode
+		}
+		t.Fatalf("expected successful ws upgrade, err=%v status=%d", err, status)
+	}
+	_ = conn.Close()
+}

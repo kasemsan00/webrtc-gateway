@@ -14,6 +14,18 @@ const isNetlifyBuild = process.env.NETLIFY === 'true'
 const isVitest = process.env.VITEST === 'true'
 const base = viteBaseFromEnv(process.env.VITE_BASE_PATH)
 
+function requireFrontendPasswordPlugin() {
+  return {
+    name: 'require-frontend-password',
+    configureServer() {
+      const password = (process.env.FRONTEND_PASSWORD ?? '').trim()
+      if (!password) {
+        throw new Error('FRONTEND_PASSWORD is not configured')
+      }
+    },
+  }
+}
+
 const config = defineConfig({
   base,
   resolve: {
@@ -22,6 +34,7 @@ const config = defineConfig({
     },
   },
   plugins: [
+    ...(isVitest ? [] : [requireFrontendPasswordPlugin()]),
     ...(isVitest ? [] : [devtools()]),
     ...(isVitest || !isNetlifyBuild ? [] : [netlify()]),
     // this is the plugin that enables path aliases

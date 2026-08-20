@@ -65,9 +65,6 @@ importers:
       clsx:
         specifier: ^2.1.1
         version: 2.1.1
-      keycloak-js:
-        specifier: ^26.2.3
-        version: 26.2.3
       motion:
         specifier: ^12.34.0
         version: 12.35.2(react-dom@19.2.0(react@19.2.0))(react@19.2.0)
@@ -4946,9 +4943,6 @@ packages:
   jwt-decode@4.0.0:
     resolution: {integrity: sha512-+KJGIyHgkGuIq3IEBNftfhW/LfWhXUIY6OmyVWjliu5KH1y0fw7VQ8YndE2O4qZdMSd9SqbnC8GOcZEy0Om7sA==}
     engines: {node: '>=18'}
-
-  keycloak-js@26.2.3:
-    resolution: {integrity: sha512-widjzw/9T6bHRgEp6H/Se3NCCarU7u5CwFKBcwtu7xfA1IfdZb+7Q7/KGusAnBo34Vtls8Oz9vzSqkQvQ7+b4Q==}
 
   keyv@4.5.4:
     resolution: {integrity: sha512-oxVHkHR/EJf2CNXnWxRLW6mg7JyCCUcG0DtEGmL2ctUo1PNTin1PUil+r/+4r5MpVgC/fn1kjsx7mjSujKqIpw==}
@@ -12056,8 +12050,6 @@ snapshots:
       safe-buffer: 5.2.1
 
   jwt-decode@4.0.0: {}
-
-  keycloak-js@26.2.3: {}
 
   keyv@4.5.4:
     dependencies:

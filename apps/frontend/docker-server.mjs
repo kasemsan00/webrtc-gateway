@@ -8,15 +8,14 @@ import app from './dist/server/server.js'
 
 const host = process.env.HOST ?? '0.0.0.0'
 const port = Number(process.env.PORT ?? 4173)
+const frontendPassword = (process.env.FRONTEND_PASSWORD ?? '').trim()
+if (!frontendPassword) {
+  console.error('FRONTEND_PASSWORD is required')
+  process.exit(1)
+}
 const staticRoot = resolve(process.cwd(), 'dist/client')
 const runtimeEnvKeys = [
   'VITE_GATEWAY_URL',
-  'VITE_TURN_URL',
-  'VITE_TURN_USERNAME',
-  'VITE_TURN_CREDENTIAL',
-  'VITE_KEYCLOAK_URL',
-  'VITE_KEYCLOAK_REALM',
-  'VITE_KEYCLOAK_CLIENT',
   'VITE_CONFIG_AUTORECORD',
   'VITE_BASE_PATH',
 ]

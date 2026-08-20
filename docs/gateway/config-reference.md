@@ -29,13 +29,16 @@ From `internal/config/config.go`.
 - `AUTH_JWT_ISSUER` (required when auth enabled)
 - `AUTH_JWT_AUDIENCE` (required when auth enabled)
 - `AUTH_JWKS_TIMEOUT_MS` (default `5000`)
+- `FRONTEND_PASSWORD` (optional on gateway-only processes; required for the admin UI)
 
 When `AUTH_ENABLE=true`:
 
 - Startup is fail-fast if required auth env is missing.
 - Startup is fail-fast if initial JWKS prefetch fails.
-- `/api/*` requires `Authorization: Bearer <jwt>`.
-- `/ws` requires `?access_token=<jwt>`.
+- `/api/*` requires `Authorization: Bearer <jwt>` or `Authorization: Bearer` matching `FRONTEND_PASSWORD` when that env is set.
+- `/ws` requires `?access_token=<jwt>`. The admin password is not accepted on `/ws`.
+
+When `FRONTEND_PASSWORD` is set and `AUTH_ENABLE=false`, authenticated `/api/*` routes still require the matching bearer. Set the same `FRONTEND_PASSWORD` on the frontend process. Do not use a `VITE_` prefix; the frontend server reads it from process env and never injects it into the browser bundle.
 
 ## Debug and media behavior toggles
 
