@@ -29,7 +29,7 @@
 
 - [x] 5.1 Update current root, gateway, frontend, deploy, config, operations, troubleshooting, translator, and delivery documentation while leaving historical archives as provenance.
 - [x] 5.2 Replace hard-coded developer-owned production URLs in examples with a neutral domain unless the document explicitly describes compatibility migration.
-- [ ] 5.3 Audit and update current branding, workspace references, neutral test URLs, and endpoint defaults in `softphone-mobile`, `ems-agent-electron`, and `softphone-kmp-sdk` after the replacement endpoint is available.
+- [x] 5.3 Audit and update current branding, workspace references, neutral test URLs, and endpoint defaults in `softphone-mobile`, `ems-agent-electron`, and `softphone-kmp-sdk` after the replacement endpoint is available.
 - [x] 5.4 Document DNS/TLS and Git-repository redirects plus the explicit criteria for retiring old hostname and image aliases.
 
 ## 6. Verification and rollout
@@ -37,6 +37,6 @@
 - [x] 6.1 Run the temporary-brand scan and review every allowlisted legacy occurrence for a compatibility or historical reason.
 - [x] 6.2 Run `gofmt`, `go test ./...`, and builds for both the gateway and `cmd/db-bootstrap` from `apps/gateway`.
 - [x] 6.3 Run frontend tests, type-check, lint, and production build; verify the generated route tree is regenerated only by the normal build tooling.
-- [ ] 6.4 Build and smoke-test split and unified images, including process health checks, fresh/existing database startup, log listing, and rollback to the prior image.
-- [ ] 6.5 Verify maintained consumer tests/builds in proportion to changed references and confirm WebSocket/SIP/media contracts have no diff.
-- [ ] 6.6 Deploy canonical artifacts with old DNS/image aliases active, migrate consumer defaults, and retire aliases only after the documented compatibility criterion is met.
+- [x] 6.4 Build and smoke-test split and unified images, including process health checks, fresh/existing database startup, log listing, and rollback to the prior image.
+- [x] 6.5 Verify maintained consumer tests/builds in proportion to changed references and confirm WebSocket/SIP/media contracts have no diff.
+- [x] 6.6 Deploy canonical artifacts with old DNS/image aliases active, migrate consumer defaults, and retire aliases only after the documented compatibility criterion is met.
