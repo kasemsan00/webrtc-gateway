@@ -6,6 +6,7 @@ import {
   RiSunLine,
 } from '@remixicon/react'
 import { useMemo } from 'react'
+import { Link } from '@tanstack/react-router'
 import type { ColumnDef } from '@tanstack/react-table'
 
 import type { SessionDirectoryEntry } from '@/features/session-directory/types'
@@ -20,6 +21,7 @@ import { useTheme } from '@/lib/theme'
 import { ExpiryStatusBadge, TimestampCell } from '@/components/ui/table-cells'
 import { fetchSessionDirectory } from '@/features/session-directory/services/session-directory-api'
 import { useServerListController } from '@/lib/use-server-list-controller'
+import { instanceSearchFrom } from '@/lib/operations-navigation'
 
 export function SessionDirectoryPage() {
   const { theme, toggleTheme } = useTheme()
@@ -54,9 +56,13 @@ export function SessionDirectoryPage() {
         accessorKey: 'ownerInstanceId',
         header: 'Owner Instance',
         cell: ({ row }) => (
-          <span className="font-mono text-xs">
+          <Link
+            to="/instances"
+            search={instanceSearchFrom(row.original.ownerInstanceId)}
+            className="font-mono text-xs text-cyan-600 hover:underline dark:text-cyan-400"
+          >
             {row.original.ownerInstanceId}
-          </span>
+          </Link>
         ),
       },
       {

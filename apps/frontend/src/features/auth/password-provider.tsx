@@ -7,13 +7,13 @@ import {
   useState,
 } from 'react'
 
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import {
   clearAdminSession,
   persistAdminPassword,
   restoreAdminPassword,
 } from './password-auth'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 
 interface PasswordAuthContextValue {
   authenticated: boolean
@@ -58,9 +58,7 @@ export function PasswordAuthProvider({
         return true
       } catch (loginError) {
         setError(
-          loginError instanceof Error
-            ? loginError.message
-            : 'Login failed',
+          loginError instanceof Error ? loginError.message : 'Login failed',
         )
         return false
       } finally {
@@ -96,17 +94,15 @@ export function PasswordAuthProvider({
   if (!authenticated) {
     return (
       <PasswordAuthContext.Provider value={value}>
-        <LoginForm
-          error={error}
-          isSubmitting={isSubmitting}
-          onSubmit={login}
-        />
+        <LoginForm error={error} isSubmitting={isSubmitting} onSubmit={login} />
       </PasswordAuthContext.Provider>
     )
   }
 
   return (
-    <PasswordAuthContext.Provider value={value}>{children}</PasswordAuthContext.Provider>
+    <PasswordAuthContext.Provider value={value}>
+      {children}
+    </PasswordAuthContext.Provider>
   )
 }
 

@@ -6,6 +6,7 @@ import {
   RiSunLine,
 } from '@remixicon/react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Link } from '@tanstack/react-router'
 import type { ColumnDef } from '@tanstack/react-table'
 
 import type { ClientDiagnostic } from '@/features/client-diagnostics/types'
@@ -73,6 +74,11 @@ function getDiagnosticPayloadId(
   }
 
   return null
+}
+
+function getDiagnosticSessionId(data: Record<string, unknown> | undefined) {
+  const raw = data?.sessionId
+  return typeof raw === 'string' && raw.trim() !== '' ? raw : null
 }
 
 export function ClientDiagnosticsPage() {
@@ -149,6 +155,15 @@ export function ClientDiagnosticsPage() {
   const columns = useMemo<Array<ColumnDef<ClientDiagnostic>>>(
     () => [
       {
+        accessorKey: 'id',
+        header: 'ID',
+        cell: ({ row }) => (
+          <span className="font-mono text-[10px] text-muted-foreground">
+            #{row.original.id}
+          </span>
+        ),
+      },
+      {
         accessorKey: 'timestamp',
         header: 'Time',
         cell: ({ row }) => (
@@ -209,6 +224,51 @@ export function ClientDiagnosticsPage() {
             {row.original.clientTraceId || '-'}
           </span>
         ),
+      },
+      {
+        accessorKey: 'appVersion',
+        header: 'App',
+        cell: ({ row }) => (
+          <span className="text-xs text-muted-foreground">
+            {row.original.appVersion || '-'}
+          </span>
+        ),
+      },
+      {
+        accessorKey: 'authRealm',
+        header: 'Realm',
+        cell: ({ row }) => (
+          <span className="text-xs text-muted-foreground">
+            {row.original.authRealm || '-'}
+          </span>
+        ),
+      },
+      {
+        accessorKey: 'deviceIdHash',
+        header: 'Device',
+        cell: ({ row }) => (
+          <span className="inline-block max-w-[100px] truncate font-mono text-[10px] text-muted-foreground">
+            {row.original.deviceIdHash || '-'}
+          </span>
+        ),
+      },
+      {
+        id: 'session',
+        header: 'Session',
+        cell: ({ row }) => {
+          const sessionId = getDiagnosticSessionId(row.original.data)
+          return sessionId ? (
+            <Link
+              to="/sessions/$sessionId"
+              params={{ sessionId }}
+              className="font-mono text-[10px] text-cyan-600 hover:underline dark:text-cyan-400"
+            >
+              {sessionId}
+            </Link>
+          ) : (
+            <span className="text-xs text-muted-foreground">-</span>
+          )
+        },
       },
       {
         accessorKey: 'data',

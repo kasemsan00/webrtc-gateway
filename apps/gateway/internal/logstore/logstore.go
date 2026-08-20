@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"webrtc-sip-gateway/internal/config"
@@ -77,12 +78,17 @@ type LogStore interface {
 
 // logStore implements LogStore interface
 type logStore struct {
-	config     config.DBConfig
-	pool       *pgxpool.Pool
-	eventQueue chan *Event
-	statsQueue chan *StatsRecord
-	wg         sync.WaitGroup
-	stopCh     chan struct{}
+	config        config.DBConfig
+	pool          *pgxpool.Pool
+	eventQueue    chan *Event
+	statsQueue    chan *StatsRecord
+	eventAccepted atomic.Uint64
+	eventDropped  atomic.Uint64
+	statsAccepted atomic.Uint64
+	statsDropped  atomic.Uint64
+	lastSuccessNS atomic.Int64
+	wg            sync.WaitGroup
+	stopCh        chan struct{}
 }
 
 // noopStore is a no-op implementation when DB is disabled
@@ -127,6 +133,9 @@ func (n *noopStore) ResolveOrCreateTrunk(ctx context.Context, domain string, por
 func (n *noopStore) ListSessions(ctx context.Context, params SessionListParams) (*SessionListResult, error) {
 	return &SessionListResult{Items: []*SessionRecord{}, Total: 0, Page: 1, PageSize: 20}, nil
 }
+func (n *noopStore) GetSession(ctx context.Context, sessionID string) (*SessionRecord, error) {
+	return nil, ErrDisabled
+}
 func (n *noopStore) ListEvents(ctx context.Context, params EventListParams) (*EventListResult, error) {
 	return &EventListResult{Items: []*EventRecord{}, Total: 0, Page: 1, PageSize: 20}, nil
 }
@@ -162,6 +171,12 @@ func (n *noopStore) GetDashboardSummary(ctx context.Context, params DashboardSum
 }
 func (n *noopStore) GetDB() *pgxpool.Pool {
 	return nil
+}
+
+// LogStoreHealth reports disabled persistence without making callers infer
+// readiness from the non-nil no-op implementation.
+func (n *noopStore) LogStoreHealth() Health {
+	return Health{Enabled: false, Connected: false}
 }
 
 // New creates a new LogStore instance
@@ -201,8 +216,11 @@ func (s *logStore) Start(ctx context.Context) error {
 
 	// Test connection
 	if err := s.pool.Ping(ctx); err != nil {
+		s.pool.Close()
+		s.pool = nil
 		return fmt.Errorf("failed to ping database: %w", err)
 	}
+	s.lastSuccessNS.Store(time.Now().UnixNano())
 
 	fmt.Printf("✅ Database connection established\n")
 	fmt.Printf("📊 Database logging: Enabled\n")
@@ -239,6 +257,32 @@ func (s *logStore) Stop() error {
 
 	fmt.Printf("✅ Log store stopped\n")
 	return nil
+}
+
+// LogStoreHealth returns cached local readiness and bounded queue metrics. It
+// deliberately does not issue a database probe from an HTTP request path.
+func (s *logStore) LogStoreHealth() Health {
+	result := Health{
+		Enabled:   true,
+		Connected: s.pool != nil,
+		Events: QueueHealth{
+			Depth:    len(s.eventQueue),
+			Capacity: cap(s.eventQueue),
+			Accepted: s.eventAccepted.Load(),
+			Dropped:  s.eventDropped.Load(),
+		},
+		Stats: QueueHealth{
+			Depth:    len(s.statsQueue),
+			Capacity: cap(s.statsQueue),
+			Accepted: s.statsAccepted.Load(),
+			Dropped:  s.statsDropped.Load(),
+		},
+	}
+	if unixNano := s.lastSuccessNS.Load(); unixNano > 0 {
+		at := time.Unix(0, unixNano).UTC()
+		result.LastSuccessAt = &at
+	}
+	return result
 }
 
 // UpsertSession inserts or updates a session record
@@ -369,8 +413,9 @@ func (s *logStore) LogEvent(event *Event) {
 
 	select {
 	case s.eventQueue <- event:
-		// Event queued successfully
+		s.eventAccepted.Add(1)
 	default:
+		s.eventDropped.Add(1)
 		// Queue full - drop event and log warning
 		fmt.Printf("⚠️ Event queue full, dropping event: %s/%s\n", event.Category, event.Name)
 	}
@@ -535,8 +580,9 @@ func (s *logStore) RecordStats(stats *StatsRecord) {
 
 	select {
 	case s.statsQueue <- stats:
-		// Stats queued successfully
+		s.statsAccepted.Add(1)
 	default:
+		s.statsDropped.Add(1)
 		// Queue full - drop stats and log warning
 		fmt.Printf("⚠️ Stats queue full, dropping stats for session: %s\n", stats.SessionID)
 	}
@@ -894,6 +940,7 @@ func (s *logStore) ListSessions(ctx context.Context, params SessionListParams) (
 		       cs.sip_call_id, cs.final_state, cs.end_reason,
 		       cs.rtp_audio_port, cs.rtp_video_port, cs.rtcp_audio_port, cs.rtcp_video_port,
 		       cs.sip_opus_pt, COALESCE(cs.audio_profile,''), COALESCE(cs.video_profile,''), COALESCE(cs.video_rejected, false),
+		       COALESCE(cs.auth_mode,''), cs.trunk_id, COALESCE(cs.trunk_name,''), COALESCE(cs.sip_username,''),
 		       cs.meta
 		FROM call_sessions cs
 		LEFT JOIN sip_trunks st
@@ -921,6 +968,7 @@ func (s *logStore) ListSessions(ctx context.Context, params SessionListParams) (
 			&sess.SIPCallID, &sess.FinalState, &sess.EndReason,
 			&sess.RTPAudioPort, &sess.RTPVideoPort, &sess.RTCPAudioPort, &sess.RTCPVideoPort,
 			&sess.SIPOpusPT, &sess.AudioProfile, &sess.VideoProfile, &sess.VideoRejected,
+			&sess.AuthMode, &sess.TrunkID, &sess.TrunkName, &sess.SIPUsername,
 			&metaJSON,
 		)
 		if err != nil {
@@ -941,6 +989,18 @@ func (s *logStore) ListSessions(ctx context.Context, params SessionListParams) (
 		Page:     params.Page,
 		PageSize: params.PageSize,
 	}, nil
+}
+
+// GetSession returns one persisted session through a dedicated typed read path.
+func (s *logStore) GetSession(ctx context.Context, sessionID string) (*SessionRecord, error) {
+	result, err := s.ListSessions(ctx, SessionListParams{SessionID: sessionID, Page: 1, PageSize: 1})
+	if err != nil {
+		return nil, err
+	}
+	if len(result.Items) == 0 {
+		return nil, nil
+	}
+	return result.Items[0], nil
 }
 
 // normalisePagination normalises pagination defaults

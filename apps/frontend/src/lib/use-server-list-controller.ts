@@ -34,6 +34,7 @@ type FetchFn<T, TParams extends ServerListBaseParams> = (
 
 interface UseServerListControllerOptions<TParams extends ServerListBaseParams> {
   defaultPageSize?: number
+  initialSearch?: string
   extraParams?: Omit<TParams, keyof ServerListBaseParams>
 }
 
@@ -44,13 +45,13 @@ export function useServerListController<
   fetchFn: FetchFn<T, TParams>,
   options: UseServerListControllerOptions<TParams> = {},
 ): ServerListState<T> & ServerListActions {
-  const { defaultPageSize = 20, extraParams } = options
+  const { defaultPageSize = 20, initialSearch = '', extraParams } = options
 
   const [items, setItems] = useState<Array<T>>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(defaultPageSize)
-  const [search, setSearch] = useState('')
+  const [search, setSearch] = useState(initialSearch)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 

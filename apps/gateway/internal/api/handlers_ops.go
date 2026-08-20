@@ -310,8 +310,10 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	wsClients := len(s.wsClients)
 	s.mu.RUnlock()
 
-	// Check DB connection
-	dbConnected := s.logStore != nil
+	// Keep the legacy boolean compatible while deriving it from actual
+	// persistence readiness rather than a non-nil no-op store.
+	databaseHealth, _ := s.persistenceHealth()
+	dbConnected := databaseHealth.State == healthConnected
 
 	// Calculate uptime
 	uptime := int64(time.Since(s.startTime).Seconds())

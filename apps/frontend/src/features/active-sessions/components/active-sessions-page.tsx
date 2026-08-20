@@ -28,6 +28,7 @@ import { Separator } from '@/components/ui/separator'
 import Header from '@/components/Header'
 import { useTheme } from '@/lib/theme'
 import { useVisibilityRealtimeReload } from '@/lib/use-visibility-realtime-reload'
+import { trunkSearchFrom } from '@/lib/operations-navigation'
 import {
   fetchActiveSessions,
   subscribeSessionEvents,
@@ -187,6 +188,15 @@ export function ActiveSessionsPage() {
         ),
       },
       {
+        accessorKey: 'sipCallId',
+        header: 'SIP Call-ID',
+        cell: ({ row }) => (
+          <span className="inline-block max-w-[140px] truncate font-mono text-[10px] text-muted-foreground">
+            {row.original.sipCallId || '-'}
+          </span>
+        ),
+      },
+      {
         accessorKey: 'authMode',
         header: 'Auth Mode',
         cell: ({ row }) => {
@@ -199,13 +209,31 @@ export function ActiveSessionsPage() {
         },
       },
       {
-        accessorKey: 'trunkName',
-        header: 'Trunk',
+        accessorKey: 'sipUsername',
+        header: 'SIP User',
         cell: ({ row }) => (
           <span className="text-xs text-muted-foreground">
-            {row.original.trunkName || '-'}
+            {row.original.sipUsername || '-'}
           </span>
         ),
+      },
+      {
+        accessorKey: 'trunkName',
+        header: 'Trunk',
+        cell: ({ row }) =>
+          row.original.trunkId > 0 ? (
+            <Link
+              to="/trunks"
+              search={trunkSearchFrom({ trunkId: row.original.trunkId })}
+              className="text-xs text-cyan-600 hover:underline dark:text-cyan-400"
+            >
+              {row.original.trunkName || `#${row.original.trunkId}`}
+            </Link>
+          ) : (
+            <span className="text-xs text-muted-foreground">
+              {row.original.trunkName || '-'}
+            </span>
+          ),
       },
       {
         accessorKey: 'durationSec',
@@ -232,9 +260,30 @@ export function ActiveSessionsPage() {
               <RiTranslate2 className="size-3" />
               {row.original.translatorSrcLang ?? '?'}→
               {row.original.translatorTgtLang ?? '?'}
+              {row.original.translatorTtsVoice
+                ? ` · ${row.original.translatorTtsVoice}`
+                : ''}
             </Badge>
           )
         },
+      },
+      {
+        accessorKey: 'createdAt',
+        header: 'Created',
+        cell: ({ row }) => (
+          <span className="font-mono text-[10px] text-muted-foreground">
+            {row.original.createdAt || '-'}
+          </span>
+        ),
+      },
+      {
+        accessorKey: 'updatedAt',
+        header: 'Updated',
+        cell: ({ row }) => (
+          <span className="font-mono text-[10px] text-muted-foreground">
+            {row.original.updatedAt || '-'}
+          </span>
+        ),
       },
       {
         id: 'actions',

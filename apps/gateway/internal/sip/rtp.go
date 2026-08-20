@@ -997,12 +997,14 @@ func (s *Server) handleRTCPFromSIP(data []byte, sess *session.Session, rtcpCount
 
 		case *rtcp.ReceiverReport:
 			sawSIPVideoReport = true
+			sess.NoteInboundRTCP("video", "rr")
 			if rtcpCount <= 3 {
 				fmt.Printf("[%s] Received RR from Linphone (SSRC=%d)\n", sess.ID, p.SSRC)
 			}
 
 		case *rtcp.SenderReport:
 			sawSIPVideoReport = true
+			sess.NoteInboundRTCP("video", "sr")
 			if rtcpCount <= 3 {
 				fmt.Printf("[%s] Received SR from Linphone (SSRC=%d)\n", sess.ID, p.SSRC)
 			}
@@ -1206,11 +1208,13 @@ func (s *Server) handleAudioRTCPPacketsForSession(conn *net.UDPConn, sess *sessi
 		for _, pkt := range packets {
 			switch p := pkt.(type) {
 			case *rtcp.ReceiverReport:
+				sess.NoteInboundRTCP("audio", "rr")
 				if rtcpCount <= 3 {
 					fmt.Printf("[%s] 📊 Received audio RR from SIP (SSRC=%d, dedicated port)\n", sess.ID, p.SSRC)
 				}
 
 			case *rtcp.SenderReport:
+				sess.NoteInboundRTCP("audio", "sr")
 				if rtcpCount <= 3 {
 					fmt.Printf("[%s] 📊 Received audio SR from SIP (SSRC=%d, dedicated port)\n", sess.ID, p.SSRC)
 				}

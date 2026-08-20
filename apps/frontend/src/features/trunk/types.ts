@@ -24,6 +24,8 @@ export interface Trunk {
   pnType?: string
   pnTokenMasked?: string
   pnUpdatedAt?: string
+  lastOnlinePlatform?: string
+  lastOnlineAt?: string
   pushContactReady?: boolean
   createdAt: string
   updatedAt: string

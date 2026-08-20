@@ -51,6 +51,7 @@ type Server struct {
 	wsClientStreamSeq  int
 	incomingCounters   map[string]int64
 	diagnosticLimits   map[string]*diagnosticRateState
+	healthProviders    map[string]OperationalHealthProvider
 	startTime          time.Time
 	mu                 sync.RWMutex
 }
@@ -211,8 +212,28 @@ func NewServer(cfg config.APIConfig, turnCfg config.TURNConfig, gatewayCfg confi
 		wsClientStreams:    make(map[int]chan []byte),
 		incomingCounters:   make(map[string]int64),
 		diagnosticLimits:   make(map[string]*diagnosticRateState),
+		healthProviders:    make(map[string]OperationalHealthProvider),
 		startTime:          time.Now(),
 	}
+}
+
+// OperationalHealthProvider supplies a cached or bounded component snapshot.
+// Implementations must not run network I/O from Health; readiness probes should
+// be performed by their own lifecycle worker and cached by the provider.
+type OperationalHealthProvider interface {
+	OperationalHealth() HealthComponentResponse
+}
+
+// SetOperationalHealthProvider registers a narrow readiness adapter for a
+// runtime dependency such as SIP, translator, push, or session directory.
+func (s *Server) SetOperationalHealthProvider(component string, provider OperationalHealthProvider) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if provider == nil {
+		delete(s.healthProviders, component)
+		return
+	}
+	s.healthProviders[component] = provider
 }
 
 // SetTranslatorClient sets the translator client for S2S translation.
@@ -256,6 +277,7 @@ func (s *Server) SetRuntimeConfig(cfg *config.Config) {
 
 // Start starts the HTTP server with graceful shutdown support
 func (s *Server) Start(ctx context.Context) error {
+	s.startStatsCollector(ctx)
 	router := mux.NewRouter()
 
 	// Enable CORS
@@ -298,6 +320,7 @@ func (s *Server) Start(ctx context.Context) error {
 		api.HandleFunc("/dtmf/{sessionId}", s.handleDTMF).Methods("POST", "OPTIONS")
 		api.HandleFunc("/switch", s.handleSwitch).Methods("POST", "OPTIONS")
 		api.HandleFunc("/sessions/history", s.handleListSessionHistory).Methods("GET", "OPTIONS")
+		api.HandleFunc("/sessions/{sessionId}/overview", s.handleGetSessionOverview).Methods("GET", "OPTIONS")
 		api.HandleFunc("/sessions/{sessionId}/events", s.handleListSessionEvents).Methods("GET", "OPTIONS")
 		api.HandleFunc("/sessions/{sessionId}/payloads", s.handleListSessionPayloads).Methods("GET", "OPTIONS")
 		api.HandleFunc("/sessions/{sessionId}/dialogs", s.handleListSessionDialogs).Methods("GET", "OPTIONS")
@@ -309,6 +332,7 @@ func (s *Server) Start(ctx context.Context) error {
 		api.HandleFunc("/ws-clients", s.handleListWSClients).Methods("GET", "OPTIONS")
 		api.HandleFunc("/ws-clients/stream", s.handleWSClientsStream).Methods("GET", "OPTIONS")
 		api.HandleFunc("/dashboard", s.handleDashboard).Methods("GET", "OPTIONS")
+		api.HandleFunc("/health/details", s.handleDetailedHealth).Methods("GET", "OPTIONS")
 		api.HandleFunc("/dashboard/summary", s.handleDashboardSummary).Methods("GET", "OPTIONS")
 		api.HandleFunc("/config", s.handleGetConfig).Methods("GET", "OPTIONS")
 		api.HandleFunc("/client-diagnostics", s.handleClientDiagnostics).Methods("POST", "OPTIONS")

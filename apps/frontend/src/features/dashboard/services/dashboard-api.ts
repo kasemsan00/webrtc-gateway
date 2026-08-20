@@ -1,6 +1,7 @@
 import type {
   DashboardSummaryParams,
   DashboardSummaryResponse,
+  DetailedHealthResponse,
 } from '@/features/dashboard/types'
 import type { GatewayDashboard } from '@/features/gateway-instances/types'
 import { fetchJson, resolveGatewayApiBaseUrl } from '@/lib/http-client'
@@ -21,4 +22,8 @@ export async function fetchDashboardSummary(
 
 export async function fetchGatewayHealth(): Promise<GatewayDashboard> {
   return fetchJson<GatewayDashboard>(`${API_BASE}/dashboard`)
+}
+
+export async function fetchDetailedHealth(): Promise<DetailedHealthResponse> {
+  return fetchJson<DetailedHealthResponse>(`${API_BASE}/health/details`)
 }

@@ -12,6 +12,7 @@ import type { ColumnDef } from '@tanstack/react-table'
 import type {
   SessionDialog,
   SessionEvent,
+  SessionOverview,
   SessionPayload,
   SessionStats,
 } from '@/features/session-detail/types'
@@ -35,12 +36,14 @@ import {
   fetchPayload,
   fetchSessionDialogs,
   fetchSessionEvents,
+  fetchSessionOverview,
   fetchSessionPayloads,
   fetchSessionStats,
 } from '@/features/session-detail/services/session-detail-api'
 import { ClientDiagnosticsTab } from '@/features/session-detail/components/client-diagnostics-tab'
 
 type TabType =
+  | 'overview'
   | 'events'
   | 'payloads'
   | 'dialogs'
@@ -55,6 +58,36 @@ type EventQuickFilter =
   | 'noAnswer480'
 
 const DEFAULT_PAGE_SIZE = 50
+const MAX_EVIDENCE_CHARS = 16_000
+
+export function formatEvidence(value: unknown) {
+  const text =
+    typeof value === 'string' ? value : JSON.stringify(value, null, 2)
+  if (!text) return '(empty)'
+  return text.length > MAX_EVIDENCE_CHARS
+    ? `${text.slice(0, MAX_EVIDENCE_CHARS)}\n… preview truncated`
+    : text
+}
+
+function copyEvidence(value: unknown) {
+  void navigator.clipboard.writeText(formatEvidence(value))
+}
+
+function downloadBinaryPayload(payload: SessionPayload) {
+  if (!payload.bodyBytesB64) return
+  const decoded = atob(payload.bodyBytesB64)
+  const bytes = Uint8Array.from(decoded, (character) => character.charCodeAt(0))
+  const url = URL.createObjectURL(
+    new Blob([bytes], {
+      type: payload.contentType || 'application/octet-stream',
+    }),
+  )
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = `payload-${payload.payloadId}`
+  anchor.click()
+  URL.revokeObjectURL(url)
+}
 
 const formatTimestamp = (iso: string) =>
   formatThaiDateTime(iso, {
@@ -107,7 +140,7 @@ export function SessionDetailPage() {
   const { theme, toggleTheme } = useTheme()
   const params = useParams({ strict: false })
   const sessionId = (params as Record<string, string>).sessionId || ''
-  const [tab, setTab] = useState<TabType>('events')
+  const [tab, setTab] = useState<TabType>('overview')
 
   return (
     <div className="flex h-screen flex-col bg-background text-foreground">
@@ -148,6 +181,7 @@ export function SessionDetailPage() {
       <div className="flex gap-0.5 border-b border-border px-4 pt-2">
         {(
           [
+            'overview',
             'events',
             'payloads',
             'dialogs',
@@ -174,12 +208,96 @@ export function SessionDetailPage() {
       {/* Tab content */}
       <div className="flex-1 overflow-y-auto p-4">
         {tab === 'events' && <EventsTab sessionId={sessionId} />}
+        {tab === 'overview' && <OverviewTab sessionId={sessionId} />}
         {tab === 'payloads' && <PayloadsTab sessionId={sessionId} />}
         {tab === 'dialogs' && <DialogsTab sessionId={sessionId} />}
         {tab === 'stats' && <StatsTab sessionId={sessionId} />}
         {tab === 'client-diagnostics' && (
           <ClientDiagnosticsTab sessionId={sessionId} />
         )}
+      </div>
+    </div>
+  )
+}
+
+function OverviewTab({ sessionId }: { sessionId: string }) {
+  const [overview, setOverview] = useState<SessionOverview | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const load = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      setOverview(await fetchSessionOverview(sessionId))
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : 'Failed to fetch session overview',
+      )
+    } finally {
+      setLoading(false)
+    }
+  }, [sessionId])
+  useEffect(() => {
+    void load()
+  }, [load])
+  if (loading) return <LoadingState />
+  if (error) return <ErrorBanner error={error} />
+  if (!overview) return null
+  const fields: Array<[string, string | number | boolean | undefined]> = [
+    ['State', overview.liveState || overview.finalState],
+    ['Direction', overview.direction],
+    ['Outcome', overview.endReason],
+    ['SIP Call-ID', overview.sipCallId],
+    ['Auth mode', overview.authMode],
+    ['Trunk', overview.trunkName || overview.trunkId],
+    ['SIP username', overview.sipUsername],
+    ['Audio profile', overview.audioProfile],
+    ['Video profile', overview.videoProfile],
+    ['Opus PT', overview.sipOpusPt],
+    [
+      'Audio RTP/RTCP',
+      overview.rtpAudioPort &&
+        `${overview.rtpAudioPort} / ${overview.rtcpAudioPort || '-'}`,
+    ],
+    [
+      'Video RTP/RTCP',
+      overview.rtpVideoPort &&
+        `${overview.rtpVideoPort} / ${overview.rtcpVideoPort || '-'}`,
+    ],
+    ['Video rejected', overview.videoRejected],
+    ['Created', overview.createdAt && formatTimestamp(overview.createdAt)],
+    ['Updated', overview.updatedAt && formatTimestamp(overview.updatedAt)],
+    ['Ended', overview.endedAt && formatTimestamp(overview.endedAt)],
+    [
+      'Live duration',
+      overview.liveDurationSec !== undefined
+        ? `${overview.liveDurationSec}s`
+        : undefined,
+    ],
+  ]
+  return (
+    <div className="space-y-3">
+      <Button
+        size="sm"
+        variant="outline"
+        className="h-7 gap-1 px-2 text-xs"
+        onClick={() => void load()}
+      >
+        <RiRefreshLine className="size-3" />
+        Refresh
+      </Button>
+      <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+        {fields.map(([label, value]) => (
+          <div
+            key={label}
+            className="rounded-md border border-border p-3 text-xs"
+          >
+            <div className="text-muted-foreground">{label}</div>
+            <div className="mt-1 break-all font-medium">
+              {value === undefined || value === '' ? '-' : String(value)}
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   )
@@ -210,6 +328,7 @@ function EventsTab({ sessionId }: { sessionId: string }) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [quickFilter, setQuickFilter] = useState<EventQuickFilter>('all')
+  const [viewEvent, setViewEvent] = useState<SessionEvent | null>(null)
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
 
@@ -289,6 +408,15 @@ function EventsTab({ sessionId }: { sessionId: string }) {
         ),
       },
       {
+        accessorKey: 'sipCallId',
+        header: 'SIP Call-ID',
+        cell: ({ row }) => (
+          <span className="inline-block max-w-[140px] truncate font-mono text-[10px] text-muted-foreground">
+            {row.original.sipCallId || '-'}
+          </span>
+        ),
+      },
+      {
         accessorKey: 'payloadId',
         header: 'Payload',
         cell: ({ row }) => (
@@ -296,6 +424,23 @@ function EventsTab({ sessionId }: { sessionId: string }) {
             {row.original.payloadId ? `#${row.original.payloadId}` : '-'}
           </span>
         ),
+      },
+      {
+        id: 'details',
+        header: 'Details',
+        cell: ({ row }) =>
+          row.original.data && Object.keys(row.original.data).length > 0 ? (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-6 px-2 text-[10px]"
+              onClick={() => setViewEvent(row.original)}
+            >
+              View
+            </Button>
+          ) : (
+            <span className="text-xs text-muted-foreground">-</span>
+          ),
       },
     ],
     [],
@@ -356,6 +501,32 @@ function EventsTab({ sessionId }: { sessionId: string }) {
         }}
         totalLabel="records"
       />
+      <Dialog
+        open={!!viewEvent}
+        onOpenChange={(open) => {
+          if (!open) setViewEvent(null)
+        }}
+      >
+        <DialogContent className="max-h-[80vh] max-w-3xl overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Event details</DialogTitle>
+            <DialogDescription>
+              {viewEvent?.name} · {viewEvent?.sipCallId || 'no SIP Call-ID'}
+            </DialogDescription>
+          </DialogHeader>
+          <Button
+            size="sm"
+            variant="outline"
+            className="w-fit"
+            onClick={() => copyEvidence(viewEvent?.data)}
+          >
+            Copy JSON
+          </Button>
+          <pre className="max-h-[60vh] overflow-auto rounded-md bg-muted p-3 text-xs">
+            {formatEvidence(viewEvent?.data)}
+          </pre>
+        </DialogContent>
+      </Dialog>
     </>
   )
 }
@@ -534,8 +705,46 @@ function PayloadsTab({ sessionId }: { sessionId: string }) {
             </DialogDescription>
           </DialogHeader>
           <pre className="max-h-[60vh] overflow-auto rounded-md bg-muted p-3 text-xs">
-            {viewPayload?.bodyText || '(empty)'}
+            {formatEvidence(viewPayload?.bodyText)}
           </pre>
+          <Button
+            size="sm"
+            variant="outline"
+            className="w-fit"
+            onClick={() => copyEvidence(viewPayload?.bodyText)}
+          >
+            Copy raw
+          </Button>
+          <div className="space-y-2 text-xs">
+            <div>
+              <span className="text-muted-foreground">Binary payload: </span>
+              {viewPayload?.bodyBytesB64
+                ? `${viewPayload.bodyBytesB64.length} base64 characters (not rendered)`
+                : '-'}
+            </div>
+            {viewPayload?.bodyBytesB64 ? (
+              <Button
+                size="sm"
+                variant="outline"
+                className="w-fit"
+                onClick={() => downloadBinaryPayload(viewPayload)}
+              >
+                Download binary
+              </Button>
+            ) : null}
+            <div className="font-medium">Parsed</div>
+            <Button
+              size="sm"
+              variant="outline"
+              className="w-fit"
+              onClick={() => copyEvidence(viewPayload?.parsed)}
+            >
+              Copy parsed
+            </Button>
+            <pre className="max-h-64 overflow-auto rounded-md bg-muted p-3 text-xs">
+              {formatEvidence(viewPayload?.parsed)}
+            </pre>
+          </div>
         </DialogContent>
       </Dialog>
     </>
@@ -689,6 +898,7 @@ function StatsTab({ sessionId }: { sessionId: string }) {
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [viewData, setViewData] = useState<Record<string, unknown> | null>(null)
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
 
@@ -718,6 +928,23 @@ function StatsTab({ sessionId }: { sessionId: string }) {
 
   const columns = useMemo<Array<ColumnDef<SessionStats>>>(
     () => [
+      {
+        id: 'details',
+        header: 'Details',
+        cell: ({ row }) =>
+          row.original.data && Object.keys(row.original.data).length > 0 ? (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-6 px-2 text-[10px]"
+              onClick={() => setViewData(row.original.data || null)}
+            >
+              View
+            </Button>
+          ) : (
+            <span className="text-xs text-muted-foreground">-</span>
+          ),
+      },
       {
         accessorKey: 'timestamp',
         header: 'Timestamp',
@@ -828,6 +1055,21 @@ function StatsTab({ sessionId }: { sessionId: string }) {
         }}
         totalLabel="records"
       />
+      <Dialog
+        open={!!viewData}
+        onOpenChange={(open) => {
+          if (!open) setViewData(null)
+        }}
+      >
+        <DialogContent className="max-h-[80vh] max-w-3xl overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Statistics details</DialogTitle>
+          </DialogHeader>
+          <pre className="max-h-[60vh] overflow-auto rounded-md bg-muted p-3 text-xs">
+            {formatEvidence(viewData)}
+          </pre>
+        </DialogContent>
+      </Dialog>
     </>
   )
 }

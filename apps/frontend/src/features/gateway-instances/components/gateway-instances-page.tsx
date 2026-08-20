@@ -7,6 +7,7 @@ import {
   RiSunLine,
 } from '@remixicon/react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useSearch } from '@tanstack/react-router'
 import type { ColumnDef } from '@tanstack/react-table'
 
 import type {
@@ -136,6 +137,7 @@ function ClientAvailabilityBadge({ availability }: { availability?: string }) {
 
 export function GatewayInstancesPage() {
   const { theme, toggleTheme } = useTheme()
+  const routeSearch = useSearch({ from: '/instances' })
   const [dashboard, setDashboard] = useState<GatewayDashboard | null>(null)
   const [wsClients, setWsClients] = useState<Array<WSClient>>([])
   const [wsClientsDialogOpen, setWsClientsDialogOpen] = useState(false)
@@ -154,7 +156,9 @@ export function GatewayInstancesPage() {
     handlePageSizeChange,
     debouncedSearch,
     reload,
-  } = useServerListController(fetchGatewayInstances)
+  } = useServerListController(fetchGatewayInstances, {
+    initialSearch: routeSearch.search ?? '',
+  })
 
   const loadOverview = useCallback(async () => {
     try {

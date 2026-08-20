@@ -13,16 +13,20 @@ import (
 
 // SessionHistoryResponse represents a call session entry for REST responses
 type SessionHistoryResponse struct {
-	SessionID  string `json:"sessionId"`
-	CreatedAt  string `json:"createdAt"`
-	UpdatedAt  string `json:"updatedAt"`
-	EndedAt    string `json:"endedAt,omitempty"`
-	Direction  string `json:"direction"`
-	FromURI    string `json:"fromUri"`
-	ToURI      string `json:"toUri"`
-	SIPCallID  string `json:"sipCallId"`
-	FinalState string `json:"finalState"`
-	EndReason  string `json:"endReason"`
+	SessionID   string `json:"sessionId"`
+	CreatedAt   string `json:"createdAt"`
+	UpdatedAt   string `json:"updatedAt"`
+	EndedAt     string `json:"endedAt,omitempty"`
+	Direction   string `json:"direction"`
+	FromURI     string `json:"fromUri"`
+	ToURI       string `json:"toUri"`
+	SIPCallID   string `json:"sipCallId"`
+	FinalState  string `json:"finalState"`
+	EndReason   string `json:"endReason"`
+	AuthMode    string `json:"authMode,omitempty"`
+	TrunkID     *int64 `json:"trunkId,omitempty"`
+	TrunkName   string `json:"trunkName,omitempty"`
+	SIPUsername string `json:"sipUsername,omitempty"`
 }
 
 // SessionHistoryListResponse represents a paginated list of call sessions
@@ -86,16 +90,20 @@ func (s *Server) handleListSessionHistory(w http.ResponseWriter, r *http.Request
 	items := make([]SessionHistoryResponse, 0, len(result.Items))
 	for _, sess := range result.Items {
 		items = append(items, SessionHistoryResponse{
-			SessionID:  sess.SessionID,
-			CreatedAt:  sess.CreatedAt.Format(time.RFC3339),
-			UpdatedAt:  sess.UpdatedAt.Format(time.RFC3339),
-			EndedAt:    formatOptionalTime(sess.EndedAt),
-			Direction:  sess.Direction,
-			FromURI:    sess.FromURI,
-			ToURI:      sess.ToURI,
-			SIPCallID:  sess.SIPCallID,
-			FinalState: sess.FinalState,
-			EndReason:  sess.EndReason,
+			SessionID:   sess.SessionID,
+			CreatedAt:   sess.CreatedAt.Format(time.RFC3339),
+			UpdatedAt:   sess.UpdatedAt.Format(time.RFC3339),
+			EndedAt:     formatOptionalTime(sess.EndedAt),
+			Direction:   sess.Direction,
+			FromURI:     sess.FromURI,
+			ToURI:       sess.ToURI,
+			SIPCallID:   sess.SIPCallID,
+			FinalState:  sess.FinalState,
+			EndReason:   sess.EndReason,
+			AuthMode:    sess.AuthMode,
+			TrunkID:     sess.TrunkID,
+			TrunkName:   sess.TrunkName,
+			SIPUsername: sess.SIPUsername,
 		})
 	}
 
@@ -105,6 +113,88 @@ func (s *Server) handleListSessionHistory(w http.ResponseWriter, r *http.Request
 		Page:     result.Page,
 		PageSize: result.PageSize,
 	})
+}
+
+// SessionOverviewResponse intentionally mirrors only reviewed persisted and
+// live session facts. Internal metadata (including account keys and secrets)
+// is never returned through this API.
+type SessionOverviewResponse struct {
+	SessionID       string `json:"sessionId"`
+	CreatedAt       string `json:"createdAt,omitempty"`
+	UpdatedAt       string `json:"updatedAt,omitempty"`
+	EndedAt         string `json:"endedAt,omitempty"`
+	Direction       string `json:"direction,omitempty"`
+	FromURI         string `json:"fromUri,omitempty"`
+	ToURI           string `json:"toUri,omitempty"`
+	SIPCallID       string `json:"sipCallId,omitempty"`
+	FinalState      string `json:"finalState,omitempty"`
+	EndReason       string `json:"endReason,omitempty"`
+	AuthMode        string `json:"authMode,omitempty"`
+	TrunkID         *int64 `json:"trunkId,omitempty"`
+	TrunkName       string `json:"trunkName,omitempty"`
+	SIPUsername     string `json:"sipUsername,omitempty"`
+	RTPAudioPort    int    `json:"rtpAudioPort,omitempty"`
+	RTPVideoPort    int    `json:"rtpVideoPort,omitempty"`
+	RTCPAudioPort   int    `json:"rtcpAudioPort,omitempty"`
+	RTCPVideoPort   int    `json:"rtcpVideoPort,omitempty"`
+	SIPOpusPT       int    `json:"sipOpusPt,omitempty"`
+	AudioProfile    string `json:"audioProfile,omitempty"`
+	VideoProfile    string `json:"videoProfile,omitempty"`
+	VideoRejected   bool   `json:"videoRejected"`
+	LiveState       string `json:"liveState,omitempty"`
+	LiveDurationSec int64  `json:"liveDurationSec,omitempty"`
+}
+
+func overviewFromRecord(record *logstore.SessionRecord) SessionOverviewResponse {
+	return SessionOverviewResponse{
+		SessionID: record.SessionID, CreatedAt: record.CreatedAt.Format(time.RFC3339), UpdatedAt: record.UpdatedAt.Format(time.RFC3339),
+		EndedAt: formatOptionalTime(record.EndedAt), Direction: record.Direction, FromURI: record.FromURI, ToURI: record.ToURI,
+		SIPCallID: record.SIPCallID, FinalState: record.FinalState, EndReason: record.EndReason, AuthMode: record.AuthMode,
+		TrunkID: record.TrunkID, TrunkName: record.TrunkName, SIPUsername: record.SIPUsername,
+		RTPAudioPort: record.RTPAudioPort, RTPVideoPort: record.RTPVideoPort, RTCPAudioPort: record.RTCPAudioPort, RTCPVideoPort: record.RTCPVideoPort,
+		SIPOpusPT: record.SIPOpusPT, AudioProfile: record.AudioProfile, VideoProfile: record.VideoProfile, VideoRejected: record.VideoRejected,
+	}
+}
+
+// handleGetSessionOverview joins safe persisted evidence with the current
+// in-memory state when this gateway still owns the active session.
+func (s *Server) handleGetSessionOverview(w http.ResponseWriter, r *http.Request) {
+	if s.logStore == nil {
+		s.respondError(w, http.StatusServiceUnavailable, "Database logging not available")
+		return
+	}
+	sessionID := mux.Vars(r)["sessionId"]
+	if sessionID == "" {
+		s.respondError(w, http.StatusBadRequest, "Session ID is required")
+		return
+	}
+	var record *logstore.SessionRecord
+	var err error
+	if reader, ok := s.logStore.(logstore.SessionOverviewReader); ok {
+		record, err = reader.GetSession(r.Context(), sessionID)
+	} else {
+		var result *logstore.SessionListResult
+		result, err = s.logStore.ListSessions(r.Context(), logstore.SessionListParams{SessionID: sessionID, Page: 1, PageSize: 1})
+		if err == nil && len(result.Items) > 0 {
+			record = result.Items[0]
+		}
+	}
+	if err != nil {
+		s.respondError(w, http.StatusInternalServerError, "Failed to load session overview")
+		return
+	}
+	if record == nil {
+		s.respondError(w, http.StatusNotFound, "Session not found")
+		return
+	}
+	overview := overviewFromRecord(record)
+	if s.sessionMgr != nil {
+		if active, ok := s.sessionMgr.GetSession(sessionID); ok {
+			overview.LiveState = string(active.GetState())
+			overview.LiveDurationSec = int64(time.Since(active.CreatedAt).Seconds())
+		}
+	}
+	s.respondJSON(w, http.StatusOK, overview)
 }
 
 // --- Session Detail Handlers ---

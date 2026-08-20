@@ -136,7 +136,7 @@ describe('trunkPrefsStore column visibility', () => {
     })
   })
 
-  it('hydrates persisted prefs on initialize', async () => {
+  it('hydrates persisted prefs on initialize', () => {
     localStorage.setItem(
       'k2_trunk_prefs',
       JSON.stringify({

@@ -6,14 +6,15 @@ import {
   RiRefreshLine,
   RiSunLine,
 } from '@remixicon/react'
+import { Link } from '@tanstack/react-router'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   fetchWSClients,
   subscribeWSClientEvents,
 } from '../services/ws-clients-api'
-import type { ColumnDef } from '@tanstack/react-table'
-import type { WSClient, WSClientStreamEvent } from '../types'
 import { resolveWSClientPresenceLabel } from '../types'
+import type { WSClient, WSClientStreamEvent } from '../types'
+import type { ColumnDef } from '@tanstack/react-table'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -146,6 +147,15 @@ export function WSClientsPage() {
   const columns = useMemo<Array<ColumnDef<WSClient>>>(
     () => [
       {
+        accessorKey: 'connectedAt',
+        header: 'Connected',
+        cell: ({ row }) => (
+          <span className="font-mono text-[10px] text-muted-foreground">
+            {row.original.connectedAt || '-'}
+          </span>
+        ),
+      },
+      {
         accessorKey: 'clientId',
         header: 'Client ID',
         cell: ({ row }) => (
@@ -157,11 +167,18 @@ export function WSClientsPage() {
       {
         accessorKey: 'sessionId',
         header: 'Session',
-        cell: ({ row }) => (
-          <span className="font-mono text-xs text-muted-foreground">
-            {row.original.sessionId || '-'}
-          </span>
-        ),
+        cell: ({ row }) =>
+          row.original.sessionId ? (
+            <Link
+              to="/sessions/$sessionId"
+              params={{ sessionId: row.original.sessionId }}
+              className="font-mono text-xs text-cyan-600 hover:underline dark:text-cyan-400"
+            >
+              {row.original.sessionId}
+            </Link>
+          ) : (
+            <span className="font-mono text-xs text-muted-foreground">-</span>
+          ),
       },
       {
         id: 'mode',
@@ -172,7 +189,7 @@ export function WSClientsPage() {
           let variant: 'default' | 'success' | 'warning' | 'outline' = 'outline'
           if (mode === 'agent') variant = 'warning'
           else if (mode === 'mobile') variant = 'success'
-          else if (mode === 'public') variant = 'default'
+          else variant = 'default'
           return (
             <div className="flex flex-col gap-0.5">
               <Badge variant={variant} className="w-fit text-[10px]">
@@ -229,6 +246,22 @@ export function WSClientsPage() {
         header: 'Call State',
         cell: ({ row }) => (
           <span className="text-xs">{row.original.callState || '-'}</span>
+        ),
+      },
+      {
+        accessorKey: 'multiCall',
+        header: 'Multi-call',
+        cell: ({ row }) => (
+          <span className="text-xs text-muted-foreground">
+            {row.original.multiCall ? 'Enabled' : 'No'}
+          </span>
+        ),
+      },
+      {
+        accessorKey: 'activeCalls',
+        header: 'Active calls',
+        cell: ({ row }) => (
+          <span className="text-xs">{row.original.activeCalls ?? 0}</span>
         ),
       },
       {

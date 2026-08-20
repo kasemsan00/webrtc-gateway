@@ -1,6 +1,7 @@
 import type {
   SessionDialogListResponse,
   SessionEventListResponse,
+  SessionOverview,
   SessionPayload,
   SessionPayloadListResponse,
   SessionStatsListResponse,
@@ -28,6 +29,14 @@ export async function fetchSessionEvents(
     sipStatusCode: params.sipStatusCode,
   })
   return fetchJson<SessionEventListResponse>(url)
+}
+
+export async function fetchSessionOverview(
+  sessionId: string,
+): Promise<SessionOverview> {
+  return fetchJson<SessionOverview>(
+    `${API_BASE}/sessions/${sessionId}/overview`,
+  )
 }
 
 export async function fetchSessionPayloads(

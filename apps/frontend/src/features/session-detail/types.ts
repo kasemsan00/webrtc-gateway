@@ -77,3 +77,30 @@ export interface SessionStatsListResponse {
   page: number
   pageSize: number
 }
+
+export interface SessionOverview {
+  SessionId: string
+  CreatedAt?: string
+  UpdatedAt?: string
+  EndedAt?: string
+  Direction?: string
+  FromUri?: string
+  ToUri?: string
+  SipCallId?: string
+  FinalState?: string
+  EndReason?: string
+  AuthMode?: string
+  TrunkId?: number
+  TrunkName?: string
+  SipUsername?: string
+  RtpAudioPort?: number
+  RtpVideoPort?: number
+  RtcpAudioPort?: number
+  RtcpVideoPort?: number
+  SipOpusPt?: number
+  AudioProfile?: string
+  VideoProfile?: string
+  VideoRejected: boolean
+  LiveState?: string
+  LiveDurationSec?: number
+}

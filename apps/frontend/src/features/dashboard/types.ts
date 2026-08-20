@@ -1,5 +1,24 @@
 export type DashboardPeriod = 'day' | 'month' | 'year'
 
+export type OperationalHealthState =
+  | 'disabled'
+  | 'connected'
+  | 'degraded'
+  | 'unavailable'
+  | 'unknown'
+
+export interface OperationalHealthComponent {
+  state: OperationalHealthState
+  reason?: string
+  lastSuccessAt?: string
+  details?: Record<string, number>
+}
+
+export interface DetailedHealthResponse {
+  checkedAt: string
+  components: Record<string, OperationalHealthComponent>
+}
+
 export interface DashboardSummaryMetrics {
   periodSessions: number
   activeSessions: number

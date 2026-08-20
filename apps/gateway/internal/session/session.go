@@ -273,15 +273,19 @@ type Session struct {
 	// keep advertising video.
 	sipOfferIncludeVideo *bool
 	// PLI (Picture Loss Indication) tracking
-	PLISent                   int          `json:"pliSent"`
-	PLIResponse               int          `json:"pliResponse"`
-	LastPLISent               time.Time    `json:"-"`
-	LastKeyframe              time.Time    `json:"-"`
-	sipVideoRTPUnixNano       atomic.Int64 `json:"-"`
-	sipVideoRequireHealthyIDR atomic.Bool  `json:"-"`
-	sipVideoHealthyIDR        atomic.Bool  `json:"-"`
-	FIRSeq                    uint8        `json:"-"`
-	RTPBufferSize             int          `json:"-"` // RTP/RTCP packet buffer size (from Config.RTP.BufferSize, minimum 1500)
+	PLISent                   int           `json:"pliSent"`
+	PLIResponse               int           `json:"pliResponse"`
+	LastPLISent               time.Time     `json:"-"`
+	LastKeyframe              time.Time     `json:"-"`
+	AudioRTCPRRCount          atomic.Uint64 `json:"-"`
+	AudioRTCPSRCount          atomic.Uint64 `json:"-"`
+	VideoRTCPRRCount          atomic.Uint64 `json:"-"`
+	VideoRTCPSRCount          atomic.Uint64 `json:"-"`
+	sipVideoRTPUnixNano       atomic.Int64  `json:"-"`
+	sipVideoRequireHealthyIDR atomic.Bool   `json:"-"`
+	sipVideoHealthyIDR        atomic.Bool   `json:"-"`
+	FIRSeq                    uint8         `json:"-"`
+	RTPBufferSize             int           `json:"-"` // RTP/RTCP packet buffer size (from Config.RTP.BufferSize, minimum 1500)
 	// Video RTP retransmission cache (for WebRTC NACK handling)
 	VideoRTPHistoryPackets [][]byte `json:"-"`
 	VideoRTPHistorySeq     []uint16 `json:"-"`
@@ -351,6 +355,23 @@ type Snapshot struct {
 	InboundTranslatorTTSVoice string
 }
 
+// ObservabilitySnapshot is a lock-protected, low-cost view of counters already
+// maintained by the session. It deliberately does not calculate new metrics in
+// RTP/RTCP packet loops.
+type ObservabilitySnapshot struct {
+	SessionID       string
+	PLISent         int
+	PLIResponse     int
+	AudioRTCPRR     int
+	AudioRTCPSR     int
+	VideoRTCPRR     int
+	VideoRTCPSR     int
+	LastPLISentAt   *time.Time
+	LastKeyframeAt  *time.Time
+	MediaForwardOK  bool
+	VideoRecoveryOn bool
+}
+
 // Snapshot returns a thread-safe snapshot of session metadata for logging.
 func (s *Session) Snapshot() Snapshot {
 	s.mu.RLock()
@@ -378,6 +399,50 @@ func (s *Session) Snapshot() Snapshot {
 		InboundTranslatorSrcLang:  s.InboundTranslatorSrcLang,
 		InboundTranslatorTgtLang:  s.InboundTranslatorTgtLang,
 		InboundTranslatorTTSVoice: s.InboundTranslatorTTSVoice,
+	}
+}
+
+// Observability returns a consistent statistics snapshot for an external
+// periodic collector. The caller performs persistence after this lock is
+// released.
+func (s *Session) Observability() ObservabilitySnapshot {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	result := ObservabilitySnapshot{
+		SessionID:       s.ID,
+		PLISent:         s.PLISent,
+		PLIResponse:     s.PLIResponse,
+		AudioRTCPRR:     int(s.AudioRTCPRRCount.Load()),
+		AudioRTCPSR:     int(s.AudioRTCPSRCount.Load()),
+		VideoRTCPRR:     int(s.VideoRTCPRRCount.Load()),
+		VideoRTCPSR:     int(s.VideoRTCPSRCount.Load()),
+		MediaForwardOK:  s.mediaForwardReady,
+		VideoRecoveryOn: s.VideoRecoveryBurstUntil.After(time.Now()),
+	}
+	if !s.LastPLISent.IsZero() {
+		at := s.LastPLISent
+		result.LastPLISentAt = &at
+	}
+	if !s.LastKeyframe.IsZero() {
+		at := s.LastKeyframe
+		result.LastKeyframeAt = &at
+	}
+	return result
+}
+
+// NoteInboundRTCP records report types with atomic increments so packet paths
+// remain lock-free and the periodic collector can safely read the totals.
+func (s *Session) NoteInboundRTCP(media, report string) {
+	switch media + ":" + report {
+	case "audio:rr":
+		s.AudioRTCPRRCount.Add(1)
+	case "audio:sr":
+		s.AudioRTCPSRCount.Add(1)
+	case "video:rr":
+		s.VideoRTCPRRCount.Add(1)
+	case "video:sr":
+		s.VideoRTCPSRCount.Add(1)
 	}
 }
 

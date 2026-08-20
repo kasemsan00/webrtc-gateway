@@ -12,9 +12,14 @@ import {
 } from '@remixicon/react'
 import { debounce } from '@tanstack/pacer'
 import { useStore } from '@tanstack/react-store'
+import { useSearch } from '@tanstack/react-router'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import type { ColumnDef, OnChangeFn, VisibilityState } from '@tanstack/react-table'
+import type {
+  ColumnDef,
+  OnChangeFn,
+  VisibilityState,
+} from '@tanstack/react-table'
 
 import type {
   CreateTrunkPayload,
@@ -97,10 +102,7 @@ const TRUNK_TABLE_COLUMN_TOGGLES = [
   { id: 'uid', label: 'UID' },
 ] as const
 
-function isColumnVisible(
-  columnVisibility: VisibilityState,
-  columnId: string,
-) {
+function isColumnVisible(columnVisibility: VisibilityState, columnId: string) {
   return columnVisibility[columnId] !== false
 }
 
@@ -238,16 +240,20 @@ function createEditForm(trunk: Trunk): TrunkEditForm {
 
 export function TrunkListPage() {
   const { theme, toggleTheme } = useTheme()
+  const routeSearch = useSearch({ from: '/trunks' })
   const [trunks, setTrunks] = useState<Array<Trunk>>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE)
-  const [search, setSearch] = useState('')
+  const [search, setSearch] = useState(routeSearch.search ?? '')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const [sortMode, setSortMode] = useState<TrunkSortMode>('activeCallsDesc')
-  const { viewMode, columnVisibility } = useStore(trunkPrefsStore, (state) => state)
+  const { viewMode, columnVisibility } = useStore(
+    trunkPrefsStore,
+    (state) => state,
+  )
 
   useEffect(() => {
     initializeTrunkPrefsStore()
@@ -318,6 +324,8 @@ export function TrunkListPage() {
           page: params?.page ?? page,
           pageSize: params?.pageSize ?? pageSize,
           search: (params?.search ?? searchRef.current) || undefined,
+          trunkId: params?.trunkId ?? routeSearch.trunkId,
+          trunkPublicId: params?.trunkPublicId ?? routeSearch.trunkPublicId,
           sortBy: sortParams.sortBy,
           sortDir: sortParams.sortDir,
         })
@@ -338,7 +346,14 @@ export function TrunkListPage() {
         }
       }
     },
-    [page, pageSize, getSortParams, sortMode],
+    [
+      page,
+      pageSize,
+      getSortParams,
+      sortMode,
+      routeSearch.trunkId,
+      routeSearch.trunkPublicId,
+    ],
   )
 
   useEffect(() => {
@@ -1551,6 +1566,15 @@ function TrunkCard({
             label="Last Unregistered"
             value={formatThaiDateTime(trunk.lastUnregisteredAt || '')}
           />
+          <Detail
+            label="Last Online"
+            value={
+              trunk.lastOnlinePlatform
+                ? `${trunk.lastOnlinePlatform} · ${formatThaiDateTime(trunk.lastOnlineAt || '')}`
+                : '-'
+            }
+          />
+          <Detail label="Updated" value={formatThaiDateTime(trunk.updatedAt)} />
           <Detail
             label="Lease Until"
             value={formatThaiDateTime(trunk.leaseUntil)}

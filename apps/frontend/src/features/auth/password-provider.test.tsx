@@ -4,8 +4,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { getAccessToken } from './token-store'
 import {
   ADMIN_PASSWORD_STORAGE_KEY,
-  clearAdminSession,
   LEGACY_ADMIN_PASSWORD_STORAGE_KEY,
+  clearAdminSession,
   restoreAdminPassword,
 } from './password-auth'
 import { passwordsMatch } from './password-match'

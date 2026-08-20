@@ -32,6 +32,27 @@ Runtime configuration (read-only):
 - Requires the same bearer JWT auth as other `/api/*` ops endpoints when `AUTH_ENABLE=true`.
 - The frontend ops UI exposes this at `/settings`.
 
+## Operational health and session evidence
+
+- `GET /api/health/details` returns authenticated, cached operational health.
+  Component states are `disabled`, `connected`, `degraded`, `unavailable`, or
+  `unknown`. The response contains only allowlisted readiness facts, queue
+  depth/capacity, accepted/dropped totals, and freshness timestamps; it never
+  includes a DSN, credentials, tokens, payload bodies, or push identifiers.
+- `GET /api/dashboard` keeps the existing `dbConnected` field. It is `true`
+  only when persistent database logging is actually connected; `DB_ENABLE=false`
+  reports `false` even though the gateway uses an internal no-op LogStore.
+- `GET /api/sessions/{sessionId}/overview` is an authenticated, typed view of
+  safe persisted call timing/outcome, SIP identity, auth/trunk routing, media
+  profiles, Opus payload type, RTP/RTCP ports, and video-rejection evidence.
+  Raw session metadata, account keys, passwords, and tokens are deliberately
+  excluded.
+- When `DB_ENABLE=true`, one gateway-owned collector records an active-session
+  snapshot every `DB_STATS_INTERVAL_MS` (minimum one second). It stores existing
+  PLI/keyframe and inbound RTCP report counters using the bounded stats queue.
+  A non-zero `statsQueue.dropped` value indicates persistence backpressure;
+  samples are dropped rather than delaying media or SIP processing.
+
 WebSocket clients real-time stream:
 
 - `GET /api/ws-clients/stream` — SSE stream of WS client connect/disconnect/update events (each event carries the full `WSClientResponse`).

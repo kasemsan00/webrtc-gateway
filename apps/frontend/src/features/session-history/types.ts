@@ -9,6 +9,10 @@ export interface SessionHistory {
   sipCallId: string
   finalState: string
   endReason: string
+  authMode?: string
+  trunkId?: number
+  trunkName?: string
+  sipUsername?: string
 }
 
 export interface SessionHistoryListResponse {
