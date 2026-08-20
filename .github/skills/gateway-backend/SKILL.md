@@ -70,7 +70,7 @@ Start from these files before widening scope:
    - Preferred order:
      1. focused Go test for the touched package if one exists
      2. `go test ./...` from `apps/gateway`
-     3. `go build -o k2-gateway .` from `apps/gateway` when compilation coverage is the main concern
+3. `go build -o webrtc-sip-gateway .` from `apps/gateway` when compilation coverage is the main concern
    - If the change affects payload contracts or docs, verify those updates before expanding scope.
 
 7. Finish with regression checks.

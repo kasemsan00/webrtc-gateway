@@ -5,7 +5,7 @@ import (
 
 	"github.com/pion/rtp"
 
-	"k2-gateway/internal/audio"
+	"webrtc-sip-gateway/internal/audio"
 )
 
 // EnableInboundGain activates Opus decode/gain/encode for SIP → WebRTC audio (thread-safe).

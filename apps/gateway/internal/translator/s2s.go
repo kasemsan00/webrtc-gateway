@@ -13,7 +13,7 @@ import (
 
 	"github.com/pion/rtp"
 
-	"k2-gateway/internal/translator/pb"
+	"webrtc-sip-gateway/internal/translator/pb"
 )
 
 type S2SPipeline struct {

@@ -8,7 +8,7 @@ import (
 
 	"github.com/pion/rtp"
 
-	"k2-gateway/internal/config"
+	"webrtc-sip-gateway/internal/config"
 )
 
 func TestSwitchVideoGateInactivePassThroughRejectsOnlyAcceptedStaleGeneration(t *testing.T) {

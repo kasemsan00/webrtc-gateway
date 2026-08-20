@@ -29,11 +29,11 @@ func TestTerminalCleanupStateIgnoresICETransitions(t *testing.T) {
 
 func TestApplyICEConnectedCallProgress(t *testing.T) {
 	tests := []struct {
-		name           string
-		current        SessionState
-		wantNext       SessionState
-		wantReason     string
-		wantChanged    bool
+		name        string
+		current     SessionState
+		wantNext    SessionState
+		wantReason  string
+		wantChanged bool
 	}{
 		{
 			name:        "connecting stays connecting",

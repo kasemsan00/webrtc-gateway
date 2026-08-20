@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"k2-gateway/internal/config"
+	"webrtc-sip-gateway/internal/config"
 )
 
 // StartSwitchVideoBlackout enables the legacy temporary hold that intentionally

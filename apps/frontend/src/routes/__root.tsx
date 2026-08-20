@@ -22,12 +22,12 @@ export const Route = createRootRoute({
         content: 'width=device-width, initial-scale=1',
       },
       {
-        title: 'WebRTC Gateway — Dashboard',
+        title: 'WebRTC-SIP Gateway Console — Dashboard',
       },
       {
         name: 'description',
         content:
-          'WebRTC Gateway operations dashboard for call analytics, trunk health, and system status.',
+          'WebRTC-SIP Gateway operations dashboard for call analytics, trunk health, and system status.',
       },
     ],
   }),
@@ -44,7 +44,7 @@ function RootDocument({ children }: { children: React.ReactNode }) {
         <HeadContent />
         <script
           dangerouslySetInnerHTML={{
-            __html: `(function(){try{var r=localStorage.getItem('k2-theme');if(!r)return;var e=JSON.parse(r);if(e&&e.data==='light')document.documentElement.classList.remove('dark')}catch(x){}})()`,
+            __html: `(function(){try{var r=localStorage.getItem('webrtc-sip-gateway-theme')||localStorage.getItem('k2-theme');if(!r)return;var e=JSON.parse(r);if(e&&e.data==='light')document.documentElement.classList.remove('dark')}catch(x){}})()`,
           }}
         />
       </head>

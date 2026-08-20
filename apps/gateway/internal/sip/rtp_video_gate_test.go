@@ -7,7 +7,7 @@ import (
 
 	"github.com/pion/rtp"
 
-	"k2-gateway/internal/session"
+	"webrtc-sip-gateway/internal/session"
 )
 
 func normalizedVideoAU(generation int, idr, ready bool, packets int) session.NormalizedH264AccessUnit {

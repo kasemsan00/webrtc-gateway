@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"k2-gateway/internal/dbbootstrap"
+	"webrtc-sip-gateway/internal/dbbootstrap"
 )
 
 func main() {

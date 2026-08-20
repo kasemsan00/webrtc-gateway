@@ -208,7 +208,7 @@ apt install libopus-dev   # Debian/Ubuntu
 yum install libopus-devel # RHEL/CentOS
 
 # Build with CGo
-CGO_ENABLED=1 go build -o k2-gateway .
+CGO_ENABLED=1 go build -o webrtc-sip-gateway .
 ```
 
 Without CGo, the stub codec is used and translation will log decode/encode errors and fall back to passthrough audio.
@@ -216,11 +216,11 @@ Without CGo, the stub codec is used and translation will log decode/encode error
 ## Troubleshooting
 
 **Q: Translation is enabled but audio still sounds original (untranslated)**
-- Check gateway logs via `https://k2-gateway.kasemsan.com/api/logs/current?tail=500` for `Translation error` lines — indicates gRPC or codec failure, passthrough fallback active
+- Check gateway logs via `https://gateway.example.com/api/logs/current?tail=500` for `Translation error` lines — indicates gRPC or codec failure, passthrough fallback active
 - Verify `TRANSLATOR_ADDR` points to a running Azure gRPC server
 - Run `grpcurl -plaintext <addr>:5000 list` to verify server is reachable
 - Check `CGO_ENABLED=1` and `libopus` is installed
 
 **Q: Client sends `translate` but gets `"Translator not available"` error**
 - `TRANSLATOR_ENABLE` is `false` or the gRPC connection failed at startup
-- Check gateway logs via `https://k2-gateway.kasemsan.com/api/logs/current?tail=500` for `Translator client failed to connect` or `Translator health check failed`
+- Check gateway logs via `https://gateway.example.com/api/logs/current?tail=500` for `Translator client failed to connect` or `Translator health check failed`

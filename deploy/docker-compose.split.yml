@@ -5,7 +5,7 @@ version: "3.8"
 
 services:
   db-bootstrap:
-    image: registry.kasemsan.com/k2-gateway:${TAG:-1.4.0}
+    image: registry.kasemsan.com/webrtc-sip-gateway:${TAG:-1.4.0}
     restart: "no"
     env_file:
       - ../.env
@@ -13,8 +13,8 @@ services:
     working_dir: /app
     network_mode: host
 
-  frontend:
-    image: registry.kasemsan.com/k2-frontend:${TAG:-1.4.0}
+  gateway-console:
+    image: registry.kasemsan.com/webrtc-sip-gateway-console:${TAG:-1.4.0}
     restart: unless-stopped
     env_file:
       - ../.env
@@ -23,8 +23,8 @@ services:
       PORT: ${FRONTEND_PORT:-4173}
     network_mode: host
 
-  webrtc-gateway:
-    image: registry.kasemsan.com/k2-gateway:${TAG:-1.4.0}
+  gateway:
+    image: registry.kasemsan.com/webrtc-sip-gateway:${TAG:-1.4.0}
     restart: unless-stopped
     env_file:
       - ../.env

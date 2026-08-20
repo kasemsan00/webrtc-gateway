@@ -4,8 +4,8 @@
 *.dll
 *.so
 *.dylib
-k2-gateway
-k2-gateway.exe
+webrtc-sip-gateway
+webrtc-sip-gateway.exe
 
 # Test binary, built with `go test -c`
 *.test

@@ -2,7 +2,12 @@
 import { Store } from '@tanstack/store'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { attachPersist, clearPersisted, loadPersisted } from './store-persist'
+import {
+  attachPersist,
+  clearPersisted,
+  loadPersisted,
+  migrateLegacyPersisted,
+} from './store-persist'
 
 // ---------- helpers ----------
 type StorageMock = {
@@ -81,6 +86,54 @@ describe('clearPersisted', () => {
     expect(localStorage.getItem('k')).toBe('value')
     clearPersisted('k')
     expect(localStorage.getItem('k')).toBeNull()
+  })
+})
+
+describe('migrateLegacyPersisted', () => {
+  const key = 'webrtc-sip-gateway-test'
+  const legacyKey = 'k2-test'
+
+  it('moves a valid legacy envelope and removes the legacy key', () => {
+    localStorage.setItem(
+      legacyKey,
+      JSON.stringify({ version: 1, data: { enabled: true } }),
+    )
+
+    migrateLegacyPersisted(
+      key,
+      legacyKey,
+      1,
+      (value): value is { enabled: boolean } =>
+        !!value &&
+        typeof value === 'object' &&
+        (value as { enabled?: unknown }).enabled === true,
+    )
+
+    expect(loadPersisted(key, 1)).toEqual({ enabled: true })
+    expect(localStorage.getItem(legacyKey)).toBeNull()
+  })
+
+  it('keeps a canonical value when both generations exist', () => {
+    localStorage.setItem(key, JSON.stringify({ version: 1, data: 'current' }))
+    localStorage.setItem(legacyKey, JSON.stringify({ version: 1, data: 'old' }))
+
+    migrateLegacyPersisted(key, legacyKey, 1, (value): value is string =>
+      typeof value === 'string',
+    )
+
+    expect(loadPersisted(key, 1)).toBe('current')
+    expect(localStorage.getItem(legacyKey)).toBeNull()
+  })
+
+  it('does not promote invalid legacy data', () => {
+    localStorage.setItem(legacyKey, JSON.stringify({ version: 1, data: 42 }))
+
+    migrateLegacyPersisted(key, legacyKey, 1, (value): value is string =>
+      typeof value === 'string',
+    )
+
+    expect(localStorage.getItem(key)).toBeNull()
+    expect(localStorage.getItem(legacyKey)).toBeNull()
   })
 })
 

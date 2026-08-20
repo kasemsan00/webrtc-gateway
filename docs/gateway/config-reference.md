@@ -15,7 +15,7 @@ From `internal/config/config.go`.
 - `API_ENABLE_PUBLIC_WS` (default `false`; enables unauthenticated `/ws-public` for public SIP per-call credentials only)
 - `API_ENABLE_AGENT_WS` (default `false`; enables unauthenticated `/ws-agent` for PC agent SIP REGISTER presence with client-provided credentials)
 - `API_ENABLE_REST` (default `true`)
-- `API_CORS_ORIGINS` (default `*`; for single-domain deploy use e.g. `https://k2-gateway.kasemsan.com` — see [`deploy/README.md`](../../deploy/README.md))
+- `API_CORS_ORIGINS` (default `*`; for single-domain deploy use e.g. `https://gateway.example.com` — see [`deploy/README.md`](../../deploy/README.md))
 - `SIPCLIENT_AUTH_REGISTER_URL` (optional; when set, user-realm WebSocket auth auto-provisions a mobile SIP trunk)
 - `SIPCLIENT_AUTH_TIMEOUT_MS` (default `5000`)
 - `RTP_PORT_MIN` (default `10500`)
@@ -129,7 +129,7 @@ When `FRONTEND_PASSWORD` is set and `AUTH_ENABLE=false`, authenticated `/api/*` 
 - `SIP_TRUNK_LEASE_RENEW_INTERVAL_SECONDS` (default `20`)
 - `SIP_TRUNK_REGISTER_TIMEOUT_SECONDS` (default `10`)
 - `GATEWAY_INSTANCE_ID` (default hostname/random)
-- `GATEWAY_PUBLIC_WS_URL` (for redirects; single-domain example `wss://k2-gateway.kasemsan.com/ws` — see [`deploy/README.md`](../../deploy/README.md))
+- `GATEWAY_PUBLIC_WS_URL` (for redirects; single-domain example `wss://gateway.example.com/ws` — see [`deploy/README.md`](../../deploy/README.md))
 - `SESSION_DIRECTORY_TTL_SECONDS` (default `7200`)
 - `SESSION_DIRECTORY_CLEANUP_INTERVAL_SECONDS` (default `300`)
 

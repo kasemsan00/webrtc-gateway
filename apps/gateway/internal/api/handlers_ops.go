@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"k2-gateway/internal/logstore"
+	"webrtc-sip-gateway/internal/logstore"
 )
 
 // PublicAccountResponse represents a public SIP account for REST responses

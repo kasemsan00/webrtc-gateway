@@ -14,8 +14,8 @@ import (
 	"github.com/pion/sdp/v3"
 	"github.com/pion/webrtc/v4"
 
-	"k2-gateway/internal/config"
-	pkg_webrtc "k2-gateway/internal/pkg/webrtc"
+	"webrtc-sip-gateway/internal/config"
+	pkg_webrtc "webrtc-sip-gateway/internal/pkg/webrtc"
 )
 
 // Gateway represents a WebRTC gateway

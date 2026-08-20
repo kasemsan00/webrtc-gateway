@@ -1,8 +1,8 @@
-# AGENTS.md - webrtc-gateway frontend
+# AGENTS.md - webrtc-sip-gateway frontend
 
 ## Overview
 
-React + TypeScript + TanStack Start frontend for gateway operations UI inside the `webrtc-gateway` pnpm monorepo.
+React + TypeScript + TanStack Start frontend for gateway operations UI inside the `webrtc-sip-gateway` pnpm monorepo.
 
 ## Project Structure
 
@@ -14,7 +14,7 @@ React + TypeScript + TanStack Start frontend for gateway operations UI inside th
 
 ## Commands
 
-Run from `E:\dev\webrtc-gateway` unless a command explicitly says it is frontend-local.
+Run from `E:\dev\webrtc-sip-gateway` unless a command explicitly says it is frontend-local.
 
 - Install: `pnpm install`
 - Dev: `pnpm dev:frontend` (port `3150`)

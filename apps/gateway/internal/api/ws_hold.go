@@ -3,7 +3,7 @@ package api
 import (
 	"fmt"
 
-	"k2-gateway/internal/session"
+	"webrtc-sip-gateway/internal/session"
 )
 
 type sipHoldController interface {

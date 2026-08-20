@@ -10,9 +10,9 @@ import (
 	sipgoSip "github.com/emiago/sipgo/sip"
 	"github.com/pion/webrtc/v4"
 
-	"k2-gateway/internal/config"
-	"k2-gateway/internal/logstore"
-	"k2-gateway/internal/session"
+	"webrtc-sip-gateway/internal/config"
+	"webrtc-sip-gateway/internal/logstore"
+	"webrtc-sip-gateway/internal/session"
 )
 
 // StateNotifier interface for notifying session state changes

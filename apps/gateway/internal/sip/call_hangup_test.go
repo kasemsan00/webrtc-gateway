@@ -3,8 +3,8 @@ package sip
 import (
 	"testing"
 
-	"k2-gateway/internal/config"
-	"k2-gateway/internal/session"
+	"webrtc-sip-gateway/internal/config"
+	"webrtc-sip-gateway/internal/session"
 )
 
 func TestCreateBYERequest_InboundPrefersDialogDomain(t *testing.T) {

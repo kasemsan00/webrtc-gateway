@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"k2-gateway/internal/config"
+	"webrtc-sip-gateway/internal/config"
 )
 
 func newSwitchFeedbackSession(t *testing.T) (*Session, *net.UDPConn) {

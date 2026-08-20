@@ -8,8 +8,8 @@ import (
 	"github.com/pion/rtcp"
 	"github.com/pion/rtp"
 
-	"k2-gateway/internal/logstore"
-	"k2-gateway/internal/session"
+	"webrtc-sip-gateway/internal/logstore"
+	"webrtc-sip-gateway/internal/session"
 )
 
 // normalizedVideoWriteResult reports whether an access unit was emitted and

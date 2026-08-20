@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"k2-gateway/internal/translator"
+	"webrtc-sip-gateway/internal/translator"
 )
 
 type fakeTranslatorCodec struct {

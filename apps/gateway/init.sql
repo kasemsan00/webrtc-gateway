@@ -1,4 +1,4 @@
--- K2 Gateway - Postgres Database Schema
+-- WebRTC-SIP Gateway - Postgres Database Schema
 -- Per-Call Debug Logging (Full Trace)
 --
 -- Design:

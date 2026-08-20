@@ -10,7 +10,7 @@ import (
 
 	"github.com/gorilla/mux"
 
-	"k2-gateway/internal/logger"
+	"webrtc-sip-gateway/internal/logger"
 )
 
 type LogFileResponse struct {

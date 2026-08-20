@@ -1,11 +1,11 @@
-# Unified deploy: single k2-stack container (gateway + frontend + internal nginx).
+# Unified deploy: single webrtc-sip-gateway-stack container (gateway + frontend + internal nginx).
 # External proxy forwards one upstream to STACK_PROXY_PORT (default 8088).
 # See deploy/README.md
 version: "3.8"
 
 services:
   db-bootstrap:
-    image: registry.kasemsan.com/k2-stack:${TAG:-1.4.0}
+    image: registry.kasemsan.com/webrtc-sip-gateway-stack:${TAG:-1.4.0}
     restart: "no"
     env_file:
       - ../.env
@@ -13,8 +13,8 @@ services:
     working_dir: /app/gateway
     network_mode: host
 
-  k2-stack:
-    image: registry.kasemsan.com/k2-stack:${TAG:-1.4.0}
+  gateway-stack:
+    image: registry.kasemsan.com/webrtc-sip-gateway-stack:${TAG:-1.4.0}
     restart: unless-stopped
     env_file:
       - ../.env

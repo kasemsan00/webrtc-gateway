@@ -66,7 +66,7 @@ export default function Header({ children }: { children?: React.ReactNode }) {
         </button>
         <Link to="/" className="flex items-center gap-2">
           <span className="bg-linear-to-r from-cyan-600 to-emerald-600 bg-clip-text text-sm font-bold text-transparent dark:from-cyan-400 dark:to-emerald-400">
-            WebRTC Gateway
+            WebRTC-SIP Gateway Console
           </span>
         </Link>
         <div className="ml-auto flex items-center gap-2">
@@ -275,7 +275,7 @@ export default function Header({ children }: { children?: React.ReactNode }) {
                   Logout
                 </Button>
                 <p className="mt-3 text-xs text-muted-foreground/60">
-                  WebRTC Gateway
+                  WebRTC-SIP Gateway Console
                 </p>
               </div>
             </motion.aside>

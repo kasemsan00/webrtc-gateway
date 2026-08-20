@@ -11,9 +11,9 @@ import (
 
 	"github.com/gorilla/mux"
 
-	"k2-gateway/internal/auth"
-	"k2-gateway/internal/config"
-	"k2-gateway/internal/logger"
+	"webrtc-sip-gateway/internal/auth"
+	"webrtc-sip-gateway/internal/config"
+	"webrtc-sip-gateway/internal/logger"
 )
 
 func setupLogFileHandlers(t *testing.T, srv *Server) *mux.Router {
@@ -66,8 +66,8 @@ func TestHandleListLogFiles(t *testing.T) {
 	overrideLogFileFuncs(t,
 		func() ([]logger.LogFileInfo, error) {
 			return []logger.LogFileInfo{
-				{Name: "k2-gateway-2026-05-25_10-30-00.log", Size: 123, ModifiedAt: modified, Current: true},
-				{Name: "k2-gateway-2026-05-25_09-30-00.log", Size: 45, ModifiedAt: modified.Add(-time.Hour), Current: false},
+				{Name: "webrtc-sip-gateway-2026-05-25_10-30-00.log", Size: 123, ModifiedAt: modified, Current: true},
+				{Name: "webrtc-sip-gateway-2026-05-25_09-30-00.log", Size: 45, ModifiedAt: modified.Add(-time.Hour), Current: false},
 			}, nil
 		},
 		nil,
@@ -87,7 +87,7 @@ func TestHandleListLogFiles(t *testing.T) {
 	if !response.Items[0].Current || response.Items[1].Current {
 		t.Fatalf("expected only first item to be current: %+v", response.Items)
 	}
-	if response.Items[0].Name != "k2-gateway-2026-05-25_10-30-00.log" || response.Items[0].Size != 123 {
+	if response.Items[0].Name != "webrtc-sip-gateway-2026-05-25_10-30-00.log" || response.Items[0].Size != 123 {
 		t.Fatalf("unexpected first item: %+v", response.Items[0])
 	}
 }
@@ -100,7 +100,7 @@ func TestHandleGetCurrentLogTail(t *testing.T) {
 				t.Fatalf("expected tail=2, got %d", tail)
 			}
 			return &logger.LogTail{
-				Name:      "k2-gateway-2026-05-25_10-30-00.log",
+				Name:      "webrtc-sip-gateway-2026-05-25_10-30-00.log",
 				Current:   true,
 				Tail:      tail,
 				Lines:     []string{"line 2", "line 3"},
@@ -130,7 +130,7 @@ func TestHandleGetSelectedLogTail(t *testing.T) {
 		nil,
 		nil,
 		func(name string, tail int) (*logger.LogTail, error) {
-			if name != "k2-gateway-2026-05-25_09-30-00.log" {
+			if name != "webrtc-sip-gateway-2026-05-25_09-30-00.log" {
 				t.Fatalf("unexpected name: %s", name)
 			}
 			if tail != 1 {
@@ -141,8 +141,8 @@ func TestHandleGetSelectedLogTail(t *testing.T) {
 	)
 
 	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, nil, nil, nil, nil, nil)
-	req := httptest.NewRequest(http.MethodGet, "/api/logs/k2-gateway-2026-05-25_09-30-00.log?tail=1", nil)
-	req = mux.SetURLVars(req, map[string]string{"name": "k2-gateway-2026-05-25_09-30-00.log"})
+	req := httptest.NewRequest(http.MethodGet, "/api/logs/webrtc-sip-gateway-2026-05-25_09-30-00.log?tail=1", nil)
+	req = mux.SetURLVars(req, map[string]string{"name": "webrtc-sip-gateway-2026-05-25_09-30-00.log"})
 	rr := httptest.NewRecorder()
 
 	srv.handleGetLogFile(rr, req)
@@ -165,9 +165,9 @@ func TestHandleLogFileErrors(t *testing.T) {
 		{name: "invalid tail", path: "/api/logs/current?tail=abc", wantStatus: http.StatusBadRequest},
 		{name: "path traversal", path: "/api/logs/..%2Fsecret?tail=1", varName: "../secret", namedErr: logger.ErrInvalidLogFilename, wantStatus: http.StatusBadRequest},
 		{name: "non gateway filename", path: "/api/logs/app.log?tail=1", varName: "app.log", namedErr: logger.ErrInvalidLogFilename, wantStatus: http.StatusBadRequest},
-		{name: "missing selected file", path: "/api/logs/k2-gateway-missing.log?tail=1", varName: "k2-gateway-missing.log", namedErr: logger.ErrLogFileNotFound, wantStatus: http.StatusNotFound},
+		{name: "missing selected file", path: "/api/logs/webrtc-sip-gateway-missing.log?tail=1", varName: "webrtc-sip-gateway-missing.log", namedErr: logger.ErrLogFileNotFound, wantStatus: http.StatusNotFound},
 		{name: "missing current file", path: "/api/logs/current?tail=1", currentErr: logger.ErrLogFileNotFound, wantStatus: http.StatusNotFound},
-		{name: "read failure", path: "/api/logs/k2-gateway-bad.log?tail=1", varName: "k2-gateway-bad.log", namedErr: errors.New("disk failed"), wantStatus: http.StatusInternalServerError},
+		{name: "read failure", path: "/api/logs/webrtc-sip-gateway-bad.log?tail=1", varName: "webrtc-sip-gateway-bad.log", namedErr: errors.New("disk failed"), wantStatus: http.StatusInternalServerError},
 	}
 
 	for _, tc := range tests {
@@ -210,7 +210,7 @@ func TestLogRoutesUseAPIMiddlewareWhenAuthConfigured(t *testing.T) {
 		},
 		func(tail int) (*logger.LogTail, error) {
 			calledCurrent = true
-			return &logger.LogTail{Name: "k2-gateway-current.log", Current: true, Tail: tail, Lines: []string{}}, nil
+			return &logger.LogTail{Name: "webrtc-sip-gateway-current.log", Current: true, Tail: tail, Lines: []string{}}, nil
 		},
 		func(name string, tail int) (*logger.LogTail, error) {
 			calledNamed = true
@@ -229,7 +229,7 @@ func TestLogRoutesUseAPIMiddlewareWhenAuthConfigured(t *testing.T) {
 	})
 	router := setupLogFileHandlers(t, srv)
 
-	for _, path := range []string{"/api/logs", "/api/logs/current", "/api/logs/k2-gateway-2026-05-25_10-30-00.log"} {
+	for _, path := range []string{"/api/logs", "/api/logs/current", "/api/logs/webrtc-sip-gateway-2026-05-25_10-30-00.log"} {
 		rr := httptest.NewRecorder()
 		router.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, path, nil))
 		if rr.Code != http.StatusUnauthorized {
@@ -283,7 +283,7 @@ func TestLogCurrentRoutePrecedesNamedRoute(t *testing.T) {
 		nil,
 		func(tail int) (*logger.LogTail, error) {
 			calledCurrent = true
-			return &logger.LogTail{Name: "k2-gateway-current.log", Current: true, Tail: tail, Lines: []string{}}, nil
+			return &logger.LogTail{Name: "webrtc-sip-gateway-current.log", Current: true, Tail: tail, Lines: []string{}}, nil
 		},
 		func(name string, tail int) (*logger.LogTail, error) {
 			calledNamed = true

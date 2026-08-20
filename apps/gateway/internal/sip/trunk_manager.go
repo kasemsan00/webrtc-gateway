@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"k2-gateway/internal/config"
+	"webrtc-sip-gateway/internal/config"
 
 	"github.com/emiago/sipgo"
 	"github.com/emiago/sipgo/sip"
@@ -745,7 +745,7 @@ func (tm *TrunkManager) registerTrunk(trunkID int64) error {
 	req.AppendHeader(sip.NewHeader("Expires", fmt.Sprintf("%d", expires)))
 
 	// User-Agent
-	req.AppendHeader(sip.NewHeader("User-Agent", "K2-Gateway-Trunk/1.0"))
+	req.AppendHeader(sip.NewHeader("User-Agent", "WebRTC-SIP-Gateway-Trunk/1.0"))
 
 	// Resolve dialable destination (host:port) for SetDestination()
 	destination, err := resolveSIPDestination(trunk.Domain, trunk.Port, trunk.Transport)

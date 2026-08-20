@@ -3,7 +3,7 @@ package session
 import (
 	"testing"
 
-	"k2-gateway/internal/config"
+	"webrtc-sip-gateway/internal/config"
 )
 
 func TestDeleteSessionIsIdempotent(t *testing.T) {

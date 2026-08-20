@@ -3,7 +3,7 @@ package api
 import (
 	"strings"
 
-	"k2-gateway/internal/session"
+	"webrtc-sip-gateway/internal/session"
 )
 
 // bindClientSession records per-call ownership while retaining sessionID for

@@ -16,9 +16,9 @@
       "executor": "nx:run-commands",
       "options": {
         "cwd": "apps/gateway",
-        "command": "go build -o k2-gateway ."
+        "command": "go build -o webrtc-sip-gateway ."
       },
-      "outputs": ["{projectRoot}/k2-gateway"]
+      "outputs": ["{projectRoot}/webrtc-sip-gateway"]
     },
     "test": {
       "executor": "nx:run-commands",

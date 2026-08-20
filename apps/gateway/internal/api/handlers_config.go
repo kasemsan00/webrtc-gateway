@@ -3,13 +3,13 @@ package api
 import (
 	"net/http"
 
-	"k2-gateway/internal/config"
+	"webrtc-sip-gateway/internal/config"
 )
 
 // GatewayConfigResponse exposes the effective runtime configuration loaded from env.
 type GatewayConfigResponse struct {
-	InstanceID string                    `json:"instanceId"`
-	Source     string                    `json:"source"`
+	InstanceID string                      `json:"instanceId"`
+	Source     string                      `json:"source"`
 	Sections   config.PublicConfigSections `json:"sections"`
 }
 

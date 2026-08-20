@@ -16,7 +16,9 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-const advisoryLockKey int64 = 0x4b325f44425f4253 // K2_DB_BS
+// Keep this numeric value stable so pre-rename and canonical release images
+// serialize database bootstrap through the same PostgreSQL advisory lock.
+const advisoryLockKey int64 = 0x4b325f44425f4253
 
 var (
 	coreTables = []string{

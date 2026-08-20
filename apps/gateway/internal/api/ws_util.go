@@ -6,8 +6,8 @@ import (
 	"log"
 	"time"
 
-	"k2-gateway/internal/logstore"
-	"k2-gateway/internal/session"
+	"webrtc-sip-gateway/internal/logstore"
+	"webrtc-sip-gateway/internal/session"
 )
 
 func (s *Server) sendWSMessage(client *WSClient, msg WSMessage) {

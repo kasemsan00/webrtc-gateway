@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"time"
 
-	"k2-gateway/internal/sip"
+	"webrtc-sip-gateway/internal/sip"
 )
 
 type TrunkStreamEvent struct {

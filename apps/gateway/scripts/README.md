@@ -31,7 +31,7 @@ Path: `./apps/gateway/scripts/migrate.ps1`
 Run from repo root:
 
 ```powershell
-$env:DB_DSN="postgres://k2user:k2pass@localhost:5432/k2_gateway?sslmode=disable"
+$env:DB_DSN="postgres://gateway_user:gateway_dev_password@localhost:5432/webrtc_sip_gateway?sslmode=disable"
 ./apps/gateway/scripts/migrate.ps1 status
 ./apps/gateway/scripts/migrate.ps1 up
 ```
@@ -39,7 +39,7 @@ $env:DB_DSN="postgres://k2user:k2pass@localhost:5432/k2_gateway?sslmode=disable"
 Run from `apps/gateway`:
 
 ```powershell
-$env:DB_DSN="postgres://k2user:k2pass@localhost:5432/k2_gateway?sslmode=disable"
+$env:DB_DSN="postgres://gateway_user:gateway_dev_password@localhost:5432/webrtc_sip_gateway?sslmode=disable"
 ./scripts/migrate.ps1 status
 ./scripts/migrate.ps1 up
 ```
@@ -47,7 +47,7 @@ $env:DB_DSN="postgres://k2user:k2pass@localhost:5432/k2_gateway?sslmode=disable"
 Use DSN directly (without setting env var):
 
 ```powershell
-./scripts/migrate.ps1 up -Dsn "postgres://k2user:k2pass@localhost:5432/k2_gateway?sslmode=disable"
+./scripts/migrate.ps1 up -Dsn "postgres://gateway_user:gateway_dev_password@localhost:5432/webrtc_sip_gateway?sslmode=disable"
 ```
 
 Create a new migration:

@@ -10,8 +10,8 @@ import (
 	"github.com/emiago/sipgo"
 	"github.com/emiago/sipgo/sip"
 
-	"k2-gateway/internal/logstore"
-	"k2-gateway/internal/session"
+	"webrtc-sip-gateway/internal/logstore"
+	"webrtc-sip-gateway/internal/session"
 )
 
 var (
@@ -388,7 +388,7 @@ func (s *Server) handleInviteAuth(ctx context.Context, originalReq *sip.Request,
 
 	// Ensure compatibility headers are present
 	if len(authReq.GetHeaders("User-Agent")) == 0 {
-		authReq.AppendHeader(sip.NewHeader("User-Agent", "LinphoneAndroid/4.6.0 (K2-Gateway)"))
+		authReq.AppendHeader(sip.NewHeader("User-Agent", "LinphoneAndroid/4.6.0 (WebRTC-SIP-Gateway)"))
 	}
 	if len(authReq.GetHeaders("Allow")) == 0 {
 		authReq.AppendHeader(sip.NewHeader("Allow", sipAllowHeaderValue()))
@@ -1105,7 +1105,7 @@ func (s *Server) createInviteRequestWithParams(destination, from string, sdpBody
 	})
 
 	// Add User-Agent
-	req.AppendHeader(sip.NewHeader("User-Agent", "TTRS-K2Gateway/1.0 (belle-sip/1.4.2)"))
+	req.AppendHeader(sip.NewHeader("User-Agent", "WebRTC-SIP-Gateway/1.0 (belle-sip/1.4.2)"))
 
 	// Set destination
 	destinationAddr := fmt.Sprintf("%s:%d", resolvedIP, port)
@@ -1374,7 +1374,7 @@ func (s *Server) createBYERequest(sess *session.Session) (*sip.Request, error) {
 	})
 
 	// Add User-Agent
-	req.AppendHeader(sip.NewHeader("User-Agent", "TTRS-K2Gateway/1.0"))
+	req.AppendHeader(sip.NewHeader("User-Agent", "WebRTC-SIP-Gateway/1.0"))
 
 	// Set destination
 	destinationAddr := fmt.Sprintf("%s:%d", resolvedIP, port)

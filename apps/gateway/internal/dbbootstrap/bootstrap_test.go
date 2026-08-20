@@ -79,7 +79,7 @@ func TestCanonicalBaselineMatchesLegacyInitSQL(t *testing.T) {
 }
 
 func TestRedactDSN(t *testing.T) {
-	got := RedactDSN("postgres://k2user:super-secret@db.example/k2?sslmode=disable&password=also-secret")
+	got := RedactDSN("postgres://gateway_user:super-secret@db.example/webrtc_sip_gateway?sslmode=disable&password=also-secret")
 	if got == "" || containsAny(got, "super-secret", "also-secret") {
 		t.Fatalf("DSN was not redacted: %q", got)
 	}

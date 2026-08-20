@@ -15,10 +15,10 @@ import (
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
 
-	"k2-gateway/internal/audio"
-	"k2-gateway/internal/config"
-	pkg_webrtc "k2-gateway/internal/pkg/webrtc"
-	"k2-gateway/internal/translator"
+	"webrtc-sip-gateway/internal/audio"
+	"webrtc-sip-gateway/internal/config"
+	pkg_webrtc "webrtc-sip-gateway/internal/pkg/webrtc"
+	"webrtc-sip-gateway/internal/translator"
 )
 
 const (

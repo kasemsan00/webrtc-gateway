@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"k2-gateway/internal/config"
-	"k2-gateway/internal/push"
-	"k2-gateway/internal/session"
-	"k2-gateway/internal/sip"
+	"webrtc-sip-gateway/internal/config"
+	"webrtc-sip-gateway/internal/push"
+	"webrtc-sip-gateway/internal/session"
+	"webrtc-sip-gateway/internal/sip"
 )
 
 type incomingTestSIPCallMaker struct {

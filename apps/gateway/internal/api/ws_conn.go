@@ -10,8 +10,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 
-	"k2-gateway/internal/auth"
-	"k2-gateway/internal/session"
+	"webrtc-sip-gateway/internal/auth"
+	"webrtc-sip-gateway/internal/session"
 )
 
 const (

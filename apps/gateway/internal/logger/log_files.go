@@ -15,7 +15,7 @@ const (
 	DefaultTailLines = 500
 	MaxTailLines     = 5000
 
-	logFilePattern = "k2-gateway-*.log"
+	logFilePattern = "webrtc-sip-gateway-*.log"
 )
 
 var (

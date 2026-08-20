@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"strings"
 
-	"k2-gateway/internal/auth"
+	"webrtc-sip-gateway/internal/auth"
 )
 
 type authClaimsContextKey struct{}

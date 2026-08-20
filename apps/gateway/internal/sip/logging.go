@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"k2-gateway/internal/logstore"
-	"k2-gateway/internal/session"
+	"webrtc-sip-gateway/internal/logstore"
+	"webrtc-sip-gateway/internal/session"
 )
 
 func (s *Server) logEvent(event *logstore.Event) {

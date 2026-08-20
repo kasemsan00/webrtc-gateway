@@ -6,7 +6,7 @@ import (
 
 	"github.com/pion/webrtc/v4"
 
-	"k2-gateway/internal/config"
+	"webrtc-sip-gateway/internal/config"
 )
 
 // BuildICEServers constructs ICE servers configuration from TURN config

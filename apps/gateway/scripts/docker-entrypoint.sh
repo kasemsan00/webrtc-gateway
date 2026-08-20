@@ -2,11 +2,11 @@
 set -eu
 
 # Named volumes such as gateway_logs:/app/gateway/logs are created as root.
-# Take ownership, then drop to k2 before bootstrap or gateway start.
+# Take ownership, then drop to gateway before bootstrap or gateway start.
 if [ "$(id -u)" = "0" ]; then
   mkdir -p logs
-  chown -R k2:k2 logs
-  exec su-exec k2 "$0" "$@"
+  chown -R gateway:gateway logs
+  exec su-exec gateway "$0" "$@"
 fi
 
 if [ "${DB_AUTO_MIGRATE:-false}" = "true" ] && [ "${DB_BOOTSTRAP_ON_START+x}" != "x" ]; then

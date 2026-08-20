@@ -12,10 +12,6 @@ function resolveFallbackGatewayOrigin(): string {
     return `http://localhost:${DEFAULT_GATEWAY_PORT}`
   }
 
-  if (window.location.hostname === 'k2-gateway.kasemsan.com') {
-    return 'https://k2-gateway.kasemsan.com'
-  }
-
   const protocol = window.location.protocol === 'https:' ? 'https' : 'http'
   return `${protocol}://${window.location.hostname}:${DEFAULT_GATEWAY_PORT}`
 }

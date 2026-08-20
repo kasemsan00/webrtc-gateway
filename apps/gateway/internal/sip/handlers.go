@@ -9,8 +9,8 @@ import (
 
 	"github.com/emiago/sipgo/sip"
 
-	"k2-gateway/internal/logstore"
-	"k2-gateway/internal/session"
+	"webrtc-sip-gateway/internal/logstore"
+	"webrtc-sip-gateway/internal/session"
 )
 
 const (

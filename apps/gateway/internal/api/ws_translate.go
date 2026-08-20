@@ -4,7 +4,7 @@ import (
 	"log"
 	"strings"
 
-	"k2-gateway/internal/session"
+	"webrtc-sip-gateway/internal/session"
 )
 
 func (s *Server) handleTranslationCaption(sessionID string, event session.TranslationCaptionEvent) {

@@ -7,7 +7,7 @@ import (
 
 	"github.com/pion/rtp"
 
-	"k2-gateway/internal/session"
+	"webrtc-sip-gateway/internal/session"
 )
 
 // DTMF constants for RFC 2833

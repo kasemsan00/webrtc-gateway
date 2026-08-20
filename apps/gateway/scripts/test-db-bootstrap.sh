@@ -2,10 +2,10 @@
 # Integration smoke test for a released gateway image. Requires Docker.
 set -eu
 
-IMAGE="${DB_BOOTSTRAP_TEST_IMAGE:-k2-gateway-bootstrap-test}"
-NETWORK="k2-bootstrap-it-$$"
+IMAGE="${DB_BOOTSTRAP_TEST_IMAGE:-webrtc-sip-gateway-bootstrap-test}"
+NETWORK="gateway-bootstrap-it-$$"
 POSTGRES="${NETWORK}-postgres"
-DSN="postgres://k2:k2pass@${POSTGRES}:5432/k2?sslmode=disable"
+DSN="postgres://gateway_user:gateway_dev_password@${POSTGRES}:5432/webrtc_sip_gateway?sslmode=disable"
 
 cleanup() {
   docker rm -f "$POSTGRES" >/dev/null 2>&1 || true
@@ -15,11 +15,11 @@ trap cleanup EXIT INT TERM
 
 docker network create "$NETWORK" >/dev/null
 docker run -d --name "$POSTGRES" --network "$NETWORK" \
-  -e POSTGRES_DB=k2 -e POSTGRES_USER=k2 -e POSTGRES_PASSWORD=k2pass \
+  -e POSTGRES_DB=webrtc_sip_gateway -e POSTGRES_USER=gateway_user -e POSTGRES_PASSWORD=gateway_dev_password \
   postgres:18-alpine >/dev/null
 
 attempt=0
-until docker exec "$POSTGRES" pg_isready -U k2 -d k2 >/dev/null 2>&1; do
+until docker exec "$POSTGRES" pg_isready -U gateway_user -d webrtc_sip_gateway >/dev/null 2>&1; do
   attempt=$((attempt + 1))
   if [ "$attempt" -ge 30 ]; then
     echo "PostgreSQL did not become ready" >&2
@@ -38,22 +38,22 @@ wait "$second_pid"
 
 # A fully migrated schema is a no-op on subsequent runs.
 docker run --rm --network "$NETWORK" -e "DB_DSN=$DSN" --entrypoint ./db-bootstrap "$IMAGE"
-docker exec "$POSTGRES" psql -U k2 -d k2 -v ON_ERROR_STOP=1 -c \
+docker exec "$POSTGRES" psql -U gateway_user -d webrtc_sip_gateway -v ON_ERROR_STOP=1 -c \
   "SELECT to_regclass('public.sip_trunks'), max(version_id) FROM goose_db_version WHERE is_applied"
 
 # A schema created by the legacy init SQL but without Goose history is adopted
 # without recreating tables or losing representative data.
-docker exec "$POSTGRES" createdb -U k2 legacy
+docker exec "$POSTGRES" createdb -U gateway_user legacy
 docker cp "$(dirname "$0")/../schema/bootstrap-baseline.sql" "$POSTGRES:/tmp/bootstrap-baseline.sql"
-docker exec "$POSTGRES" psql -U k2 -d legacy -v ON_ERROR_STOP=1 -f /tmp/bootstrap-baseline.sql
-docker exec "$POSTGRES" psql -U k2 -d legacy -v ON_ERROR_STOP=1 -c \
+docker exec "$POSTGRES" psql -U gateway_user -d legacy -v ON_ERROR_STOP=1 -f /tmp/bootstrap-baseline.sql
+docker exec "$POSTGRES" psql -U gateway_user -d legacy -v ON_ERROR_STOP=1 -c \
   "INSERT INTO sip_trunks (name, domain, username, password) VALUES ('preserved-trunk', 'example.test', 'user', 'secret')"
-docker run --rm --network "$NETWORK" -e "DB_DSN=postgres://k2:k2pass@${POSTGRES}:5432/legacy?sslmode=disable" --entrypoint ./db-bootstrap "$IMAGE"
-docker exec "$POSTGRES" psql -U k2 -d legacy -v ON_ERROR_STOP=1 -c \
+docker run --rm --network "$NETWORK" -e "DB_DSN=postgres://gateway_user:gateway_dev_password@${POSTGRES}:5432/legacy?sslmode=disable" --entrypoint ./db-bootstrap "$IMAGE"
+docker exec "$POSTGRES" psql -U gateway_user -d legacy -v ON_ERROR_STOP=1 -c \
   "SELECT name FROM sip_trunks WHERE name = 'preserved-trunk'"
 
 # A damaged managed database must be rejected, not automatically repaired.
-docker exec "$POSTGRES" psql -U k2 -d k2 -v ON_ERROR_STOP=1 -c "DROP TABLE call_stats"
+docker exec "$POSTGRES" psql -U gateway_user -d webrtc_sip_gateway -v ON_ERROR_STOP=1 -c "DROP TABLE call_stats"
 if docker run --rm --network "$NETWORK" -e "DB_DSN=$DSN" --entrypoint ./db-bootstrap "$IMAGE"; then
   echo "bootstrap unexpectedly accepted an inconsistent schema" >&2
   exit 1

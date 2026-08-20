@@ -1,4 +1,4 @@
-# k2-stack: gateway + frontend + internal nginx in one image.
+# webrtc-sip-gateway-stack: gateway + frontend + internal nginx in one image.
 # Build from repo root: docker build -f deploy/Dockerfile.unified .
 
 # --- Gateway build ---
@@ -12,7 +12,7 @@ RUN go mod download
 RUN go install github.com/pressly/goose/v3/cmd/goose@v3.24.1
 COPY apps/gateway/ .
 ARG TARGETARCH
-RUN CGO_ENABLED=1 GOOS=linux GOARCH=${TARGETARCH} go build -ldflags="-w -s" -o k2-gateway . && \
+RUN CGO_ENABLED=1 GOOS=linux GOARCH=${TARGETARCH} go build -ldflags="-w -s" -o webrtc-sip-gateway . && \
     CGO_ENABLED=1 GOOS=linux GOARCH=${TARGETARCH} go build -ldflags="-w -s" -o db-bootstrap ./cmd/db-bootstrap
 
 # --- Frontend deps ---
@@ -54,10 +54,10 @@ RUN apk add --no-cache \
     wget \
     su-exec
 
-RUN addgroup -g 1000 k2 && adduser -D -u 1000 -G k2 k2
+RUN addgroup -g 1000 gateway && adduser -D -u 1000 -G gateway gateway
 
 WORKDIR /app/gateway
-COPY --from=gateway-build /build/k2-gateway ./k2-gateway
+COPY --from=gateway-build /build/webrtc-sip-gateway ./webrtc-sip-gateway
 COPY --from=gateway-build /build/db-bootstrap ./db-bootstrap
 COPY --from=gateway-build /go/bin/goose ./goose
 COPY --from=gateway-build /build/migrations ./migrations
@@ -65,7 +65,7 @@ COPY --from=gateway-build /build/schema ./schema
 COPY apps/gateway/scripts/docker-entrypoint.sh ./docker-entrypoint.sh
 RUN chmod +x docker-entrypoint.sh && \
     mkdir -p /app/gateway/logs && \
-    chown -R k2:k2 /app/gateway
+    chown -R gateway:gateway /app/gateway
 
 WORKDIR /app/frontend
 COPY --from=frontend-deps /app/node_modules ./node_modules
@@ -91,6 +91,6 @@ EXPOSE 5060/udp
 EXPOSE 10500-10600/udp
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD pgrep -x k2-gateway >/dev/null && pgrep -x node >/dev/null && wget -q --spider http://127.0.0.1:8088/admin/ || exit 1
+    CMD pgrep -f '^./webrtc-sip-gateway$' >/dev/null && pgrep -x node >/dev/null && pgrep -f 'nginx: master process' >/dev/null && wget -q --spider http://127.0.0.1:8088/admin/ || exit 1
 
 ENTRYPOINT ["/sbin/tini", "--", "/app/stack-entrypoint.sh"]

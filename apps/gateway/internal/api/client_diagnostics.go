@@ -14,8 +14,8 @@ import (
 
 	"github.com/gorilla/mux"
 
-	"k2-gateway/internal/auth"
-	"k2-gateway/internal/logstore"
+	"webrtc-sip-gateway/internal/auth"
+	"webrtc-sip-gateway/internal/logstore"
 )
 
 const (

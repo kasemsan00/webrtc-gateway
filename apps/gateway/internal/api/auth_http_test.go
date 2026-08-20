@@ -12,8 +12,8 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
 
-	"k2-gateway/internal/auth"
-	"k2-gateway/internal/config"
+	"webrtc-sip-gateway/internal/auth"
+	"webrtc-sip-gateway/internal/config"
 )
 
 type tokenVerifierStub struct {

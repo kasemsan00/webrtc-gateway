@@ -6,21 +6,21 @@ For agents debugging live gateway behavior without host or database credentials.
 
 ## Direct database access for agent work
 
-- When work on `apps/gateway` needs live database data or schema verification, read from the MCP/database connection named `database-dev-k2-gateway`.
+- When work on `apps/gateway` needs live database data or schema verification, read from the MCP/database connection named `database-dev-webrtc-sip-gateway`.
 - Treat direct database queries as read-only unless the user explicitly asks for a write or migration.
-- Prefer source-controlled schema files (`init.sql`, `migrations/`) for expected structure, then use `database-dev-k2-gateway` only to verify the live dev state.
+- Prefer source-controlled schema files (`init.sql`, `migrations/`) for expected structure, then use `database-dev-webrtc-sip-gateway` only to verify the live dev state.
 
 ## Operational log access for agents
 
 Default public gateway base URL:
 
-- `https://k2-gateway.kasemsan.com`
+- `https://gateway.example.com`
 
 Use the HTTP API before asking the user for host or database access.
 
 Gateway process logs:
 
-- `GET /api/logs` lists gateway-managed `k2-gateway-*.log` files.
+- `GET /api/logs` lists gateway-managed `webrtc-sip-gateway-*.log` files.
 - `GET /api/logs/current?tail=500` reads the current gateway log tail.
 - `GET /api/logs/{name}?tail=500` reads a selected gateway log file tail.
 - When API auth is enabled, these endpoints require the same bearer token as other `/api/*` operations endpoints. They remain public only when no token verifier is configured.
@@ -49,7 +49,7 @@ Softphone mobile diagnostics uploaded to gateway:
 PowerShell examples:
 
 ```powershell
-$base = "https://k2-gateway.kasemsan.com"
+$base = "https://gateway.example.com"
 $token = "<jwt>"
 $headers = @{ Authorization = "Bearer $token" } # required when API auth is enabled
 Invoke-RestMethod "$base/api/logs/current?tail=500" -Headers $headers | ConvertTo-Json -Depth 8

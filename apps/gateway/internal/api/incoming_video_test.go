@@ -3,8 +3,8 @@ package api
 import (
 	"testing"
 
-	"k2-gateway/internal/config"
-	"k2-gateway/internal/sip"
+	"webrtc-sip-gateway/internal/config"
+	"webrtc-sip-gateway/internal/sip"
 )
 
 func TestHasActiveVideoMedia(t *testing.T) {

@@ -28,7 +28,7 @@ Each migration must include both sections:
 PowerShell:
 
 ```powershell
-$env:DB_DSN = "postgres://k2user:k2pass@localhost:5432/k2_gateway?sslmode=disable"
+$env:DB_DSN = "postgres://gateway_user:gateway_dev_password@localhost:5432/webrtc_sip_gateway?sslmode=disable"
 ./apps/gateway/scripts/migrate.ps1 status
 ./apps/gateway/scripts/migrate.ps1 up
 ```
@@ -36,7 +36,7 @@ $env:DB_DSN = "postgres://k2user:k2pass@localhost:5432/k2_gateway?sslmode=disabl
 Bash:
 
 ```bash
-export DB_DSN="postgres://k2user:k2pass@localhost:5432/k2_gateway?sslmode=disable"
+export DB_DSN="postgres://gateway_user:gateway_dev_password@localhost:5432/webrtc_sip_gateway?sslmode=disable"
 ./apps/gateway/scripts/migrate.sh status
 ./apps/gateway/scripts/migrate.sh up
 ```

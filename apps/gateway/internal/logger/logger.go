@@ -126,7 +126,7 @@ func newLogger(cfg Config) (*Logger, error) {
 	// Log initialization
 	fmt.Fprintf(l.multiWriter, "\n")
 	fmt.Fprintf(l.multiWriter, "================================================================================\n")
-	fmt.Fprintf(l.multiWriter, "=== K2 Gateway Log Started: %s ===\n", time.Now().Format("2006-01-02 15:04:05"))
+	fmt.Fprintf(l.multiWriter, "=== WebRTC-SIP Gateway Log Started: %s ===\n", time.Now().Format("2006-01-02 15:04:05"))
 	fmt.Fprintf(l.multiWriter, "=== Log File: %s ===\n", l.logFilePath)
 	fmt.Fprintf(l.multiWriter, "================================================================================\n")
 	fmt.Fprintf(l.multiWriter, "\n")
@@ -135,16 +135,16 @@ func newLogger(cfg Config) (*Logger, error) {
 }
 
 // generateLogFilePath creates a unique log file path with timestamp
-// Format: k2-gateway-YYYY-MM-DD_HH-MM-SS.log
+// Format: webrtc-sip-gateway-YYYY-MM-DD_HH-MM-SS.log
 func (l *Logger) generateLogFilePath() string {
 	timestamp := time.Now().Format("2006-01-02_15-04-05")
-	filename := fmt.Sprintf("k2-gateway-%s.log", timestamp)
+	filename := fmt.Sprintf("webrtc-sip-gateway-%s.log", timestamp)
 	return filepath.Join(l.config.LogsDir, filename)
 }
 
 // cleanupOldLogs removes old log files keeping only MaxBackups most recent
 func (l *Logger) cleanupOldLogs() {
-	pattern := filepath.Join(l.config.LogsDir, "k2-gateway-*.log")
+	pattern := filepath.Join(l.config.LogsDir, "webrtc-sip-gateway-*.log")
 	files, err := filepath.Glob(pattern)
 	if err != nil {
 		return
@@ -232,7 +232,7 @@ func (l *Logger) Close() {
 	// Log shutdown
 	fmt.Fprintf(l.multiWriter, "\n")
 	fmt.Fprintf(l.multiWriter, "================================================================================\n")
-	fmt.Fprintf(l.multiWriter, "=== K2 Gateway Log Ended: %s ===\n", time.Now().Format("2006-01-02 15:04:05"))
+	fmt.Fprintf(l.multiWriter, "=== WebRTC-SIP Gateway Log Ended: %s ===\n", time.Now().Format("2006-01-02 15:04:05"))
 	fmt.Fprintf(l.multiWriter, "================================================================================\n")
 
 	// Close pipe

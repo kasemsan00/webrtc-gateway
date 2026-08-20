@@ -157,6 +157,8 @@ describe('trunkPrefsStore column visibility', () => {
       name: true,
       actions: true,
     })
+    expect(localStorage.getItem('webrtc-sip-gateway-trunk-prefs')).toBeTruthy()
+    expect(localStorage.getItem('k2_trunk_prefs')).toBeNull()
   })
 
   it('persists column visibility after toggle', async () => {
@@ -165,7 +167,7 @@ describe('trunkPrefsStore column visibility', () => {
     toggleColumnVisibility('username', false)
 
     await vi.waitFor(() => {
-      const raw = localStorage.getItem('k2_trunk_prefs')
+      const raw = localStorage.getItem('webrtc-sip-gateway-trunk-prefs')
       expect(raw).toBeTruthy()
       const envelope = JSON.parse(raw!) as {
         version: number

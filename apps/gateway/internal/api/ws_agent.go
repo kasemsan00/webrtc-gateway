@@ -5,8 +5,8 @@ import (
 	"log"
 	"strings"
 
-	"k2-gateway/internal/session"
-	"k2-gateway/internal/sip"
+	"webrtc-sip-gateway/internal/session"
+	"webrtc-sip-gateway/internal/sip"
 )
 
 func (s *Server) handleWSAgentRegister(client *WSClient, msg WSMessage) {

@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"k2-gateway/internal/session"
+	"webrtc-sip-gateway/internal/session"
 )
 
 // NotifySessionState notifies WebSocket clients about session state changes

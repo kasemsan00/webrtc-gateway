@@ -25,8 +25,8 @@ func NewSpeechTranslatorClient(cc grpc.ClientConnInterface) SpeechTranslatorClie
 func (c *speechTranslatorClient) Translate(ctx context.Context, opts ...grpc.CallOption) (SpeechTranslator_TranslateClient, error) {
 	stream, err := c.cc.NewStream(ctx, &grpc.StreamDesc{
 		StreamName:    "Translate",
-		ServerStreams:  true,
-		ClientStreams:  true,
+		ServerStreams: true,
+		ClientStreams: true,
 	}, "/SpeechTranslator/Translate", opts...)
 	if err != nil {
 		return nil, err
@@ -82,7 +82,7 @@ func CheckHealth(ctx context.Context, cc grpc.ClientConnInterface) error {
 	if err := stream.Send(&TranslationRequest{
 		SourceLanguage: "",
 		TargetLanguage: "",
-		Mode:          TranslationMode_MODE_S2S,
+		Mode:           TranslationMode_MODE_S2S,
 	}); err != nil {
 		stream.CloseSend()
 		return fmt.Errorf("health check send failed: %w", err)

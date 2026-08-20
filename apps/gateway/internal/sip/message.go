@@ -10,8 +10,8 @@ import (
 	"github.com/emiago/sipgo"
 	"github.com/emiago/sipgo/sip"
 
-	"k2-gateway/internal/logstore"
-	"k2-gateway/internal/session"
+	"webrtc-sip-gateway/internal/logstore"
+	"webrtc-sip-gateway/internal/session"
 )
 
 // SendMessage sends a SIP MESSAGE to a destination
@@ -151,7 +151,7 @@ func (s *Server) SendMessage(destination, from, body, contentType string) error 
 	})
 
 	// Add User-Agent
-	req.AppendHeader(sip.NewHeader("User-Agent", "TTRS-K2Gateway/1.0"))
+	req.AppendHeader(sip.NewHeader("User-Agent", "WebRTC-SIP-Gateway/1.0"))
 
 	// Set destination
 	destinationAddr := fmt.Sprintf("%s:%d", recipient.Host, recipient.Port)
@@ -426,7 +426,7 @@ func (s *Server) SendMessageToSession(sess *session.Session, body, contentType s
 	})
 
 	// Add User-Agent
-	req.AppendHeader(sip.NewHeader("User-Agent", "TTRS-K2Gateway/1.0"))
+	req.AppendHeader(sip.NewHeader("User-Agent", "WebRTC-SIP-Gateway/1.0"))
 
 	// Set destination - use the host:port from the recipient Contact
 	destinationAddr := fmt.Sprintf("%s:%d", recipient.Host, recipient.Port)

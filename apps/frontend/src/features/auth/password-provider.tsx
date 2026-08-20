@@ -131,7 +131,7 @@ function LoginForm({
         }}
       >
         <div className="space-y-1">
-          <h1 className="text-lg font-semibold">WebRTC Gateway</h1>
+          <h1 className="text-lg font-semibold">WebRTC-SIP Gateway Console</h1>
           <p className="text-sm text-muted-foreground">
             Enter the admin password to continue.
           </p>

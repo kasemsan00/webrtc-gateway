@@ -3,7 +3,7 @@ package sip
 import (
 	"testing"
 
-	"k2-gateway/internal/session"
+	"webrtc-sip-gateway/internal/session"
 )
 
 func TestNotifySessionStateChange_ForwardsConnectingRingingAndDedupes(t *testing.T) {

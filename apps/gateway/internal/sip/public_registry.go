@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"k2-gateway/internal/config"
+	"webrtc-sip-gateway/internal/config"
 
 	"github.com/emiago/sipgo"
 	"github.com/emiago/sipgo/sip"
@@ -392,7 +392,7 @@ func (r *PublicAccountRegistry) createRegisterRequest(acc *PublicAccount) (*sip.
 	req.AppendHeader(sip.NewHeader("Expires", fmt.Sprintf("%d", r.config.RegisterExpiresSeconds)))
 
 	// User-Agent
-	req.AppendHeader(sip.NewHeader("User-Agent", "K2-Gateway/1.0"))
+	req.AppendHeader(sip.NewHeader("User-Agent", "WebRTC-SIP-Gateway/1.0"))
 
 	// Resolve dialable destination (host:port) for SetDestination()
 	destination, err := resolveSIPDestination(acc.Domain, acc.Port, "tcp")

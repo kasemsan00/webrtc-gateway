@@ -11,7 +11,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
-	"k2-gateway/internal/translator/pb"
+	"webrtc-sip-gateway/internal/translator/pb"
 )
 
 type Client struct {

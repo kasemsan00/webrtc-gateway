@@ -21,7 +21,7 @@ func TestPublicViewRedactsSecrets(t *testing.T) {
 		},
 		DB: DBConfig{
 			Enable: true,
-			DSN:    "postgres://gateway_user:db-pass-123@db.internal:5432/k2",
+			DSN:    "postgres://gateway_user:db-pass-123@db.internal:5432/webrtc_sip_gateway",
 		},
 		PushNotification: PushNotificationConfig{
 			Enable:                  true,

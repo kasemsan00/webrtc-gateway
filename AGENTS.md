@@ -20,7 +20,7 @@ Run from repo root unless working in a specific app directory.
 
 Go commands (run from `apps/gateway`):
 - `go test ./...`
-- `go build -o k2-gateway .`
+- `go build -o webrtc-sip-gateway .`
 - `go test -v ./internal/sip -run "TestBuildPublicAccountKey|TestResolveSIPDestination"`
 
 Frontend single-test (from root):
@@ -39,7 +39,7 @@ Gateway env is loaded via `godotenv`; `AUTH_ENABLE` triggers fail-fast startup c
 
 - Monorepo: `pnpm` workspaces (`apps/*`, `packages/*`) + Turborepo (`turbo.json`)
 - `apps/frontend`: React + TypeScript + **TanStack Start** (SSR via Vite, port 3150)
-- `apps/gateway`: Go WebRTC↔SIP bridge, module path `k2-gateway`, Go 1.26.2
+- `apps/gateway`: Go WebRTC↔SIP bridge, module path `webrtc-sip-gateway`, Go 1.26.2
 - `packages/`: `eslint-config`, `typescript-config`, `ui`
 - `pnpm-workspace.yaml` blocks native builds (`esbuild`, `sharp`, etc.) on virtiofs mounts
 

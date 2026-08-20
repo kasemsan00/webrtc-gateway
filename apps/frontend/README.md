@@ -39,7 +39,7 @@ pnpm test
 >
 > `FRONTEND_PASSWORD` is runtime-only. The frontend server and gateway both need it.
 >
-> Single-domain deploy (`k2-gateway.kasemsan.com/admin`): see [`deploy/README.md`](../../deploy/README.md) — **split** (2 containers + external path routing) or **unified** (`k2-stack`, one external upstream → `:8088`).
+> Single-domain deploy (`gateway.example.com/admin`): see [`deploy/README.md`](../../deploy/README.md) — **split** (2 containers + external path routing) or **unified** (`webrtc-sip-gateway-stack`, one external upstream → `:8088`).
 
 ## References
 

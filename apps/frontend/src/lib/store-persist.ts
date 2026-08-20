@@ -75,6 +75,51 @@ export function clearPersisted(key: string): void {
 }
 
 /**
+ * Moves a valid legacy storage envelope to its canonical key exactly once.
+ * A value already stored under the canonical key always wins.
+ */
+export function migrateLegacyPersisted<TData>(
+  key: string,
+  legacyKey: string,
+  version: number,
+  isValid: (value: unknown) => value is TData,
+): void {
+  if (typeof window === 'undefined') return
+
+  try {
+    if (window.localStorage.getItem(key) !== null) {
+      window.localStorage.removeItem(legacyKey)
+      return
+    }
+
+    const raw = window.localStorage.getItem(legacyKey)
+    if (!raw) return
+
+    const envelope = JSON.parse(raw) as unknown
+    if (!envelope || typeof envelope !== 'object') {
+      window.localStorage.removeItem(legacyKey)
+      return
+    }
+
+    const typedEnvelope = envelope as PersistedEnvelope<unknown>
+    if (typedEnvelope.version === version && isValid(typedEnvelope.data)) {
+      window.localStorage.setItem(
+        key,
+        JSON.stringify({ version, data: typedEnvelope.data }),
+      )
+    }
+    window.localStorage.removeItem(legacyKey)
+  } catch {
+    // Ignore unavailable storage and discard malformed legacy data when possible.
+    try {
+      window.localStorage.removeItem(legacyKey)
+    } catch {
+      // Storage is unavailable.
+    }
+  }
+}
+
+/**
  * Attach persistence to a TanStack Store.
  *
  * 1. Hydrates the store from localStorage (if data exists and version matches).

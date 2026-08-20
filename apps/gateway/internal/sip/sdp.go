@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"k2-gateway/internal/session"
+	"webrtc-sip-gateway/internal/session"
 )
 
 // createSDPOffer creates an SDP offer for outbound calls
@@ -29,7 +29,7 @@ func (s *Server) createSDPOffer(rtpPort int, sess *session.Session) []byte {
 	videoPT := sess.GetSIPVideoPayloadType()
 
 	// Plain RTP SDP without crypto attributes (like Linphone Desktop)
-	// Asterisk will send plain RTP, k2-gateway will forward to WebRTC as SRTP
+	// Asterisk will send plain RTP, webrtc-sip-gateway will forward to WebRTC as SRTP
 	// Audio: Opus only (passthrough, no transcoding)
 	//
 	// NOTE: Some Asterisk/chan_sip setups accept RTP/AVPF but do not behave correctly with RTCP feedback/mux.

@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"k2-gateway/internal/auth"
-	"k2-gateway/internal/config"
-	"k2-gateway/internal/sip"
+	"webrtc-sip-gateway/internal/auth"
+	"webrtc-sip-gateway/internal/config"
+	"webrtc-sip-gateway/internal/sip"
 )
 
 const (

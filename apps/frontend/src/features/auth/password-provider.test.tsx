@@ -5,6 +5,8 @@ import { getAccessToken } from './token-store'
 import {
   ADMIN_PASSWORD_STORAGE_KEY,
   clearAdminSession,
+  LEGACY_ADMIN_PASSWORD_STORAGE_KEY,
+  restoreAdminPassword,
 } from './password-auth'
 import { passwordsMatch } from './password-match'
 import { PasswordAuthProvider, usePasswordAuth } from './password-provider'
@@ -44,6 +46,21 @@ describe('passwordsMatch', () => {
 })
 
 describe('PasswordAuthProvider', () => {
+  it('migrates the legacy password session without overriding a current session', () => {
+    sessionStorage.setItem(LEGACY_ADMIN_PASSWORD_STORAGE_KEY, 'legacy-secret')
+
+    expect(restoreAdminPassword()).toBe('legacy-secret')
+    expect(sessionStorage.getItem(ADMIN_PASSWORD_STORAGE_KEY)).toBe(
+      'legacy-secret',
+    )
+    expect(sessionStorage.getItem(LEGACY_ADMIN_PASSWORD_STORAGE_KEY)).toBeNull()
+
+    sessionStorage.setItem(ADMIN_PASSWORD_STORAGE_KEY, 'current-secret')
+    sessionStorage.setItem(LEGACY_ADMIN_PASSWORD_STORAGE_KEY, 'older-secret')
+    expect(restoreAdminPassword()).toBe('current-secret')
+    expect(sessionStorage.getItem(LEGACY_ADMIN_PASSWORD_STORAGE_KEY)).toBeNull()
+  })
+
   it('shows operations pages after a successful login and stores the bearer', async () => {
     const verifyPassword = vi.fn().mockResolvedValue(true)
 

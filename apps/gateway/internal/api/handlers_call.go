@@ -11,9 +11,9 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/pion/webrtc/v4"
 
-	"k2-gateway/internal/logstore"
-	"k2-gateway/internal/session"
-	"k2-gateway/internal/sip"
+	"webrtc-sip-gateway/internal/logstore"
+	"webrtc-sip-gateway/internal/session"
+	"webrtc-sip-gateway/internal/sip"
 )
 
 // handleOffer processes WebRTC offer and returns answer

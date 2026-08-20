@@ -8,7 +8,7 @@ import (
 
 	"github.com/gorilla/mux"
 
-	"k2-gateway/internal/logstore"
+	"webrtc-sip-gateway/internal/logstore"
 )
 
 // SessionHistoryResponse represents a call session entry for REST responses

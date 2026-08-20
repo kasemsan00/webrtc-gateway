@@ -5,8 +5,8 @@ import (
 
 	"github.com/emiago/sipgo/sip"
 
-	"k2-gateway/internal/config"
-	"k2-gateway/internal/session"
+	"webrtc-sip-gateway/internal/config"
+	"webrtc-sip-gateway/internal/session"
 )
 
 type cancelNotifierStub struct {

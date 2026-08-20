@@ -7,7 +7,7 @@ import (
 
 	"github.com/emiago/sipgo/sip"
 
-	"k2-gateway/internal/session"
+	"webrtc-sip-gateway/internal/session"
 )
 
 func TestCompleteOutboundInvite200SetsAsteriskEndpointsFromAnswer(t *testing.T) {

@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"k2-gateway/internal/config"
+	"webrtc-sip-gateway/internal/config"
 )
 
 func TestNoopStoreResolveTrunkByCredentials(t *testing.T) {

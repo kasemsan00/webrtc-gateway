@@ -1,4 +1,4 @@
-module k2-gateway
+module webrtc-sip-gateway
 
 go 1.26.5
 

@@ -1,5 +1,5 @@
 {
-  "projectName": "webrtc-gateway-react",
+  "projectName": "webrtc-sip-gateway-react",
   "mode": "file-router",
   "typescript": true,
   "packageManager": "npm",

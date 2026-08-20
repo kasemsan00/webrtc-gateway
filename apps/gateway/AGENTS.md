@@ -1,4 +1,4 @@
-# K2 Gateway - AI Agent Development Guide
+# WebRTC-SIP Gateway - AI Agent Development Guide
 
 > **Role:** Senior Go Engineer / Systems Architect
 > **Objective:** Keep a production-grade WebRTC <-> SIP bridge stable under real-time load.
@@ -21,7 +21,7 @@
 
 ## 2. Current Project Snapshot
 
-K2 Gateway bridges WebRTC clients (browser/mobile) to SIP/RTP endpoints (Asterisk, Kamailio).
+WebRTC-SIP Gateway bridges WebRTC clients (browser/mobile) to SIP/RTP endpoints (Asterisk, Kamailio).
 
 - **Language:** Go 1.26.2 (`go.mod`)
 - **Core libs:** `pion/webrtc/v4`, `emiago/sipgo`, `gorilla/websocket`, `gorilla/mux`, `pion/rtp`, `pion/rtcp`, `pion/sdp/v3`, `pgx/v5`, `golang-jwt/jwt/v5`
@@ -141,8 +141,8 @@ Full WS message types: [`docs/gateway/ws-contract.md`](../../docs/gateway/ws-con
 ## 8. Build, Run, Test
 
 ```bash
-go build -o k2-gateway .
-./k2-gateway
+go build -o webrtc-sip-gateway .
+./webrtc-sip-gateway
 go test ./...
 go test -v ./internal/sip -run "TestBuildPublicAccountKey|TestResolveSIPDestination"
 ```

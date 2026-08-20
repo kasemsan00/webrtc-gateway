@@ -17,7 +17,7 @@ describe('gateway-logs-api', () => {
         json: () => ({
           items: [
             {
-              name: 'k2-gateway-2026-06-26.log',
+              name: 'webrtc-sip-gateway-2026-06-26.log',
               size: 1024,
               modifiedAt: '2026-06-26T10:00:00Z',
               current: true,
@@ -40,7 +40,7 @@ describe('gateway-logs-api', () => {
         status: 200,
         headers: new Headers({ 'content-type': 'application/json' }),
         json: () => ({
-          name: 'k2-gateway-2026-06-26.log',
+          name: 'webrtc-sip-gateway-2026-06-26.log',
           current: true,
           tail: 2,
           lines: ['line-1', 'line-2'],

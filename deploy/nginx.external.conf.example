@@ -9,7 +9,7 @@ map $http_upgrade $connection_upgrade {
 
 server {
     listen 443 ssl;
-    server_name k2-gateway.kasemsan.com;
+    server_name gateway.example.com;
 
     # ssl_certificate /path/to/cert.pem;
     # ssl_certificate_key /path/to/key.pem;

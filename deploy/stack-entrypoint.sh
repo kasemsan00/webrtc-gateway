@@ -12,7 +12,7 @@ frontend_pid=""
 nginx_pid=""
 
 shutdown() {
-  echo "Shutting down k2-stack..."
+  echo "Shutting down webrtc-sip-gateway-stack..."
   if [ -n "$nginx_pid" ]; then kill "$nginx_pid" 2>/dev/null || true; fi
   if [ -n "$frontend_pid" ]; then kill "$frontend_pid" 2>/dev/null || true; fi
   if [ -n "$gateway_pid" ]; then kill "$gateway_pid" 2>/dev/null || true; fi
@@ -21,8 +21,8 @@ shutdown() {
 trap shutdown INT TERM
 
 cd /app/gateway
-# Run as root so docker-entrypoint.sh can chown a mounted logs volume, then su-exec k2.
-./docker-entrypoint.sh ./k2-gateway &
+# Run as root so docker-entrypoint.sh can chown a mounted logs volume, then su-exec gateway.
+./docker-entrypoint.sh ./webrtc-sip-gateway &
 gateway_pid=$!
 
 cd /app/frontend
@@ -48,7 +48,7 @@ envsubst '${PROXY_PORT} ${GATEWAY_PORT} ${FRONTEND_PORT}' \
   < /etc/nginx/nginx.conf.template \
   > /etc/nginx/nginx.conf
 
-echo "k2-stack listening on :${STACK_PROXY_PORT} (gateway :${GATEWAY_PORT}, frontend :${FRONTEND_PORT})"
+echo "webrtc-sip-gateway-stack listening on :${STACK_PROXY_PORT} (gateway :${GATEWAY_PORT}, frontend :${FRONTEND_PORT})"
 
 nginx -g 'daemon off;' &
 nginx_pid=$!
@@ -57,7 +57,7 @@ while kill -0 "$gateway_pid" 2>/dev/null && kill -0 "$frontend_pid" 2>/dev/null 
   sleep 1
 done
 
-echo "A required k2-stack process exited unexpectedly" >&2
+echo "A required webrtc-sip-gateway-stack process exited unexpectedly" >&2
 shutdown
 wait "$gateway_pid" "$frontend_pid" "$nginx_pid" 2>/dev/null || true
 exit 1

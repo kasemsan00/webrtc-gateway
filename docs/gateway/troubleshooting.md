@@ -18,7 +18,7 @@ Checkpoints:
 
 ## Video rejected (`m=video ... 0`)
 
-- inspect full SDP answer logs through `https://k2-gateway.kasemsan.com/api/logs/current?tail=500`
+- inspect full SDP answer logs through `https://gateway.example.com/api/logs/current?tail=500`
 - validate AVPF compatibility (`SIP_VIDEO_USE_AVPF` and endpoint support)
 - temporarily force AVP with `SIP_FORCE_AVP=true` for interoperability testing
 

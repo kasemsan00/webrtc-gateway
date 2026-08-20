@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"k2-gateway/internal/session"
+	"webrtc-sip-gateway/internal/session"
 )
 
 func TestWSMessageMidCallRenegotiationContract(t *testing.T) {

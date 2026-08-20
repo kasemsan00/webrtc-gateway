@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"k2-gateway/internal/logstore"
-	"k2-gateway/internal/session"
+	"webrtc-sip-gateway/internal/logstore"
+	"webrtc-sip-gateway/internal/session"
 )
 
 func readWSTestMessage(t *testing.T, client *WSClient) WSMessage {

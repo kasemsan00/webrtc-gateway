@@ -9,8 +9,8 @@ import (
 	"github.com/pion/rtcp"
 	"github.com/pion/webrtc/v4"
 
-	"k2-gateway/internal/config"
-	pkg_webrtc "k2-gateway/internal/pkg/webrtc"
+	"webrtc-sip-gateway/internal/config"
+	pkg_webrtc "webrtc-sip-gateway/internal/pkg/webrtc"
 )
 
 const RENEGOTIATE_ICE_GATHER_TIMEOUT = 3 * time.Second

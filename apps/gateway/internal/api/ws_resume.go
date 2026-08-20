@@ -6,7 +6,7 @@ import (
 	"log"
 	"time"
 
-	"k2-gateway/internal/session"
+	"webrtc-sip-gateway/internal/session"
 )
 
 const (

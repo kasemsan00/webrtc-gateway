@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"k2-gateway/internal/config"
+	"webrtc-sip-gateway/internal/config"
 )
 
 func TestSwitchTransitionPreserve_HoldsNonKeyframesButReleasesImmediateKeyframe(t *testing.T) {

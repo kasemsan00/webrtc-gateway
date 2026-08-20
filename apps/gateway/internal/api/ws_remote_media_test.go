@@ -3,7 +3,7 @@ package api
 import (
 	"testing"
 
-	"k2-gateway/internal/config"
+	"webrtc-sip-gateway/internal/config"
 )
 
 func TestNotifyRemoteMedia_EmitsOnceShape(t *testing.T) {

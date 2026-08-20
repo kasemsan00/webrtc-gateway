@@ -9,7 +9,7 @@ import (
 
 	"github.com/pion/rtcp"
 
-	"k2-gateway/internal/config"
+	"webrtc-sip-gateway/internal/config"
 )
 
 const (

@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"k2-gateway/internal/config"
+	"webrtc-sip-gateway/internal/config"
 )
 
 // Manager manages multiple concurrent sessions

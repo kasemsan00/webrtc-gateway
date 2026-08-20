@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"k2-gateway/internal/sip"
+	"webrtc-sip-gateway/internal/sip"
 )
 
 func TestTrunkResponseFrom_IncludesPublicIDBothFields(t *testing.T) {

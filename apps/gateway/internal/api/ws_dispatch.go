@@ -6,7 +6,7 @@ import (
 	"log"
 	"strings"
 
-	"k2-gateway/internal/session"
+	"webrtc-sip-gateway/internal/session"
 )
 
 // handleWSMessage processes WebSocket messages

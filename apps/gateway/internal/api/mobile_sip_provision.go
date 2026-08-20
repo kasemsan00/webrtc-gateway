@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"strings"
 
-	"k2-gateway/internal/auth"
-	"k2-gateway/internal/sip"
-	"k2-gateway/internal/sipclientauth"
+	"webrtc-sip-gateway/internal/auth"
+	"webrtc-sip-gateway/internal/sip"
+	"webrtc-sip-gateway/internal/sipclientauth"
 )
 
 // MobileSIPProvisionResult identifies the trunk provisioned for a mobile client.

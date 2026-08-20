@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"k2-gateway/internal/config"
+	"webrtc-sip-gateway/internal/config"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"

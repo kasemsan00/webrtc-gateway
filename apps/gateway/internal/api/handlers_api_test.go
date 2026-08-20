@@ -15,11 +15,11 @@ import (
 
 	"github.com/gorilla/mux"
 
-	"k2-gateway/internal/auth"
-	"k2-gateway/internal/config"
-	"k2-gateway/internal/logstore"
-	"k2-gateway/internal/session"
-	"k2-gateway/internal/sip"
+	"webrtc-sip-gateway/internal/auth"
+	"webrtc-sip-gateway/internal/config"
+	"webrtc-sip-gateway/internal/logstore"
+	"webrtc-sip-gateway/internal/session"
+	"webrtc-sip-gateway/internal/sip"
 )
 
 type apiHandlerTrunkManagerStub struct {

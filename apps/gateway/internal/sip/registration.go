@@ -203,7 +203,7 @@ func (s *Server) createRegisterRequestWithParams(params RegisterParams) (*sip.Re
 	req.AppendHeader(sip.NewHeader("Expires", "3600"))
 
 	// User-Agent
-	req.AppendHeader(sip.NewHeader("User-Agent", "K2-Gateway/1.0"))
+	req.AppendHeader(sip.NewHeader("User-Agent", "WebRTC-SIP-Gateway/1.0"))
 
 	// Resolve dialable destination (host:port) using SRV if needed
 	destination, err := resolveSIPDestination(params.Domain, params.Port, "tcp")

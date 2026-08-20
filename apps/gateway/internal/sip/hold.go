@@ -8,7 +8,7 @@ import (
 
 	"github.com/emiago/sipgo/sip"
 
-	"k2-gateway/internal/session"
+	"webrtc-sip-gateway/internal/session"
 )
 
 // SetHold performs a client-originated in-dialog re-INVITE. Held calls use

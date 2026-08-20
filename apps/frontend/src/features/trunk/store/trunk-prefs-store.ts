@@ -1,7 +1,7 @@
 import { Store } from '@tanstack/store'
 import type { VisibilityState } from '@tanstack/react-table'
 
-import { attachPersist } from '@/lib/store-persist'
+import { attachPersist, migrateLegacyPersisted } from '@/lib/store-persist'
 
 type ViewMode = 'card' | 'table'
 
@@ -15,7 +15,8 @@ export interface TrunkPrefsPersisted {
   columnVisibility: VisibilityState
 }
 
-const PERSIST_KEY = 'k2_trunk_prefs'
+const PERSIST_KEY = 'webrtc-sip-gateway-trunk-prefs'
+const LEGACY_PERSIST_KEY = 'k2_trunk_prefs'
 const PERSIST_VERSION = 2
 
 export const DEFAULT_COLUMN_VISIBILITY: VisibilityState = {
@@ -38,6 +39,12 @@ function isVisibilityState(value: unknown): value is VisibilityState {
     return false
   }
   return Object.values(value).every((entry) => typeof entry === 'boolean')
+}
+
+function isTrunkPrefsPersisted(value: unknown): value is TrunkPrefsPersisted {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const prefs = value as Partial<TrunkPrefsPersisted>
+  return isViewMode(prefs.viewMode) && isVisibilityState(prefs.columnVisibility)
 }
 
 export function mergeTrunkPrefs(
@@ -71,6 +78,13 @@ export function mergeTrunkPrefs(
 export function initializeTrunkPrefsStore() {
   if (typeof window === 'undefined' || initialized) return
   initialized = true
+
+  migrateLegacyPersisted(
+    PERSIST_KEY,
+    LEGACY_PERSIST_KEY,
+    PERSIST_VERSION,
+    isTrunkPrefsPersisted,
+  )
 
   attachPersist<TrunkPrefsState, TrunkPrefsPersisted>(trunkPrefsStore, {
     key: PERSIST_KEY,

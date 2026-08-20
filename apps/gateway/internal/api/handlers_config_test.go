@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"k2-gateway/internal/config"
+	"webrtc-sip-gateway/internal/config"
 )
 
 func TestHandleGetConfigRedactsSecrets(t *testing.T) {
@@ -24,7 +24,7 @@ func TestHandleGetConfigRedactsSecrets(t *testing.T) {
 		},
 		DB: config.DBConfig{
 			Enable: true,
-			DSN:    "postgres://user:db-secret@db.internal:5432/k2",
+			DSN:    "postgres://user:db-secret@db.internal:5432/webrtc_sip_gateway",
 		},
 		PushNotification: config.PushNotificationConfig{
 			TTRSClientSecret: "oauth-secret",

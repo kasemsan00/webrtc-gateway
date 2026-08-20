@@ -1,8 +1,8 @@
-https://webrtc-gateway-ui.app.kasemsan.com/
+https://gateway.example.com/
 
-# WebRTC Gateway Monorepo
+# WebRTC-SIP Gateway Monorepo
 
-Monorepo สำหรับระบบ **K2 Gateway** — bridge ที่เชื่อม **WebRTC** (เบราว์เซอร์/มือถือ) กับ **SIP** (ระบบโทรศัพท์ VoIP) เข้าด้วยกัน
+Monorepo สำหรับระบบ **WebRTC-SIP Gateway** — bridge ที่เชื่อม **WebRTC** (เบราว์เซอร์/มือถือ) กับ **SIP** (ระบบโทรศัพท์ VoIP) เข้าด้วยกัน
 
 ประกอบด้วย frontend สำหรับ operations UI และ backend gateway service สำหรับ signaling/media
 
@@ -10,7 +10,7 @@ Monorepo สำหรับระบบ **K2 Gateway** — bridge ที่เ�
 
 ## ระบบทำอะไร? (System Overview)
 
-K2 Gateway ทำหน้าที่เป็น **สะพานเชื่อมระหว่างโลก WebRTC กับโลก SIP** โดย:
+WebRTC-SIP Gateway ทำหน้าที่เป็น **สะพานเชื่อมระหว่างโลก WebRTC กับโลก SIP** โดย:
 
 1. **รับ WebRTC จากเบราว์เซอร์** — ผ่าน WebSocket + SRTP (เข้ารหัส)
 2. **แปลงและส่งต่อไปยัง SIP** — ส่ง RTP ธรรมดาไปยัง Kamailio/Asterisk
@@ -18,7 +18,7 @@ K2 Gateway ทำหน้าที่เป็น **สะพานเชื่
 
 ```
 ┌─────────────────┐         ┌───────────────┐         ┌─────────────────────┐
-│  Browser/Mobile  │◄──────►│  K2 Gateway   │◄──────►│  Kamailio/Asterisk  │
+│  Browser/Mobile  │◄──────►│ WebRTC-SIP Gateway │◄──────►│  Kamailio/Asterisk  │
 │  (WebRTC+SRTP)   │  WS +  │  (Bridge)     │  SIP +  │  (SIP PBX)          │
 │                   │  SRTP  │               │  RTP    │                     │
 └─────────────────┘         └───────────────┘         └─────────┬───────────┘
@@ -200,7 +200,7 @@ Trunk คือ "บัญชี SIP" ที่ใช้สำหรับรั
 | โฟลเดอร์                     | คำอธิบาย                                      |
 | ---------------------------- | --------------------------------------------- |
 | `apps/frontend`              | React + TypeScript + Vite — Operations UI     |
-| `apps/gateway`               | Go service — WebRTC ↔ SIP bridge (K2 Gateway) |
+| `apps/gateway`               | Go service — WebRTC ↔ SIP bridge (WebRTC-SIP Gateway) |
 | `packages/ui`                | Shared UI components                          |
 | `packages/eslint-config`     | Shared ESLint config                          |
 | `packages/typescript-config` | Shared TypeScript config                      |
@@ -220,7 +220,7 @@ Trunk คือ "บัญชี SIP" ที่ใช้สำหรับรั
 
 - **Monorepo:** `pnpm` workspaces + `turborepo`
 - **Frontend:** React, TypeScript, Vite, TanStack Router
-- **Backend:** Go (`k2-gateway`), Pion WebRTC, SIP stack
+- **Backend:** Go (`webrtc-sip-gateway`), Pion WebRTC, SIP stack
 - **Codecs:** H.264 (หลัก), VP8 (สำรอง), Opus (เสียง), PCMU (legacy)
 - **Database:** PostgreSQL (optional, สำหรับ trunk routing + call logging)
 
@@ -315,19 +315,19 @@ go test ./...
 เมื่อต้องการตรวจสอบ gateway process logs ให้เรียกผ่าน REST API ของ gateway แทนการเข้าไปอ่านไฟล์บนเครื่องโดยตรง:
 
 ```bash
-curl https://k2-gateway.kasemsan.com/api/logs
-curl "https://k2-gateway.kasemsan.com/api/logs/current?tail=500"
-curl "https://k2-gateway.kasemsan.com/api/logs/<log-file-name>?tail=500"
+curl https://gateway.example.com/api/logs
+curl "https://gateway.example.com/api/logs/current?tail=500"
+curl "https://gateway.example.com/api/logs/<log-file-name>?tail=500"
 ```
 
-`/api/logs` endpoints ไม่ต้องใช้ bearer token และคืนเฉพาะไฟล์ log ที่ gateway จัดการ (`k2-gateway-*.log`).
+`/api/logs` endpoints ไม่ต้องใช้ bearer token และคืนเฉพาะไฟล์ log ที่ gateway จัดการ (`webrtc-sip-gateway-*.log`).
 
 ## Client Diagnostics
 
 Softphone clients can upload sanitized diagnostics batches for bug analysis:
 
 ```bash
-curl -X POST https://k2-gateway.kasemsan.com/api/client-diagnostics \
+curl -X POST https://gateway.example.com/api/client-diagnostics \
   -H "Authorization: Bearer <access-token>" \
   -H "Content-Type: application/json" \
   -d '{"clientTraceId":"trace-1","events":[{"source":"app","level":"info","name":"app.boot"}]}'
@@ -339,16 +339,16 @@ Read-only mobile diagnostics endpoints do not require bearer tokens:
 
 ```bash
 # No-session mobile diagnostics such as app.boot, login, notification handoff
-curl "https://k2-gateway.kasemsan.com/api/client-diagnostics?clientTraceId=<trace-id>&page=1&pageSize=100"
+curl "https://gateway.example.com/api/client-diagnostics?clientTraceId=<trace-id>&page=1&pageSize=100"
 
 # Mobile diagnostics attached to a call session
-curl "https://k2-gateway.kasemsan.com/api/client-diagnostics/sessions/<sessionId>/events?page=1&pageSize=100"
+curl "https://gateway.example.com/api/client-diagnostics/sessions/<sessionId>/events?page=1&pageSize=100"
 
 # Large mobile diagnostics batches for a call session
-curl "https://k2-gateway.kasemsan.com/api/client-diagnostics/sessions/<sessionId>/payloads?page=1&pageSize=100"
+curl "https://gateway.example.com/api/client-diagnostics/sessions/<sessionId>/payloads?page=1&pageSize=100"
 
 # Read one diagnostics payload; only client_diagnostics_batch payloads are returned
-curl "https://k2-gateway.kasemsan.com/api/client-diagnostics/payloads/<payloadId>"
+curl "https://gateway.example.com/api/client-diagnostics/payloads/<payloadId>"
 ```
 
 Privacy constraints: clients and gateway both redact token/password/secret/credential/authorization fields. Do not upload raw access tokens, refresh tokens, SIP passwords, PushKit/FCM tokens, full SDP, SIP messages, or raw device logs.

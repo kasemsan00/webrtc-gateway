@@ -5,7 +5,7 @@ import (
 
 	"github.com/pion/rtp"
 
-	"k2-gateway/internal/translator"
+	"webrtc-sip-gateway/internal/translator"
 )
 
 // InboundGainProcessor decodes Opus RTP, applies PCM gain, and re-encodes Opus.

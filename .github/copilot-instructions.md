@@ -1,4 +1,4 @@
-# Copilot Instructions - webrtc-gateway
+# Copilot Instructions - webrtc-sip-gateway
 
 ## Purpose
 
