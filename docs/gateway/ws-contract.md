@@ -74,6 +74,9 @@ Auth behavior:
 - `answer`, `state`, `incoming`, `ringing`, `media`, `hold_state`
   - `hold_state` includes `sessionId` and `held: true|false` and confirms a successful or idempotent `hold`/`unhold` request.
 - `message`, `messageSent`, `dtmf`
+  - `message` is `{type:"message", sessionId?, from, to, body, contentType}` for inbound SIP MESSAGE.
+  - In-dialog MESSAGE is sent only to the WebSocket client bound to the matching active session.
+  - Out-of-dialog MESSAGE (no matching call session, e.g. PBX DND `DND0`/`DND1`/`DND2`) is sent to every resolved `/ws` or `/ws-agent` client whose trunk username matches the SIP `To` user. `sessionId` is omitted.
 - `renegotiate`, `renegotiate_result`
   - `renegotiate` is additive mid-call WebRTC assistance for SIP re-INVITE/UPDATE media changes and for `@switch` gate release (`reason=agent_switch`). It includes `sessionId`, `renegotiationId`, optional `sdp`, `reason`, `mediaDirection`, `hasVideo`, and `requiresAnswer`.
   - Clients that support it respond with `renegotiate_answer` (`sessionId`, `renegotiationId`, optional `sdp`, `status`, optional `reason`). For `agent_switch`, the gateway applies the answer SDP to its active PeerConnection.

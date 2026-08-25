@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,15 +15,19 @@ import (
 )
 
 type agentTrunkManagerStub struct {
+	mu              sync.Mutex
 	trunk           *sip.Trunk
 	upsertErr       error
 	upsertPayload   sip.AgentTrunkPayload
 	registerErr     error
 	registerCount   int
 	registerID      int64
+	owned           bool
 	unregisterErr   error
 	unregisterCount int
 	unregisterID    int64
+	unregisterStart chan struct{}
+	unregisterAllow chan struct{}
 }
 
 func (s *agentTrunkManagerStub) GetTrunkByID(id int64) (interface{}, bool) {
@@ -42,14 +47,41 @@ func (s *agentTrunkManagerStub) UpdateTrunk(context.Context, int64, sip.TrunkUpd
 	return nil, errors.New("not implemented")
 }
 func (s *agentTrunkManagerStub) RegisterTrunk(trunkID int64, _ bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.registerCount++
 	s.registerID = trunkID
+	if s.registerErr == nil {
+		s.owned = true
+	}
 	return s.registerErr
 }
 func (s *agentTrunkManagerStub) UnregisterTrunk(trunkID int64, _ bool) error {
+	s.mu.Lock()
 	s.unregisterCount++
 	s.unregisterID = trunkID
-	return s.unregisterErr
+	if s.unregisterErr == nil {
+		s.owned = false
+	}
+	start := s.unregisterStart
+	allow := s.unregisterAllow
+	err := s.unregisterErr
+	s.mu.Unlock()
+	if start != nil {
+		select {
+		case start <- struct{}{}:
+		default:
+		}
+	}
+	if allow != nil {
+		<-allow
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err == nil {
+		s.owned = false
+	}
+	return err
 }
 func (s *agentTrunkManagerStub) ListTrunks(context.Context, sip.TrunkListParams) (*sip.TrunkListResult, error) {
 	return &sip.TrunkListResult{}, nil
@@ -60,7 +92,19 @@ func (s *agentTrunkManagerStub) GetTrunkByIDFromDB(_ context.Context, trunkID in
 	}
 	return nil, errors.New("not found")
 }
-func (s *agentTrunkManagerStub) ListOwnedTrunks() []*sip.Trunk { return nil }
+func (s *agentTrunkManagerStub) ListOwnedTrunks() []*sip.Trunk {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.owned || s.trunk == nil {
+		return nil
+	}
+	return []*sip.Trunk{s.trunk}
+}
+func (s *agentTrunkManagerStub) IsTrunkOwned(trunkID int64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.owned && s.trunk != nil && s.trunk.ID == trunkID
+}
 func (s *agentTrunkManagerStub) SetTrunkInUseBy(context.Context, int64, *string) error {
 	return nil
 }
@@ -94,6 +138,24 @@ func (s *agentTrunkManagerStub) UpsertAgentTrunk(_ context.Context, payload sip.
 		}
 	}
 	return s.trunk, nil
+}
+
+func (s *agentTrunkManagerStub) setOwned(owned bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.owned = owned
+}
+
+func (s *agentTrunkManagerStub) isOwned() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.owned
+}
+
+func (s *agentTrunkManagerStub) registrationCounts() (register, unregister int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.registerCount, s.unregisterCount
 }
 
 func newAgentTestServer(t *testing.T, tm *agentTrunkManagerStub) *Server {
@@ -268,6 +330,117 @@ func TestAgentTwoClientsShareRegisterAndLastDisconnectUnregisters(t *testing.T) 
 	}
 	if srv.agentTrunkRefCount(99) != 0 {
 		t.Fatalf("expected refcount 0 after last disconnect")
+	}
+}
+
+func TestAgentReconnectDuringLastDisconnectRestoresRegistrationAndPreservesNewSession(t *testing.T) {
+	tm := &agentTrunkManagerStub{
+		unregisterStart: make(chan struct{}, 1),
+		unregisterAllow: make(chan struct{}),
+	}
+	sipMaker := &incomingTestSIPCallMaker{}
+	srv := newAgentTestServer(t, tm)
+	srv.sipMaker = sipMaker
+	oldClient := newAgentWSClient()
+	oldClient.clientID = "old"
+	replacement := newAgentWSClient()
+	replacement.clientID = "replacement"
+	msg := WSMessage{
+		Type:        "agent_register",
+		SIPDomain:   "sip.example.com",
+		SIPUsername: "1001",
+		SIPPassword: "super-secret",
+	}
+
+	srv.handleWSAgentRegister(oldClient, msg)
+	_ = readAgentWSMessages(t, oldClient)
+
+	cleanupDone := make(chan struct{})
+	go func() {
+		defer close(cleanupDone)
+		srv.cleanupAgentPresence(oldClient)
+	}()
+
+	select {
+	case <-tm.unregisterStart:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for stale unregister to start")
+	}
+
+	replacementRegistered := make(chan struct{})
+	go func() {
+		defer close(replacementRegistered)
+		srv.handleWSAgentRegister(replacement, msg)
+	}()
+	deadline := time.Now().Add(time.Second)
+	for srv.agentTrunkRefCount(99) != 1 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if srv.agentTrunkRefCount(99) != 1 {
+		t.Fatal("timed out waiting for replacement presence to bind")
+	}
+	newSession, err := srv.sessionMgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	newSession.SetSIPAuthContext("trunk", "", 99, "sip.example.com", "1001", "super-secret", 5060)
+	newSession.UpdateState(session.StateActive)
+	srv.bindClientSession(replacement, newSession.ID)
+
+	close(tm.unregisterAllow)
+	select {
+	case <-cleanupDone:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for stale cleanup to finish")
+	}
+	select {
+	case <-replacementRegistered:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for replacement registration to finish")
+	}
+	_ = readAgentWSMessages(t, replacement)
+
+	if !tm.isOwned() {
+		t.Fatal("replacement presence must finish with owned registration")
+	}
+	registerCount, unregisterCount := tm.registrationCounts()
+	if registerCount != 3 || unregisterCount != 1 {
+		t.Fatalf("expected initial, replacement, and repair REGISTER around one UNREGISTER; got register=%d unregister=%d", registerCount, unregisterCount)
+	}
+	if _, ok := srv.sessionMgr.GetSession(newSession.ID); !ok {
+		t.Fatal("stale cleanup must not delete a replacement session")
+	}
+	if sipMaker.hangupCount != 0 {
+		t.Fatalf("stale cleanup must not hang up replacement session, got %d hangups", sipMaker.hangupCount)
+	}
+}
+
+func TestAgentAlreadyBoundRepairsMissingRegistrationOwnership(t *testing.T) {
+	tm := &agentTrunkManagerStub{}
+	srv := newAgentTestServer(t, tm)
+	client := newAgentWSClient()
+	msg := WSMessage{
+		Type:        "agent_register",
+		SIPDomain:   "sip.example.com",
+		SIPUsername: "1001",
+		SIPPassword: "super-secret",
+	}
+
+	srv.handleWSAgentRegister(client, msg)
+	_ = readAgentWSMessages(t, client)
+	tm.setOwned(false)
+	srv.handleWSAgentRegister(client, msg)
+	msgs := readAgentWSMessages(t, client)
+
+	if len(msgs) != 1 || msgs[0].Type != "trunk_resolved" {
+		t.Fatalf("expected repaired trunk_resolved, got %+v", msgs)
+	}
+	if !tm.isOwned() {
+		t.Fatal("already-bound agent must repair missing ownership")
+	}
+	registerCount, _ := tm.registrationCounts()
+	if registerCount != 2 {
+		t.Fatalf("expected repair REGISTER, got %d total REGISTER calls", registerCount)
 	}
 }
 

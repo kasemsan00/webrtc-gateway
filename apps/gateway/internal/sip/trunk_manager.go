@@ -1170,6 +1170,13 @@ func (tm *TrunkManager) ListOwnedTrunks() []*Trunk {
 	return trunks
 }
 
+// IsTrunkOwned reports whether this instance currently holds the trunk lease.
+func (tm *TrunkManager) IsTrunkOwned(trunkID int64) bool {
+	tm.mu.RLock()
+	defer tm.mu.RUnlock()
+	return tm.ownedLeases[trunkID]
+}
+
 // GetDefaultTrunk returns the default trunk (if any)
 func (tm *TrunkManager) GetDefaultTrunk() (interface{}, bool) {
 	tm.mu.RLock()

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"webrtc-sip-gateway/internal/session"
+	"webrtc-sip-gateway/internal/sip"
 )
 
 // NotifySessionState notifies WebSocket clients about session state changes
@@ -305,10 +306,74 @@ func (s *Server) selectSIPMessageTargets(sessionID string) (targets []*WSClient,
 	return targets, totalConnections, droppedDuplicate
 }
 
+func (s *Server) trunkUsername(trunkID int64) string {
+	if s.trunkManager == nil || trunkID <= 0 {
+		return ""
+	}
+	raw, ok := s.trunkManager.GetTrunkByID(trunkID)
+	if !ok {
+		return ""
+	}
+	trunk, ok := raw.(*sip.Trunk)
+	if !ok || trunk == nil {
+		return ""
+	}
+	return strings.TrimSpace(trunk.Username)
+}
+
+// selectOutOfDialogSIPMessageTargets fans out SIP MESSAGE with no matching call
+// session to resolved WebSocket clients whose trunk username matches To.
+func (s *Server) selectOutOfDialogSIPMessageTargets(to string) (targets []*WSClient, droppedDuplicate int) {
+	targetUser := sipURIUsername(to)
+	if targetUser == "" {
+		return nil, 0
+	}
+
+	type resolvedClient struct {
+		client  *WSClient
+		trunkID int64
+	}
+
+	s.mu.RLock()
+	candidates := make([]resolvedClient, 0)
+	for client := range s.wsConnections {
+		if client == nil || !client.trunkResolved || client.resolvedTrunkID <= 0 {
+			continue
+		}
+		candidates = append(candidates, resolvedClient{client: client, trunkID: client.resolvedTrunkID})
+	}
+	s.mu.RUnlock()
+
+	seen := make(map[*WSClient]struct{})
+	usernameByTrunk := make(map[int64]string)
+	for _, candidate := range candidates {
+		username, cached := usernameByTrunk[candidate.trunkID]
+		if !cached {
+			username = s.trunkUsername(candidate.trunkID)
+			usernameByTrunk[candidate.trunkID] = username
+		}
+		if !sipAddressMatches(to, targetUser, username) {
+			continue
+		}
+		if _, ok := seen[candidate.client]; ok {
+			droppedDuplicate++
+			continue
+		}
+		seen[candidate.client] = struct{}{}
+		targets = append(targets, candidate.client)
+	}
+	return targets, droppedDuplicate
+}
+
 // NotifySIPMessage notifies the WebSocket client associated with an incoming SIP message.
 func (s *Server) NotifySIPMessage(to, from, body, contentType string) {
 	sessionID := s.findSIPMessageSessionID(to)
 	targets, totalConnections, droppedDuplicate := s.selectSIPMessageTargets(sessionID)
+	if len(targets) == 0 && sessionID == "" {
+		fallback, extraDup := s.selectOutOfDialogSIPMessageTargets(to)
+		targets = fallback
+		droppedDuplicate += extraDup
+	}
 
 	msg := WSMessage{
 		Type:        "message",

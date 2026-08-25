@@ -43,6 +43,7 @@ type Server struct {
 	wsClients          map[string]*WSClient
 	wsConnections      map[*WSClient]struct{}
 	agentTrunkBindings map[int64]map[*WSClient]struct{} // agent WS refcount per trunk
+	agentTrunkOpLocks  sync.Map                         // trunk ID -> *sync.Mutex; never held with mu during network I/O
 	trunkStreams       map[int]chan []byte
 	trunkStreamSeq     int
 	sessionStreams     map[int]chan []byte

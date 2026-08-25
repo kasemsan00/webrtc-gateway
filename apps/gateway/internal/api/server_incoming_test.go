@@ -924,6 +924,103 @@ func TestNotifySIPMessage_DedupesStaleWSClientMapEntries(t *testing.T) {
 	}
 }
 
+func TestNotifySIPMessage_OutOfDialogTargetsResolvedTrunk(t *testing.T) {
+	trunkMgr := &incomingNotifyTestTrunkManager{
+		trunkByID: map[int64]*sip.Trunk{
+			1: {ID: 1, Username: "01001"},
+			2: {ID: 2, Username: "01002"},
+		},
+	}
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, nil, nil, nil, trunkMgr, nil)
+	matching := &WSClient{
+		clientID:        "agent-01001",
+		send:            make(chan []byte, 8),
+		ConnectedAt:     time.Now(),
+		trunkResolved:   true,
+		resolvedTrunkID: 1,
+		agentOnly:       true,
+	}
+	other := &WSClient{
+		clientID:        "agent-01002",
+		send:            make(chan []byte, 8),
+		ConnectedAt:     time.Now(),
+		trunkResolved:   true,
+		resolvedTrunkID: 2,
+		agentOnly:       true,
+	}
+	unresolved := &WSClient{clientID: "unresolved", send: make(chan []byte, 8), ConnectedAt: time.Now()}
+
+	srv.mu.Lock()
+	srv.wsConnections[matching] = struct{}{}
+	srv.wsConnections[other] = struct{}{}
+	srv.wsConnections[unresolved] = struct{}{}
+	srv.mu.Unlock()
+
+	srv.NotifySIPMessage("sip:01001@161.118.203.7:5060", "DND", "DND1", "text/plain")
+
+	matchingMsgs := readWSMessages(t, matching.send)
+	otherMsgs := readWSMessages(t, other.send)
+	unresolvedMsgs := readWSMessages(t, unresolved.send)
+	if len(matchingMsgs) != 1 {
+		t.Fatalf("expected matching agent to receive one message, got %d", len(matchingMsgs))
+	}
+	if len(otherMsgs) != 0 {
+		t.Fatalf("expected other agent to receive no message, got %d", len(otherMsgs))
+	}
+	if len(unresolvedMsgs) != 0 {
+		t.Fatalf("expected unresolved client to receive no message, got %d", len(unresolvedMsgs))
+	}
+	msg := matchingMsgs[0]
+	if msg.Type != "message" || msg.From != "DND" || msg.Body != "DND1" {
+		t.Fatalf("unexpected out-of-dialog message: %+v", msg)
+	}
+	if msg.To != "sip:01001@161.118.203.7:5060" {
+		t.Fatalf("expected original To URI, got %q", msg.To)
+	}
+	if msg.SessionID != "" {
+		t.Fatalf("expected empty sessionId for out-of-dialog MESSAGE, got %q", msg.SessionID)
+	}
+}
+
+func TestNotifySIPMessage_OutOfDialogFansOutToAllMatchingAgents(t *testing.T) {
+	trunkMgr := &incomingNotifyTestTrunkManager{
+		trunkByID: map[int64]*sip.Trunk{
+			1: {ID: 1, Username: "01001"},
+		},
+	}
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, nil, nil, nil, trunkMgr, nil)
+	first := &WSClient{
+		clientID:        "agent-a",
+		send:            make(chan []byte, 8),
+		ConnectedAt:     time.Now().Add(-time.Minute),
+		trunkResolved:   true,
+		resolvedTrunkID: 1,
+		agentOnly:       true,
+	}
+	second := &WSClient{
+		clientID:        "agent-b",
+		send:            make(chan []byte, 8),
+		ConnectedAt:     time.Now(),
+		trunkResolved:   true,
+		resolvedTrunkID: 1,
+		agentOnly:       true,
+	}
+
+	srv.mu.Lock()
+	srv.wsConnections[first] = struct{}{}
+	srv.wsConnections[second] = struct{}{}
+	srv.mu.Unlock()
+
+	srv.NotifySIPMessage("sip:01001@161.118.203.7:5060", "DND", "DND0", "text/plain")
+
+	if got := readWSMessages(t, first.send); len(got) != 1 || got[0].Body != "DND0" {
+		t.Fatalf("expected first matching agent to receive DND0, got %+v", got)
+	}
+	if got := readWSMessages(t, second.send); len(got) != 1 || got[0].Body != "DND0" {
+		t.Fatalf("expected second matching agent to receive DND0, got %+v", got)
+	}
+}
+
 func TestNotifyIncomingCall_PushLookupUsesDBPath(t *testing.T) {
 	trunkMgr := &incomingNotifyTestTrunkManager{
 		trunkByID: map[int64]*sip.Trunk{

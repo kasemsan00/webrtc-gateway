@@ -4,10 +4,15 @@ import (
 	"context"
 	"log"
 	"strings"
+	"sync"
 
 	"webrtc-sip-gateway/internal/session"
 	"webrtc-sip-gateway/internal/sip"
 )
+
+type agentTrunkOwnership interface {
+	IsTrunkOwned(trunkID int64) bool
+}
 
 func (s *Server) handleWSAgentRegister(client *WSClient, msg WSMessage) {
 	if client == nil || !client.agentOnly {
@@ -57,18 +62,23 @@ func (s *Server) handleWSAgentRegister(client *WSClient, msg WSMessage) {
 		return
 	}
 	if oldTrunkID > 0 && oldRemaining == 0 && oldTrunkID != trunk.ID {
-		s.hangupSessionsForTrunk(oldTrunkID, "agent_rebind")
-		if err := s.trunkManager.UnregisterTrunk(oldTrunkID, true); err != nil {
-			log.Printf("Agent rebind unregister old trunk failed: trunkID=%d err=%v", oldTrunkID, err)
-		}
+		s.cleanupUnusedAgentTrunk(oldTrunkID, "agent_rebind")
 	}
+	// Serialize SIP registration changes for this trunk without holding the
+	// shared server mutex. Presence can still change while network I/O is in
+	// flight; cleanup revalidates it before deciding the final operation.
+	unlockTrunkOperation := s.lockAgentTrunkOperation(trunk.ID)
+	needRegister = needRegister || !s.agentTrunkOwned(trunk.ID)
+	var registerErr error
 	if needRegister {
-		if err := s.trunkManager.RegisterTrunk(trunk.ID, true); err != nil {
-			log.Printf("Agent register SIP REGISTER failed: clientID=%s trunkID=%d err=%v", client.clientID, trunk.ID, err)
-			s.unbindAgentClient(client, false)
-			s.sendWSError(client, msg.SessionID, "Failed to SIP REGISTER agent trunk")
-			return
-		}
+		registerErr = s.trunkManager.RegisterTrunk(trunk.ID, true)
+	}
+	unlockTrunkOperation()
+	if registerErr != nil {
+		log.Printf("Agent register SIP REGISTER failed: clientID=%s trunkID=%d err=%v", client.clientID, trunk.ID, registerErr)
+		s.unbindAgentClient(client, false)
+		s.sendWSError(client, msg.SessionID, "Failed to SIP REGISTER agent trunk")
+		return
 	}
 
 	s.notifyWSClientChanged("updated", client)
@@ -158,6 +168,28 @@ func (s *Server) agentTrunkRefCount(trunkID int64) int {
 	return len(s.agentTrunkBindings[trunkID])
 }
 
+func (s *Server) agentTrunkOwned(trunkID int64) bool {
+	if s.trunkManager == nil || trunkID <= 0 {
+		return false
+	}
+	if ownership, ok := s.trunkManager.(agentTrunkOwnership); ok {
+		return ownership.IsTrunkOwned(trunkID)
+	}
+	for _, trunk := range s.trunkManager.ListOwnedTrunks() {
+		if trunk != nil && trunk.ID == trunkID {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Server) lockAgentTrunkOperation(trunkID int64) func() {
+	value, _ := s.agentTrunkOpLocks.LoadOrStore(trunkID, &sync.Mutex{})
+	mu := value.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
+}
+
 func (s *Server) cleanupAgentPresence(client *WSClient) {
 	if client == nil || !client.agentOnly {
 		return
@@ -192,35 +224,74 @@ func (s *Server) cleanupAgentPresence(client *WSClient) {
 		return
 	}
 
-	// Last agent for this trunk: end any leftover sessions, then unregister immediately.
-	s.hangupSessionsForTrunk(trunkID, "agent_last_disconnect")
-	if s.trunkManager != nil {
-		if err := s.trunkManager.UnregisterTrunk(trunkID, true); err != nil {
-			log.Printf("Agent last-disconnect unregister failed: trunkID=%d err=%v", trunkID, err)
+	// The refcount snapshot can become stale while owned-session BYE/CANCEL is
+	// in flight. Revalidate and compensate inside the trunk cleanup helper.
+	s.cleanupUnusedAgentTrunk(trunkID, "agent_last_disconnect")
+}
+
+func (s *Server) cleanupUnusedAgentTrunk(trunkID int64, reason string) {
+	if s.trunkManager == nil || trunkID <= 0 {
+		return
+	}
+	unlockTrunkOperation := s.lockAgentTrunkOperation(trunkID)
+	defer unlockTrunkOperation()
+	if remaining := s.agentTrunkRefCount(trunkID); remaining > 0 {
+		log.Printf("Agent stale cleanup skipped: trunkID=%d reason=%s remaining=%d", trunkID, reason, remaining)
+		return
+	}
+
+	// Snapshot before network I/O. Sessions created by a replacement agent
+	// after this point must never be swept into cleanup from the old socket.
+	sessionIDs := s.sessionIDsForTrunk(trunkID)
+	if remaining := s.agentTrunkRefCount(trunkID); remaining > 0 {
+		log.Printf("Agent stale cleanup skipped after session snapshot: trunkID=%d reason=%s remaining=%d", trunkID, reason, remaining)
+		return
+	}
+	for _, sessionID := range sessionIDs {
+		if sess, ok := s.sessionMgr.GetSession(sessionID); ok && sess != nil {
+			s.forceEndSession(sess, reason)
+		}
+	}
+
+	// A replacement may have bound while orphan sessions were ending.
+	if remaining := s.agentTrunkRefCount(trunkID); remaining > 0 {
+		log.Printf("Agent stale unregister skipped: trunkID=%d reason=%s remaining=%d", trunkID, reason, remaining)
+		return
+	}
+	if err := s.trunkManager.UnregisterTrunk(trunkID, true); err != nil {
+		log.Printf("Agent unregister failed: trunkID=%d reason=%s err=%v", trunkID, reason, err)
+		return
+	}
+	log.Printf("Agent trunk unregistered: trunkID=%d reason=%s", trunkID, reason)
+
+	// If presence reappeared after the final refcount check, its REGISTER may
+	// have completed before this stale UNREGISTER. Repair once more after the
+	// unregister returns so the last completed operation matches live presence.
+	if remaining := s.agentTrunkRefCount(trunkID); remaining > 0 {
+		log.Printf("Agent presence reappeared during unregister; repairing REGISTER: trunkID=%d remaining=%d", trunkID, remaining)
+		if err := s.trunkManager.RegisterTrunk(trunkID, true); err != nil {
+			log.Printf("Agent REGISTER repair failed: trunkID=%d remaining=%d err=%v", trunkID, remaining, err)
 			return
 		}
-		log.Printf("Agent last-disconnect unregistered: trunkID=%d", trunkID)
+		log.Printf("Agent REGISTER repair succeeded: trunkID=%d remaining=%d", trunkID, remaining)
 	}
 }
 
-func (s *Server) hangupSessionsForTrunk(trunkID int64, reason string) {
+func (s *Server) sessionIDsForTrunk(trunkID int64) []string {
 	if s.sessionMgr == nil || trunkID <= 0 {
-		return
+		return nil
 	}
+	var sessionIDs []string
 	for _, sess := range s.sessionMgr.ListSessions() {
-		if sess == nil {
+		if sess == nil || sess.GetState() == session.StateEnded {
 			continue
 		}
 		_, _, sessTrunkID, _, _, _, _ := sess.GetSIPAuthContext()
-		if sessTrunkID != trunkID {
-			continue
+		if sessTrunkID == trunkID {
+			sessionIDs = append(sessionIDs, sess.ID)
 		}
-		state := sess.GetState()
-		if state == session.StateEnded {
-			continue
-		}
-		s.forceEndSession(sess, reason)
 	}
+	return sessionIDs
 }
 
 func (s *Server) forceEndSession(sess *session.Session, reason string) {
