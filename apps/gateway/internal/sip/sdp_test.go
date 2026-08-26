@@ -43,7 +43,13 @@ func TestCreateSDPOffer_AVPFStillIncludesRTCPMux(t *testing.T) {
 		t.Fatalf("expected 2 rtcp-mux lines (audio+video), got %d\nSDP:\n%s", got, offer)
 	}
 	if !strings.Contains(offer, "a=rtcp-fb:* ccm fir") {
-		t.Fatalf("expected rtcp-fb line in AVPF mode\nSDP:\n%s", offer)
+		t.Fatalf("expected FIR rtcp-fb line in AVPF mode\nSDP:\n%s", offer)
+	}
+	if !strings.Contains(offer, "a=rtcp-fb:* nack") {
+		t.Fatalf("expected NACK rtcp-fb line in AVPF mode\nSDP:\n%s", offer)
+	}
+	if !strings.Contains(offer, "a=rtcp-fb:* nack pli") {
+		t.Fatalf("expected PLI rtcp-fb line in AVPF mode\nSDP:\n%s", offer)
 	}
 }
 
@@ -116,6 +122,97 @@ func TestCreateSDPOffer_OmitsVideoWhenFlagFalse(t *testing.T) {
 	}
 	if !strings.Contains(offer, "m=audio 12000 RTP/AVP 111 101") {
 		t.Fatalf("expected audio m-line in audio-only SDP\nSDP:\n%s", offer)
+	}
+}
+
+func TestCreateSDPOffer_AVPOmitsRTCPFeedback(t *testing.T) {
+	s := &Server{config: config.SIPConfig{}, publicAddress: "203.0.113.10"}
+	sess := &session.Session{ID: "test-avp-no-rtcp-fb"}
+
+	offer := string(s.createSDPOffer(12000, sess))
+	if strings.Contains(offer, "a=rtcp-fb:") {
+		t.Fatalf("AVP offer must not advertise rtcp-fb\nSDP:\n%s", offer)
+	}
+}
+
+func TestCreateSDPAnswerForInvite_StripsRTCPFeedbackWhenOfferIsAVP(t *testing.T) {
+	s := &Server{
+		config:        config.SIPConfig{VideoUseAVPF: true},
+		publicAddress: "203.0.113.10",
+	}
+	sess := &session.Session{ID: "test-inbound-avp-strips-fb"}
+	invite := []byte("v=0\r\nm=audio 4000 RTP/AVP 107\r\na=rtpmap:107 opus/48000/2\r\nm=video 4002 RTP/AVP 96\r\na=rtpmap:96 H264/90000\r\na=fmtp:96 packetization-mode=1;profile-level-id=42E01F\r\na=sendrecv\r\n")
+
+	answer := string(s.createSDPAnswerForInvite(12000, sess, invite))
+	if !strings.Contains(answer, "m=video 12002 RTP/AVP 96") {
+		t.Fatalf("AVP invite must be answered with RTP/AVP\nSDP:\n%s", answer)
+	}
+	if strings.Contains(answer, "a=rtcp-fb:") {
+		t.Fatalf("AVP answer must not echo rtcp-fb (chan_sip / non-AVPF peers)\nSDP:\n%s", answer)
+	}
+}
+
+func TestCreateSDPAnswerForInvite_KeepsFIRNACKPLIWhenOfferIsAVPF(t *testing.T) {
+	s := &Server{
+		config:        config.SIPConfig{VideoUseAVPF: true},
+		publicAddress: "203.0.113.10",
+	}
+	sess := &session.Session{ID: "test-inbound-avpf-keeps-fb"}
+	invite := []byte("v=0\r\nm=audio 4000 RTP/AVPF 107\r\na=rtpmap:107 opus/48000/2\r\na=rtcp-mux\r\nm=video 4002 RTP/AVPF 96\r\na=rtpmap:96 H264/90000\r\na=fmtp:96 packetization-mode=1;profile-level-id=42E01F\r\na=rtcp-mux\r\na=rtcp-fb:* ccm fir\r\na=rtcp-fb:* nack pli\r\na=sendrecv\r\n")
+
+	answer := string(s.createSDPAnswerForInvite(12000, sess, invite))
+	for _, want := range []string{
+		"m=video 12002 RTP/AVPF 96",
+		"a=rtcp-fb:* ccm fir",
+		"a=rtcp-fb:* nack",
+		"a=rtcp-fb:* nack pli",
+	} {
+		if !strings.Contains(answer, want) {
+			t.Fatalf("AVPF answer missing %q\nSDP:\n%s", want, answer)
+		}
+	}
+}
+
+func TestCreateSDPAnswerForInvite_DropsVideoMuxKeepsRTCPFeedback(t *testing.T) {
+	s := &Server{
+		config:        config.SIPConfig{VideoUseAVPF: true},
+		publicAddress: "203.0.113.10",
+	}
+	sess := &session.Session{ID: "test-inbound-avpf-no-mux"}
+	invite := []byte("v=0\r\nm=audio 4000 RTP/AVPF 107\r\na=rtpmap:107 opus/48000/2\r\na=rtcp-mux\r\nm=video 4002 RTP/AVPF 96\r\na=rtpmap:96 H264/90000\r\na=fmtp:96 packetization-mode=1;profile-level-id=42E01F\r\na=rtcp-fb:* ccm fir\r\na=sendrecv\r\n")
+
+	answer := string(s.createSDPAnswerForInvite(12000, sess, invite))
+	if !strings.Contains(answer, "a=rtcp:12003") {
+		t.Fatalf("expected explicit video RTCP port when offer omitted mux\nSDP:\n%s", answer)
+	}
+	audioIdx := strings.Index(answer, "m=audio")
+	videoIdx := strings.Index(answer, "m=video")
+	if audioIdx < 0 || videoIdx < 0 {
+		t.Fatalf("missing audio or video m-line\nSDP:\n%s", answer)
+	}
+	if !strings.Contains(answer[audioIdx:videoIdx], "a=rtcp-mux") {
+		t.Fatalf("audio mux must stay when only video omitted mux\nSDP:\n%s", answer)
+	}
+	if strings.Contains(answer[videoIdx:], "a=rtcp-mux") {
+		t.Fatalf("video answer must not advertise rtcp-mux when offer omitted it\nSDP:\n%s", answer)
+	}
+	if !strings.Contains(answer, "a=rtcp-fb:* nack pli") {
+		t.Fatalf("non-mux AVPF answer must keep PLI advertisement\nSDP:\n%s", answer)
+	}
+}
+
+func TestSDPVideoHasRTCPFeedbackAcceptsWildcardAndPayload(t *testing.T) {
+	wildcard := "v=0\nm=video 4002 RTP/AVPF 96\na=rtcp-fb:* ccm fir\n"
+	if !sdpVideoHasRTCPFeedback(wildcard) {
+		t.Fatal("expected wildcard a=rtcp-fb:* to count as negotiated feedback")
+	}
+	payload := "v=0\nm=video 4002 RTP/AVPF 103\na=rtcp-fb:103 nack pli\n"
+	if !sdpVideoHasRTCPFeedback(payload) {
+		t.Fatal("expected payload-specific a=rtcp-fb:103 to count as negotiated feedback")
+	}
+	audioOnly := "v=0\nm=audio 4000 RTP/AVPF 111\na=rtcp-fb:* nack\nm=video 4002 RTP/AVP 96\n"
+	if sdpVideoHasRTCPFeedback(audioOnly) {
+		t.Fatal("audio rtcp-fb must not count as video feedback")
 	}
 }
 

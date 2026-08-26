@@ -52,7 +52,7 @@ When `FRONTEND_PASSWORD` is set and `AUTH_ENABLE=false`, authenticated `/api/*` 
 - `SIP_AUDIO_INBOUND_GAIN` (default `1.0`; linear multiplier, clamped to max)
 - `SIP_AUDIO_INBOUND_GAIN_MAX` (default `3.0`)
 - `SIP_VIDEO_USE_AVPF` (default `false`)
-- `SIP_VIDEO_FEEDBACK_TRANSPORT` (default `dual`; `auto|rtp|rtcp|dual`). `dual` always sends PLI/FIR/NACK to both the SIP video RTP port and RTCP (RTP first), which Asterisk `chan_sip` needs. `auto` now keeps the RTP target for the whole call instead of dropping it after the 4s fallback window.
+- `SIP_VIDEO_FEEDBACK_TRANSPORT` (default `dual`; `auto|rtp|rtcp|dual`). `dual` always sends PLI/FIR/NACK to both the SIP video RTP port and RTCP (RTP first), which Asterisk `chan_sip` needs. `auto` now keeps the RTP target for the whole call instead of dropping it after the 4s fallback window. AVPF offers advertise `ccm fir`, `nack`, and `nack pli`; chan_sip peers that answer `RTP/AVP` ignore the extra `a=rtcp-fb` lines.
 - `SIP_VIDEO_PRESERVE_STAPA` (default `false`)
 - `SIP_VIDEO_AU_NORMALIZE_ENABLE` (default `true`; validates complete timestamp-grouped H.264 access units, rewrites outbound RTP continuity, injects fresh SPS/PPS before IDR when absent, and keeps a real `@switch` gated until a decoder-safe IDR is written; set `false` only as a bounded rollback to the legacy raw reordered/packet-level transition path)
 - `SIP_SWITCH_VIDEO_TRANSITION_MODE` (default `blackout`; `blackout` drops SIP→WebRTC video until the complete-IDR gate releases; `preserve` is rollback that keeps the last rendered frame visible while holding unsafe packets)

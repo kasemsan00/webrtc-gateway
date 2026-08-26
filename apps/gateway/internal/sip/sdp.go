@@ -12,6 +12,107 @@ import (
 	"webrtc-sip-gateway/internal/session"
 )
 
+// sipVideoRTCPFeedbackSDP is the AVPF rtcp-fb block advertised on SIP video.
+// Wildcard PT matches Linphone. FIR was already offered; NACK/PLI are additive
+// so PJSIP/Linphone will honor Picture Loss Indications. chan_sip ignores
+// unknown a=rtcp-fb lines and typically answers RTP/AVP, which strips this
+// block from our 200 OK — extra lines do not change RTP/RTCP packets we send.
+const sipVideoRTCPFeedbackSDP = "a=rtcp-fb:* ccm fir\na=rtcp-fb:* nack\na=rtcp-fb:* nack pli\n"
+
+func isSDPRTCPFeedbackLine(line string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(line)), "a=rtcp-fb:")
+}
+
+func stripSDPRTCPFeedbackLines(sdp string) string {
+	lines := strings.Split(sdp, "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if isSDPRTCPFeedbackLine(line) {
+			continue
+		}
+		out = append(out, line)
+	}
+	return strings.Join(out, "\n")
+}
+
+func sdpVideoHasRTCPFeedback(sdp string) bool {
+	currentMedia := ""
+	for _, raw := range strings.Split(sdp, "\n") {
+		line := strings.TrimSpace(raw)
+		if strings.HasPrefix(line, "m=") {
+			fields := strings.Fields(line)
+			currentMedia = ""
+			if len(fields) > 0 {
+				currentMedia = strings.TrimPrefix(strings.ToLower(fields[0]), "m=")
+			}
+			continue
+		}
+		if currentMedia == "video" && isSDPRTCPFeedbackLine(line) {
+			return true
+		}
+	}
+	return false
+}
+
+func replaceSDPMediaProfile(sdp, media string, port int, profile string) string {
+	avpf := fmt.Sprintf("m=%s %d RTP/AVPF ", media, port)
+	avp := fmt.Sprintf("m=%s %d RTP/AVP ", media, port)
+	next := fmt.Sprintf("m=%s %d %s ", media, port, profile)
+	if strings.Contains(sdp, avpf) {
+		return strings.Replace(sdp, avpf, next, 1)
+	}
+	return strings.Replace(sdp, avp, next, 1)
+}
+
+func rewriteSDPMediaSection(sdp, media string, fn func([]string) []string) string {
+	lines := strings.Split(sdp, "\n")
+	prefix := "m=" + media + " "
+	start := -1
+	for i, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), prefix) {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		return sdp
+	}
+	end := len(lines)
+	for i := start + 1; i < len(lines); i++ {
+		if strings.HasPrefix(strings.TrimSpace(lines[i]), "m=") {
+			end = i
+			break
+		}
+	}
+	rewritten := fn(append([]string{}, lines[start:end]...))
+	out := make([]string, 0, len(lines)-(end-start)+len(rewritten))
+	out = append(out, lines[:start]...)
+	out = append(out, rewritten...)
+	out = append(out, lines[end:]...)
+	return strings.Join(out, "\n")
+}
+
+func stripRTCPMuxLines(lines []string) []string {
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "a=rtcp-mux" {
+			continue
+		}
+		out = append(out, line)
+	}
+	return out
+}
+
+func insertAfterMLine(lines []string, attr string) []string {
+	if len(lines) == 0 {
+		return lines
+	}
+	out := make([]string, 0, len(lines)+1)
+	out = append(out, lines[0], attr)
+	out = append(out, lines[1:]...)
+	return out
+}
+
 // createSDPOffer creates an SDP offer for outbound calls
 // Plain RTP version (no SRTP/crypto) since Asterisk doesn't use encryption
 // WebRTC side will still use SRTP (handled by pion/webrtc automatically)
@@ -47,10 +148,7 @@ func (s *Server) createSDPOffer(rtpPort int, sess *session.Session) []byte {
 	rtcpFbLines := ""
 	if s.config.VideoUseAVPF {
 		videoProfile = "RTP/AVPF"
-		// Phase 4: Match Linphone Mobile RTCP feedback format exactly
-		// Linphone Mobile uses wildcard: a=rtcp-fb:* ccm fir
-		// This is simpler and more compatible than per-codec feedback
-		rtcpFbLines = "a=rtcp-fb:* ccm fir\n"
+		rtcpFbLines = sipVideoRTCPFeedbackSDP
 	}
 
 	if forceAVP == "true" || forceAVP == "1" || forceAVP == "yes" {
@@ -150,7 +248,7 @@ a=rtcp-mux
 	}
 	fmt.Printf("=== SDP Offer to Asterisk (Plain RTP, no SRTP, Opus PT=%d, Profile=%s) ===\n%s\n=============================\n", opusPT, profileNote, sdp)
 	if includeVideo && s.config.VideoUseAVPF {
-		fmt.Printf("📋 AVPF SDP Details: Profile=%s, RTCP Feedback: rtcp-fb:* ccm fir (matching Linphone Mobile)\n", videoProfile)
+		fmt.Printf("📋 AVPF SDP Details: Profile=%s, RTCP Feedback: ccm fir / nack / nack pli\n", videoProfile)
 	}
 	return []byte(sdp)
 }
@@ -213,25 +311,18 @@ func (s *Server) createSDPAnswerForInvite(rtpPort int, sess *session.Session, in
 	base := s.createSDPOffer(rtpPort, sess)
 	sdp := string(base)
 
-	// Apply profile constraints.
-	sdp = strings.ReplaceAll(sdp, "m=audio "+strconv.Itoa(rtpPort)+" RTP/AVPF", "m=audio "+strconv.Itoa(rtpPort)+" "+audioProfile)
-	sdp = strings.ReplaceAll(sdp, "m=audio "+strconv.Itoa(rtpPort)+" RTP/AVP", "m=audio "+strconv.Itoa(rtpPort)+" "+audioProfile)
+	sdp = replaceSDPMediaProfile(sdp, "audio", rtpPort, audioProfile)
 	videoPort := rtpPort + 2
-	sdp = strings.ReplaceAll(sdp, "m=video "+strconv.Itoa(videoPort)+" RTP/AVPF", "m=video "+strconv.Itoa(videoPort)+" "+videoProfile)
-	sdp = strings.ReplaceAll(sdp, "m=video "+strconv.Itoa(videoPort)+" RTP/AVP", "m=video "+strconv.Itoa(videoPort)+" "+videoProfile)
+	sdp = replaceSDPMediaProfile(sdp, "video", videoPort, videoProfile)
 
 	if !audioRtcpMux {
-		sdp = strings.Replace(sdp, "a=rtcp-mux\na=sendrecv", "a=sendrecv", 1)
+		sdp = rewriteSDPMediaSection(sdp, "audio", stripRTCPMuxLines)
 	}
 	if !videoRtcpMux {
-		sdp = strings.Replace(sdp, "a=rtcp-mux\na=rtcp-fb:* ccm fir\na=sendrecv", "a=rtcp-fb:* ccm fir\na=sendrecv", 1)
-		sdp = strings.Replace(sdp, "a=rtcp-mux\na=sendrecv", "a=sendrecv", 1)
-		// Explicit RTCP port when mux is off (RFC 3605). Avoids peers guessing wrong.
 		rtcpPort := videoPort + 1
-		videoLine := fmt.Sprintf("m=video %d %s %d\n", videoPort, videoProfile, sess.GetSIPVideoPayloadType())
-		if strings.Contains(sdp, videoLine) {
-			sdp = strings.Replace(sdp, videoLine, fmt.Sprintf("%sa=rtcp:%d\n", videoLine, rtcpPort), 1)
-		}
+		sdp = rewriteSDPMediaSection(sdp, "video", func(lines []string) []string {
+			return insertAfterMLine(stripRTCPMuxLines(lines), fmt.Sprintf("a=rtcp:%d", rtcpPort))
+		})
 	}
 
 	// RFC 6184 defaults an omitted packetization-mode to 0. An answer must not
@@ -245,7 +336,7 @@ func (s *Server) createSDPAnswerForInvite(rtpPort int, sess *session.Session, in
 	sess.SetSIPVideoPacketizationMode(answerPacketizationMode)
 
 	if videoProfile != "RTP/AVPF" {
-		sdp = strings.ReplaceAll(sdp, "a=rtcp-fb:* ccm fir\n", "")
+		sdp = stripSDPRTCPFeedbackLines(sdp)
 	}
 
 	fmt.Printf("[%s] 📋 Inbound SDP answer constrained to offer (audio=%s video=%s audio_mux=%v video_mux=%v offer_pmode1=%v answer_pmode1=%v)\n",
@@ -306,7 +397,7 @@ func (s *Server) parseAsteriskSDPAndSetEndpoints(sdpBody []byte, sess *session.S
 	var asteriskIP string
 	var audioPort, videoPort int
 	var videoProfile string
-	var hasRtcpFb bool
+	hasRtcpFb := sdpVideoHasRTCPFeedback(sdpStr)
 
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
@@ -334,11 +425,6 @@ func (s *Server) parseAsteriskSDPAndSetEndpoints(sdpBody []byte, sess *session.S
 					videoProfile = parts[2]
 				}
 			}
-		}
-
-		// Check for RTCP feedback attributes for payload 96
-		if strings.HasPrefix(line, "a=rtcp-fb:96 ") {
-			hasRtcpFb = true
 		}
 	}
 
@@ -390,7 +476,7 @@ func (s *Server) parseAsteriskSDPAndSetEndpoints(sdpBody []byte, sess *session.S
 						fmt.Printf("[%s] ✅ AVPF negotiation successful - Asterisk accepted RTP/AVPF with RTCP feedback\n",
 							sess.ID)
 					} else {
-						fmt.Printf("[%s] ⚠️ AVPF profile accepted but no RTCP feedback attributes found in answer (payload 96)\n",
+						fmt.Printf("[%s] ⚠️ AVPF profile accepted but no RTCP feedback attributes found in answer\n",
 							sess.ID)
 						fmt.Printf("[%s] 💡 Asterisk may not support RTCP feedback - video will work but PLI/FIR/NACK may not function\n",
 							sess.ID)
