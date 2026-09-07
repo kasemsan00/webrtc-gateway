@@ -94,6 +94,11 @@ type logStore struct {
 // noopStore is a no-op implementation when DB is disabled
 type noopStore struct{}
 
+// Noop returns a LogStore that discards all operations.
+func Noop() LogStore {
+	return &noopStore{}
+}
+
 func (n *noopStore) Start(ctx context.Context) error                              { return nil }
 func (n *noopStore) Stop() error                                                  { return nil }
 func (n *noopStore) UpsertSession(ctx context.Context, sess *SessionRecord) error { return nil }

@@ -156,3 +156,59 @@ func TestUpsertMobileTrunkUsesDeterministicNameAndCredentials(t *testing.T) {
 		t.Fatalf("upsert should not assign notify_user_id or platform, got SQL %s", db.sql)
 	}
 }
+
+func TestUpsertMobileTrunkInvalidatesRegistrarIdentityOnUsernameChange(t *testing.T) {
+	t.Parallel()
+
+	db := &mobileTrunkTestDB{
+		row: mobileTrunkTestRow{trunk: Trunk{
+			ID:        42,
+			PublicID:  "public-42",
+			Name:      "sipclient-mobile-user-sub-1",
+			Domain:    "sipclient.ttrs.or.th",
+			Port:      5060,
+			Username:  "1429900148716",
+			Password:  "secret-1",
+			Transport: "tcp",
+			Enabled:   true,
+		}},
+	}
+	tm := &TrunkManager{
+		db:                   db,
+		trunks:               make(map[int64]*Trunk),
+		trunkByPublic:        make(map[string]int64),
+		registrarIdentities:  make(map[int64]*registrarIdentity),
+		registrarGenerations: make(map[int64]uint64),
+	}
+	existing := &Trunk{
+		ID:        42,
+		PublicID:  "public-42",
+		Name:      "sipclient-mobile-user-sub-1",
+		Domain:    "sipclient.ttrs.or.th",
+		Port:      5060,
+		Username:  "old-extension",
+		Transport: "tcp",
+		Enabled:   true,
+	}
+	tm.trunks[existing.ID] = existing
+	generation := tm.beginRegistrarOperation(existing.ID)
+	if !tm.tryPublishRegistrarIdentity(existing.ID, generation, registrarIdentityFixture(existing, "203.150.245.41")) {
+		t.Fatal("expected initial registrar identity")
+	}
+
+	db.row.trunk.Username = "1429900148716"
+	if _, err := tm.UpsertMobileTrunk(context.Background(), MobileTrunkPayload{
+		Subject:  "user-sub-1",
+		Domain:   "sipclient.ttrs.or.th",
+		Username: "1429900148716",
+		Password: "secret-1",
+	}); err != nil {
+		t.Fatalf("UpsertMobileTrunk failed: %v", err)
+	}
+	if tm.registrarIdentities[existing.ID] != nil {
+		t.Fatal("username change must invalidate cached registrar identity")
+	}
+	if tm.registrarGenerations[existing.ID] <= generation {
+		t.Fatalf("expected generation to advance after invalidation, got %d", tm.registrarGenerations[existing.ID])
+	}
+}

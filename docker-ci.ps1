@@ -1,7 +1,7 @@
 $branch = $env:BRANCH ?? "1.4.1"
 $registry = $env:REGISTRY ?? "registry.kasemsan.com"
-$platforms = $env:PLATFORMS ?? "linux/amd64,linux/arm64"
-# $platforms = $env:PLATFORMS ?? "linux/amd64"
+# $platforms = $env:PLATFORMS ?? "linux/amd64,linux/arm64"
+$platforms = $env:PLATFORMS ?? "linux/amd64"
 
 if ($env:RUN_MIGRATIONS -eq "true") {
   if (-not $env:DB_DSN) {

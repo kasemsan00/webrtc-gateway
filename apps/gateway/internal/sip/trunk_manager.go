@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -157,6 +156,10 @@ type TrunkManager struct {
 	refreshWorkers map[int64]chan struct{}          // Stop signals for refresh workers
 	leaseRetryRuns map[int64]int                    // Consecutive lease-renew transient failures
 
+	registrarIdentities  map[int64]*registrarIdentity
+	registrarGenerations map[int64]uint64
+	resolver             registrarEndpointResolver
+
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -171,13 +174,19 @@ type trunkDB interface {
 
 // TrunkInviteMatchResult contains detailed invite matching outcome for observability.
 type TrunkInviteMatchResult struct {
-	Trunk           *Trunk
-	Owned           bool
-	Rule            string
-	CandidateIDs    []int64
-	SIPUser         string
-	OwnedCandidates []int64
-	Ambiguous       bool
+	Trunk             *Trunk
+	Owned             bool
+	Rule              string
+	CandidateIDs      []int64
+	SIPUser           string
+	OwnedCandidates   []int64
+	Ambiguous         bool
+	LocalRequestURI   bool
+	LocalToURI        bool
+	Origins           []string
+	EligibleIDs       []int64
+	RegistrarEvidence string
+	Reason            string
 }
 
 const trunkManagerDBTimeout = 5 * time.Second
@@ -190,20 +199,23 @@ func (tm *TrunkManager) dbContext() (context.Context, context.CancelFunc) {
 func NewTrunkManager(db *pgxpool.Pool, cfg *config.Config, userAgent *sipgo.UserAgent, instanceID string) *TrunkManager {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &TrunkManager{
-		db:             db,
-		cfg:            cfg,
-		userAgent:      userAgent,
-		instanceID:     instanceID,
-		publicIP:       cfg.SIP.PublicIP,
-		localPort:      cfg.SIP.LocalPort,
-		trunks:         make(map[int64]*Trunk),
-		trunkByPublic:  make(map[string]int64),
-		ownedLeases:    make(map[int64]bool),
-		registrations:  make(map[int64]*sip.ClientTransaction),
-		refreshWorkers: make(map[int64]chan struct{}),
-		leaseRetryRuns: make(map[int64]int),
-		ctx:            ctx,
-		cancel:         cancel,
+		db:                   db,
+		cfg:                  cfg,
+		userAgent:            userAgent,
+		instanceID:           instanceID,
+		publicIP:             cfg.SIP.PublicIP,
+		localPort:            cfg.SIP.LocalPort,
+		trunks:               make(map[int64]*Trunk),
+		trunkByPublic:        make(map[string]int64),
+		ownedLeases:          make(map[int64]bool),
+		registrations:        make(map[int64]*sip.ClientTransaction),
+		refreshWorkers:       make(map[int64]chan struct{}),
+		leaseRetryRuns:       make(map[int64]int),
+		registrarIdentities:  make(map[int64]*registrarIdentity),
+		registrarGenerations: make(map[int64]uint64),
+		resolver:             defaultRegistrarResolver{},
+		ctx:                  ctx,
+		cancel:               cancel,
 	}
 }
 
@@ -280,25 +292,7 @@ func (tm *TrunkManager) UpsertMobileTrunk(ctx context.Context, payload MobileTru
 		return nil, fmt.Errorf("upsert mobile trunk failed: %w", err)
 	}
 
-	tm.mu.Lock()
-	if tm.trunks == nil {
-		tm.trunks = make(map[int64]*Trunk)
-	}
-	if tm.trunkByPublic == nil {
-		tm.trunkByPublic = make(map[string]int64)
-	}
-	if trunk.Enabled {
-		tm.trunks[trunk.ID] = trunk
-		if trunk.PublicID != "" {
-			tm.trunkByPublic[trunk.PublicID] = trunk.ID
-		}
-	} else {
-		delete(tm.trunks, trunk.ID)
-		if trunk.PublicID != "" {
-			delete(tm.trunkByPublic, trunk.PublicID)
-		}
-	}
-	tm.mu.Unlock()
+	tm.cacheUpsertedTrunk(trunk)
 
 	return trunk, nil
 }
@@ -380,13 +374,27 @@ func (tm *TrunkManager) UpsertAgentTrunk(ctx context.Context, payload AgentTrunk
 		return nil, fmt.Errorf("upsert agent trunk failed: %w", err)
 	}
 
+	tm.cacheUpsertedTrunk(trunk)
+
+	return trunk, nil
+}
+
+func (tm *TrunkManager) cacheUpsertedTrunk(trunk *Trunk) {
+	if trunk == nil {
+		return
+	}
+
 	tm.mu.Lock()
+	defer tm.mu.Unlock()
+
 	if tm.trunks == nil {
 		tm.trunks = make(map[int64]*Trunk)
 	}
 	if tm.trunkByPublic == nil {
 		tm.trunkByPublic = make(map[string]int64)
 	}
+
+	previous := tm.trunks[trunk.ID]
 	if trunk.Enabled {
 		tm.trunks[trunk.ID] = trunk
 		if trunk.PublicID != "" {
@@ -398,9 +406,10 @@ func (tm *TrunkManager) UpsertAgentTrunk(ctx context.Context, payload AgentTrunk
 			delete(tm.trunkByPublic, trunk.PublicID)
 		}
 	}
-	tm.mu.Unlock()
 
-	return trunk, nil
+	if trunkRegistrarIdentityChanged(previous, trunk) || !trunk.Enabled {
+		tm.invalidateRegistrarIdentityLocked(trunk.ID)
+	}
 }
 
 // Start loads trunks, acquires leases, and starts registration workers
@@ -483,6 +492,11 @@ func (tm *TrunkManager) Stop() {
 	// Wait for workers to finish
 	tm.wg.Wait()
 
+	tm.mu.Lock()
+	tm.registrarIdentities = make(map[int64]*registrarIdentity)
+	tm.registrarGenerations = make(map[int64]uint64)
+	tm.mu.Unlock()
+
 	fmt.Printf("✅ [TrunkManager] Stopped\n")
 }
 
@@ -505,11 +519,8 @@ func (tm *TrunkManager) loadTrunks() error {
 	}
 	defer rows.Close()
 
-	tm.mu.Lock()
-	defer tm.mu.Unlock()
-	tm.trunks = make(map[int64]*Trunk)
-	tm.trunkByPublic = make(map[string]int64)
-
+	loaded := make(map[int64]*Trunk)
+	trunkByPublic := make(map[string]int64)
 	count := 0
 	for rows.Next() {
 		trunk := &Trunk{}
@@ -527,10 +538,10 @@ func (tm *TrunkManager) loadTrunks() error {
 			return fmt.Errorf("scan failed: %w", err)
 		}
 		if trunk.PublicID != "" {
-			tm.trunkByPublic[trunk.PublicID] = trunk.ID
+			trunkByPublic[trunk.PublicID] = trunk.ID
 		}
 
-		tm.trunks[trunk.ID] = trunk
+		loaded[trunk.ID] = trunk
 		count++
 	}
 
@@ -538,8 +549,41 @@ func (tm *TrunkManager) loadTrunks() error {
 		return fmt.Errorf("rows iteration failed: %w", err)
 	}
 
+	tm.replaceLoadedTrunks(loaded, trunkByPublic)
+
 	fmt.Printf("📞 [TrunkManager] Loaded %d enabled trunk(s) from DB\n", count)
 	return nil
+}
+
+func (tm *TrunkManager) replaceLoadedTrunks(loaded map[int64]*Trunk, trunkByPublic map[string]int64) {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+
+	invalidated := make(map[int64]struct{})
+	invalidate := func(trunkID int64) {
+		if _, exists := invalidated[trunkID]; exists {
+			return
+		}
+		tm.invalidateRegistrarIdentityLocked(trunkID)
+		invalidated[trunkID] = struct{}{}
+	}
+
+	for id, previous := range tm.trunks {
+		updated, exists := loaded[id]
+		if !exists || trunkRegistrarIdentityChanged(previous, updated) || !updated.Enabled {
+			invalidate(id)
+		}
+	}
+	for id := range tm.registrarIdentities {
+		previous, previouslyLoaded := tm.trunks[id]
+		updated, stillLoaded := loaded[id]
+		if !previouslyLoaded || !stillLoaded || trunkRegistrarIdentityChanged(previous, updated) || !updated.Enabled {
+			invalidate(id)
+		}
+	}
+
+	tm.trunks = loaded
+	tm.trunkByPublic = trunkByPublic
 }
 
 // acquireAndRegisterAll tries to acquire leases and register all loaded trunks
@@ -629,6 +673,11 @@ func (tm *TrunkManager) markLeaseLost(trunkID int64) {
 		delete(tm.refreshWorkers, trunkID)
 	}
 	delete(tm.registrations, trunkID)
+	if tm.registrarGenerations == nil {
+		tm.registrarGenerations = make(map[int64]uint64)
+	}
+	tm.registrarGenerations[trunkID]++
+	delete(tm.registrarIdentities, trunkID)
 	delete(tm.ownedLeases, trunkID)
 	delete(tm.leaseRetryRuns, trunkID)
 	tm.mu.Unlock()
@@ -686,9 +735,19 @@ func (tm *TrunkManager) releaseLease(trunkID int64) {
 
 // registerTrunk performs SIP REGISTER for a trunk
 func (tm *TrunkManager) registerTrunk(trunkID int64) error {
-	tm.mu.RLock()
+	tm.mu.Lock()
 	trunk, ok := tm.trunks[trunkID]
-	tm.mu.RUnlock()
+	var generation uint64
+	if ok {
+		copied := *trunk
+		trunk = &copied
+		if tm.registrarGenerations == nil {
+			tm.registrarGenerations = make(map[int64]uint64)
+		}
+		tm.registrarGenerations[trunkID]++
+		generation = tm.registrarGenerations[trunkID]
+	}
+	tm.mu.Unlock()
 
 	if !ok {
 		return fmt.Errorf("trunk %d not found", trunkID)
@@ -804,6 +863,8 @@ func (tm *TrunkManager) registerTrunk(trunkID int64) error {
 		return fmt.Errorf("%s", errMsg)
 	}
 
+	tm.publishRegistrarIdentityFromRegister(trunk, generation, res, expires)
+
 	// Success
 	tm.updateRegistrationSuccess(trunkID)
 
@@ -824,6 +885,8 @@ func (tm *TrunkManager) unregisterTrunk(trunkID int64) {
 	if !ok {
 		return
 	}
+
+	tm.invalidateRegistrarIdentity(trunkID)
 
 	// Stop refresh worker
 	if hasWorker {
@@ -1188,203 +1251,6 @@ func (tm *TrunkManager) GetDefaultTrunk() (interface{}, bool) {
 		}
 	}
 	return nil, false
-}
-
-func collectCandidateIDs(trunks []*Trunk) []int64 {
-	ids := make([]int64, 0, len(trunks))
-	for _, t := range trunks {
-		ids = append(ids, t.ID)
-	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
-	return ids
-}
-
-func filterTrunks(trunks []*Trunk, predicate func(*Trunk) bool) []*Trunk {
-	matches := make([]*Trunk, 0)
-	for _, t := range trunks {
-		if predicate(t) {
-			matches = append(matches, t)
-		}
-	}
-	return matches
-}
-
-func normalizeInviteURI(uri sip.Uri) (host, user string, port int) {
-	host = strings.ToLower(strings.TrimSpace(uri.Host))
-	user = strings.TrimSpace(uri.User)
-	port = uri.Port
-	if port == 0 {
-		port = 5060
-	}
-	return host, user, port
-}
-
-func selectSingleMatch(matches []*Trunk, rule string) TrunkInviteMatchResult {
-	result := TrunkInviteMatchResult{
-		Rule:         rule,
-		CandidateIDs: collectCandidateIDs(matches),
-	}
-	if len(matches) == 1 {
-		result.Trunk = matches[0]
-		return result
-	}
-	if len(matches) > 1 {
-		result.Ambiguous = true
-	}
-	return result
-}
-
-// MatchTrunkFromInviteDetailed matches an incoming INVITE to a trunk with deterministic priority.
-// Priority:
-// 1) Request-URI username+domain+port
-// 2) To header username+domain+port
-// 3) Request-URI username+domain
-// 4) To header username+domain
-// 5) fallback domain+port only when exactly one candidate exists
-// 6) fallback username-only on owned/online trunks only
-func (tm *TrunkManager) MatchTrunkFromInviteDetailed(req *sip.Request) TrunkInviteMatchResult {
-	tm.mu.RLock()
-	defer tm.mu.RUnlock()
-
-	all := make([]*Trunk, 0, len(tm.trunks))
-	for _, trunk := range tm.trunks {
-		all = append(all, trunk)
-	}
-	sort.Slice(all, func(i, j int) bool { return all[i].ID < all[j].ID })
-
-	ruriHost, ruriUser, ruriPort := normalizeInviteURI(req.Recipient)
-
-	toHost := ""
-	toUser := ""
-	toPort := 5060
-	to := req.To()
-	if to != nil {
-		toHost, toUser, toPort = normalizeInviteURI(to.Address)
-	}
-	sipUser := strings.TrimSpace(ruriUser)
-	if sipUser == "" {
-		sipUser = strings.TrimSpace(toUser)
-	}
-
-	matchesBy := func(predicate func(trunk *Trunk) bool) []*Trunk {
-		return filterTrunks(all, predicate)
-	}
-
-	byUserDomainPort := func(host, user string, port int) []*Trunk {
-		if host == "" || user == "" {
-			return nil
-		}
-		return matchesBy(func(trunk *Trunk) bool {
-			trunkDomain := strings.ToLower(strings.TrimSpace(trunk.Domain))
-			return trunkDomain == host && trunk.Port == port && strings.TrimSpace(trunk.Username) == user
-		})
-	}
-
-	byUserDomain := func(host, user string) []*Trunk {
-		if host == "" || user == "" {
-			return nil
-		}
-		return matchesBy(func(trunk *Trunk) bool {
-			trunkDomain := strings.ToLower(strings.TrimSpace(trunk.Domain))
-			return trunkDomain == host && strings.TrimSpace(trunk.Username) == user
-		})
-	}
-
-	byDomainPort := func(host string, port int) []*Trunk {
-		if host == "" {
-			return nil
-		}
-		return matchesBy(func(trunk *Trunk) bool {
-			trunkDomain := strings.ToLower(strings.TrimSpace(trunk.Domain))
-			return trunkDomain == host && trunk.Port == port
-		})
-	}
-	byUsernameOwnedOnline := func(user string) []*Trunk {
-		user = strings.TrimSpace(user)
-		if user == "" {
-			return nil
-		}
-		return matchesBy(func(trunk *Trunk) bool {
-			return tm.ownedLeases[trunk.ID] && strings.TrimSpace(trunk.Username) == user
-		})
-	}
-	ownedCandidatesByUser := func(user string) []int64 {
-		return collectCandidateIDs(byUsernameOwnedOnline(user))
-	}
-
-	orderedRules := []struct {
-		rule    string
-		matches []*Trunk
-	}{
-		{rule: "ruri_user_domain_port", matches: byUserDomainPort(ruriHost, ruriUser, ruriPort)},
-		{rule: "to_user_domain_port", matches: byUserDomainPort(toHost, toUser, toPort)},
-		{rule: "ruri_user_domain", matches: byUserDomain(ruriHost, ruriUser)},
-		{rule: "to_user_domain", matches: byUserDomain(toHost, toUser)},
-	}
-
-	for _, entry := range orderedRules {
-		result := selectSingleMatch(entry.matches, entry.rule)
-		if result.Trunk != nil || result.Ambiguous {
-			if result.Trunk != nil {
-				result.Owned = tm.ownedLeases[result.Trunk.ID]
-			}
-			result.SIPUser = sipUser
-			result.OwnedCandidates = ownedCandidatesByUser(sipUser)
-			return result
-		}
-	}
-
-	fallbackRules := []struct {
-		rule    string
-		matches []*Trunk
-	}{
-		{rule: "ruri_domain_port_fallback", matches: byDomainPort(ruriHost, ruriPort)},
-		{rule: "to_domain_port_fallback", matches: byDomainPort(toHost, toPort)},
-	}
-
-	for _, entry := range fallbackRules {
-		result := selectSingleMatch(entry.matches, entry.rule)
-		if result.Trunk != nil || result.Ambiguous {
-			if result.Trunk != nil {
-				result.Owned = tm.ownedLeases[result.Trunk.ID]
-			}
-			result.SIPUser = sipUser
-			result.OwnedCandidates = ownedCandidatesByUser(sipUser)
-			return result
-		}
-	}
-
-	usernameFallbackUsers := []string{strings.TrimSpace(ruriUser)}
-	if toUserTrimmed := strings.TrimSpace(toUser); toUserTrimmed != "" && toUserTrimmed != usernameFallbackUsers[0] {
-		usernameFallbackUsers = append(usernameFallbackUsers, toUserTrimmed)
-	}
-	for _, user := range usernameFallbackUsers {
-		result := selectSingleMatch(byUsernameOwnedOnline(user), "username_only_online")
-		if result.Trunk != nil || result.Ambiguous {
-			if result.Trunk != nil {
-				result.Owned = true
-			}
-			result.SIPUser = user
-			result.OwnedCandidates = result.CandidateIDs
-			return result
-		}
-	}
-
-	return TrunkInviteMatchResult{
-		Rule:            "no_match",
-		SIPUser:         sipUser,
-		OwnedCandidates: ownedCandidatesByUser(sipUser),
-	}
-}
-
-// MatchTrunkFromInvite matches an incoming INVITE to a trunk.
-// Returns (trunk, owned) where owned indicates if this instance owns the trunk's lease.
-func (tm *TrunkManager) MatchTrunkFromInvite(req *sip.Request) (*Trunk, bool) {
-	result := tm.MatchTrunkFromInviteDetailed(req)
-	if result.Trunk == nil {
-		return nil, false
-	}
-	return result.Trunk, result.Owned
 }
 
 // IsOwnedTrunk checks if this instance owns the lease for a trunk
@@ -1826,6 +1692,7 @@ func (tm *TrunkManager) UpdateTrunk(ctx context.Context, trunkID int64, patch Tr
 		return nil, fmt.Errorf("commit update failed: %w", err)
 	}
 
+	identityChanged := trunkRegistrarIdentityChanged(current, updated)
 	tm.mu.Lock()
 	if patch.IsDefault != nil && *patch.IsDefault {
 		for id, trunk := range tm.trunks {
@@ -1844,6 +1711,9 @@ func (tm *TrunkManager) UpdateTrunk(ctx context.Context, trunkID int64, patch Tr
 		if updated.PublicID != "" {
 			delete(tm.trunkByPublic, updated.PublicID)
 		}
+	}
+	if identityChanged || !updated.Enabled {
+		tm.invalidateRegistrarIdentityLocked(trunkID)
 	}
 	tm.mu.Unlock()
 
@@ -1883,9 +1753,13 @@ func (tm *TrunkManager) RegisterTrunk(trunkID int64, force bool) error {
 	trunk.SipAutoRegister = true
 
 	tm.mu.Lock()
+	previous := tm.trunks[trunkID]
 	tm.trunks[trunkID] = trunk
 	if trunk.PublicID != "" {
 		tm.trunkByPublic[trunk.PublicID] = trunkID
+	}
+	if trunkRegistrarIdentityChanged(previous, trunk) {
+		tm.invalidateRegistrarIdentityLocked(trunkID)
 	}
 	tm.mu.Unlock()
 
@@ -1927,6 +1801,11 @@ func (tm *TrunkManager) UnregisterTrunk(trunkID int64, force bool) error {
 		delete(tm.refreshWorkers, trunkID)
 	}
 	delete(tm.registrations, trunkID)
+	if tm.registrarGenerations == nil {
+		tm.registrarGenerations = make(map[int64]uint64)
+	}
+	tm.registrarGenerations[trunkID]++
+	delete(tm.registrarIdentities, trunkID)
 	delete(tm.ownedLeases, trunkID)
 	delete(tm.leaseRetryRuns, trunkID)
 	if loaded, ok := tm.trunks[trunkID]; ok {

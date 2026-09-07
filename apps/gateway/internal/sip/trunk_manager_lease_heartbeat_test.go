@@ -13,10 +13,12 @@ func TestHandleLeaseRenewResult_TransientFailureKeepsOwnership(t *testing.T) {
 
 	stopCh := make(chan struct{})
 	tm := &TrunkManager{
-		ownedLeases:    map[int64]bool{1: true},
-		registrations:  map[int64]*gosip.ClientTransaction{1: nil},
-		refreshWorkers: map[int64]chan struct{}{1: stopCh},
-		leaseRetryRuns: map[int64]int{},
+		ownedLeases:          map[int64]bool{1: true},
+		registrations:        map[int64]*gosip.ClientTransaction{1: nil},
+		refreshWorkers:       map[int64]chan struct{}{1: stopCh},
+		leaseRetryRuns:       map[int64]int{},
+		registrarIdentities:  map[int64]*registrarIdentity{1: {TrunkID: 1}},
+		registrarGenerations: map[int64]uint64{1: 2},
 	}
 
 	leaseLost, retryCount := tm.handleLeaseRenewResult(1, fmt.Errorf("%w: db timeout", ErrTrunkLeaseRetry))
@@ -35,6 +37,12 @@ func TestHandleLeaseRenewResult_TransientFailureKeepsOwnership(t *testing.T) {
 	if got := tm.leaseRetryRuns[1]; got != 1 {
 		t.Fatalf("expected leaseRetryRuns[1]=1, got %d", got)
 	}
+	if _, ok := tm.registrarIdentities[1]; !ok {
+		t.Fatal("transient lease failure must retain registrar identity")
+	}
+	if tm.registrarGenerations[1] != 2 {
+		t.Fatalf("transient lease failure must not advance generation, got %d", tm.registrarGenerations[1])
+	}
 }
 
 func TestHandleLeaseRenewResult_LostLeaseDropsOwnershipAndWorker(t *testing.T) {
@@ -42,10 +50,12 @@ func TestHandleLeaseRenewResult_LostLeaseDropsOwnershipAndWorker(t *testing.T) {
 
 	stopCh := make(chan struct{})
 	tm := &TrunkManager{
-		ownedLeases:    map[int64]bool{1: true},
-		registrations:  map[int64]*gosip.ClientTransaction{1: nil},
-		refreshWorkers: map[int64]chan struct{}{1: stopCh},
-		leaseRetryRuns: map[int64]int{1: 2},
+		ownedLeases:          map[int64]bool{1: true},
+		registrations:        map[int64]*gosip.ClientTransaction{1: nil},
+		refreshWorkers:       map[int64]chan struct{}{1: stopCh},
+		leaseRetryRuns:       map[int64]int{1: 2},
+		registrarIdentities:  map[int64]*registrarIdentity{1: {TrunkID: 1}},
+		registrarGenerations: map[int64]uint64{1: 4},
 	}
 
 	leaseLost, retryCount := tm.handleLeaseRenewResult(1, fmt.Errorf("%w: held by another instance", ErrTrunkLeaseLost))
@@ -66,6 +76,12 @@ func TestHandleLeaseRenewResult_LostLeaseDropsOwnershipAndWorker(t *testing.T) {
 	}
 	if _, ok := tm.leaseRetryRuns[1]; ok {
 		t.Fatalf("expected retry counter to be cleared after lease loss")
+	}
+	if _, ok := tm.registrarIdentities[1]; ok {
+		t.Fatalf("expected registrar identity to be removed after lease loss")
+	}
+	if tm.registrarGenerations[1] != 5 {
+		t.Fatalf("expected registrar generation to advance on lease loss, got %d", tm.registrarGenerations[1])
 	}
 
 	select {

@@ -144,8 +144,29 @@ func (s *Server) handleINVITE(req *sip.Request, tx sip.ServerTransaction) {
 			isTrunkCall = true
 			trunkOwned = match.Owned
 			matchedTrunk = match.Trunk
-			fmt.Printf("📞 INVITE matched trunk ID %d (name: %s, owned: %v, rule=%s, sipUser=%q, candidates=%v, ownedCandidates=%v)\n",
-				match.Trunk.ID, match.Trunk.Name, match.Owned, match.Rule, match.SIPUser, match.CandidateIDs, match.OwnedCandidates)
+			fmt.Printf("📞 INVITE matched trunk ID %d (name: %s, owned: %v, rule=%s, sipUser=%q, localRURI=%v, localTo=%v, origins=%v, candidates=%v, ownedCandidates=%v, eligible=%v, evidence=%q, reason=%s)\n",
+				match.Trunk.ID, match.Trunk.Name, match.Owned, match.Rule, match.SIPUser, match.LocalRequestURI, match.LocalToURI, match.Origins, match.CandidateIDs, match.OwnedCandidates, match.EligibleIDs, match.RegistrarEvidence, match.Reason)
+			s.logEvent(&logstore.Event{
+				Timestamp: time.Now(),
+				SessionID: "",
+				Category:  "sip",
+				Name:      "sip_invite_trunk_match_selected",
+				SIPCallID: callIDValue,
+				Data: map[string]interface{}{
+					"trunkId":            match.Trunk.ID,
+					"trunkName":          match.Trunk.Name,
+					"matchRule":          match.Rule,
+					"sipUser":            match.SIPUser,
+					"candidates":         match.CandidateIDs,
+					"ownedCandidates":    match.OwnedCandidates,
+					"eligibleCandidates": match.EligibleIDs,
+					"localRequestURI":    match.LocalRequestURI,
+					"localToURI":         match.LocalToURI,
+					"origins":            match.Origins,
+					"registrarEvidence":  match.RegistrarEvidence,
+					"matchReason":        match.Reason,
+				},
+			})
 
 			if !match.Owned {
 				// Trunk exists but not owned by this instance - reject with 404
@@ -160,19 +181,25 @@ func (s *Server) handleINVITE(req *sip.Request, tx sip.ServerTransaction) {
 					SIPStatusCode: 404,
 					SIPCallID:     callIDValue,
 					Data: map[string]interface{}{
-						"trunkId":         match.Trunk.ID,
-						"trunkName":       match.Trunk.Name,
-						"matchRule":       match.Rule,
-						"sipUser":         match.SIPUser,
-						"candidates":      match.CandidateIDs,
-						"ownedCandidates": match.OwnedCandidates,
+						"trunkId":            match.Trunk.ID,
+						"trunkName":          match.Trunk.Name,
+						"matchRule":          match.Rule,
+						"sipUser":            match.SIPUser,
+						"candidates":         match.CandidateIDs,
+						"ownedCandidates":    match.OwnedCandidates,
+						"eligibleCandidates": match.EligibleIDs,
+						"localRequestURI":    match.LocalRequestURI,
+						"localToURI":         match.LocalToURI,
+						"origins":            match.Origins,
+						"registrarEvidence":  match.RegistrarEvidence,
+						"matchReason":        match.Reason,
 					},
 				})
 				return
 			}
 		} else if match.Ambiguous {
-			fmt.Printf("❌ Ambiguous trunk match for INVITE - rejecting (rule=%s sipUser=%q candidates=%v ownedCandidates=%v)\n",
-				match.Rule, match.SIPUser, match.CandidateIDs, match.OwnedCandidates)
+			fmt.Printf("❌ Ambiguous trunk match for INVITE - rejecting (rule=%s sipUser=%q candidates=%v ownedCandidates=%v eligible=%v origins=%v reason=%s)\n",
+				match.Rule, match.SIPUser, match.CandidateIDs, match.OwnedCandidates, match.EligibleIDs, match.Origins, match.Reason)
 			res := sip.NewResponseFromRequest(req, 503, "Service Unavailable", nil)
 			tx.Respond(res)
 			s.logEvent(&logstore.Event{
@@ -183,18 +210,23 @@ func (s *Server) handleINVITE(req *sip.Request, tx sip.ServerTransaction) {
 				SIPStatusCode: 503,
 				SIPCallID:     callIDValue,
 				Data: map[string]interface{}{
-					"matchRule":       match.Rule,
-					"sipUser":         match.SIPUser,
-					"candidates":      match.CandidateIDs,
-					"ownedCandidates": match.OwnedCandidates,
+					"matchRule":          match.Rule,
+					"sipUser":            match.SIPUser,
+					"candidates":         match.CandidateIDs,
+					"ownedCandidates":    match.OwnedCandidates,
+					"eligibleCandidates": match.EligibleIDs,
+					"localRequestURI":    match.LocalRequestURI,
+					"localToURI":         match.LocalToURI,
+					"origins":            match.Origins,
+					"matchReason":        match.Reason,
 				},
 			})
 			return
 		} else {
 			// No trunk match - this is a SIP public incoming call attempt
 			isTrunkCall = false
-			fmt.Printf("⚠️ INVITE does not match any trunk - rejecting (rule=%s, sipUser=%q, ownedCandidates=%v, SIP public incoming not allowed)\n",
-				match.Rule, match.SIPUser, match.OwnedCandidates)
+			fmt.Printf("⚠️ INVITE does not match any trunk - rejecting (rule=%s, sipUser=%q, ownedCandidates=%v, eligible=%v, origins=%v, reason=%s, SIP public incoming not allowed)\n",
+				match.Rule, match.SIPUser, match.OwnedCandidates, match.EligibleIDs, match.Origins, match.Reason)
 			res := sip.NewResponseFromRequest(req, 403, "Forbidden", nil)
 			tx.Respond(res)
 			s.logEvent(&logstore.Event{
@@ -205,9 +237,14 @@ func (s *Server) handleINVITE(req *sip.Request, tx sip.ServerTransaction) {
 				SIPStatusCode: 403,
 				SIPCallID:     callIDValue,
 				Data: map[string]interface{}{
-					"matchRule":       match.Rule,
-					"sipUser":         match.SIPUser,
-					"ownedCandidates": match.OwnedCandidates,
+					"matchRule":          match.Rule,
+					"sipUser":            match.SIPUser,
+					"ownedCandidates":    match.OwnedCandidates,
+					"eligibleCandidates": match.EligibleIDs,
+					"localRequestURI":    match.LocalRequestURI,
+					"localToURI":         match.LocalToURI,
+					"origins":            match.Origins,
+					"matchReason":        match.Reason,
 				},
 			})
 			return

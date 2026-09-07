@@ -88,3 +88,29 @@ Checkpoints:
 - Verify token is not expired (`exp`) and is already valid (`nbf`).
 - Verify JWT header `kid` exists in current JWKS (gateway auto-refreshes JWKS once on unknown `kid`).
 - For WebSocket, verify client sends `access_token` query param on the connect URL.
+
+## Incoming INVITE rejected as ambiguous trunk match
+
+Asterisk and similar PBXs rewrite inbound INVITE Request-URI and To to the Gateway REGISTER Contact, for example `sip:00025@203.151.21.121:5090`. That address is the Gateway itself, not the SIP registrar identity.
+
+The matcher therefore:
+
+1. Classifies a Request-URI/To that equals the Gateway public SIP address as a local Contact route.
+2. Restricts candidates to enabled trunks owned by this instance with a current successful REGISTER identity.
+3. Compares INVITE origin evidence in order: transport peer, top Via, Contact.
+4. Matches hostname-configured trunks using registrar IPs captured during REGISTER, not DNS during INVITE handling.
+
+Useful log fields: `rule`, `sipUser`, `localRURI`, `localTo`, `origins`, `ownedCandidates`, `eligible`, `evidence`, `reason`.
+
+If two owned current registrations share the same username and the same origin, Gateway returns `503 Service Unavailable`. Do not pick by newest `last_registered_at` or trunk ID.
+
+To inspect and soft-disable obsolete duplicates:
+
+```sql
+SELECT id, name, username, domain, port, enabled, sip_auto_register, lease_owner, last_registered_at
+FROM sip_trunks
+WHERE username = '00025'
+ORDER BY id;
+```
+
+Soft-delete stale rows with `enabled=false`. Never hard-delete `sip_trunks`.
