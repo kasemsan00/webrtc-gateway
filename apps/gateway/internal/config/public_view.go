@@ -12,18 +12,37 @@ type PublicConfigView struct {
 
 // PublicConfigSections groups configuration by subsystem.
 type PublicConfigSections struct {
-	TURN       TURNConfig             `json:"turn"`
-	SIP        SIPConfig              `json:"sip"`
-	API        APIConfig              `json:"api"`
-	Auth       AuthConfig             `json:"auth"`
-	RTP        RTPConfig              `json:"rtp"`
-	DB         DBConfig               `json:"db"`
-	SIPPublic  SIPPublicConfig        `json:"sipPublic"`
-	SIPTrunk   SIPTrunkConfig         `json:"sipTrunk"`
-	Gateway    GatewayConfig          `json:"gateway"`
-	SessionDir SessionDirectoryConfig `json:"sessionDir"`
-	Push       PushNotificationConfig `json:"push"`
-	Translator TranslatorConfig       `json:"translator"`
+	TURN          TURNConfig                `json:"turn"`
+	SIP           SIPConfig                 `json:"sip"`
+	API           APIConfig                 `json:"api"`
+	Auth          AuthConfig                `json:"auth"`
+	RTP           RTPConfig                 `json:"rtp"`
+	DB            DBConfig                  `json:"db"`
+	SIPPublic     SIPPublicConfig           `json:"sipPublic"`
+	SIPTrunk      SIPTrunkConfig            `json:"sipTrunk"`
+	Gateway       GatewayConfig             `json:"gateway"`
+	SessionDir    SessionDirectoryConfig    `json:"sessionDir"`
+	Push          PushNotificationConfig    `json:"push"`
+	Translator    TranslatorConfig          `json:"translator"`
+	Observability PublicObservabilityConfig `json:"observability"`
+}
+
+// PublicObservabilityConfig deliberately omits endpoint, headers and arbitrary
+// resource attributes because they may disclose private topology or secrets.
+type PublicObservabilityConfig struct {
+	Enable             bool    `json:"enable"`
+	EndpointConfigured bool    `json:"endpointConfigured"`
+	Protocol           string  `json:"protocol"`
+	ServiceName        string  `json:"serviceName"`
+	Environment        string  `json:"environment"`
+	MetricsIntervalMS  int     `json:"metricsIntervalMs"`
+	TracesEnable       bool    `json:"tracesEnable"`
+	TraceSampleRatio   float64 `json:"traceSampleRatio"`
+	MaxQueueSize       int     `json:"maxQueueSize"`
+	MaxExportBatchSize int     `json:"maxExportBatchSize"`
+	ScheduleDelayMS    int     `json:"scheduleDelayMs"`
+	ExportTimeoutMS    int     `json:"exportTimeoutMs"`
+	ShutdownTimeoutMS  int     `json:"shutdownTimeoutMs"`
 }
 
 // PublicView returns a copy of the configuration with secrets redacted.
@@ -51,20 +70,37 @@ func (c *Config) PublicView() PublicConfigView {
 	auth := c.Auth
 	auth.FrontendPassword = redactSecret(auth.FrontendPassword)
 
+	observability := PublicObservabilityConfig{
+		Enable:             c.Observability.Enable,
+		EndpointConfigured: c.Observability.Endpoint != "",
+		Protocol:           c.Observability.Protocol,
+		ServiceName:        c.Observability.ServiceName,
+		Environment:        c.Observability.Environment,
+		MetricsIntervalMS:  c.Observability.MetricsIntervalMS,
+		TracesEnable:       c.Observability.TracesEnable,
+		TraceSampleRatio:   c.Observability.TraceSampleRatio,
+		MaxQueueSize:       c.Observability.MaxQueueSize,
+		MaxExportBatchSize: c.Observability.MaxExportBatchSize,
+		ScheduleDelayMS:    c.Observability.ScheduleDelayMS,
+		ExportTimeoutMS:    c.Observability.ExportTimeoutMS,
+		ShutdownTimeoutMS:  c.Observability.ShutdownTimeoutMS,
+	}
+
 	return PublicConfigView{
 		Sections: PublicConfigSections{
-			TURN:       turn,
-			SIP:        sip,
-			API:        c.API,
-			Auth:       auth,
-			RTP:        c.RTP,
-			DB:         db,
-			SIPPublic:  c.SIPPublic,
-			SIPTrunk:   c.SIPTrunk,
-			Gateway:    c.Gateway,
-			SessionDir: c.SessionDir,
-			Push:       push,
-			Translator: c.Translator,
+			TURN:          turn,
+			SIP:           sip,
+			API:           c.API,
+			Auth:          auth,
+			RTP:           c.RTP,
+			DB:            db,
+			SIPPublic:     c.SIPPublic,
+			SIPTrunk:      c.SIPTrunk,
+			Gateway:       c.Gateway,
+			SessionDir:    c.SessionDir,
+			Push:          push,
+			Translator:    c.Translator,
+			Observability: observability,
 		},
 	}
 }

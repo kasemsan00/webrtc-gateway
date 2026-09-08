@@ -117,6 +117,7 @@ func (s *Session) CompleteMidCallRenegotiation(id, answerSDP string) bool {
 	if s.PendingMidCallRenegotiation == nil || s.PendingMidCallRenegotiation.ID != id {
 		return false
 	}
+	clearSwitchVideoRenegotiateHoldLocked(s, s.PendingMidCallRenegotiation.Source)
 	s.PendingMidCallRenegotiation.AnswerSDP = answerSDP
 	s.PendingMidCallRenegotiation.Status = "completed"
 	s.PendingMidCallRenegotiation = nil
@@ -131,6 +132,7 @@ func (s *Session) FailMidCallRenegotiation(id string, statusCode int, reason str
 	if s.PendingMidCallRenegotiation == nil || s.PendingMidCallRenegotiation.ID != id {
 		return false
 	}
+	clearSwitchVideoRenegotiateHoldLocked(s, s.PendingMidCallRenegotiation.Source)
 	s.PendingMidCallRenegotiation.Status = "failed"
 	s.PendingMidCallRenegotiation.StatusCode = statusCode
 	s.PendingMidCallRenegotiation.Reason = reason

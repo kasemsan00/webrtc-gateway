@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"webrtc-sip-gateway/internal/session"
+	"webrtc-sip-gateway/internal/telemetry"
 )
 
 const (
@@ -29,14 +30,20 @@ func hasActiveVideoMedia(sdp string) bool {
 // If SDP is provided, it renegotiates the PeerConnection to establish a fresh WebRTC connection
 func (s *Server) handleWSResume(client *WSClient, msg WSMessage) {
 	resumeStartedAt := time.Now()
+	telemetryOutcome, telemetryReason := "failure", "internal_error"
+	ctx, span := telemetry.StartCallSpan(context.Background(), "resume")
+	telemetry.SetSpanCorrelation(span, telemetry.Correlation{SessionID: msg.SessionID})
 	defer func() {
 		elapsed := time.Since(resumeStartedAt)
+		telemetry.EndSpan(span, telemetryOutcome, telemetryReason, 0)
+		_ = telemetry.Log(ctx, telemetry.LogEvent{Severity: telemetry.SeverityInfo, Component: "call", Name: "call.resume.completed", Outcome: telemetryOutcome, Reason: telemetryReason, Correlation: telemetry.Correlation{SessionID: msg.SessionID}, Measurements: []telemetry.Measurement{telemetry.DurationMilliseconds("duration_ms", elapsed)}})
 		if elapsed > resumeSlowLogThreshold {
 			log.Printf("⚠️ Slow resume request: session=%s elapsed=%s hasSDP=%v", msg.SessionID, elapsed.Round(10*time.Millisecond), msg.SDP != "")
 		}
 	}()
 
 	if msg.SessionID == "" {
+		telemetryReason = "invalid_request"
 		s.sendWSError(client, "", "Session ID required for resume")
 		return
 	}
@@ -60,6 +67,7 @@ func (s *Server) handleWSResume(client *WSClient, msg WSMessage) {
 		if err != nil {
 			log.Printf("⚠️ Resume directory lookup failed for %s: %v (elapsed=%s)", msg.SessionID, err, dirLookupElapsed)
 		} else if found && ownerInstanceID != s.gatewayConfig.InstanceID {
+			telemetryOutcome, telemetryReason = "success", "none"
 			log.Printf("🔀 Session %s is owned by instance %s, redirecting to %s (lookup_elapsed=%s)", msg.SessionID, ownerInstanceID, wsURL, dirLookupElapsed)
 			response := WSMessage{
 				Type:        "resume_redirect",
@@ -78,6 +86,7 @@ func (s *Server) handleWSResume(client *WSClient, msg WSMessage) {
 	}
 
 	if !ok {
+		telemetryReason = "not_found"
 		log.Printf("❌ Resume failed: session %s not found", msg.SessionID)
 		response := WSMessage{
 			Type:      "resume_failed",
@@ -105,6 +114,7 @@ func (s *Server) handleWSResume(client *WSClient, msg WSMessage) {
 
 	if (mediaStatus.HasAsteriskAudio && !mediaStatus.AudioRTPReady) ||
 		(mediaStatus.HasAsteriskVideo && !mediaStatus.VideoRTPReady) {
+		telemetryReason = "dependency_unavailable"
 		reason := "Session media endpoints expired - cannot resume"
 		log.Printf(
 			"❌ Resume failed: session %s media endpoints unavailable (reason=%s audioRTP=%v:%d videoRTP=%v:%d audioRTCP=%v:%d videoRTCP=%v:%d hasAsteriskAudio=%v hasAsteriskVideo=%v)",
@@ -136,6 +146,7 @@ func (s *Server) handleWSResume(client *WSClient, msg WSMessage) {
 		state != session.StateConnecting &&
 		state != session.StateRinging &&
 		state != session.StateReconnecting {
+		telemetryReason = "conflict"
 		log.Printf("❌ Resume failed: session %s is in state %s (not resumable)", msg.SessionID, state)
 		response := WSMessage{
 			Type:      "resume_failed",
@@ -188,6 +199,7 @@ func (s *Server) handleWSResume(client *WSClient, msg WSMessage) {
 
 		// Renegotiate with the new SDP offer
 		if err := sess.RenegotiatePeerConnection(msg.SDP, s.turnConfig, s.config.DebugTURN); err != nil {
+			telemetryReason = "peer_closed"
 			log.Printf("❌ Resume renegotiation failed for session %s: %v (elapsed=%s)", msg.SessionID, err, time.Since(renegotiateStartedAt).Round(10*time.Millisecond))
 			response := WSMessage{
 				Type:      "resume_failed",
@@ -217,6 +229,8 @@ func (s *Server) handleWSResume(client *WSClient, msg WSMessage) {
 	direction, _, _, _ := sess.GetCallInfo()
 	log.Printf("📊 Resume total elapsed: session=%s elapsed=%s", msg.SessionID, time.Since(resumeStartedAt).Round(10*time.Millisecond))
 	log.Printf("✅ Session %s resumed successfully (state: %s, direction: %s, wasReconnecting: %v, hasSDP: %v)", msg.SessionID, finalState, direction, wasReconnecting, answerSDP != "")
+	telemetryOutcome, telemetryReason = "success", "none"
+	telemetry.RecordMediaRecovery(context.Background(), direction, "resume", "success")
 
 	// Send success response with session details (and answer SDP if renegotiated)
 	_, from, to, _ := sess.GetCallInfo()

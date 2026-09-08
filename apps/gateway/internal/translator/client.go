@@ -11,6 +11,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
+	"webrtc-sip-gateway/internal/telemetry"
 	"webrtc-sip-gateway/internal/translator/pb"
 )
 
@@ -34,7 +35,10 @@ func NewClient(cfg Config) *Client {
 	return &Client{cfg: cfg}
 }
 
-func (c *Client) Connect(ctx context.Context) error {
+func (c *Client) Connect(ctx context.Context) (err error) {
+	started := time.Now()
+	ctx, span := telemetry.StartDependencySpan(ctx, "translator")
+	defer func() { telemetry.EndDependency(ctx, span, "translator", started, err) }()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -56,7 +60,10 @@ func (c *Client) Connect(ctx context.Context) error {
 	return nil
 }
 
-func (c *Client) TranslateStream(ctx context.Context) (pb.SpeechTranslator_TranslateClient, error) {
+func (c *Client) TranslateStream(ctx context.Context) (stream pb.SpeechTranslator_TranslateClient, err error) {
+	started := time.Now()
+	ctx, span := telemetry.StartDependencySpan(ctx, "translator")
+	defer func() { telemetry.EndDependency(ctx, span, "translator", started, err) }()
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
@@ -64,14 +71,17 @@ func (c *Client) TranslateStream(ctx context.Context) (pb.SpeechTranslator_Trans
 		return nil, fmt.Errorf("translator client not connected")
 	}
 
-	stream, err := c.client.Translate(ctx)
+	stream, err = c.client.Translate(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create translate stream: %w", err)
 	}
 	return stream, nil
 }
 
-func (c *Client) CheckHealth(ctx context.Context) error {
+func (c *Client) CheckHealth(ctx context.Context) (err error) {
+	started := time.Now()
+	ctx, span := telemetry.StartDependencySpan(ctx, "translator")
+	defer func() { telemetry.EndDependency(ctx, span, "translator", started, err) }()
 	c.mu.RLock()
 	conn := c.conn
 	c.mu.RUnlock()
@@ -82,7 +92,10 @@ func (c *Client) CheckHealth(ctx context.Context) error {
 	return pb.CheckHealth(ctx, conn)
 }
 
-func (c *Client) Send(ctx context.Context, audioData []byte) (*pb.TranslationResult, error) {
+func (c *Client) Send(ctx context.Context, audioData []byte) (result *pb.TranslationResult, err error) {
+	started := time.Now()
+	ctx, span := telemetry.StartDependencySpan(ctx, "translator")
+	defer func() { telemetry.EndDependency(ctx, span, "translator", started, err) }()
 	stream, err := c.TranslateStream(ctx)
 	if err != nil {
 		return nil, err
@@ -114,7 +127,10 @@ func (c *Client) Send(ctx context.Context, audioData []byte) (*pb.TranslationRes
 	return resp, nil
 }
 
-func (c *Client) SynthesizeText(ctx context.Context, lang, text, voiceName string) ([]byte, error) {
+func (c *Client) SynthesizeText(ctx context.Context, lang, text, voiceName string) (audioResult []byte, err error) {
+	started := time.Now()
+	ctx, span := telemetry.StartDependencySpan(ctx, "translator")
+	defer func() { telemetry.EndDependency(ctx, span, "translator", started, err) }()
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return nil, nil

@@ -11,7 +11,9 @@ import (
 )
 
 // StartSwitchVideoRenegotiation begins client-assisted WebRTC renegotiation
-// after @switch video gate release to reset the remote decoder binding.
+// when an authoritative @switch MESSAGE is accepted. The gateway replaces
+// its PeerConnection and the Android client creates a fresh offer (same
+// contract as resume). Android cannot answer a mid-call remote offer.
 func (s *Server) StartSwitchVideoRenegotiation(sessionID string, generation int) {
 	if s.sessionMgr == nil || s.runtimeConfig == nil {
 		return
@@ -28,17 +30,15 @@ func (s *Server) StartSwitchVideoRenegotiation(sessionID string, generation int)
 		return
 	}
 
-	offerSDP, err := sess.CreatePeerConnectionOffer()
-	if err != nil {
+	if err := sess.PrepareSwitchPeerConnection(s.turnConfig, s.config.DebugTURN); err != nil {
 		sess.ReleaseSwitchVideoRenegotiationClaim(generation)
-		fmt.Printf("[%s] switch_renegotiate_offer_failed generation=%d error=%v\n", sessionID, generation, err)
+		fmt.Printf("[%s] switch_renegotiate_prepare_failed generation=%d error=%v\n", sessionID, generation, err)
 		return
 	}
 
 	started, ok := sess.TryBeginMidCallRenegotiation(session.MidCallRenegotiationRequest{
-		Source:    session.MidCallRenegotiationSourceSwitchGateRelease,
+		Source:    session.MidCallRenegotiationSourceSwitchMessage,
 		Method:    "WS",
-		OfferSDP:  offerSDP,
 		Reason:    "agent_switch",
 		StartedAt: time.Now(),
 	})
@@ -81,7 +81,6 @@ func (s *Server) NotifySwitchVideoRenegotiation(sessionID string, renegotiation 
 		SessionID:       sessionID,
 		RenegotiationID: renegotiation.ID,
 		Reason:          "agent_switch",
-		SDP:             renegotiation.OfferSDP,
 		MediaDirection:  "sendrecv",
 		HasVideo:        strconv.FormatBool(true),
 		RequiresAnswer:  true,

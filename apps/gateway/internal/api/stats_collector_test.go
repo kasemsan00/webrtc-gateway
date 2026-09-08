@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pion/webrtc/v4"
+
 	"webrtc-sip-gateway/internal/config"
 	"webrtc-sip-gateway/internal/logstore"
 	"webrtc-sip-gateway/internal/session"
@@ -72,5 +74,38 @@ func TestRunStatsCollectorStopsOnCancellation(t *testing.T) {
 	case <-stopped:
 	case <-time.After(250 * time.Millisecond):
 		t.Fatal("collector did not stop after cancellation")
+	}
+}
+
+func TestStatsCollectionRunsForTelemetryWithoutDatabase(t *testing.T) {
+	server := &Server{runtimeConfig: &config.Config{Observability: config.ObservabilityConfig{Enable: true, MetricsIntervalMS: 2500}}}
+	if !server.statsCollectionEnabled() {
+		t.Fatal("telemetry-enabled collector must run independently of database logging")
+	}
+	if got := server.statsCollectionInterval(); got != 2500*time.Millisecond {
+		t.Fatalf("interval = %v", got)
+	}
+}
+
+func TestCollectMediaQualityUsesPeriodicAggregateStats(t *testing.T) {
+	report := webrtc.StatsReport{
+		"inbound":  webrtc.InboundRTPStreamStats{Kind: "audio", PacketsReceived: 90, PacketsLost: 10, Jitter: 0.02, PLICount: 2, FIRCount: 3, NACKCount: 4},
+		"outbound": webrtc.RemoteInboundRTPStreamStats{Kind: "video", FractionLost: 0.25, Jitter: 0.03, RoundTripTime: 0.04, PLICount: 5, FIRCount: 6, NACKCount: 7},
+	}
+	samples := collectMediaQuality(report)
+	if len(samples) != 2 {
+		t.Fatalf("samples = %#v", samples)
+	}
+	byDirection := map[string]mediaQualitySample{}
+	for _, sample := range samples {
+		byDirection[sample.direction] = sample
+	}
+	inbound := byDirection["inbound"]
+	if inbound.kind != "audio" || inbound.packetLoss != 0.1 || inbound.jitter != 0.02 || inbound.pli != 2 || inbound.fir != 3 || inbound.nack != 4 {
+		t.Fatalf("unexpected inbound aggregate: %#v", inbound)
+	}
+	outbound := byDirection["outbound"]
+	if outbound.kind != "video" || outbound.packetLoss != 0.25 || outbound.jitter != 0.03 || outbound.rtt != 0.04 || outbound.pli != 5 || outbound.fir != 6 || outbound.nack != 7 {
+		t.Fatalf("unexpected outbound aggregate: %#v", outbound)
 	}
 }

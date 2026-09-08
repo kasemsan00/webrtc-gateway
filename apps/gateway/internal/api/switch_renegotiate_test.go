@@ -51,7 +51,7 @@ func TestNotifySwitchVideoRenegotiationSendsAgentSwitchOffer(t *testing.T) {
 	if msg.Type != "renegotiate" {
 		t.Fatalf("expected renegotiate, got %s", msg.Type)
 	}
-	if msg.RenegotiationID != "reneg-switch-1" || msg.Reason != "agent_switch" || msg.SDP != "v=0\r\noffer" || !msg.RequiresAnswer {
+	if msg.RenegotiationID != "reneg-switch-1" || msg.Reason != "agent_switch" || msg.SDP != "" || !msg.RequiresAnswer {
 		t.Fatalf("unexpected renegotiate payload: %#v", msg)
 	}
 }

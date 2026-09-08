@@ -3,14 +3,11 @@ package session
 import (
 	"fmt"
 	"strings"
-	"sync/atomic"
 	"time"
 
-	"github.com/pion/rtcp"
 	"github.com/pion/webrtc/v4"
 
 	"webrtc-sip-gateway/internal/config"
-	pkg_webrtc "webrtc-sip-gateway/internal/pkg/webrtc"
 )
 
 const RENEGOTIATE_ICE_GATHER_TIMEOUT = 3 * time.Second
@@ -88,7 +85,6 @@ func (s *Session) RenegotiatePeerConnection(newOfferSDP string, turnConfig confi
 		videoDiag.VideoDirection,
 		videoDiag.ExpectVideoUplink,
 	)
-	var videoOnTrackObserved atomic.Bool
 
 	if offerOK {
 		s.mu.Lock()
@@ -100,254 +96,9 @@ func (s *Session) RenegotiatePeerConnection(newOfferSDP string, turnConfig confi
 		fmt.Printf("[%s] 💾 Cached SPS/PPS from SDP (renegotiate-offer) (SPS=%d bytes, PPS=%d bytes)\n", s.ID, len(offerSPS), len(offerPPS))
 	}
 
-	// 1. Close old PeerConnection (RTP connections are preserved)
-	// Capture old PC under lock, close outside lock
-	s.mu.Lock()
-	oldPC := s.PeerConnection
-	s.PeerConnection = nil
-	s.mu.Unlock()
-
-	if oldPC != nil {
-		fmt.Printf("[%s] 🔄 Closing old PeerConnection\n", s.ID)
-		oldPC.Close()
-	}
-
-	// 2. Build ICE servers configuration
-	iceServers := pkg_webrtc.BuildICEServers(turnConfig)
-
-	// 3. Create custom MediaEngine with RTCPFeedback
-	mediaEngine, err := createCustomMediaEngine()
+	newPC, err := s.createReplacementPeerConnection(turnConfig, debugTURN, videoDiag)
 	if err != nil {
-		return fmt.Errorf("failed to create media engine: %w", err)
-	}
-
-	// Create API with custom MediaEngine
-	api := webrtc.NewAPI(webrtc.WithMediaEngine(mediaEngine))
-
-	// Create new PeerConnection using custom API
-	webrtcConfig := webrtc.Configuration{
-		ICEServers: iceServers,
-	}
-
-	newPC, err := api.NewPeerConnection(webrtcConfig)
-	if err != nil {
-		return fmt.Errorf("failed to create new PeerConnection: %w", err)
-	}
-
-	// 4. Create audio track (Opus for passthrough)
-	audioTrack, err := webrtc.NewTrackLocalStaticRTP(
-		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus},
-		"audio",
-		fmt.Sprintf("pion-audio-%s-renegotiate", s.ID),
-	)
-	if err != nil {
-		newPC.Close()
-		return fmt.Errorf("failed to create audio track: %w", err)
-	}
-
-	// Add audio track to peer connection
-	audioSender, err := newPC.AddTrack(audioTrack)
-	if err != nil {
-		newPC.Close()
-		return fmt.Errorf("failed to add audio track: %w", err)
-	}
-
-	// 5. Create video track (H.264 for SIP compatibility)
-	videoTrack, err := webrtc.NewTrackLocalStaticRTP(
-		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264, ClockRate: 90000},
-		"video",
-		fmt.Sprintf("pion-video-%s-renegotiate", s.ID),
-	)
-	if err != nil {
-		newPC.Close()
-		return fmt.Errorf("failed to create video track: %w", err)
-	}
-
-	// Add video track to peer connection
-	videoSender, err := newPC.AddTrack(videoTrack)
-	if err != nil {
-		newPC.Close()
-		return fmt.Errorf("failed to add video track: %w", err)
-	}
-
-	// Update session tracks under lock
-	s.mu.Lock()
-	s.AudioTrack = audioTrack
-	s.VideoTrack = videoTrack
-	s.mu.Unlock()
-
-	// 6. Set up RTCP readers (similar to CreateSession)
-	go func() {
-		rtcpBuf := make([]byte, s.RTPBufferSize)
-		for {
-			if _, _, err := audioSender.Read(rtcpBuf); err != nil {
-				return
-			}
-		}
-	}()
-
-	go func() {
-		rtcpBuf := make([]byte, s.RTPBufferSize)
-		for {
-			if s.GetState() == StateEnded {
-				return
-			}
-			n, _, rtcpErr := videoSender.Read(rtcpBuf)
-			if rtcpErr != nil {
-				return
-			}
-			packets, err := rtcp.Unmarshal(rtcpBuf[:n])
-			if err != nil {
-				continue
-			}
-			for _, p := range packets {
-				switch pkt := p.(type) {
-				case *rtcp.PictureLossIndication, *rtcp.FullIntraRequest:
-					s.SendBrowserRecoveryToAsterisk("browser-rtcp")
-				case *rtcp.TransportLayerNack:
-					_ = pkt
-				}
-			}
-		}
-	}()
-
-	// 7. Set up TURN/ICE debug logging if enabled
-	if debugTURN {
-		// Log ICE gathering state changes
-		newPC.OnICEGatheringStateChange(func(state webrtc.ICEGatheringState) {
-			fmt.Printf("[%s] 🧊 ICE Gathering State (renegotiated): %s\n", s.ID, state.String())
-		})
-
-		// Log all ICE candidates as they are discovered
-		newPC.OnICECandidate(func(candidate *webrtc.ICECandidate) {
-			if candidate == nil {
-				// nil candidate indicates gathering is complete
-				fmt.Printf("[%s] 🧊 ICE Candidate gathering complete (renegotiated)\n", s.ID)
-				return
-			}
-			candidateType := "unknown"
-			switch candidate.Typ {
-			case webrtc.ICECandidateTypeHost:
-				candidateType = "host"
-			case webrtc.ICECandidateTypeSrflx:
-				candidateType = "srflx"
-			case webrtc.ICECandidateTypePrflx:
-				candidateType = "prflx"
-			case webrtc.ICECandidateTypeRelay:
-				candidateType = "relay"
-			}
-			fmt.Printf("[%s] 🧊 ICE Candidate (renegotiated): type=%s address=%s:%d protocol=%s\n", s.ID, candidateType, candidate.Address, candidate.Port, candidate.Protocol.String())
-		})
-	}
-
-	// 7. Set up ICE connection state handler
-	id := s.ID
-	newPC.OnICEConnectionStateChange(func(connectionState webrtc.ICEConnectionState) {
-		fmt.Printf("[%s] 🧊 ICE Connection State (renegotiated): %s\n", id, connectionState.String())
-
-		if connectionState == webrtc.ICEConnectionStateConnected {
-			// Log selected candidate pair if TURN debug is enabled
-			if debugTURN {
-				// Use GetStats to find the selected candidate pair (nominated and succeeded)
-				stats := newPC.GetStats()
-				var selectedPair *webrtc.ICECandidatePairStats
-				var localCandidate *webrtc.ICECandidateStats
-				var remoteCandidate *webrtc.ICECandidateStats
-
-				// Find the nominated candidate pair (selected pair)
-				for _, stat := range stats {
-					if pairStats, ok := stat.(webrtc.ICECandidatePairStats); ok {
-						if pairStats.Nominated {
-							selectedPair = &pairStats
-							break
-						}
-					}
-				}
-
-				if selectedPair != nil {
-					// Look up local and remote candidate stats
-					for _, stat := range stats {
-						if candidateStats, ok := stat.(webrtc.ICECandidateStats); ok {
-							if candidateStats.ID == selectedPair.LocalCandidateID {
-								localCandidate = &candidateStats
-							}
-							if candidateStats.ID == selectedPair.RemoteCandidateID {
-								remoteCandidate = &candidateStats
-							}
-							if localCandidate != nil && remoteCandidate != nil {
-								break
-							}
-						}
-					}
-
-					if localCandidate != nil && remoteCandidate != nil {
-						localType := localCandidate.CandidateType.String()
-						remoteType := remoteCandidate.CandidateType.String()
-						isUsingTURN := localCandidate.CandidateType == webrtc.ICECandidateTypeRelay || remoteCandidate.CandidateType == webrtc.ICECandidateTypeRelay
-						turnIndicator := ""
-						if isUsingTURN {
-							turnIndicator = " ✅ TURN RELAY ACTIVE"
-						}
-						fmt.Printf("[%s] 🧊 Selected Candidate Pair (renegotiated):%s\n", id, turnIndicator)
-						fmt.Printf("[%s]   Local:  type=%s address=%s:%d protocol=%s\n", id, localType, localCandidate.IP, localCandidate.Port, localCandidate.Protocol)
-						fmt.Printf("[%s]   Remote: type=%s address=%s:%d protocol=%s\n", id, remoteType, remoteCandidate.IP, remoteCandidate.Port, remoteCandidate.Protocol)
-					}
-				}
-			}
-
-			fmt.Printf("[%s] ✅ Renegotiated connection established\n", id)
-			s.SetState(StateActive)
-			s.StartVideoRecoveryBurst("renegotiated-ice-connected")
-			s.RequestSIPVideoIDRReplay("renegotiated-ice-connected")
-			// Send FIR first (to request SPS/PPS + IDR), then PLI burst for fast video start
-			go func() {
-				fmt.Printf("[%s] 🚀 Renegotiated - Sending FIR + PLI requests for fast video start (with SPS/PPS)\n", id)
-				if s.GetState() == StateEnded {
-					return
-				}
-				s.SendFIRToAsterisk()
-				s.SendPLIToAsteriskForced("renegotiated-ice")
-				s.SendPLItoWebRTC()
-			}()
-		} else if connectionState == webrtc.ICEConnectionStateFailed {
-			fmt.Printf("[%s] ❌ Renegotiated connection failed\n", id)
-			s.SetState(StateEnded)
-		}
-	})
-
-	// 8. Set up OnTrack handler to forward WebRTC RTP → Asterisk
-	newPC.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
-		kind := track.Kind().String()
-		if kind == "video" {
-			videoOnTrackObserved.Store(true)
-		}
-		codec := track.Codec()
-		fmt.Printf("[%s] 🎬 OnTrack (renegotiated): kind=%s mime=%s pt=%d ssrc=%d clockRate=%d fmtp=%q\n",
-			id, kind, codec.MimeType, track.PayloadType(), track.SSRC(), codec.ClockRate, codec.SDPFmtpLine)
-
-		// Extra logging for video codec (profile-level-id critical for H264 decode compatibility)
-		if kind == "video" {
-			fmt.Printf("[%s] 🎬 WebRTC video codec details (renegotiated): %s (fmtp: %s)\n", id, codec.MimeType, codec.SDPFmtpLine)
-		}
-
-		// Forward RTP packets to Asterisk (reuse existing forwarding logic)
-		go s.forwardRTPToAsterisk(track, kind)
-	})
-
-	if videoDiag.ExpectVideoUplink {
-		go func(sessionID string, diag renegotiateVideoOfferDiagnostics) {
-			time.Sleep(renegotiateVideoOnTrackWatchdog)
-			if videoOnTrackObserved.Load() || s.GetState() == StateEnded {
-				return
-			}
-			fmt.Printf("[%s] ⚠️ Expected client video uplink but no video OnTrack within %s (hasVideoMLine=%v, videoPort=%d, videoDirection=%s)\n",
-				sessionID,
-				renegotiateVideoOnTrackWatchdog,
-				diag.HasVideoMLine,
-				diag.VideoPort,
-				diag.VideoDirection,
-			)
-		}(s.ID, videoDiag)
+		return err
 	}
 
 	// 9. Set remote description (the new offer from client)

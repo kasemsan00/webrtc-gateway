@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+
+	"webrtc-sip-gateway/internal/telemetry"
 )
 
 const (
@@ -159,7 +161,10 @@ func apnsBaseURL(environment string) string {
 }
 
 // SendVoIPPush sends one incoming-call PushKit notification.
-func (s *APNSSender) SendVoIPPush(ctx context.Context, token string, data map[string]string) error {
+func (s *APNSSender) SendVoIPPush(ctx context.Context, token string, data map[string]string) (err error) {
+	started := time.Now()
+	ctx, span := telemetry.StartDependencySpan(ctx, "push_apns")
+	defer func() { telemetry.EndDependency(ctx, span, "push_apns", started, err) }()
 	token = strings.TrimSpace(token)
 	if token == "" {
 		return fmt.Errorf("apns: token is empty")

@@ -528,9 +528,6 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 			if !result.emitted {
 				return
 			}
-			if result.gateReleased && s.switchRenegotiationStarter != nil {
-				s.switchRenegotiationStarter.StartSwitchVideoRenegotiation(sess.ID, result.generation)
-			}
 			if au.IsIDR {
 				sess.MarkSIPVideoIDRSize(len(au.Packets))
 				isPLIResponse, responseTime, pliSent, pliResponse := sess.RecordKeyframe()

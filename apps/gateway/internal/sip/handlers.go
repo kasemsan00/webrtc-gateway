@@ -122,10 +122,7 @@ func (s *Server) handleINVITE(req *sip.Request, tx sip.ServerTransaction) {
 		toURI = toHeader.Address.String()
 	}
 
-	fmt.Printf("\n=== Inbound INVITE ===\n")
-	fmt.Printf("From: %s (%s)\n", fromURI, fromDisplayName)
-	fmt.Printf("To: %s\n", toURI)
-	fmt.Printf("Call-ID: %s\n", callIDValue)
+	fmt.Printf("\n=== Inbound INVITE: bodyBytes=%d ===\n", len(req.Body()))
 
 	// Debug: Print all headers to see if Record-Route is present
 	if s.config.DebugSIPInvite {
@@ -701,35 +698,31 @@ func sipReasonForStatus(statusCode int) string {
 // handleBYE handles BYE requests (call termination)
 func (s *Server) handleBYE(req *sip.Request, tx sip.ServerTransaction) {
 	ctx := context.Background()
-	log.Printf("[SIP-BYE] handleBYE start: method=%s source=%s destination=%s recipient=%s", req.Method, req.Source(), req.Destination(), req.Recipient.String())
+	log.Printf("[SIP-BYE] handleBYE start: method=%s", req.Method)
 	fmt.Printf("\n=== Received BYE Request ===\n")
-	fmt.Printf("From: %s\n", req.From().Value())
-	fmt.Printf("To: %s\n", req.To().Value())
+	if s.config.DebugSIPInvite {
+		fmt.Printf("From: %s\n", req.From().Value())
+		fmt.Printf("To: %s\n", req.To().Value())
+	}
 
 	var callIDValue string
 	if callID := req.CallID(); callID != nil {
 		callIDValue = callID.Value()
-		fmt.Printf("Call-ID: %s\n", callIDValue)
+		if s.config.DebugSIPInvite { fmt.Printf("Call-ID: %s\n", callIDValue) }
 	}
 
 	if cseq := req.CSeq(); cseq != nil {
 		fmt.Printf("CSeq: %s\n", cseq.Value())
 	}
 	fmt.Printf("Method: %s\n", req.Method)
-	fmt.Printf("Request-URI: %s\n", req.Recipient.String())
+	if s.config.DebugSIPInvite { fmt.Printf("Request-URI: %s\n", req.Recipient.String()) }
 
 	// Log Via headers (critical for response routing)
-	fmt.Printf("\nVia Headers:\n")
-	for i, via := range req.GetHeaders("Via") {
-		fmt.Printf("  Via[%d]: %s\n", i, via.Value())
-	}
-
-	// Log source/destination
-	if req.Source() != "" {
-		fmt.Printf("Request Source: %s\n", req.Source())
-	}
-	if req.Destination() != "" {
-		fmt.Printf("Request Destination: %s\n", req.Destination())
+	if s.config.DebugSIPInvite {
+		fmt.Printf("\nVia Headers:\n")
+		for i, via := range req.GetHeaders("Via") { fmt.Printf("  Via[%d]: %s\n", i, via.Value()) }
+		if req.Source() != "" { fmt.Printf("Request Source: %s\n", req.Source()) }
+		if req.Destination() != "" { fmt.Printf("Request Destination: %s\n", req.Destination()) }
 	}
 
 	// Find session by Call-ID
@@ -739,7 +732,7 @@ func (s *Server) handleBYE(req *sip.Request, tx sip.ServerTransaction) {
 			sess = foundSess
 			fmt.Printf("✅ Found session: %s\n", sess.ID)
 		} else {
-			fmt.Printf("⚠️  Session not found for Call-ID: %s\n", callIDValue)
+			fmt.Printf("⚠️  Session not found for supplied Call-ID\n")
 		}
 	}
 
@@ -950,10 +943,11 @@ func (s *Server) handleACK(req *sip.Request, _ sip.ServerTransaction) {
 				// CRITICAL: Update From/To with actual URIs from ACK
 				sess.UpdateFromTo(remotePartyURI, localPartyURI)
 
-				fmt.Printf("✅ [%s] Dialog state set from ACK - FromTag: %s, ToTag: %s, Contact: %s\n",
-					sess.ID, toTag, fromTag, remoteContact)
-				fromValue, toValue := sess.GetFromTo()
-				fmt.Printf("✅ [%s] Updated URIs - From: %s, To: %s\n", sess.ID, fromValue, toValue)
+				if s.config.DebugSIPInvite {
+					fmt.Printf("✅ [%s] Dialog state set from ACK (debug) - FromTag: %s, ToTag: %s, Contact: %s\n", sess.ID, toTag, fromTag, remoteContact)
+				} else {
+					fmt.Printf("✅ [%s] Dialog state set from ACK\n", sess.ID)
+				}
 			}
 		}
 	}
@@ -1086,7 +1080,7 @@ func (s *Server) handleMESSAGE(req *sip.Request, tx sip.ServerTransaction) {
 		fmt.Printf("================================\n\n")
 	} else {
 		// Minimal log when debug is off
-		fmt.Printf("💬 MESSAGE from %s to %s (%d bytes)\n", caller, toURI, len(body))
+		fmt.Printf("💬 MESSAGE received (%d bytes)\n", len(body))
 	}
 
 	// Send 200 OK response
@@ -1258,6 +1252,8 @@ func (s *Server) handleSwitchMessage(body string, callerURI string) {
 		if !sess.StartSwitchVideoRecoveryIfAuthoritative(switchDecision.Generation, switchDecision.MediaEpoch, recoveryWindow, stableWindow) {
 			return
 		}
+		s.runSwitchHandlerTestHook("renegotiate", switchDecision)
+		s.startSwitchVideoRenegotiationAsync(sess.ID, switchDecision.Generation)
 	} else {
 		sess.StartSwitchVideoRecovery(recoveryWindow, stableWindow)
 	}
@@ -1392,6 +1388,13 @@ func (s *Server) handleSwitchMessage(body string, callerURI string) {
 	}
 
 	fmt.Printf("✅ Sent @switch immediate kick + FIR/PLI bursts (Browser + Asterisk) for session: %s\n", sess.ID)
+}
+
+func (s *Server) startSwitchVideoRenegotiationAsync(sessionID string, generation int) {
+	if s.switchRenegotiationStarter == nil || sessionID == "" || generation <= 0 {
+		return
+	}
+	go s.switchRenegotiationStarter.StartSwitchVideoRenegotiation(sessionID, generation)
 }
 
 func (s *Server) switchFeedbackBurstNeeded(sess *session.Session, genuine bool, decision session.SwitchTargetDecision) bool {

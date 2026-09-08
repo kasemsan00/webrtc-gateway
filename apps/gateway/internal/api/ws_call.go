@@ -189,12 +189,8 @@ func (s *Server) handleWSIce(client *WSClient, msg WSMessage) {
 	if strings.TrimSpace(candidate.Candidate) == "" {
 		return
 	}
-	if sess.PeerConnection.RemoteDescription() == nil {
-		s.sendWSError(client, sessionID, "Remote description not set for ICE candidate")
-		return
-	}
-
-	if err := sess.PeerConnection.AddICECandidate(candidate); err != nil {
+	queued, err := sess.AddRemoteICECandidate(candidate)
+	if err != nil {
 		s.sendWSError(client, sessionID, fmt.Sprintf("Failed to add ICE candidate: %v", err))
 		return
 	}
@@ -207,7 +203,11 @@ func (s *Server) handleWSIce(client *WSClient, msg WSMessage) {
 		}
 	}
 	count, elapsed := sess.RecordRemoteICECandidate()
-	log.Printf("[%s] 🧊 Remote ICE candidate added type=%s count=%d elapsed=%s", sessionID, candidateType, count, elapsed)
+	if queued {
+		log.Printf("[%s] 🧊 Remote ICE candidate queued type=%s count=%d elapsed=%s", sessionID, candidateType, count, elapsed)
+	} else {
+		log.Printf("[%s] 🧊 Remote ICE candidate added type=%s count=%d elapsed=%s", sessionID, candidateType, count, elapsed)
+	}
 
 	s.logEvent(&logstore.Event{
 		Timestamp: time.Now(),
@@ -218,6 +218,7 @@ func (s *Server) handleWSIce(client *WSClient, msg WSMessage) {
 			"candidateType":  candidateType,
 			"candidateCount": count,
 			"elapsedMs":      elapsed.Milliseconds(),
+			"queued":         queued,
 		},
 	})
 }

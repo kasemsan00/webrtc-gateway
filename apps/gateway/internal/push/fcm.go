@@ -13,6 +13,8 @@ import (
 
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
+
+	"webrtc-sip-gateway/internal/telemetry"
 )
 
 const (
@@ -73,7 +75,10 @@ type fcmAndroidConfig struct {
 }
 
 // SendPush sends a push notification with notification + data payload.
-func (s *FCMSender) SendPush(ctx context.Context, token, title, notificationBody string, data map[string]string, mobileDevice string) error {
+func (s *FCMSender) SendPush(ctx context.Context, token, title, notificationBody string, data map[string]string, mobileDevice string) (err error) {
+	started := time.Now()
+	ctx, span := telemetry.StartDependencySpan(ctx, "push_fcm")
+	defer func() { telemetry.EndDependency(ctx, span, "push_fcm", started, err) }()
 	url := fmt.Sprintf("%s/%s/messages:send", fcmBaseURL, s.projectID)
 
 	payload := buildFCMPayload(token, title, notificationBody, data, mobileDevice)

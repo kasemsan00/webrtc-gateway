@@ -106,7 +106,7 @@ func newLogger(cfg Config) (*Logger, error) {
 	}
 
 	// Redirect standard log package
-	log.SetOutput(l.multiWriter)
+	log.SetOutput(l)
 	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds)
 
 	// Create pipe to capture os.Stdout
@@ -132,6 +132,26 @@ func newLogger(cfg Config) (*Logger, error) {
 	fmt.Fprintf(l.multiWriter, "\n")
 
 	return l, nil
+}
+
+// Write emits a complete structured or legacy log record to the existing
+// local/stdout destination under the same lock used by captured stdout.
+func (l *Logger) Write(record []byte) (int, error) {
+	if l == nil {
+		return len(record), nil
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.multiWriter.Write(record)
+}
+
+// Writer returns the initialized process log destination. Telemetry logs use
+// this writer so file/stdout collection remains the only log export path.
+func Writer() io.Writer {
+	if instance == nil {
+		return log.Writer()
+	}
+	return instance
 }
 
 // generateLogFilePath creates a unique log file path with timestamp

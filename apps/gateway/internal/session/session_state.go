@@ -1,7 +1,10 @@
 package session
 
 import (
+	"context"
 	"time"
+
+	"webrtc-sip-gateway/internal/telemetry"
 )
 
 // SessionState represents the state of a call session
@@ -25,15 +28,68 @@ func (s *Session) UpdateState(state SessionState) {
 // SetState sets the session state in a thread-safe manner
 func (s *Session) SetState(state SessionState) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	previous := s.State
 	s.State = state
-	s.UpdatedAt = time.Now()
+	now := time.Now()
+	s.UpdatedAt = now
+	started, startedAt := s.beginCallTelemetryLocked(now)
+	direction := s.Direction
+	recordSetup := state == StateActive && previous != StateActive && s.telemetryCallStarted && !s.telemetrySetupRecorded && !s.telemetryTransferred
+	setupDuration := time.Duration(0)
+	if recordSetup {
+		s.telemetrySetupRecorded = true
+		s.telemetryCallActiveAt = now
+		setupDuration = now.Sub(s.telemetryCallStartedAt)
+	}
+	recordCompleted := state == StateEnded && s.telemetryCallStarted && !s.telemetryCallCompleted && !s.telemetryTransferred
+	duration := time.Duration(0)
+	outcome, reason := "success", "none"
+	if recordCompleted {
+		s.telemetryCallCompleted = true
+		duration = now.Sub(s.telemetryCallStartedAt)
+		outcome, reason = terminalTelemetryOutcome(s.TerminalAction, s.TerminalReason)
+	}
 	if state == StateEnded {
 		s.clearSIPVideoIDRCacheLocked()
 		if s.cancel != nil {
 			s.cancel()
 		}
 	}
+	s.mu.Unlock()
+	if started {
+		s.emitCallStartedTelemetry(direction, startedAt)
+	}
+	if recordSetup {
+		ctx, span := telemetry.StartCallSpan(context.Background(), "setup")
+		telemetry.SetSpanCorrelation(span, telemetry.Correlation{SessionID: s.ID})
+		telemetry.SetCallDirection(span, direction)
+		telemetry.EndSpan(span, "success", "none", 0)
+		telemetry.RecordCallSetup(ctx, direction, "success", setupDuration)
+		_ = telemetry.Log(ctx, telemetry.LogEvent{Severity: telemetry.SeverityInfo, Component: "call", Name: "call.setup.completed", Outcome: "success", Reason: "none", Correlation: telemetry.Correlation{SessionID: s.ID}, Measurements: []telemetry.Measurement{telemetry.DurationMilliseconds("duration_ms", setupDuration)}})
+	}
+	if recordCompleted {
+		ctx, span := telemetry.StartCallSpan(context.Background(), "completed")
+		telemetry.SetSpanCorrelation(span, telemetry.Correlation{SessionID: s.ID})
+		telemetry.SetCallDirection(span, direction)
+		telemetry.EndSpan(span, outcome, reason, 0)
+		telemetry.RecordCallCompleted(ctx, direction, outcome, reason, -1, duration)
+		_ = telemetry.Log(ctx, telemetry.LogEvent{Severity: telemetry.SeverityInfo, Component: "call", Name: "call.completed", Outcome: outcome, Reason: reason, Correlation: telemetry.Correlation{SessionID: s.ID}, Measurements: []telemetry.Measurement{telemetry.DurationMilliseconds("duration_ms", duration)}})
+	}
+}
+
+func terminalTelemetryOutcome(action, terminalReason string) (string, string) {
+	switch action {
+	case "reject":
+		return "rejected", "remote_rejected"
+	case "timeout":
+		return "timeout", "deadline_exceeded"
+	case "cancel":
+		return "cancelled", "none"
+	}
+	if terminalReason == "ice_failed" || terminalReason == "ice_failed_pre_sip" {
+		return "failure", "peer_closed"
+	}
+	return "success", "none"
 }
 
 // GetState returns the current state of the session

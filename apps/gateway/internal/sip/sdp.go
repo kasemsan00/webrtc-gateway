@@ -246,7 +246,11 @@ a=rtcp-mux
 		}
 		profileNote = fmt.Sprintf("AVPF (%s)", strings.Join(profiles, ", "))
 	}
-	fmt.Printf("=== SDP Offer to Asterisk (Plain RTP, no SRTP, Opus PT=%d, Profile=%s) ===\n%s\n=============================\n", opusPT, profileNote, sdp)
+	if s.config.DebugSIPInvite {
+		fmt.Printf("=== SDP Offer to Asterisk (debug; Plain RTP, no SRTP, Opus PT=%d, Profile=%s) ===\n%s\n=============================\n", opusPT, profileNote, sdp)
+	} else {
+		fmt.Printf("SDP offer prepared: opusPT=%d profile=%s video=%v bytes=%d\n", opusPT, profileNote, includeVideo, len(sdp))
+	}
 	if includeVideo && s.config.VideoUseAVPF {
 		fmt.Printf("📋 AVPF SDP Details: Profile=%s, RTCP Feedback: ccm fir / nack / nack pli\n", videoProfile)
 	}

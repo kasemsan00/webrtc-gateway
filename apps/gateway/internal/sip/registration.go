@@ -9,6 +9,8 @@ import (
 
 	"github.com/emiago/sipgo"
 	"github.com/emiago/sipgo/sip"
+
+	"webrtc-sip-gateway/internal/telemetry"
 )
 
 // RegisterParams holds parameters for creating SIP REGISTER requests
@@ -70,6 +72,14 @@ func (s *Server) CreateClient() error {
 // This function is safe to call multiple times; it ensures only one refresh
 // goroutine runs at a time.
 func (s *Server) Register(ctx context.Context) error {
+	started := time.Now()
+	spanCtx, span := telemetry.StartSIPSpan(ctx, "REGISTER")
+	err := s.register(ctx)
+	telemetry.EndSIP(spanCtx, span, "REGISTER", started, 0, err)
+	return err
+}
+
+func (s *Server) register(ctx context.Context) error {
 	if s.sipClient == nil || s.config.Domain == "" || s.config.Username == "" {
 		fmt.Println("SIP Registration skipped - not configured")
 		return nil
@@ -120,7 +130,7 @@ func (s *Server) doRegister(ctx context.Context) error {
 	fmt.Printf("Received response from server\n")
 
 	// Display full response from Asterisk
-	logSIPResponse(res, "Response from Asterisk")
+	logSIPResponse(res, "Response from Asterisk", s.config.DebugSIPInvite)
 
 	// Handle response
 	switch res.StatusCode {
@@ -242,7 +252,7 @@ func (s *Server) registerWithAuth(ctx context.Context, originalReq *sip.Request,
 	}
 
 	// Display authenticated response from Asterisk
-	logSIPResponse(res, "Authenticated Response from Asterisk")
+	logSIPResponse(res, "Authenticated Response from Asterisk", s.config.DebugSIPInvite)
 
 	// Handle response
 	if res.StatusCode == 200 {
@@ -288,9 +298,14 @@ func (s *Server) StopRegistration() {
 }
 
 // logSIPResponse logs SIP response headers in a consistent format
-func logSIPResponse(res *sip.Response, title string) {
+func logSIPResponse(res *sip.Response, title string, debug bool) {
 	fmt.Printf("\n--- %s ---\n", title)
 	fmt.Printf("Status: %d %s\n", res.StatusCode, res.Reason)
+	if !debug {
+		fmt.Printf("Headers: omitted; bodyBytes=%d\n", len(res.Body()))
+		fmt.Printf("--------------------------------------------\n\n")
+		return
+	}
 	fmt.Printf("Headers:\n")
 
 	headersToLog := []string{"Via", "From", "To", "Call-ID", "CSeq", "Contact", "Expires", "Date", "Server", "WWW-Authenticate"}

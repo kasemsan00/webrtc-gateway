@@ -53,6 +53,7 @@ type Server struct {
 	incomingCounters   map[string]int64
 	diagnosticLimits   map[string]*diagnosticRateState
 	healthProviders    map[string]OperationalHealthProvider
+	mediaTelemetry     map[string]mediaRecoveryCounters
 	startTime          time.Time
 	mu                 sync.RWMutex
 }
@@ -214,6 +215,7 @@ func NewServer(cfg config.APIConfig, turnCfg config.TURNConfig, gatewayCfg confi
 		incomingCounters:   make(map[string]int64),
 		diagnosticLimits:   make(map[string]*diagnosticRateState),
 		healthProviders:    make(map[string]OperationalHealthProvider),
+		mediaTelemetry:     make(map[string]mediaRecoveryCounters),
 		startTime:          time.Now(),
 	}
 }
@@ -283,6 +285,7 @@ func (s *Server) Start(ctx context.Context) error {
 
 	// Enable CORS
 	router.Use(s.corsMiddleware)
+	router.Use(s.telemetryHTTPMiddleware)
 
 	// WebSocket endpoint
 	if s.config.EnableWS {
@@ -304,14 +307,16 @@ func (s *Server) Start(ctx context.Context) error {
 		router.HandleFunc("/api/client-diagnostics/sessions/{sessionId}/events", s.handleListClientDiagnosticSessionEvents).Methods("GET", "OPTIONS")
 		router.HandleFunc("/api/client-diagnostics/sessions/{sessionId}/payloads", s.handleListClientDiagnosticSessionPayloads).Methods("GET", "OPTIONS")
 		router.HandleFunc("/api/client-diagnostics/payloads/{payloadId}", s.handleGetClientDiagnosticPayload).Methods("GET", "OPTIONS")
+		// Keep all read-only gateway log endpoints available for unauthenticated
+		// operational troubleshooting. Non-log API routes remain protected.
+		router.HandleFunc("/api/logs", s.handleListLogFiles).Methods("GET", "OPTIONS")
+		router.HandleFunc("/api/logs/current", s.handleGetCurrentLog).Methods("GET", "OPTIONS")
+		router.HandleFunc("/api/logs/{name}", s.handleGetLogFile).Methods("GET", "OPTIONS")
 
 		api := router.PathPrefix("/api").Subrouter()
 		if s.restAuthEnabled() {
 			api.Use(s.authMiddleware)
 		}
-		api.HandleFunc("/logs", s.handleListLogFiles).Methods("GET", "OPTIONS")
-		api.HandleFunc("/logs/current", s.handleGetCurrentLog).Methods("GET", "OPTIONS")
-		api.HandleFunc("/logs/{name}", s.handleGetLogFile).Methods("GET", "OPTIONS")
 		api.HandleFunc("/offer", s.handleOffer).Methods("POST", "OPTIONS")
 		api.HandleFunc("/call", s.handleCall).Methods("POST", "OPTIONS")
 		api.HandleFunc("/hangup/{sessionId}", s.handleHangup).Methods("POST", "OPTIONS")

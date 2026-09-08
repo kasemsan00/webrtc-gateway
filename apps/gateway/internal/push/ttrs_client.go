@@ -14,6 +14,8 @@ import (
 
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/clientcredentials"
+
+	"webrtc-sip-gateway/internal/telemetry"
 )
 
 // NotificationEntry represents a single notification record from the TTRS API.
@@ -63,7 +65,11 @@ func NewTTRSClient(baseURL, tokenURL, grantType, clientID, clientSecret string, 
 }
 
 // FetchNotifications retrieves notification entries for a given user ID.
-func (c *TTRSClient) FetchNotifications(ctx context.Context, userID string) ([]NotificationEntry, error) {
+func (c *TTRSClient) FetchNotifications(ctx context.Context, userID string) (entries []NotificationEntry, err error) {
+	started := time.Now()
+	ctx, span := telemetry.StartDependencySpan(ctx, "push_ttrs")
+	defer func() { telemetry.EndDependency(ctx, span, "push_ttrs", started, err) }()
+
 	url := fmt.Sprintf("%s/employees/v3/accounts/%s/notifications", c.baseURL, userID)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -72,7 +78,8 @@ func (c *TTRSClient) FetchNotifications(ctx context.Context, userID string) ([]N
 	}
 
 	if c.tokenSource != nil {
-		token, err := c.tokenSource.Token()
+		var token *oauth2.Token
+		token, err = c.tokenSource.Token()
 		if err != nil {
 			return nil, fmt.Errorf("ttrs: obtain token: %w", err)
 		}
@@ -99,7 +106,7 @@ func (c *TTRSClient) FetchNotifications(ctx context.Context, userID string) ([]N
 	}
 
 	var result NotificationResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err = json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("ttrs: decode response: %w", err)
 	}
 

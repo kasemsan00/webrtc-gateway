@@ -33,7 +33,9 @@ Copy per-app env examples before running:
 - `apps/frontend/.env.example` → `.env`
 - `apps/gateway/.env.example` → `.env`
 
-Gateway env is loaded via `godotenv`; `AUTH_ENABLE` triggers fail-fast startup checks for JWKS, issuer, and audience.
+Gateway env is loaded via `godotenv`; `AUTH_ENABLE` requires at least one user
+or employee realm JWKS URL and triggers fail-fast JWKS prefetch. Issuer and
+audience are enforced when configured for that realm.
 
 ## Architecture
 

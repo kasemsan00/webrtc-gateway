@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"webrtc-sip-gateway/internal/config"
+	"webrtc-sip-gateway/internal/telemetry"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -419,8 +420,11 @@ func (s *logStore) LogEvent(event *Event) {
 	select {
 	case s.eventQueue <- event:
 		s.eventAccepted.Add(1)
+		telemetry.RecordPersistenceQueue("events", len(s.eventQueue), cap(s.eventQueue))
 	default:
 		s.eventDropped.Add(1)
+		telemetry.RecordPersistenceQueue("events", len(s.eventQueue), cap(s.eventQueue))
+		telemetry.RecordPersistenceDrop(context.Background(), "events")
 		// Queue full - drop event and log warning
 		fmt.Printf("⚠️ Event queue full, dropping event: %s/%s\n", event.Category, event.Name)
 	}
@@ -586,8 +590,11 @@ func (s *logStore) RecordStats(stats *StatsRecord) {
 	select {
 	case s.statsQueue <- stats:
 		s.statsAccepted.Add(1)
+		telemetry.RecordPersistenceQueue("stats", len(s.statsQueue), cap(s.statsQueue))
 	default:
 		s.statsDropped.Add(1)
+		telemetry.RecordPersistenceQueue("stats", len(s.statsQueue), cap(s.statsQueue))
+		telemetry.RecordPersistenceDrop(context.Background(), "stats")
 		// Queue full - drop stats and log warning
 		fmt.Printf("⚠️ Stats queue full, dropping stats for session: %s\n", stats.SessionID)
 	}

@@ -546,6 +546,55 @@ func gateTestAU(generation int, idr, parameterSetsReady bool, ssrc uint32) Norma
 	return gateTestAUWithPackets(generation, idr, parameterSetsReady, ssrc, MinSwitchVideoGateIDRPackets)
 }
 
+func TestSwitchVideoGateHoldsIDRWhileSwitchRenegotiationPending(t *testing.T) {
+	start := time.Unix(1_700_000_000, 0)
+	sess := &Session{VideoAUNormalizeEnabled: true, SwitchGeneration: 3}
+	sess.StartSwitchVideoGate(3, start, "switch")
+	if !sess.TryClaimSwitchVideoRenegotiation(3) {
+		t.Fatal("expected renegotiation claim")
+	}
+
+	full := gateTestAUWithPackets(3, true, true, 99, MinSwitchVideoGateIDRPackets)
+	held := sess.EvaluateSwitchVideoAccessUnit(full, start.Add(400*time.Millisecond))
+	if held.Emit || held.Reason != "renegotiate-pending" {
+		t.Fatalf("expected renegotiate-pending hold, got %+v", held)
+	}
+
+	started, ok := sess.TryBeginMidCallRenegotiation(MidCallRenegotiationRequest{
+		Source: MidCallRenegotiationSourceSwitchMessage,
+		Method: "WS",
+	})
+	if !ok {
+		t.Fatal("expected pending switch renegotiation")
+	}
+	if !sess.CompleteMidCallRenegotiation(started.ID, "v=0") {
+		t.Fatal("expected complete")
+	}
+
+	reserved := sess.EvaluateSwitchVideoAccessUnit(full, start.Add(500*time.Millisecond))
+	if !reserved.Emit || reserved.Reason != "complete-idr-reserved" {
+		t.Fatalf("expected IDR after client answer, got %+v", reserved)
+	}
+}
+
+func TestSwitchVideoGateDoesNotHoldForSIPReinvite(t *testing.T) {
+	start := time.Unix(1_700_000_000, 0)
+	sess := &Session{VideoAUNormalizeEnabled: true, SwitchGeneration: 3}
+	sess.StartSwitchVideoGate(3, start, "switch")
+	if _, ok := sess.TryBeginMidCallRenegotiation(MidCallRenegotiationRequest{
+		Source: "sip_reinvite",
+		Method: "INVITE",
+	}); !ok {
+		t.Fatal("expected SIP re-INVITE pending")
+	}
+
+	full := gateTestAUWithPackets(3, true, true, 99, MinSwitchVideoGateIDRPackets)
+	reserved := sess.EvaluateSwitchVideoAccessUnit(full, start.Add(400*time.Millisecond))
+	if !reserved.Emit || reserved.Reason != "complete-idr-reserved" {
+		t.Fatalf("SIP re-INVITE must not block @switch IDR, got %+v", reserved)
+	}
+}
+
 func gateTestAUWithPackets(generation int, idr, parameterSetsReady bool, ssrc uint32, n int) NormalizedH264AccessUnit {
 	packets := make([]*rtp.Packet, n)
 	for i := range packets {

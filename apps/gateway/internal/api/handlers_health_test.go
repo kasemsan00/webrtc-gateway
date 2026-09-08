@@ -134,6 +134,20 @@ func TestDetailedHealthRedactsUnsafeProviderReason(t *testing.T) {
 	}
 }
 
+func TestTelemetryHealthConstructorBoundsStateDetailsAndTimestamps(t *testing.T) {
+	component := NewHealthComponentResponse(
+		"connected", "none", "2026-09-07T00:00:00Z", "2026-09-06T23:59:00Z",
+		map[string]uint64{"depth": 1, "capacity": 2, "accepted": 3, "dropped": 4, "exported": 5, "failed": 6},
+	)
+	if component.State != healthConnected || component.Details["exported"] != 5 || component.LastFailureAt == "" {
+		t.Fatalf("unexpected bounded telemetry component: %#v", component)
+	}
+	unsafe := NewHealthComponentResponse("secret-state", "postgres://user:secret@example/db", "", "", nil)
+	if unsafe.State != healthUnknown || unsafe.Reason != "" {
+		t.Fatalf("unsafe health fields were not bounded: %#v", unsafe)
+	}
+}
+
 func TestSessionOverviewAllowListsPersistedFields(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	trunkID := int64(42)

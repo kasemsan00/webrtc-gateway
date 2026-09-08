@@ -1,7 +1,9 @@
 # Gateway WebSocket Contract
 
 Source of truth for `/ws`, `/ws-public`, and `/ws-agent` JSON messages.
-When changing message types, also update `internal/api/ws_dispatch.go` and frontend `gateway-store.ts`.
+When changing message types, also update `internal/api/ws_dispatch.go`, the
+relevant `internal/api/ws_*.go` handler, and each client implementation that
+consumes the contract.
 
 ---
 
@@ -20,7 +22,28 @@ Auth behavior:
   - `notify_user_id` is bound from verified JWT `sub`, and `last_online_platform` is updated from `devicePlatform`;
   - provisioning or SIP REGISTER failure rejects the WebSocket connection;
   - after successful provisioning and SIP REGISTER, the gateway sends `trunk_resolved` with `trunkId` and `trunkPublicId`.
-  - Mobile presence is sticky: WebSocket disconnect does **not** SIP UNREGISTER (push wake remains available).
+- Mobile presence is sticky: WebSocket disconnect does **not** SIP UNREGISTER (push wake remains available).
+
+---
+
+Endpoint: `/ws-public` (opt-in via `API_ENABLE_PUBLIC_WS=true`)
+Payload format: JSON
+
+Auth and scope:
+
+- No `access_token`; this endpoint is limited to one public SIP session owned by
+  the connection.
+- `call` requires per-call `sipDomain`, `sipUsername`, and `sipPassword`, with
+  optional `sipPort`. Trunk IDs are rejected.
+- Before the session is established, only `offer` and `ping` are generally
+  accepted. Session-scoped call/media commands must target the connection's own
+  `sessionId`.
+- Supported session messages are `call`, `ice`, `hangup`, `dtmf`,
+  `request_keyframe`, `renegotiate_answer`, `translate`, `translate_stop`,
+  `send_message`, and `resume`, subject to their normal validation.
+- `media_health` is obsolete: although a legacy policy entry still recognizes
+  the name, the dispatcher intentionally returns `Unknown message type` and the
+  message is not part of the supported contract.
 
 ---
 
@@ -65,9 +88,18 @@ Auth behavior:
 - `resume` -> requires `sessionId`, optional `sdp`
 - `trunk_resolve` -> requires `sipDomain`, `sipUsername`, `sipPassword`, optional `sipPort` (resolve-only; no auto-create)
   - Mobile clients may include `devicePlatform` (`ios` or `android`) so the gateway can persist the latest online platform for incoming push routing.
+- `trunk_push_token` -> authenticated `/ws` only after trunk resolution;
+  requires `pnAppId`, `pnType:"apple"`, and a hexadecimal `pnToken` of 32–256
+  characters; optional `devicePlatform` must be `ios` or `android`, and optional
+  `trunkId` or `trunkPublicId` must match the connection's resolved trunk.
 - `ping` -> keepalive
 - `request_keyframe` -> requires `sessionId` (or the connection's active session) and uses bounded legacy SIP-directed recovery.
+- `renegotiate_answer` -> requires the owning `sessionId` and matching
+  `renegotiationId`; includes optional `sdp`, `status`, and `reason`.
 - `client_state` -> optional `availability`, `callState`, `sessionId`; multi-call clients also send `multiCall: true` and `activeCalls`.
+- `translate` -> enables translation for the owning session; optional
+  `sourceLang`, `targetLang`, and `ttsVoice` override configured defaults.
+- `translate_stop` -> disables translation for the owning session.
 
 ### Server -> Client message types
 
@@ -78,12 +110,19 @@ Auth behavior:
   - In-dialog MESSAGE is sent only to the WebSocket client bound to the matching active session.
   - Out-of-dialog MESSAGE (no matching call session, e.g. PBX DND `DND0`/`DND1`/`DND2`) is sent to every resolved `/ws` or `/ws-agent` client whose trunk username matches the SIP `To` user. `sessionId` is omitted.
 - `renegotiate`, `renegotiate_result`
-  - `renegotiate` is additive mid-call WebRTC assistance for SIP re-INVITE/UPDATE media changes and for `@switch` gate release (`reason=agent_switch`). It includes `sessionId`, `renegotiationId`, optional `sdp`, `reason`, `mediaDirection`, `hasVideo`, and `requiresAnswer`.
-  - Clients that support it respond with `renegotiate_answer` (`sessionId`, `renegotiationId`, optional `sdp`, `status`, optional `reason`). For `agent_switch`, the gateway applies the answer SDP to its active PeerConnection.
+  - `renegotiate` is additive mid-call WebRTC assistance for SIP re-INVITE/UPDATE media changes and for an accepted `@switch` MESSAGE (`reason=agent_switch`). It includes `sessionId`, `renegotiationId`, optional `sdp`, `reason`, `mediaDirection`, `hasVideo`, and `requiresAnswer`.
+  - Clients that support it respond with `renegotiate_answer` (`sessionId`, `renegotiationId`, optional `sdp`, `status`, optional `reason`). For `agent_switch`, the gateway applies the answer SDP to its active PeerConnection. SIP→WebRTC video is held until that answer is applied.
 - `resumed`, `resume_failed`, `resume_redirect`
 - `trunk_resolved`, `trunk_redirect`, `trunk_not_found`, `trunk_not_ready`
   - `trunk_resolved` now returns both `trunkId` and `trunkPublicId`
 - `pong`, `error`
+- `cancel` -> cancels a previously presented incoming call and includes
+  `sessionId` plus `reason`.
+- `translation_caption` -> SIP-to-WebRTC caption event with `sessionId`,
+  direction, source/target languages, recognized/translated text, and
+  `isFinal`.
+- `translate`, `translate_stop` -> acknowledge translation enabled/disabled
+  state for the session.
 
 ### Outbound call progress (`state` / `ringing`)
 
@@ -133,6 +172,7 @@ Video `receiving` is emitted once per session when the gateway has parameter set
 
 If you add/change a message type, update all of:
 
-1. `internal/api/server.go` switch + payload struct
-2. Frontend client handlers/senders in `frontend` (`src/features/gateway/store/gateway-store.ts`)
+1. `internal/api/ws_dispatch.go`, the relevant `internal/api/ws_*.go` handler,
+   and the `WSMessage` payload in `internal/api/server.go`
+2. TTRS VRI client handlers/types in `lib/gateway/`
 3. this document

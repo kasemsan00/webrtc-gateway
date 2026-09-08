@@ -12,6 +12,7 @@ import (
 
 	"webrtc-sip-gateway/internal/logstore"
 	"webrtc-sip-gateway/internal/session"
+	"webrtc-sip-gateway/internal/telemetry"
 )
 
 var (
@@ -93,6 +94,17 @@ func (s *Server) resolveSessionSIPParams(sess *session.Session) (sipAuthParams, 
 
 // MakeCall initiates an outbound SIP INVITE
 func (s *Server) MakeCall(destination, from string, sess *session.Session) error {
+	started := time.Now()
+	ctx, span := telemetry.StartSIPSpan(context.Background(), "INVITE")
+	if sess != nil {
+		telemetry.SetSpanCorrelation(span, telemetry.Correlation{SessionID: sess.ID})
+	}
+	err := s.makeCall(destination, from, sess)
+	telemetry.EndSIP(ctx, span, "INVITE", started, 0, err)
+	return err
+}
+
+func (s *Server) makeCall(destination, from string, sess *session.Session) error {
 	if s.sipClient == nil {
 		return fmt.Errorf("SIP client not initialized")
 	}
@@ -494,16 +506,23 @@ func (s *Server) handleInviteAuth(ctx context.Context, originalReq *sip.Request,
 
 // Hangup terminates a SIP call by sending BYE to Asterisk
 func (s *Server) Hangup(sess *session.Session) error {
+	started := time.Now()
+	ctx, span := telemetry.StartSIPSpan(context.Background(), "BYE")
+	if sess != nil {
+		telemetry.SetSpanCorrelation(span, telemetry.Correlation{SessionID: sess.ID})
+	}
+	err := s.hangup(sess)
+	telemetry.EndSIP(ctx, span, "BYE", started, 0, err)
+	return err
+}
+
+func (s *Server) hangup(sess *session.Session) error {
 	fmt.Printf("\n=== [%s] Hangup Request ===\n", sess.ID)
 	direction, from, to, sipCallID := sess.GetCallInfo()
 	fromTag, toTag, remoteContact, _, cseq, _, _ := sess.GetSIPDialogState()
 	fmt.Printf("[%s] Direction: '%s'\n", sess.ID, direction)
-	fmt.Printf("[%s] SIPCallID: '%s'\n", sess.ID, sipCallID)
-	fmt.Printf("[%s] SIPFromTag: '%s'\n", sess.ID, fromTag)
-	fmt.Printf("[%s] SIPToTag: '%s'\n", sess.ID, toTag)
-	fmt.Printf("[%s] SIPRemoteContact: '%s'\n", sess.ID, remoteContact)
 	fmt.Printf("[%s] SIPCSeq: %d\n", sess.ID, cseq)
-	fmt.Printf("[%s] From: '%s', To: '%s'\n", sess.ID, from, to)
+	fmt.Printf("[%s] Dialog metadata present: callID=%v fromTag=%v toTag=%v contact=%v from=%v to=%v\n", sess.ID, sipCallID != "", fromTag != "", toTag != "", remoteContact != "", from != "", to != "")
 	fmt.Printf("[%s] sipClient is nil: %v\n", sess.ID, s.sipClient == nil)
 
 	if s.sipClient == nil {
@@ -690,6 +709,17 @@ func (s *Server) CancelPendingCall(sess *session.Session) error {
 
 // AcceptCall accepts an incoming SIP call by sending 200 OK
 func (s *Server) AcceptCall(sess *session.Session) error {
+	started := time.Now()
+	ctx, span := telemetry.StartSIPSpan(context.Background(), "INVITE")
+	if sess != nil {
+		telemetry.SetSpanCorrelation(span, telemetry.Correlation{SessionID: sess.ID})
+	}
+	err := s.acceptCall(sess)
+	telemetry.EndSIP(ctx, span, "INVITE", started, 200, err)
+	return err
+}
+
+func (s *Server) acceptCall(sess *session.Session) error {
 	fmt.Printf("\n=== [%s] Accept Incoming Call ===\n", sess.ID)
 
 	// Ensure no stale transports from a previous call remain bound to this session.
@@ -894,6 +924,21 @@ func isBenignIncomingRejectRespondError(err error) bool {
 
 // RejectCall rejects an incoming SIP call by sending 486 Busy Here
 func (s *Server) RejectCall(sess *session.Session, reason string) error {
+	started := time.Now()
+	ctx, span := telemetry.StartSIPSpan(context.Background(), "INVITE")
+	if sess != nil {
+		telemetry.SetSpanCorrelation(span, telemetry.Correlation{SessionID: sess.ID})
+	}
+	err := s.rejectCall(sess, reason)
+	status := 486
+	if reason == "no_answer" || reason == "unavailable" || reason == "offline" {
+		status = 480
+	}
+	telemetry.EndSIP(ctx, span, "INVITE", started, status, err)
+	return err
+}
+
+func (s *Server) rejectCall(sess *session.Session, reason string) error {
 	fmt.Printf("\n=== [%s] Reject Incoming Call ===\n", sess.ID)
 
 	// Get stored SIP transaction
@@ -1253,7 +1298,9 @@ func (s *Server) createBYERequest(sess *session.Session) (*sip.Request, error) {
 	}
 	resolvedIP := ips[0].String()
 
-	fmt.Printf("[%s] BYE Request-URI: %s\n", sess.ID, recipient.String())
+	if s.config.DebugSIPInvite {
+		fmt.Printf("[%s] BYE Request-URI (debug): %s\n", sess.ID, recipient.String())
+	}
 
 	// Create BYE request
 	req := sip.NewRequest(sip.BYE, recipient)
@@ -1383,12 +1430,13 @@ func (s *Server) createBYERequest(sess *session.Session) (*sip.Request, error) {
 	// CRITICAL: Force TCP transport to prevent sipgo from switching transports
 	req.SetTransport("TCP")
 
-	fmt.Printf("[%s] Created BYE request - Call-ID: %s, CSeq: %d\n", sess.ID, sipCallID, cseq)
+	fmt.Printf("[%s] Created BYE request - CSeq: %d\n", sess.ID, cseq)
 
-	// Print full BYE request for debugging
-	fmt.Printf("\n=== BYE Request (Session %s) ===\n", sess.ID)
-	fmt.Printf("%s\n", req.String())
-	fmt.Printf("================================\n\n")
+	if s.config.DebugSIPInvite {
+		fmt.Printf("\n=== BYE Request (debug; Session %s) ===\n", sess.ID)
+		fmt.Printf("%s\n", req.String())
+		fmt.Printf("================================\n\n")
+	}
 
 	return req, nil
 }
@@ -1504,13 +1552,21 @@ func (s *Server) completeOutboundInvite200(
 	}
 
 	sess.SetSIPDialogState(fromTag, dialogState.ToTag, dialogState.RemoteContact, params.Domain, params.Port, dialogCSeq, dialogState.RouteSet)
-	fmt.Printf("[%s] Dialog state captured - FromTag: %s, ToTag: %s, Contact: %s, RouteSet: %v\n",
-		sess.ID, fromTag, dialogState.ToTag, dialogState.RemoteContact, dialogState.RouteSet)
+	if s.config.DebugSIPInvite {
+		fmt.Printf("[%s] Dialog state captured (debug) - FromTag: %s, ToTag: %s, Contact: %s, RouteSet: %v\n",
+			sess.ID, fromTag, dialogState.ToTag, dialogState.RemoteContact, dialogState.RouteSet)
+	} else {
+		fmt.Printf("[%s] Dialog state captured: routeCount=%d contactPresent=%v\n", sess.ID, len(dialogState.RouteSet), dialogState.RemoteContact != "")
+	}
 
 	opusUpdated := false
 	var opusPT uint8
 	if len(res.Body()) > 0 {
-		fmt.Printf("=== SDP Answer from Asterisk ===\n%s\n================================\n", string(res.Body()))
+		if s.config.DebugSIPInvite {
+			fmt.Printf("=== SDP Answer from Asterisk (debug) ===\n%s\n================================\n", string(res.Body()))
+		} else {
+			fmt.Printf("SDP answer received: bytes=%d\n", len(res.Body()))
+		}
 		opusPT = parseOpusPayloadType(res.Body())
 		if opusPT > 0 && opusPT != sess.SIPOpusPT {
 			fmt.Printf("[%s] 🎵 Updated Opus PT from answer: %d → %d\n", sess.ID, sess.SIPOpusPT, opusPT)

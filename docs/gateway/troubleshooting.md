@@ -83,7 +83,14 @@ Do not bypass RTPengine in production for this diagnosis.
 
 Checkpoints:
 
-- Verify `AUTH_ENABLE`, `AUTH_JWKS_URL`, `AUTH_JWT_ISSUER`, `AUTH_JWT_AUDIENCE` are set correctly.
+- Verify `AUTH_ENABLE` and at least one configured realm: user
+  (`AUTH_TTRS_USERS_JWKS_URL`, `AUTH_TTRS_USERS_JWT_ISSUER`,
+  `AUTH_TTRS_USERS_JWT_AUDIENCE`) or employee
+  (`AUTH_TTRS_EMPLOYEE_JWKS_URL`, `AUTH_TTRS_EMPLOYEE_JWT_ISSUER`,
+  `AUTH_TTRS_EMPLOYEE_JWT_AUDIENCE`). Issuer and audience checks apply when
+  their values are configured.
+- For REST operations, remember that a non-empty `FRONTEND_PASSWORD` enables
+  bearer authentication even when `AUTH_ENABLE=false`.
 - Verify token `iss` and `aud` match configured values exactly.
 - Verify token is not expired (`exp`) and is already valid (`nbf`).
 - Verify JWT header `kid` exists in current JWKS (gateway auto-refreshes JWKS once on unknown `kid`).

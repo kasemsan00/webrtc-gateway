@@ -41,7 +41,7 @@ Environment variables (see `.env.example`):
 | `TRANSLATOR_ADDR` | `localhost:5000` | gRPC server address |
 | `TRANSLATOR_SOURCE_LANG` | `en-US` | Source language code/locale |
 | `TRANSLATOR_TARGET_LANG` | `th` | Target language code |
-| `TRANSLATOR_TTS_VOICE` | `th-TH-Sarawut` | Default/fallback TTS voice name |
+| `TRANSLATOR_TTS_VOICE` | `th-TH-PremwadeeNeural` | Default/fallback TTS voice name |
 | `TRANSLATOR_OPUS_BITRATE` | `24000` | Opus encoding bitrate |
 
 ### Example `.env`
@@ -50,7 +50,7 @@ TRANSLATOR_ENABLE=true
 TRANSLATOR_ADDR=192.168.1.100:5000
 TRANSLATOR_SOURCE_LANG=en-US
 TRANSLATOR_TARGET_LANG=th
-TRANSLATOR_TTS_VOICE=th-TH-Sarawut
+TRANSLATOR_TTS_VOICE=th-TH-PremwadeeNeural
 TRANSLATOR_OPUS_BITRATE=24000
 ```
 
@@ -66,7 +66,7 @@ TranslationRequest {
   source_language = "en-US"
   target_language = "th"
   return_audio = true
-  tts_voice_name = "th-TH-Sarawut"
+  tts_voice_name = "th-TH-PremwadeeNeural"
   audio_data = <PCM int16 bytes>
   mode = MODE_S2S
 }
@@ -78,7 +78,7 @@ TranslationResult {
   recognized_text = "..."
   translated_text = "..."
   audio_data = <PCM int16 bytes>
-  tts_voice_used = "th-TH-Sarawut"
+  tts_voice_used = "th-TH-PremwadeeNeural"
 }
 ```
 
@@ -97,13 +97,13 @@ Client → Server:
   "sessionId": "AbCdEfGh1234",
   "sourceLang": "en",
   "targetLang": "th",
-  "ttsVoice": "th-TH-Sarawut"
+  "ttsVoice": "th-TH-PremwadeeNeural"
 }
 ```
 
 For this example:
 
-- WebRTC -> SIP/Linphone uses `en -> th` with `th-TH-Sarawut`.
+- WebRTC -> SIP/Linphone uses `en -> th` with `th-TH-PremwadeeNeural`.
 - SIP/Linphone -> WebRTC uses `th -> en` with an English voice selected by the gateway.
 
 Server → Client:
@@ -114,7 +114,7 @@ Server → Client:
   "state": "enabled",
   "sourceLang": "en",
   "targetLang": "th",
-  "ttsVoice": "th-TH-Sarawut"
+  "ttsVoice": "th-TH-PremwadeeNeural"
 }
 ```
 
@@ -175,7 +175,7 @@ The SIP -> WebRTC direction automatically selects a TTS voice from the reverse t
 | Target language | Voice |
 |-----------------|-------|
 | `en`, `en-*` | `en-US-AriaNeural` |
-| `th`, `th-*` | `th-TH-Sarawut` |
+| `th`, `th-*` | `th-TH-PremwadeeNeural` |
 | Other | `TRANSLATOR_TTS_VOICE`, or `en-US-AriaNeural` when unset |
 
 ## Key Source Files
@@ -192,8 +192,8 @@ The SIP -> WebRTC direction automatically selects a TTS voice from the reverse t
 | `internal/session/session.go` | Bidirectional translator state plus `SetTranslator()`, `EnableTranslator()`, `DisableTranslator()`, `ProcessInboundTranslator()` |
 | `internal/session/rtp_forward.go` | WebRTC -> SIP audio fork to `S2SPipeline.Process()` |
 | `internal/sip/rtp.go` | SIP -> WebRTC audio fork to `ProcessInboundTranslator()` |
-| `internal/api/server.go` | WS message dispatch for `translate`/`translate_stop` |
-| `internal/api/handlers.go` | `handleWSTranslate()`, `handleWSTranslateStop()`, reverse direction and TTS voice selection |
+| `internal/api/ws_dispatch.go` | WS message dispatch for `translate`/`translate_stop` |
+| `internal/api/ws_translate.go` | `handleWSTranslate()`, `handleWSTranslateStop()`, reverse direction and TTS voice selection |
 | `internal/config/config.go` | `TranslatorConfig` struct + env loading |
 | `main.go` | Translator client init + health check |
 | `docs/bidirectional-s2s-translation.md` | Phase 1 and Phase 2 implementation plan |

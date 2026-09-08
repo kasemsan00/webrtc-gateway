@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 
 	"webrtc-sip-gateway/internal/auth"
 	"webrtc-sip-gateway/internal/session"
+	"webrtc-sip-gateway/internal/telemetry"
 )
 
 const (
@@ -116,6 +118,8 @@ func (s *Server) handleWebSocketConn(w http.ResponseWriter, r *http.Request, pub
 	s.wsConnections[client] = struct{}{}
 	s.mu.Unlock()
 	s.notifyWSClientChanged("connected", client)
+	telemetry.RecordWebSocketConnection(req.Context(), true)
+	_ = telemetry.Log(req.Context(), telemetry.LogEvent{Severity: telemetry.SeverityInfo, Component: "websocket", Name: "websocket.connected", Outcome: "success", Reason: "none"})
 
 	// Start write pump
 	go s.wsWritePump(client)
@@ -160,6 +164,8 @@ func (s *Server) handleWebSocketConn(w http.ResponseWriter, r *http.Request, pub
 	// client is already absent from notification maps at this point.
 	s.cleanupAgentPresence(client)
 	s.notifyWSClientChanged("disconnected", client)
+	telemetry.RecordWebSocketConnection(context.Background(), false)
+	_ = telemetry.Log(context.Background(), telemetry.LogEvent{Severity: telemetry.SeverityInfo, Component: "websocket", Name: "websocket.disconnected", Outcome: "success", Reason: "peer_closed"})
 }
 
 // detachWSClient removes a connection from all in-memory routing indexes. It

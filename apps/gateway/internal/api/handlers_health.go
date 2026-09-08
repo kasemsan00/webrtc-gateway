@@ -26,7 +26,30 @@ type HealthComponentResponse struct {
 	State         healthState       `json:"state"`
 	Reason        string            `json:"reason,omitempty"`
 	LastSuccessAt string            `json:"lastSuccessAt,omitempty"`
+	LastFailureAt string            `json:"lastFailureAt,omitempty"`
 	Details       map[string]uint64 `json:"details,omitempty"`
+}
+
+// NewHealthComponentResponse converts an external cached health snapshot to
+// the API's bounded state vocabulary without exporting healthState itself.
+func NewHealthComponentResponse(state, reason, lastSuccessAt, lastFailureAt string, details map[string]uint64) HealthComponentResponse {
+	boundedState := healthUnknown
+	switch state {
+	case string(healthDisabled):
+		boundedState = healthDisabled
+	case string(healthConnected):
+		boundedState = healthConnected
+	case string(healthDegraded):
+		boundedState = healthDegraded
+	case string(healthUnavailable):
+		boundedState = healthUnavailable
+	case string(healthUnknown):
+		boundedState = healthUnknown
+	}
+	return sanitizeHealthComponent(HealthComponentResponse{
+		State: boundedState, Reason: reason, LastSuccessAt: lastSuccessAt,
+		LastFailureAt: lastFailureAt, Details: details,
+	})
 }
 
 type DetailedHealthResponse struct {
@@ -38,19 +61,26 @@ func sanitizeHealthComponent(component HealthComponentResponse) HealthComponentR
 	if !safeHealthReason.MatchString(component.Reason) {
 		component.Reason = ""
 	}
+	if component.LastSuccessAt != "" {
+		if _, err := time.Parse(time.RFC3339Nano, component.LastSuccessAt); err != nil {
+			component.LastSuccessAt = ""
+		}
+	}
+	if component.LastFailureAt != "" {
+		if _, err := time.Parse(time.RFC3339Nano, component.LastFailureAt); err != nil {
+			component.LastFailureAt = ""
+		}
+	}
 	if component.Details == nil {
 		return component
 	}
-	// Keep only a bounded number of numeric facts even for external adapters.
-	if len(component.Details) > 12 {
-		bounded := make(map[string]uint64, 12)
-		for _, key := range []string{"depth", "capacity", "accepted", "dropped"} {
-			if value, ok := component.Details[key]; ok {
-				bounded[key] = value
-			}
+	bounded := make(map[string]uint64, 6)
+	for _, key := range []string{"depth", "capacity", "accepted", "dropped", "exported", "failed"} {
+		if value, ok := component.Details[key]; ok {
+			bounded[key] = value
 		}
-		component.Details = bounded
 	}
+	component.Details = bounded
 	return component
 }
 

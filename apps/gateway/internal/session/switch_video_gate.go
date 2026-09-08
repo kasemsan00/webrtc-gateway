@@ -109,6 +109,8 @@ func (s *Session) EvaluateSwitchVideoAccessUnit(au NormalizedH264AccessUnit, now
 	switch {
 	case switchVideoTransitionBlocksGateReleaseLocked(s, now):
 		reason = "blackout-hold"
+	case switchVideoShouldHoldForRenegotiateLocked(s):
+		reason = "renegotiate-pending"
 	case s.SwitchVideoGateReleasing:
 		reason = "release-in-progress"
 	case au.Generation != generation:

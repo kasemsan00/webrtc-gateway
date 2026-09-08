@@ -32,7 +32,7 @@ type RemoteMediaNotifier interface {
 }
 
 // SwitchVideoRenegotiationStarter starts client-assisted WebRTC renegotiation
-// after @switch video gate release.
+// when an authoritative @switch MESSAGE is accepted.
 type SwitchVideoRenegotiationStarter interface {
 	StartSwitchVideoRenegotiation(sessionID string, generation int)
 }

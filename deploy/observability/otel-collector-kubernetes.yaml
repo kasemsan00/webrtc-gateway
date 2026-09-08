@@ -1,0 +1,150 @@
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+  file_storage:
+    directory: ${env:OTELCOL_FILE_STORAGE_DIRECTORY}
+    create_directory: true
+    timeout: 10s
+    compaction:
+      on_start: true
+      directory: ${env:OTELCOL_FILE_STORAGE_DIRECTORY}
+
+receivers:
+  otlp/gateway:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+  # This is the only log source in this variant. Run as a DaemonSet and mount
+  # /var/log/pods read-only. The container operator understands CRI/containerd
+  # and Docker JSON line formats without requiring the Docker socket.
+  filelog/gateway:
+    include:
+      - /var/log/pods/*webrtc-sip-gateway*/*/*.log
+    start_at: end
+    include_file_path: true
+    operators:
+      - type: container
+        id: parse-container-log
+      - type: add
+        field: attributes["log.source"]
+        value: kubernetes_stdout
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 512
+    spike_limit_mib: 128
+  resource/gateway:
+    attributes:
+      - key: service.name
+        value: webrtc-sip-gateway
+        action: upsert
+      - key: deployment.environment
+        value: ${env:GATEWAY_ENVIRONMENT}
+        action: upsert
+  redaction/defense_in_depth:
+    allow_all_keys: true
+    blocked_key_patterns:
+      - '(?i).*authorization.*'
+      - '(?i).*credential.*'
+      - '(?i).*password.*'
+      - '(?i).*token.*'
+      - '(?i).*private.?key.*'
+      - '(?i).*dsn.*'
+      - '(?i).*message.?body.*'
+      - '(?i).*transcript.*'
+      - '(?i).*(sip|sdp).?raw.*'
+    blocked_values:
+      - '(?i)bearer\s+[a-z0-9._~+/=-]+'
+      - '(?i)basic\s+[a-z0-9+/=]+'
+      - '(?i)(authorization|proxy-authorization|password|token)\s*[:=]\s*\S+'
+      - '(?i)postgres(?:ql)?://\S+'
+      - '(?i)sip:[^\s>;,]+'
+      - '(?:\d{1,3}\.){3}\d{1,3}'
+      - '(?i)eyJ[a-z0-9_-]+\.[a-z0-9_-]+\.[a-z0-9_-]+'
+    summary: info
+  filter/drop_sensitive_legacy:
+    error_mode: ignore
+    logs:
+      log_record:
+        - 'IsMatch(body, "(?im)(^|[\\r\\n])(INVITE|REGISTER|MESSAGE|BYE|ACK|CANCEL|SIP/2.0)([ \\t]|$)")'
+        - 'IsMatch(body, "(?im)(^|[\\r\\n])v=0([\\r\\n]|$)|a=ice-(pwd|ufrag):")'
+  batch:
+    timeout: 5s
+    send_batch_size: 1024
+    send_batch_max_size: 2048
+
+exporters:
+  otlphttp/openobserve_logs:
+    endpoint: ${env:OPENOBSERVE_OTLP_ENDPOINT}
+    headers:
+      Authorization: ${env:OPENOBSERVE_AUTHORIZATION}
+      organization: ${env:OPENOBSERVE_ORGANIZATION}
+      stream-name: ${env:OPENOBSERVE_LOG_STREAM}
+    tls:
+      insecure: ${env:OPENOBSERVE_TLS_INSECURE}
+      ca_file: ${env:OPENOBSERVE_TLS_CA_FILE}
+    timeout: 10s
+    sending_queue: &persistent_queue
+      enabled: true
+      num_consumers: 4
+      queue_size: 5000
+      storage: file_storage
+    retry_on_failure: &bounded_retry
+      enabled: true
+      initial_interval: 1s
+      max_interval: 15s
+      max_elapsed_time: 5m
+  otlphttp/openobserve_metrics:
+    endpoint: ${env:OPENOBSERVE_OTLP_ENDPOINT}
+    headers:
+      Authorization: ${env:OPENOBSERVE_AUTHORIZATION}
+      organization: ${env:OPENOBSERVE_ORGANIZATION}
+      stream-name: ${env:OPENOBSERVE_METRIC_STREAM}
+    tls:
+      insecure: ${env:OPENOBSERVE_TLS_INSECURE}
+      ca_file: ${env:OPENOBSERVE_TLS_CA_FILE}
+    timeout: 10s
+    sending_queue: *persistent_queue
+    retry_on_failure: *bounded_retry
+  otlphttp/openobserve_traces:
+    endpoint: ${env:OPENOBSERVE_OTLP_ENDPOINT}
+    headers:
+      Authorization: ${env:OPENOBSERVE_AUTHORIZATION}
+      organization: ${env:OPENOBSERVE_ORGANIZATION}
+      stream-name: ${env:OPENOBSERVE_TRACE_STREAM}
+    tls:
+      insecure: ${env:OPENOBSERVE_TLS_INSECURE}
+      ca_file: ${env:OPENOBSERVE_TLS_CA_FILE}
+    timeout: 10s
+    sending_queue: *persistent_queue
+    retry_on_failure: *bounded_retry
+
+service:
+  extensions: [health_check, file_storage]
+  telemetry:
+    logs:
+      level: info
+    metrics:
+      level: detailed
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: 0.0.0.0
+                port: 8888
+  pipelines:
+    logs:
+      receivers: [filelog/gateway]
+      processors: [memory_limiter, resource/gateway, filter/drop_sensitive_legacy, redaction/defense_in_depth, batch]
+      exporters: [otlphttp/openobserve_logs]
+    metrics:
+      receivers: [otlp/gateway]
+      processors: [memory_limiter, resource/gateway, batch]
+      exporters: [otlphttp/openobserve_metrics]
+    traces:
+      receivers: [otlp/gateway]
+      processors: [memory_limiter, resource/gateway, redaction/defense_in_depth, batch]
+      exporters: [otlphttp/openobserve_traces]

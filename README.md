@@ -286,7 +286,6 @@ go test ./...
 
 | ตัวแปร                                            | หน้าที่                                           |
 | ------------------------------------------------- | ------------------------------------------------- |
-| `SIP_DOMAIN` / `SIP_USERNAME` / `SIP_PASSWORD`    | Identity ของ Gateway ในระบบ SIP                   |
 | `SIP_PORT`                                        | Port สำหรับ SIP (default: 5060)                   |
 | `TURN_SERVER` / `TURN_USERNAME` / `TURN_PASSWORD` | TURN server สำหรับ NAT traversal                  |
 | `API_PORT`                                        | WebSocket/REST API port (default: 8080)           |
@@ -294,7 +293,7 @@ go test ./...
 | `SIP_TRUNK_ENABLE`                                | เปิดใช้ trunk-based routing                       |
 | `GATEWAY_INSTANCE_ID`                             | ID คงที่ของ instance (สำหรับ HA)                  |
 | `GATEWAY_PUBLIC_WS_URL`                           | Public URL สำหรับ redirect/recovery ข้าม instance |
-| `AUTH_ENABLE` / JWKS URLs                          | JWT authentication for mobile `/ws` and JWT REST  |
+| `AUTH_ENABLE` / `AUTH_TTRS_*_JWKS_URL`             | JWT authentication แยก user/employee realm        |
 | `FRONTEND_PASSWORD`                               | Shared admin UI login and REST bearer             |
 
 สำหรับ flow browser-to-browser ผ่าน SIP core ต้องใช้ trunk/DB:
@@ -320,11 +319,12 @@ curl "https://gateway.example.com/api/logs/current?tail=500"
 curl "https://gateway.example.com/api/logs/<log-file-name>?tail=500"
 ```
 
-`/api/logs` endpoints ไม่ต้องใช้ bearer token และคืนเฉพาะไฟล์ log ที่ gateway จัดการ (`webrtc-sip-gateway-*.log`).
+ทุก read-only `/api/logs*` endpoint เป็น public โดยไม่ต้องมี bearer และคืนเฉพาะ
+ไฟล์ log ที่ gateway จัดการ (`webrtc-sip-gateway-*.log`).
 
 ## Client Diagnostics
 
-Softphone clients can upload sanitized diagnostics batches for bug analysis:
+TTRS VRI clients can upload sanitized diagnostics batches for bug analysis:
 
 ```bash
 curl -X POST https://gateway.example.com/api/client-diagnostics \
@@ -335,16 +335,16 @@ curl -X POST https://gateway.example.com/api/client-diagnostics \
 
 Diagnostics with `sessionId` are attached to the call timeline as `call_events` category `client`; larger batches may also be linked through `call_payloads` kind `client_diagnostics_batch`. Diagnostics without `sessionId` are stored in `client_diagnostic_events`.
 
-Read-only mobile diagnostics endpoints do not require bearer tokens:
+Read-only TTRS VRI diagnostics endpoints do not require bearer tokens:
 
 ```bash
-# No-session mobile diagnostics such as app.boot, login, notification handoff
+# No-session TTRS VRI diagnostics such as app.boot, login, notification handoff
 curl "https://gateway.example.com/api/client-diagnostics?clientTraceId=<trace-id>&page=1&pageSize=100"
 
 # Mobile diagnostics attached to a call session
 curl "https://gateway.example.com/api/client-diagnostics/sessions/<sessionId>/events?page=1&pageSize=100"
 
-# Large mobile diagnostics batches for a call session
+# Large TTRS VRI diagnostics batches for a call session
 curl "https://gateway.example.com/api/client-diagnostics/sessions/<sessionId>/payloads?page=1&pageSize=100"
 
 # Read one diagnostics payload; only client_diagnostics_batch payloads are returned

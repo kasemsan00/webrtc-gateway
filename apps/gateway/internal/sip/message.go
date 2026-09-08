@@ -12,10 +12,19 @@ import (
 
 	"webrtc-sip-gateway/internal/logstore"
 	"webrtc-sip-gateway/internal/session"
+	"webrtc-sip-gateway/internal/telemetry"
 )
 
 // SendMessage sends a SIP MESSAGE to a destination
 func (s *Server) SendMessage(destination, from, body, contentType string) error {
+	started := time.Now()
+	ctx, span := telemetry.StartSIPSpan(context.Background(), "MESSAGE")
+	err := s.sendMessage(destination, from, body, contentType)
+	telemetry.EndSIP(ctx, span, "MESSAGE", started, 0, err)
+	return err
+}
+
+func (s *Server) sendMessage(destination, from, body, contentType string) error {
 	if s.sipClient == nil {
 		return fmt.Errorf("SIP client not initialized")
 	}
@@ -171,7 +180,7 @@ func (s *Server) SendMessage(destination, from, body, contentType string) error 
 		fmt.Printf("%s\n", req.String())
 		fmt.Printf("==============================\n\n")
 	} else {
-		fmt.Printf("💬 Sending MESSAGE to %s (%d bytes)\n", recipient.String(), len(body))
+		fmt.Printf("💬 Sending MESSAGE (%d bytes)\n", len(body))
 	}
 
 	// Send MESSAGE using TransactionRequest
@@ -309,6 +318,14 @@ func (s *Server) handleMessageAuth(ctx context.Context, originalReq *sip.Request
 // SendMessageToSession sends a SIP MESSAGE within an existing call session (in-dialog)
 // This sends directly to the remote Contact address from the session
 func (s *Server) SendMessageToSession(sess *session.Session, body, contentType string) error {
+	started := time.Now()
+	ctx, span := telemetry.StartSIPSpan(context.Background(), "MESSAGE")
+	err := s.sendMessageToSession(sess, body, contentType)
+	telemetry.EndSIP(ctx, span, "MESSAGE", started, 0, err)
+	return err
+}
+
+func (s *Server) sendMessageToSession(sess *session.Session, body, contentType string) error {
 	if s.sipClient == nil {
 		return fmt.Errorf("SIP client not initialized")
 	}
@@ -447,7 +464,7 @@ func (s *Server) SendMessageToSession(sess *session.Session, body, contentType s
 		fmt.Printf("%s\n", req.String())
 		fmt.Printf("==============================\n\n")
 	} else {
-		fmt.Printf("💬 Sending in-dialog MESSAGE to %s (%d bytes)\n", recipient.String(), len(body))
+		fmt.Printf("💬 Sending in-dialog MESSAGE (%d bytes)\n", len(body))
 	}
 
 	// Send MESSAGE

@@ -1,12 +1,46 @@
 package sip
 
 import (
+	"sync"
 	"testing"
 	"time"
 
 	"webrtc-sip-gateway/internal/config"
 	"webrtc-sip-gateway/internal/session"
 )
+
+type recordingSwitchRenegotiateStarter struct {
+	mu         sync.Mutex
+	n          int
+	sessionID  string
+	generation int
+}
+
+func (r *recordingSwitchRenegotiateStarter) StartSwitchVideoRenegotiation(sessionID string, generation int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.n++
+	r.sessionID = sessionID
+	r.generation = generation
+}
+
+func (r *recordingSwitchRenegotiateStarter) calls() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.n
+}
+
+func (r *recordingSwitchRenegotiateStarter) lastID() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.sessionID
+}
+
+func (r *recordingSwitchRenegotiateStarter) lastGen() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.generation
+}
 
 func TestHandleSwitchMessage_StartsVideoRecoveryBurst(t *testing.T) {
 	cfg := &config.Config{
@@ -53,10 +87,12 @@ func TestHandleSwitchMessage_StartsVideoRecoveryBurst(t *testing.T) {
 		t.Fatalf("expected burst policy inactive before @switch")
 	}
 
+	starter := &recordingSwitchRenegotiateStarter{}
 	srv := &Server{
-		config:     cfg.SIP,
-		rtpConfig:  cfg.RTP,
-		sessionMgr: mgr,
+		config:                     cfg.SIP,
+		rtpConfig:                  cfg.RTP,
+		sessionMgr:                 mgr,
+		switchRenegotiationStarter: starter,
 	}
 
 	srv.handleSwitchMessage("@switch:14131|00025", "sip:0900200002@example.com")
@@ -101,6 +137,15 @@ func TestHandleSwitchMessage_StartsVideoRecoveryBurst(t *testing.T) {
 	if sess.SwitchSPSPPSInjectRemaining != 3 {
 		t.Fatalf("expected uplink SPS/PPS inject armed to 3, got %d", sess.SwitchSPSPPSInjectRemaining)
 	}
+
+	deadline := time.Now().Add(time.Second)
+	for starter.calls() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if starter.calls() != 1 || starter.lastID() != sess.ID || starter.lastGen() != sess.GetSwitchGeneration() {
+		t.Fatalf("expected @switch renegotiate start session=%s generation=%d calls=%d last=%s/%d",
+			sess.ID, sess.GetSwitchGeneration(), starter.calls(), starter.lastID(), starter.lastGen())
+	}
 }
 
 func TestHandleSwitchMessage_IgnoresDuplicateTargetInsideDebounce(t *testing.T) {
@@ -138,10 +183,12 @@ func TestHandleSwitchMessage_IgnoresDuplicateTargetInsideDebounce(t *testing.T) 
 	sess.SetState(session.StateActive)
 	sess.SetRemoteVideoSSRC(1234)
 
+	starter := &recordingSwitchRenegotiateStarter{}
 	srv := &Server{
-		config:     cfg.SIP,
-		rtpConfig:  cfg.RTP,
-		sessionMgr: mgr,
+		config:                     cfg.SIP,
+		rtpConfig:                  cfg.RTP,
+		sessionMgr:                 mgr,
+		switchRenegotiationStarter: starter,
 	}
 
 	srv.handleSwitchMessage("@switch:14131|00025", "sip:0900200002@example.com")
@@ -171,6 +218,9 @@ func TestHandleSwitchMessage_IgnoresDuplicateTargetInsideDebounce(t *testing.T) 
 		t.Fatalf("duplicate mutated gate: generation=%d started=%s nonce=%d reservation=%d baseline=%d rejected=%d",
 			sess.SwitchVideoGateGeneration, sess.SwitchVideoGateStartedAt, sess.SwitchVideoGateLeaseNonce,
 			sess.SwitchVideoGateReservation, sess.SwitchVideoGateFeedbackBaseline, sess.SwitchVideoGateRejectedCount)
+	}
+	if starter.calls() != 1 {
+		t.Fatalf("expected one renegotiate start for first @switch, got %d", starter.calls())
 	}
 }
 

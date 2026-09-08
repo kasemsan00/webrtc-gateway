@@ -42,6 +42,8 @@ func (s *Server) handleWSRenegotiateAnswer(client *WSClient, msg WSMessage) {
 	if status == "" {
 		status = "ok"
 	}
+	fmt.Printf("[%s] switch_renegotiate_answer received status=%s renegotiationId=%s sdpBytes=%d reason=%s\n",
+		sessionID, status, msg.RenegotiationID, len(msg.SDP), msg.Reason)
 
 	pending, hasPending := sess.GetPendingMidCallRenegotiation()
 	if !hasPending || pending.ID != msg.RenegotiationID {
@@ -49,11 +51,14 @@ func (s *Server) handleWSRenegotiateAnswer(client *WSClient, msg WSMessage) {
 		return
 	}
 
+	resultSDP := ""
 	var completed bool
 	switch status {
 	case "ok":
-		if pending.Source == session.MidCallRenegotiationSourceSwitchGateRelease {
-			if err := sess.ApplyPeerConnectionAnswer(msg.SDP); err != nil {
+		if session.IsSwitchVideoRenegotiationSource(pending.Source) {
+			answerSDP, err := sess.AnswerClientOffer(msg.SDP)
+			if err != nil {
+				fmt.Printf("[%s] switch_renegotiate_answer failed: %v\n", sessionID, err)
 				_ = sess.FailMidCallRenegotiation(msg.RenegotiationID, 488, err.Error())
 				s.sendWSMessage(client, WSMessage{
 					Type:            "renegotiate_result",
@@ -76,6 +81,7 @@ func (s *Server) handleWSRenegotiateAnswer(client *WSClient, msg WSMessage) {
 				})
 				return
 			}
+			resultSDP = answerSDP
 		}
 		completed = sess.CompleteMidCallRenegotiation(msg.RenegotiationID, msg.SDP)
 	case "failed":
@@ -99,6 +105,7 @@ func (s *Server) handleWSRenegotiateAnswer(client *WSClient, msg WSMessage) {
 		RenegotiationID: msg.RenegotiationID,
 		Status:          resultStatus,
 		Reason:          msg.Reason,
+		SDP:             resultSDP,
 	})
 	s.logEvent(&logstore.Event{
 		Timestamp: time.Now(),

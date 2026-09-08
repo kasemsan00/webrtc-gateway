@@ -18,6 +18,7 @@ import (
 	"webrtc-sip-gateway/internal/audio"
 	"webrtc-sip-gateway/internal/config"
 	pkg_webrtc "webrtc-sip-gateway/internal/pkg/webrtc"
+	"webrtc-sip-gateway/internal/telemetry"
 	"webrtc-sip-gateway/internal/translator"
 )
 
@@ -77,16 +78,23 @@ type Session struct {
 	// One-shot WebRTC→SIP keyframe kick on the first SIP video SR/RR.
 	uplinkKeyframeKickOnFirstSIPRTCP bool `json:"-"`
 	// When SIP video dest first became reachable (200 OK / first RTP dest).
-	sipVideoDestReadyAt time.Time `json:"-"`
-	Direction           string    `json:"direction"` // "inbound" or "outbound"
-	From                string    `json:"from,omitempty"`
-	To                  string    `json:"to,omitempty"`
-	RTPPort             int       `json:"rtpPort,omitempty"`
-	VideoRTPPort        int       `json:"videoRtpPort,omitempty"`
-	AudioRTCPPort       int       `json:"audioRtcpPort,omitempty"`
-	VideoRTCPPort       int       `json:"videoRtcpPort,omitempty"`
-	CreatedAt           time.Time `json:"createdAt"`
-	UpdatedAt           time.Time `json:"updatedAt"`
+	sipVideoDestReadyAt    time.Time `json:"-"`
+	Direction              string    `json:"direction"` // "inbound" or "outbound"
+	From                   string    `json:"from,omitempty"`
+	To                     string    `json:"to,omitempty"`
+	RTPPort                int       `json:"rtpPort,omitempty"`
+	VideoRTPPort           int       `json:"videoRtpPort,omitempty"`
+	AudioRTCPPort          int       `json:"audioRtcpPort,omitempty"`
+	VideoRTCPPort          int       `json:"videoRtcpPort,omitempty"`
+	CreatedAt              time.Time `json:"createdAt"`
+	UpdatedAt              time.Time `json:"updatedAt"`
+	telemetryCallStarted   bool      `json:"-"`
+	telemetryCallActive    bool      `json:"-"`
+	telemetrySetupRecorded bool      `json:"-"`
+	telemetryCallCompleted bool      `json:"-"`
+	telemetryTransferred   bool      `json:"-"`
+	telemetryCallStartedAt time.Time `json:"-"`
+	telemetryCallActiveAt  time.Time `json:"-"`
 	// ICE-lite credentials for SIP side
 	ICEUfrag string `json:"-"`
 	ICEPwd   string `json:"-"`
@@ -189,6 +197,7 @@ type Session struct {
 	SwitchVideoBlackoutMaxWait       time.Time `json:"-"`
 	SwitchVideoFirstKeyframeAt       time.Time `json:"-"`
 	SwitchVideoRenegotiateGeneration int       `json:"-"`
+	SwitchVideoRenegotiateHold       bool      `json:"-"` // true from @switch claim until client answers or the attempt fails
 	// RTP State for re-packetization
 	AudioSeq        uint16 `json:"-"`
 	AudioSSRC       uint32 `json:"-"`
@@ -264,6 +273,7 @@ type Session struct {
 	RemoteICECandidateCount     int                        `json:"-"`
 	FirstLocalICECandidateAt    time.Time                  `json:"-"`
 	FirstRemoteICECandidateAt   time.Time                  `json:"-"`
+	pendingRemoteICE            []webrtc.ICECandidateInit  `json:"-"`
 	PendingMidCallRenegotiation *midCallRenegotiationState `json:"-"`
 	RemoteAudioDirection        string                     `json:"-"`
 	RemoteVideoDirection        string                     `json:"-"`
@@ -672,6 +682,11 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 		}
 
 		session.mu.Lock()
+		if !iceCallbackIsForCurrentPeerConnection(session.PeerConnection, peerConnection) {
+			session.mu.Unlock()
+			fmt.Printf("[%s] 🧊 ICE %s ignored on replaced PeerConnection\n", id, connectionState.String())
+			return
+		}
 		session.UpdatedAt = time.Now()
 		startRecoveryBurstReason := ""
 		replayIDRReason := ""
@@ -942,12 +957,16 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 // SetCallInfo sets call information for a session
 func (s *Session) SetCallInfo(direction, from, to, sipCallID string) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.Direction = direction
 	s.From = from
 	s.To = to
 	s.SIPCallID = sipCallID
 	s.UpdatedAt = time.Now()
+	started, startedAt := s.beginCallTelemetryLocked(s.UpdatedAt)
+	s.mu.Unlock()
+	if started {
+		s.emitCallStartedTelemetry(direction, startedAt)
+	}
 }
 
 // SetIncomingInvite stores incoming INVITE metadata (thread-safe)
@@ -1162,6 +1181,47 @@ func (s *Session) CopyIncomingInviteFrom(source *Session) {
 	}
 	_tx, _req, invite, fromURI, toURI := source.GetIncomingInvite()
 	s.SetIncomingInvite(_tx, _req, invite, fromURI, toURI)
+	started, active, setupRecorded, startedAt, activeAt := source.transferCallTelemetry()
+	s.mu.Lock()
+	if started && !s.telemetryCallStarted {
+		s.telemetryCallStarted = true
+		s.telemetryCallActive = active
+		s.telemetrySetupRecorded = setupRecorded
+		s.telemetryCallStartedAt = startedAt
+		s.telemetryCallActiveAt = activeAt
+	}
+	s.mu.Unlock()
+}
+
+func (s *Session) transferCallTelemetry() (started, active, setupRecorded bool, startedAt, activeAt time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.telemetryCallStarted {
+		s.telemetryTransferred = true
+	}
+	return s.telemetryCallStarted, s.telemetryCallActive, s.telemetrySetupRecorded, s.telemetryCallStartedAt, s.telemetryCallActiveAt
+}
+
+func (s *Session) beginCallTelemetryLocked(now time.Time) (bool, time.Time) {
+	if s.telemetryCallStarted || s.telemetryTransferred || (s.Direction != "inbound" && s.Direction != "outbound") {
+		return false, time.Time{}
+	}
+	if s.State != StateIncoming && s.State != StateConnecting && s.State != StateRinging && s.State != StateActive {
+		return false, time.Time{}
+	}
+	s.telemetryCallStarted = true
+	s.telemetryCallActive = true
+	s.telemetryCallStartedAt = now
+	return true, now
+}
+
+func (s *Session) emitCallStartedTelemetry(direction string, _ time.Time) {
+	ctx, span := telemetry.StartCallSpan(context.Background(), "started")
+	telemetry.SetSpanCorrelation(span, telemetry.Correlation{SessionID: s.ID})
+	telemetry.SetCallDirection(span, direction)
+	telemetry.EndSpan(span, "success", "none", 0)
+	telemetry.RecordCallStarted(ctx, direction)
+	_ = telemetry.Log(ctx, telemetry.LogEvent{Severity: telemetry.SeverityInfo, Component: "call", Name: "call.started", Outcome: "success", Reason: "none", Correlation: telemetry.Correlation{SessionID: s.ID}})
 }
 
 // CopyCallInfoFrom copies direction/from/to/sipCallID from another session (thread-safe)

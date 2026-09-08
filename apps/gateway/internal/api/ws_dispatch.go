@@ -1,30 +1,43 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"strings"
 
 	"webrtc-sip-gateway/internal/session"
+	"webrtc-sip-gateway/internal/telemetry"
 )
 
 // handleWSMessage processes WebSocket messages
 func (s *Server) handleWSMessage(client *WSClient, message []byte) {
 	var msg WSMessage
 	if err := json.Unmarshal(message, &msg); err != nil {
+		telemetry.RecordWebSocketMessage(context.Background(), "other", "failure")
 		s.sendWSError(client, "", "Invalid message format")
 		return
 	}
+	ctx, span := telemetry.StartWebSocketSpan(context.Background(), msg.Type)
+	telemetry.SetSpanCorrelation(span, telemetry.Correlation{SessionID: msg.SessionID})
+	outcome, spanReason := "success", "none"
+	defer func() {
+		telemetry.RecordWebSocketMessage(ctx, msg.Type, outcome)
+		telemetry.EndSpan(span, outcome, spanReason, 0)
+		_ = telemetry.Log(ctx, telemetry.LogEvent{Severity: telemetry.SeverityInfo, Component: "websocket", Name: "websocket.message.completed", Outcome: outcome, Reason: spanReason, Correlation: telemetry.Correlation{SessionID: msg.SessionID}})
+	}()
 
 	if client != nil && client.agentOnly {
 		if ok, reason := s.allowAgentWSMessage(client, msg); !ok {
+			outcome, spanReason = "rejected", "forbidden"
 			log.Printf("Agent WebSocket message rejected: type=%s sessionID=%s reason=%s", msg.Type, msg.SessionID, reason)
 			s.sendWSError(client, msg.SessionID, reason)
 			return
 		}
 	} else if client != nil && client.publicOnly {
 		if ok, reason := s.allowPublicWSMessage(client, msg); !ok {
+			outcome, spanReason = "rejected", "forbidden"
 			log.Printf("Public WebSocket message rejected: type=%s sessionID=%s reason=%s", msg.Type, msg.SessionID, reason)
 			s.sendWSError(client, msg.SessionID, reason)
 			return
@@ -71,6 +84,7 @@ func (s *Server) handleWSMessage(client *WSClient, message []byte) {
 	case "translate_stop":
 		s.handleWSTranslateStop(client, msg)
 	default:
+		outcome, spanReason = "rejected", "invalid_request"
 		s.sendWSError(client, msg.SessionID, "Unknown message type")
 	}
 }

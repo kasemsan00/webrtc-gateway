@@ -15,7 +15,7 @@ The WebSocket contract should stay backward compatible for Phase 1. Clients cont
   "sessionId": "...",
   "sourceLang": "en",
   "targetLang": "th",
-  "ttsVoice": "th-TH-Sarawut"
+  "ttsVoice": "th-TH-PremwadeeNeural"
 }
 ```
 
@@ -119,4 +119,3 @@ RTP packets
 2. Measure logs and call quality: translator errors, fallback rate, perceived latency, and CPU load.
 3. Use those measurements to tune Phase 2 chunk sizing and queue policies.
 4. Implement Phase 2 behind a separate runtime flag so production can fall back to Phase 1 quickly.
-
