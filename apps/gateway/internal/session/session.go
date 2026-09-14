@@ -1078,22 +1078,31 @@ func (s *Session) Done() <-chan struct{} {
 }
 
 // TryClaimIncoming attempts to claim an incoming call (first-accept-wins).
-// Returns true if successfully claimed, false if already claimed by another client.
-// Thread-safe atomic operation.
+// Returns true if successfully claimed, or if this client already owns the claim.
+// Returns false if another client already claimed it.
 func (s *Session) TryClaimIncoming(clientID string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if s.IncomingClaimed {
-		// Already claimed by someone else
-		return false
+		return s.IncomingClaimedBy == clientID
 	}
 
-	// Claim it
 	s.IncomingClaimed = true
 	s.IncomingClaimedBy = clientID
 	s.UpdatedAt = time.Now()
 	return true
+}
+
+// IncomingClaimOwner returns the WS client claim id that won this incoming
+// session, or empty if it is still unclaimed.
+func (s *Session) IncomingClaimOwner() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if !s.IncomingClaimed {
+		return ""
+	}
+	return s.IncomingClaimedBy
 }
 
 // TryBeginTerminalAction atomically claims the signaling path that ends or

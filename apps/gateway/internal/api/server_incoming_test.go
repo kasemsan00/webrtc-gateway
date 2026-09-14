@@ -227,12 +227,146 @@ func TestHandleWSAccept_FirstAcceptWins(t *testing.T) {
 	if len(msgs2) != 1 {
 		t.Fatalf("expected 1 message for second accept, got %d", len(msgs2))
 	}
-	if msgs2[0].Type != "error" {
-		t.Fatalf("expected stale second accept to receive error, got type=%s state=%s", msgs2[0].Type, msgs2[0].State)
+	if msgs2[0].Type != "cancel" || msgs2[0].Reason != incomingCancelAnsweredElsewhere {
+		t.Fatalf("expected stale second accept to receive answered_elsewhere cancel, got type=%s reason=%s", msgs2[0].Type, msgs2[0].Reason)
 	}
 
 	if sipMaker.acceptCount != 1 {
 		t.Fatalf("expected AcceptCall once, got %d", sipMaker.acceptCount)
+	}
+}
+
+func TestHandleWSAccept_CancelsOtherSameTrunkClients(t *testing.T) {
+	mgr := newTestSessionManager()
+	incomingSess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create incoming session: %v", err)
+	}
+	incomingSess.SetState(session.StateIncoming)
+	incomingSess.SetCallInfo("inbound", "1001", "00025", "sip-call-fork")
+	incomingSess.SetSIPAuthContext("trunk", "", 7, "sip.example.test", "00025", "secret", 5060)
+
+	sipMaker := &incomingTestSIPCallMaker{}
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, sipMaker, nil, nil, nil)
+
+	webrtcSess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create webrtc session: %v", err)
+	}
+	winner := &WSClient{
+		sessionID:       webrtcSess.ID,
+		trunkResolved:   true,
+		resolvedTrunkID: 7,
+		send:            make(chan []byte, 8),
+	}
+	loser := &WSClient{
+		sessionID:       "loser",
+		trunkResolved:   true,
+		resolvedTrunkID: 7,
+		send:            make(chan []byte, 8),
+	}
+	srv.wsConnections[winner] = struct{}{}
+	srv.wsConnections[loser] = struct{}{}
+	srv.markPendingIncoming(winner, incomingSess.ID)
+	srv.markPendingIncoming(loser, incomingSess.ID)
+
+	srv.handleWSAccept(winner, WSMessage{Type: "accept", SessionID: incomingSess.ID})
+
+	msgsWinner := readWSMessages(t, winner.send)
+	if len(msgsWinner) != 1 || msgsWinner[0].Type != "state" || msgsWinner[0].State != "active" {
+		t.Fatalf("expected winner active state, got %+v", msgsWinner)
+	}
+	for _, msg := range msgsWinner {
+		if msg.Type == "cancel" {
+			t.Fatalf("winner must not receive cancel, got %+v", msgsWinner)
+		}
+	}
+
+	msgsLoser := readWSMessages(t, loser.send)
+	if len(msgsLoser) != 1 || msgsLoser[0].Type != "cancel" || msgsLoser[0].Reason != incomingCancelAnsweredElsewhere {
+		t.Fatalf("expected loser answered_elsewhere cancel, got %+v", msgsLoser)
+	}
+	if sipMaker.acceptCount != 1 {
+		t.Fatalf("expected AcceptCall once, got %d", sipMaker.acceptCount)
+	}
+}
+
+func TestHandleWSAccept_InPlaceSecondAcceptGetsCancelNotActive(t *testing.T) {
+	mgr := newTestSessionManager()
+	incomingSess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create incoming session: %v", err)
+	}
+	incomingSess.SetState(session.StateIncoming)
+	incomingSess.SetCallInfo("inbound", "1001", "00025", "sip-call-inplace")
+	incomingSess.SetSIPAuthContext("trunk", "", 7, "sip.example.test", "00025", "secret", 5060)
+
+	sipMaker := &incomingTestSIPCallMaker{}
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, sipMaker, nil, nil, nil)
+
+	winner := &WSClient{
+		sessionID:       incomingSess.ID,
+		trunkResolved:   true,
+		resolvedTrunkID: 7,
+		send:            make(chan []byte, 8),
+	}
+	loser := &WSClient{
+		sessionID:       incomingSess.ID,
+		trunkResolved:   true,
+		resolvedTrunkID: 7,
+		send:            make(chan []byte, 8),
+	}
+	srv.wsConnections[winner] = struct{}{}
+	srv.wsConnections[loser] = struct{}{}
+	srv.bindClientSession(winner, incomingSess.ID)
+	srv.markPendingIncoming(loser, incomingSess.ID)
+
+	srv.handleWSAccept(winner, WSMessage{Type: "accept", SessionID: incomingSess.ID})
+	_ = readWSMessages(t, winner.send)
+	fanout := readWSMessages(t, loser.send)
+	if len(fanout) != 1 || fanout[0].Type != "cancel" || fanout[0].Reason != incomingCancelAnsweredElsewhere {
+		t.Fatalf("expected fanout cancel to the other ringer, got %+v", fanout)
+	}
+
+	srv.handleWSAccept(loser, WSMessage{Type: "accept", SessionID: incomingSess.ID})
+	msgsLoser := readWSMessages(t, loser.send)
+	if len(msgsLoser) != 1 {
+		t.Fatalf("expected 1 message for in-place loser accept, got %+v", msgsLoser)
+	}
+	if msgsLoser[0].Type == "state" && msgsLoser[0].State == "active" {
+		t.Fatalf("loser must not receive state=active for a claimed in-place session, got %+v", msgsLoser)
+	}
+	if msgsLoser[0].Type != "cancel" || msgsLoser[0].Reason != incomingCancelAnsweredElsewhere {
+		t.Fatalf("expected answered_elsewhere cancel, got %+v", msgsLoser)
+	}
+	if sipMaker.acceptCount != 1 {
+		t.Fatalf("expected AcceptCall once, got %d", sipMaker.acceptCount)
+	}
+}
+
+func TestHandleWSoffer_IncomingAlreadyClaimedSendsCancel(t *testing.T) {
+	mgr := newTestSessionManager()
+	incomingSess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create incoming session: %v", err)
+	}
+	incomingSess.SetState(session.StateIncoming)
+
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, nil, nil, nil, nil)
+	winner := &WSClient{send: make(chan []byte, 8)}
+	loser := &WSClient{send: make(chan []byte, 8)}
+	if !incomingSess.TryClaimIncoming(wsClientClaimID(winner)) {
+		t.Fatal("expected first client to claim incoming session")
+	}
+
+	srv.handleWSoffer(loser, WSMessage{Type: "offer", SessionID: incomingSess.ID, SDP: "v=0"})
+
+	msgs := readWSMessages(t, loser.send)
+	if len(msgs) != 1 || msgs[0].Type != "cancel" || msgs[0].Reason != incomingCancelAnsweredElsewhere {
+		t.Fatalf("expected answered_elsewhere cancel for later offer, got %+v", msgs)
+	}
+	if incomingSess.IncomingClaimOwner() != wsClientClaimID(winner) {
+		t.Fatalf("expected first client to keep the incoming claim, got %q", incomingSess.IncomingClaimOwner())
 	}
 }
 

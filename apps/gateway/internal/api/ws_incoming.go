@@ -21,10 +21,11 @@ const (
 )
 
 const (
-	clientAvailabilityIdle        = "idle"
-	clientAvailabilityBusy        = "busy"
-	clientAvailabilityUnavailable = "unavailable"
-	incomingOfflinePolicyPush480  = "push_then_480"
+	clientAvailabilityIdle          = "idle"
+	clientAvailabilityBusy          = "busy"
+	clientAvailabilityUnavailable   = "unavailable"
+	incomingOfflinePolicyPush480    = "push_then_480"
+	incomingCancelAnsweredElsewhere = "answered_elsewhere"
 )
 
 const (
@@ -370,10 +371,42 @@ func (s *Server) NotifyIncomingCall(sessionID, from, to string, trunkID int64) {
 
 // NotifyIncomingCancel notifies connected WebSocket clients that an incoming call was cancelled by caller.
 func (s *Server) NotifyIncomingCancel(sessionID string, trunkID int64, reason string) {
+	s.fanoutIncomingCancel(sessionID, trunkID, reason, nil)
+}
+
+func (s *Server) notifyIncomingAnsweredElsewhere(sessionID string, trunkID int64, winner *WSClient) {
+	s.fanoutIncomingCancel(sessionID, trunkID, incomingCancelAnsweredElsewhere, winner)
+}
+
+func (s *Server) sendIncomingAnsweredElsewhere(client *WSClient, sessionID string) {
+	s.sendWSMessage(client, WSMessage{
+		Type:      "cancel",
+		SessionID: sessionID,
+		Reason:    incomingCancelAnsweredElsewhere,
+	})
+}
+
+func wsClientClaimID(client *WSClient) string {
+	if client == nil {
+		return ""
+	}
+	return fmt.Sprintf("%p", client)
+}
+
+func (s *Server) incomingClaimedByOther(sess *session.Session, client *WSClient) bool {
+	if sess == nil || client == nil {
+		return false
+	}
+	owner := sess.IncomingClaimOwner()
+	return owner != "" && owner != wsClientClaimID(client)
+}
+
+func (s *Server) fanoutIncomingCancel(sessionID string, trunkID int64, reason string, skip *WSClient) {
 	s.mu.RLock()
 
 	if trunkID <= 0 {
 		s.mu.RUnlock()
+		s.clearPendingIncoming(sessionID)
 		log.Printf("📲 Skipping incoming cancel notification for session %s: missing trunkID", sessionID)
 		return
 	}
@@ -383,7 +416,7 @@ func (s *Server) NotifyIncomingCancel(sessionID string, trunkID int64, reason st
 	recipientSessionIDs := make([]string, 0)
 
 	for client := range s.wsConnections {
-		if client == nil || !client.trunkResolved || client.resolvedTrunkID != trunkID {
+		if client == nil || client == skip || !client.trunkResolved || client.resolvedTrunkID != trunkID {
 			continue
 		}
 		recipients++
@@ -393,7 +426,7 @@ func (s *Server) NotifyIncomingCancel(sessionID string, trunkID int64, reason st
 			SessionID: sessionID,
 			Reason:    reason,
 		})
-		log.Printf("📲 Sent incoming cancel notification to resolved client (sessionID=%s trunkID=%d)", sessionID, trunkID)
+		log.Printf("📲 Sent incoming cancel notification to resolved client (sessionID=%s trunkID=%d reason=%s)", sessionID, trunkID, reason)
 	}
 	s.mu.RUnlock()
 	s.clearPendingIncoming(sessionID)
@@ -401,7 +434,7 @@ func (s *Server) NotifyIncomingCancel(sessionID string, trunkID int64, reason st
 	if totalConnections == 0 {
 		log.Printf("⚠️ No WebSocket clients connected for incoming cancel notification")
 	} else {
-		log.Printf("📲 Incoming cancel fanout summary: sessionID=%s trunkID=%d recipients=%d recipientSessionIDs=%v filtered=%d total=%d", sessionID, trunkID, recipients, recipientSessionIDs, totalConnections-recipients, totalConnections)
+		log.Printf("📲 Incoming cancel fanout summary: sessionID=%s trunkID=%d reason=%s recipients=%d recipientSessionIDs=%v filtered=%d total=%d", sessionID, trunkID, reason, recipients, recipientSessionIDs, totalConnections-recipients, totalConnections)
 	}
 }
 
@@ -417,7 +450,13 @@ func (s *Server) handleWSAccept(client *WSClient, msg WSMessage) {
 	// Get the incoming call session (this has the SIP transaction but no WebRTC)
 	incomingSess, ok := s.sessionMgr.GetSession(msg.SessionID)
 	if !ok {
-		s.sendWSError(client, msg.SessionID, "Session not found")
+		// Another client already accepted and the presented incoming session
+		// was consumed. Stop the loser's ringing UI instead of leaving it up.
+		s.sendIncomingAnsweredElsewhere(client, msg.SessionID)
+		return
+	}
+	if s.incomingClaimedByOther(incomingSess, client) {
+		s.sendIncomingAnsweredElsewhere(client, msg.SessionID)
 		return
 	}
 	if incomingSess.GetState() != session.StateIncoming {
@@ -478,14 +517,18 @@ func (s *Server) handleWSAccept(client *WSClient, msg WSMessage) {
 	}
 
 	if !incomingSess.TryBeginTerminalAction("accept") {
-		s.sendWSError(client, msg.SessionID, "Call already has a terminal action in progress")
+		if s.incomingClaimedByOther(incomingSess, client) {
+			s.sendIncomingAnsweredElsewhere(client, msg.SessionID)
+			return
+		}
+		s.sendWSMessage(client, WSMessage{Type: "state", SessionID: msg.SessionID, State: string(incomingSess.GetState())})
 		return
 	}
 
-	// First-accept-wins: Try to claim the incoming call
-	clientID := fmt.Sprintf("%p", client) // Use client pointer as unique ID
+	// First-accept-wins: claim the incoming call. The same client may already
+	// own the claim from an in-place offer used to prepare WebRTC.
+	clientID := wsClientClaimID(client)
 	if !incomingSess.TryClaimIncoming(clientID) {
-		// Already claimed by another client
 		log.Printf("⚠️ [Accept] Session %s already claimed by another client", msg.SessionID)
 		incomingSess.ClearTerminalAction()
 		s.logEvent(&logstore.Event{
@@ -499,7 +542,7 @@ func (s *Server) handleWSAccept(client *WSClient, msg WSMessage) {
 				"sessionId":      msg.SessionID,
 			},
 		})
-		s.sendWSError(client, msg.SessionID, "Call already accepted by another client")
+		s.sendIncomingAnsweredElsewhere(client, msg.SessionID)
 		return
 	}
 
@@ -592,7 +635,10 @@ func (s *Server) handleWSAccept(client *WSClient, msg WSMessage) {
 		})
 	}
 	callSession.ClearTerminalAction()
-	s.clearPendingIncoming(incomingSessionID)
+	if trunkID <= 0 {
+		trunkID = client.resolvedTrunkID
+	}
+	s.notifyIncomingAnsweredElsewhere(incomingSessionID, trunkID, client)
 	s.incrementIncomingCounter("incoming_accepted")
 }
 

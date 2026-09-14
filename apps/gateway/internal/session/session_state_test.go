@@ -2,6 +2,22 @@ package session
 
 import "testing"
 
+func TestTryClaimIncomingSameClientIsIdempotent(t *testing.T) {
+	sess := &Session{}
+	if !sess.TryClaimIncoming("client-a") {
+		t.Fatal("first claim should succeed")
+	}
+	if !sess.TryClaimIncoming("client-a") {
+		t.Fatal("same client must be able to claim again after preparing WebRTC")
+	}
+	if sess.TryClaimIncoming("client-b") {
+		t.Fatal("another client must not steal the incoming claim")
+	}
+	if got := sess.IncomingClaimOwner(); got != "client-a" {
+		t.Fatalf("IncomingClaimOwner()=%q want client-a", got)
+	}
+}
+
 func TestTerminalCleanupStateIgnoresICETransitions(t *testing.T) {
 	tests := []struct {
 		name           string

@@ -34,6 +34,11 @@ func (s *Server) handleWSoffer(client *WSClient, msg WSMessage) {
 			s.sendWSError(client, msg.SessionID, "Session not found")
 			return
 		}
+		if sess.GetState() == session.StateIncoming && !sess.TryClaimIncoming(wsClientClaimID(client)) {
+			log.Printf("⚠️ [Offer] Incoming session %s already claimed; ignoring later offer", sess.ID)
+			s.sendIncomingAnsweredElsewhere(client, sess.ID)
+			return
+		}
 	} else {
 		sess, err = s.sessionMgr.CreateSession(s.turnConfig)
 		if err != nil {
@@ -174,6 +179,9 @@ func (s *Server) handleWSIce(client *WSClient, msg WSMessage) {
 	sess, ok := s.sessionMgr.GetSession(sessionID)
 	if !ok {
 		s.sendWSError(client, sessionID, "Session not found")
+		return
+	}
+	if s.incomingClaimedByOther(sess, client) {
 		return
 	}
 	if sess.PeerConnection == nil {
@@ -531,6 +539,10 @@ func (s *Server) handleWSHangup(client *WSClient, msg WSMessage) {
 	sess, ok := s.sessionMgr.GetSession(msg.SessionID)
 	if !ok {
 		s.sendWSError(client, msg.SessionID, "Session not found")
+		return
+	}
+	if s.incomingClaimedByOther(sess, client) {
+		s.sendIncomingAnsweredElsewhere(client, msg.SessionID)
 		return
 	}
 

@@ -66,6 +66,7 @@ Auth behavior:
 - Multi-call is backward compatible and connection-scoped. The gateway enables it only after `agent_register` or `client_state` includes `multiCall: true`; omitted/false keeps the original single-call busy admission behavior.
 - A multi-call connection can own multiple `sessionId` values. Every call-control/media command after `answer` MUST carry the intended `sessionId`; the gateway rejects access to sessions not owned or explicitly presented to that connection.
 - A busy multi-call agent remains eligible for call waiting. For a presented incoming call, prepare WebRTC in place with `offer.sessionId` equal to the incoming `sessionId`, then send `accept` with the same ID. The ID stays stable through answer, hold, resume, and hangup.
+- Multiple `/ws-agent` clients may share one SIP identity. Incoming INVITEs are fanned out to every idle/multi-call client on that trunk. The first `offer` or `accept` claims the session (first-claim-wins). Other clients then receive `cancel` with `reason=answered_elsewhere` and must stop ringing and tear down any local media. They must not receive `state: active` for a claim they lost, and a later `hangup` from a losing client must not BYE the winner's SIP dialog.
 - `hold` and `unhold` perform an in-dialog SIP re-INVITE (`inactive` and `sendrecv`). Success returns `hold_state`; an error leaves the previous hold state unchanged. `491` glare and other non-2xx responses are reported as errors without ending the call.
 - `client_state` may include `activeCalls` for diagnostics/admission visibility. The gateway still derives session ownership from successful offers and presented incoming calls.
 - Disconnect ends every call owned by that WebSocket. The last connection for the SIP identity then unregisters the agent trunk.
@@ -120,7 +121,12 @@ Auth behavior:
 - `pong`, `error`
   - Recoverable `send_message` failures include `operation:"send_message"` and `operationSessionId`. They intentionally omit `sessionId` so SDK versions through `0.1.30` do not mistake a chat delivery failure for a terminal call failure and close the active PeerConnection.
 - `cancel` -> cancels a previously presented incoming call and includes
-  `sessionId` plus `reason`.
+  `sessionId` plus `reason`. Known reasons: `caller_cancelled`, `no_answer`,
+  and `answered_elsewhere` (another client on the same SIP identity claimed
+  the call). After a successful `accept`, the gateway sends
+  `answered_elsewhere` to every other resolved client on that trunk. The
+  winning connection receives `state: active` and must not receive that
+  cancel.
 - `translation_caption` -> SIP-to-WebRTC caption event with `sessionId`,
   direction, source/target languages, recognized/translated text, and
   `isFinal`.
