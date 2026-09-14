@@ -25,6 +25,88 @@ func (s *Server) SendMessage(destination, from, body, contentType string) error 
 }
 
 func (s *Server) sendMessage(destination, from, body, contentType string) error {
+	params := sipAuthParams{
+		Domain:    s.getActiveDomain(),
+		Port:      s.getActivePort(),
+		Username:  s.getActiveUsername(),
+		Password:  s.getActivePassword(),
+		Transport: "tcp",
+	}
+	return s.sendMessageWithParams("", destination, from, body, contentType, params)
+}
+
+// SendMessageForSession sends an out-of-dialog MESSAGE through the PBX using
+// identities and credentials owned by sess. Asterisk is a B2BUA, so an
+// in-dialog MESSAGE can be accepted on one call leg without being forwarded to
+// the other leg. PBX-routed chat must instead address the remote SIP user and
+// identify the local agent explicitly.
+func (s *Server) SendMessageForSession(sess *session.Session, body, contentType string) error {
+	if sess == nil {
+		return fmt.Errorf("session is required")
+	}
+	destination, from, err := sessionMessageParties(sess)
+	if err != nil {
+		return err
+	}
+	params, err := s.resolveSessionSIPParams(sess)
+	if err != nil {
+		return fmt.Errorf("resolve SIP message route: %w", err)
+	}
+	return s.sendMessageWithParams(sess.ID, destination, from, body, contentType, params)
+}
+
+func sessionMessageParties(sess *session.Session) (destination, from string, err error) {
+	direction, callFrom, callTo, _ := sess.GetCallInfo()
+	switch strings.ToLower(strings.TrimSpace(direction)) {
+	case "inbound":
+		destination = messageURIAddress(callFrom)
+		from = messageURIUsername(callTo)
+	case "outbound":
+		destination = messageURIAddress(callTo)
+		from = messageURIUsername(callFrom)
+	default:
+		return "", "", fmt.Errorf("session %s has unsupported call direction %q", sess.ID, direction)
+	}
+	if destination == "" {
+		return "", "", fmt.Errorf("session %s has no remote SIP address", sess.ID)
+	}
+	if from == "" {
+		_, _, _, _, authUser, _, _ := sess.GetSIPAuthContext()
+		from = messageURIUsername(authUser)
+	}
+	if from == "" {
+		return "", "", fmt.Errorf("session %s has no local SIP user", sess.ID)
+	}
+	return destination, from, nil
+}
+
+// messageURIAddress preserves the remote SIP address captured from the active
+// call. This matches Linphone's linphone_call_get_remote_address() chat-room
+// behavior and, importantly, keeps the call peer's URI domain in Request-URI.
+func messageURIAddress(value string) string {
+	value = strings.TrimSpace(value)
+	if start := strings.Index(value, "<"); start >= 0 {
+		if end := strings.Index(value[start+1:], ">"); end >= 0 {
+			return strings.TrimSpace(value[start+1 : start+1+end])
+		}
+	}
+	return value
+}
+
+func messageURIUsername(value string) string {
+	value = messageURIAddress(value)
+	uriText := value
+	if !strings.HasPrefix(uriText, "sip:") && !strings.HasPrefix(uriText, "sips:") {
+		uriText = "sip:" + uriText
+	}
+	var parsed sip.Uri
+	if err := sip.ParseUri(uriText, &parsed); err == nil && parsed.User != "" {
+		return strings.TrimSpace(parsed.User)
+	}
+	return normalizeSIPUser(value)
+}
+
+func (s *Server) sendMessageWithParams(sessionID, destination, from, body, contentType string, params sipAuthParams) error {
 	if s.sipClient == nil {
 		return fmt.Errorf("SIP client not initialized")
 	}
@@ -33,7 +115,7 @@ func (s *Server) sendMessage(destination, from, body, contentType string) error 
 	defer cancel()
 
 	payloadID := s.storePayload(ctx, &logstore.PayloadRecord{
-		SessionID:   "",
+		SessionID:   sessionID,
 		Timestamp:   time.Now(),
 		Kind:        "sip_message",
 		ContentType: contentType,
@@ -42,61 +124,43 @@ func (s *Server) sendMessage(destination, from, body, contentType string) error 
 
 	s.logEvent(&logstore.Event{
 		Timestamp: time.Now(),
-		SessionID: "",
+		SessionID: sessionID,
 		Category:  "sip",
 		Name:      "sip_message_send_request",
 		PayloadID: payloadID,
 		Data:      map[string]interface{}{"destination": destination, "from": from},
 	})
 
-	// Use configured username if from is empty
+	// Use the session/configured username if from is empty.
 	if from == "" {
-		from = s.getActiveUsername()
+		from = params.Username
 	}
 
-	domain := s.getActiveDomain()
-	port := s.getActivePort()
-
-	// Parse destination - could be username, username@host, or full SIP URI
-	var recipient sip.Uri
-	// Try to parse as SIP URI (add sip: prefix if missing)
-	uriStr := destination
-	if !strings.HasPrefix(uriStr, "sip:") && !strings.HasPrefix(uriStr, "sips:") {
-		uriStr = "sip:" + uriStr
+	domain := params.Domain
+	port := params.Port
+	if domain == "" {
+		return fmt.Errorf("SIP domain is required")
+	}
+	if port == 0 {
+		port = 5060
+	}
+	transport := strings.ToUpper(strings.TrimSpace(params.Transport))
+	if transport == "" {
+		transport = "TCP"
 	}
 
-	var parsedURI sip.Uri
-	if err := sip.ParseUri(uriStr, &parsedURI); err == nil {
-		// Successfully parsed as URI
-		recipient = parsedURI
-		// If parsed URI doesn't have a port, use configured port
-		if recipient.Port == 0 {
-			recipient.Port = port
-		}
-		// If parsed URI doesn't have a host, use domain
-		if recipient.Host == "" {
-			recipient.Host = domain
-		}
-	} else {
-		// Failed to parse as URI, treat as username
-		recipient = sip.Uri{
-			User: destination,
-			Host: domain,
-			Port: port,
-		}
+	recipient, err := resolveMessageRecipient(destination, domain, port)
+	if err != nil {
+		return err
 	}
 
-	// If host is not an IP address, resolve it
-	if ip := net.ParseIP(recipient.Host); ip == nil {
-		// Host is a domain name, resolve it
-		ips, err := net.LookupIP(recipient.Host)
-		if err != nil {
-			return fmt.Errorf("failed to resolve host %s: %w", recipient.Host, err)
-		}
-		if len(ips) == 0 {
-			return fmt.Errorf("no IP addresses found for host %s", recipient.Host)
-		}
-		recipient.Host = ips[0].String()
+	// Request-URI identifies the active call peer, while the transaction's
+	// network next hop is always the session's registered proxy/Asterisk. Do not
+	// replace recipient.Host with a resolved IP: that changes the SIP identity
+	// Linphone preserves when it creates a chat room from the active call.
+	nextHopHost, err := resolveMessageNextHop(domain)
+	if err != nil {
+		return err
 	}
 
 	// Create MESSAGE request
@@ -107,7 +171,7 @@ func (s *Server) sendMessage(destination, from, body, contentType string) error 
 	viaHop := &sip.ViaHeader{
 		ProtocolName:    "SIP",
 		ProtocolVersion: "2.0",
-		Transport:       "TCP",
+		Transport:       transport,
 		Host:            s.publicAddress,
 		Port:            s.sipPort,
 	}
@@ -162,17 +226,31 @@ func (s *Server) sendMessage(destination, from, body, contentType string) error 
 	// Add User-Agent
 	req.AppendHeader(sip.NewHeader("User-Agent", "WebRTC-SIP-Gateway/1.0"))
 
-	// Set destination
-	destinationAddr := fmt.Sprintf("%s:%d", recipient.Host, recipient.Port)
+	// Route through the configured registrar/proxy, independently of the
+	// logical recipient in Request-URI and To.
+	destinationAddr := fmt.Sprintf("%s:%d", nextHopHost, port)
 	req.SetDestination(destinationAddr)
 
-	// CRITICAL: Force TCP transport to prevent sipgo DoDigestAuth from switching to UDP
-	req.SetTransport("TCP")
+	// Keep the registered trunk transport stable across authentication retries.
+	req.SetTransport(transport)
+	s.logEvent(&logstore.Event{
+		Timestamp: time.Now(),
+		SessionID: sessionID,
+		Category:  "sip",
+		Name:      "sip_message_route_selected",
+		Data: map[string]interface{}{
+			"request_uri":       recipient.String(),
+			"proxy_destination": destinationAddr,
+			"from":              from + "@" + domain,
+			"transport":         transport,
+		},
+	})
 
 	// Debug logging before sending
 	if s.config.DebugSIPMessage {
 		fmt.Printf("\n=== 💬 Sending SIP MESSAGE ===\n")
-		fmt.Printf("To: %s\n", recipient.String())
+		fmt.Printf("Request-URI: %s\n", recipient.String())
+		fmt.Printf("Proxy destination: %s\n", destinationAddr)
 		fmt.Printf("From: %s\n", from+"@"+domain)
 		fmt.Printf("Content-Type: %s\n", contentType)
 		fmt.Printf("Body: %s\n", body)
@@ -188,7 +266,7 @@ func (s *Server) sendMessage(destination, from, body, contentType string) error 
 	if err != nil {
 		s.logEvent(&logstore.Event{
 			Timestamp: time.Now(),
-			SessionID: "",
+			SessionID: sessionID,
 			Category:  "sip",
 			Name:      "sip_message_send_failed",
 			Data:      map[string]interface{}{"error": err.Error()},
@@ -206,7 +284,7 @@ func (s *Server) sendMessage(destination, from, body, contentType string) error 
 			}
 			s.logEvent(&logstore.Event{
 				Timestamp:     time.Now(),
-				SessionID:     "",
+				SessionID:     sessionID,
 				Category:      "sip",
 				Name:          "sip_message_response",
 				SIPStatusCode: res.StatusCode,
@@ -220,12 +298,12 @@ func (s *Server) sendMessage(destination, from, body, contentType string) error 
 				tx.Terminate()
 				s.logEvent(&logstore.Event{
 					Timestamp:     time.Now(),
-					SessionID:     "",
+					SessionID:     sessionID,
 					Category:      "sip",
 					Name:          "sip_message_auth_challenge",
 					SIPStatusCode: res.StatusCode,
 				})
-				return s.handleMessageAuth(ctx, req, res)
+				return s.handleMessageAuthWithParams(ctx, req, res, params)
 			}
 			return fmt.Errorf("MESSAGE failed: %d %s", res.StatusCode, res.Reason)
 		}
@@ -233,7 +311,7 @@ func (s *Server) sendMessage(destination, from, body, contentType string) error 
 		if err := tx.Err(); err != nil {
 			s.logEvent(&logstore.Event{
 				Timestamp: time.Now(),
-				SessionID: "",
+				SessionID: sessionID,
 				Category:  "sip",
 				Name:      "sip_message_transaction_error",
 				Data:      map[string]interface{}{"error": err.Error()},
@@ -243,7 +321,7 @@ func (s *Server) sendMessage(destination, from, body, contentType string) error 
 	case <-ctx.Done():
 		s.logEvent(&logstore.Event{
 			Timestamp: time.Now(),
-			SessionID: "",
+			SessionID: sessionID,
 			Category:  "sip",
 			Name:      "sip_message_timeout",
 		})
@@ -253,9 +331,72 @@ func (s *Server) sendMessage(destination, from, body, contentType string) error 
 	return nil
 }
 
+func resolveMessageNextHop(domain string) (string, error) {
+	domain = strings.TrimSpace(domain)
+	if domain == "" {
+		return "", fmt.Errorf("SIP domain is required")
+	}
+	if net.ParseIP(domain) != nil {
+		return domain, nil
+	}
+	ips, err := net.LookupIP(domain)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve SIP proxy %s: %w", domain, err)
+	}
+	if len(ips) == 0 {
+		return "", fmt.Errorf("no IP addresses found for SIP proxy %s", domain)
+	}
+	return ips[0].String(), nil
+}
+
+// resolveMessageRecipient distinguishes a bare SIP username from a hostname.
+// sipgo parses "sip:1429900148716" as a host-only URI; for PBX-routed chat the
+// same value means user 1429900148716 at the session's SIP domain.
+func resolveMessageRecipient(destination, domain string, port int) (sip.Uri, error) {
+	destination = messageURIAddress(destination)
+	if destination == "" {
+		return sip.Uri{}, fmt.Errorf("SIP MESSAGE destination is required")
+	}
+	if domain == "" {
+		return sip.Uri{}, fmt.Errorf("SIP domain is required")
+	}
+	if port == 0 {
+		port = 5060
+	}
+
+	hasScheme := strings.HasPrefix(destination, "sip:") || strings.HasPrefix(destination, "sips:")
+	if !hasScheme && !strings.Contains(destination, "@") {
+		return sip.Uri{User: destination, Host: domain, Port: port}, nil
+	}
+
+	uriText := destination
+	if !hasScheme {
+		uriText = "sip:" + uriText
+	}
+	var recipient sip.Uri
+	if err := sip.ParseUri(uriText, &recipient); err != nil {
+		return sip.Uri{}, fmt.Errorf("invalid SIP MESSAGE destination %q: %w", destination, err)
+	}
+	// Treat an explicit host-less URI such as sip:00025 as a username too.
+	if !strings.Contains(strings.TrimPrefix(strings.TrimPrefix(destination, "sip:"), "sips:"), "@") && recipient.User == "" {
+		recipient.User = recipient.Host
+		recipient.Host = domain
+	}
+	if recipient.User == "" {
+		return sip.Uri{}, fmt.Errorf("SIP MESSAGE destination %q has no user", destination)
+	}
+	if recipient.Host == "" {
+		recipient.Host = domain
+	}
+	if recipient.Port == 0 {
+		recipient.Port = port
+	}
+	return recipient, nil
+}
+
 // handleMessageAuth handles authentication for MESSAGE requests
-func (s *Server) handleMessageAuth(ctx context.Context, originalReq *sip.Request, challenge *sip.Response) error {
-	password := s.getActivePassword()
+func (s *Server) handleMessageAuthWithParams(ctx context.Context, originalReq *sip.Request, challenge *sip.Response, params sipAuthParams) error {
+	password := params.Password
 	if password == "" {
 		return fmt.Errorf("authentication required but no password configured")
 	}
@@ -275,7 +416,7 @@ func (s *Server) handleMessageAuth(ctx context.Context, originalReq *sip.Request
 	viaHop := &sip.ViaHeader{
 		ProtocolName:    "SIP",
 		ProtocolVersion: "2.0",
-		Transport:       "TCP",
+		Transport:       strings.ToUpper(originalReq.Transport()),
 		Host:            s.publicAddress,
 		Port:            s.sipPort,
 	}
@@ -290,12 +431,12 @@ func (s *Server) handleMessageAuth(ctx context.Context, originalReq *sip.Request
 
 	// Create digest credentials
 	digest := sipgo.DigestAuth{
-		Username: s.getActiveUsername(),
+		Username: params.Username,
 		Password: password,
 	}
 
 	if s.config.DebugSIPMessage {
-		fmt.Printf("💬 Sending authenticated MESSAGE with username: %s\n", s.getActiveUsername())
+		fmt.Printf("💬 Sending authenticated MESSAGE with username: %s\n", params.Username)
 	}
 
 	// Use DoDigestAuth to send authenticated request
@@ -325,22 +466,57 @@ func (s *Server) SendMessageToSession(sess *session.Session, body, contentType s
 	return err
 }
 
+// createInDialogMessageRequest builds MESSAGE from the same dialog metadata as
+// BYE and re-INVITE. Request-URI follows the remote Contact, while From/To,
+// tags, Call-ID, Route set, and the network next hop remain those of the dialog.
+func (s *Server) createInDialogMessageRequest(
+	sess *session.Session,
+	body string,
+	contentType string,
+) (*sip.Request, error) {
+	if sess == nil {
+		return nil, fmt.Errorf("session is required")
+	}
+	if !sess.HasDialogState() {
+		return nil, fmt.Errorf("session has no SIP dialog state")
+	}
+	_, _, remoteContact, _, _, _, _ := sess.GetSIPDialogState()
+	if strings.TrimSpace(remoteContact) == "" {
+		return nil, fmt.Errorf("session has no remote contact address")
+	}
+	_, _, _, sipCallID := sess.GetCallInfo()
+	if strings.TrimSpace(sipCallID) == "" {
+		return nil, fmt.Errorf("session has no SIP Call-ID")
+	}
+
+	req, err := s.createBYERequest(sess)
+	if err != nil {
+		return nil, fmt.Errorf("build in-dialog MESSAGE: %w", err)
+	}
+	req.Method = sip.MESSAGE
+	req.ReplaceHeader(&sip.CSeqHeader{
+		SeqNo:      uint32(sess.NextSIPCSeq()),
+		MethodName: sip.MESSAGE,
+	})
+	if contentType == "" {
+		contentType = "text/plain;charset=UTF-8"
+	}
+	req.AppendHeader(sip.NewHeader("Content-Type", contentType))
+	req.SetBody([]byte(body))
+	return req, nil
+}
+
 func (s *Server) sendMessageToSession(sess *session.Session, body, contentType string) error {
 	if s.sipClient == nil {
 		return fmt.Errorf("SIP client not initialized")
 	}
-
-	_, _, remoteContact, _, _, _, _ := sess.GetSIPDialogState()
-	if remoteContact == "" {
-		return fmt.Errorf("session has no remote contact address")
+	if contentType == "" {
+		contentType = "text/plain;charset=UTF-8"
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// Parse the remote contact URI
-	var recipient sip.Uri
-	fromTag, toTag, remoteContact, routeSet, _, _, _ := sess.GetSIPDialogState()
 	_, _, _, sipCallID := sess.GetCallInfo()
 
 	payloadID := s.storePayload(ctx, &logstore.PayloadRecord{
@@ -358,105 +534,17 @@ func (s *Server) sendMessageToSession(sess *session.Session, body, contentType s
 		PayloadID: payloadID,
 		Data:      map[string]interface{}{"call_id": sipCallID},
 	})
-	contactStr := remoteContact
-	// Remove angle brackets if present: <sip:user@host> -> sip:user@host
-	contactStr = strings.TrimPrefix(contactStr, "<")
-	contactStr = strings.TrimSuffix(contactStr, ">")
-
-	if err := sip.ParseUri(contactStr, &recipient); err != nil {
-		return fmt.Errorf("failed to parse remote contact URI: %w", err)
+	req, err := s.createInDialogMessageRequest(sess, body, contentType)
+	if err != nil {
+		return err
 	}
-
-	// If no port specified, default to 5060
-	if recipient.Port == 0 {
-		recipient.Port = 5060
-	}
-
-	// Increment CSeq for this session
-	cseq := sess.NextSIPCSeq()
-
-	// Create MESSAGE request
-	req := sip.NewRequest(sip.MESSAGE, recipient)
-	req.SetBody([]byte(body))
-
-	// Add Via header
-	viaHop := &sip.ViaHeader{
-		ProtocolName:    "SIP",
-		ProtocolVersion: "2.0",
-		Transport:       "TCP",
-		Host:            s.publicAddress,
-		Port:            s.sipPort,
-	}
-	inDialogViaParams := sip.NewParams()
-	inDialogViaParams.Add("branch", sip.GenerateBranch())
-	viaHop.Params = inDialogViaParams
-	req.AppendHeader(viaHop)
-
-	// Add Route headers if we have a route set (for proper routing through proxies)
-	for _, route := range routeSet {
-		req.AppendHeader(sip.NewHeader("Route", route))
-	}
-
-	// Add From header with our tag
-	fromUri := sip.Uri{
-		User: s.getActiveUsername(),
-		Host: s.getActiveDomain(),
-	}
-	fromParams := sip.NewParams()
-	fromParams.Add("tag", fromTag)
-	req.AppendHeader(&sip.FromHeader{
-		Address: fromUri,
-		Params:  fromParams,
-	})
-
-	// Add To header with remote tag
-	toParams := sip.NewParams()
-	toParams.Add("tag", toTag)
-	req.AppendHeader(&sip.ToHeader{
-		Address: recipient,
-		Params:  toParams,
-	})
-
-	// Add Call-ID from session
-	req.AppendHeader(sip.NewHeader("Call-ID", sipCallID))
-
-	// Add CSeq
-	req.AppendHeader(sip.NewHeader("CSeq", fmt.Sprintf("%d MESSAGE", cseq)))
-
-	// Add Max-Forwards
-	req.AppendHeader(sip.NewHeader("Max-Forwards", "70"))
-
-	// Add Content-Type
-	if contentType == "" {
-		contentType = "text/plain;charset=UTF-8"
-	}
-	req.AppendHeader(sip.NewHeader("Content-Type", contentType))
-
-	// Add Contact header
-	contactUri := sip.Uri{
-		User: s.getActiveUsername(),
-		Host: s.publicAddress,
-		Port: s.sipPort,
-	}
-	req.AppendHeader(&sip.ContactHeader{
-		Address: contactUri,
-	})
-
-	// Add User-Agent
-	req.AppendHeader(sip.NewHeader("User-Agent", "WebRTC-SIP-Gateway/1.0"))
-
-	// Set destination - use the host:port from the recipient Contact
-	destinationAddr := fmt.Sprintf("%s:%d", recipient.Host, recipient.Port)
-	req.SetDestination(destinationAddr)
-
-	// CRITICAL: Force TCP transport to prevent sipgo DoDigestAuth from switching to UDP
-	req.SetTransport("TCP")
 
 	// Debug logging
 	if s.config.DebugSIPMessage {
 		fmt.Printf("\n=== 💬 Sending In-Dialog SIP MESSAGE ===\n")
 		fmt.Printf("Session: %s\n", sess.ID)
-		fmt.Printf("To: %s\n", recipient.String())
+		fmt.Printf("Request-URI: %s\n", req.Recipient.String())
+		fmt.Printf("Destination: %s\n", req.Destination())
 		fmt.Printf("Call-ID: %s\n", sipCallID)
 		fmt.Printf("Content-Type: %s\n", contentType)
 		fmt.Printf("Body: %s\n", body)

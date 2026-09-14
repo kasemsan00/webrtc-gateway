@@ -213,6 +213,9 @@ func (s *apiHandlerSIPMakerStub) SendDTMF(_ *session.Session, digits string) err
 func (s *apiHandlerSIPMakerStub) AcceptCall(_ *session.Session) error           { return nil }
 func (s *apiHandlerSIPMakerStub) RejectCall(_ *session.Session, _ string) error { return nil }
 func (s *apiHandlerSIPMakerStub) SendMessage(_, _, _, _ string) error           { return nil }
+func (s *apiHandlerSIPMakerStub) SendMessageForSession(_ *session.Session, _, _ string) error {
+	return nil
+}
 func (s *apiHandlerSIPMakerStub) SendMessageToSession(_ *session.Session, _, _ string) error {
 	return nil
 }

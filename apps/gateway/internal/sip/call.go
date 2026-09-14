@@ -897,7 +897,6 @@ func (s *Server) acceptCall(sess *session.Session) error {
 		State:     string(session.StateActive),
 	})
 	s.logSessionSnapshot(ctx, sess, "")
-
 	// Clear stored transaction and request
 	sess.ClearIncomingInvite()
 

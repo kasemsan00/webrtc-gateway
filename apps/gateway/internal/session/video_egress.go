@@ -42,8 +42,15 @@ func (s *Session) DetachPeerConnection() *webrtc.PeerConnection {
 	s.StopVideoEgress()
 	s.mu.Lock()
 	pc := s.PeerConnection
+	legacy := s.legacyPeerConnection
 	s.PeerConnection = nil
+	s.legacyPeerConnection = nil
+	s.legacyAudioTrack = nil
+	s.legacyVideoTrack = nil
 	s.mu.Unlock()
+	if legacy != nil && legacy != pc {
+		ClosePeerConnectionAsync(legacy, s.ID)
+	}
 	return pc
 }
 

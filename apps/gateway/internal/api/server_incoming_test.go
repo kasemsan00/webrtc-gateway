@@ -57,6 +57,9 @@ func (s *incomingTestSIPCallMaker) RejectCall(sess *session.Session, reason stri
 func (s *incomingTestSIPCallMaker) SendMessage(destination, from, body, contentType string) error {
 	return nil
 }
+func (s *incomingTestSIPCallMaker) SendMessageForSession(sess *session.Session, body, contentType string) error {
+	return nil
+}
 func (s *incomingTestSIPCallMaker) SendMessageToSession(sess *session.Session, body, contentType string) error {
 	return nil
 }
@@ -1171,6 +1174,7 @@ func TestIncomingAcceptThenHangup_UsesSessionWithDialogState(t *testing.T) {
 	}
 	incomingSess.SetState(session.StateIncoming)
 	incomingSess.SetCallInfo("inbound", "sip:00025@203.150.245.42:5060", "sip:1100@203.151.21.121:5060", "sip-call-3")
+	incomingSess.SetSIPAuthContext("trunk", "", 25, "203.150.245.41", "1100", "secret", 5060)
 
 	sipMaker := &incomingTestSIPCallMaker{}
 	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, sipMaker, nil, nil, nil)
@@ -1201,5 +1205,11 @@ func TestIncomingAcceptThenHangup_UsesSessionWithDialogState(t *testing.T) {
 	}
 	if domain == "" || port == 0 {
 		t.Fatalf("expected dialog domain/port to be present on hangup session, got domain=%q port=%d", domain, port)
+	}
+	authMode, _, trunkID, authDomain, authUsername, authPassword, authPort := sipMaker.lastHangup.GetSIPAuthContext()
+	// Dialog establishment may replace SIPDomain with the dialog next hop; the
+	// trunk ID and credentials must still survive the incoming->WebRTC transfer.
+	if authMode != "trunk" || trunkID != 25 || authDomain == "" || authUsername != "1100" || authPassword != "secret" || authPort != 5060 {
+		t.Fatalf("incoming SIP auth context was not transferred to call session: mode=%q trunk=%d domain=%q username=%q port=%d", authMode, trunkID, authDomain, authUsername, authPort)
 	}
 }

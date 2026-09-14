@@ -12,24 +12,32 @@ import (
 	pkg_webrtc "webrtc-sip-gateway/internal/pkg/webrtc"
 )
 
-// createReplacementPeerConnection closes the live WebRTC PeerConnection and
-// builds a new one with fresh ICE/DTLS, keeping SIP RTP sockets. Used by
-// resume (gateway answers a client offer) and @switch (gateway offers so
-// Android can answer on a new PC as well).
+// createReplacementPeerConnection builds a new PeerConnection with fresh
+// ICE/DTLS, keeping SIP RTP sockets. Resume closes the live PC immediately.
+// @switch uses keepExisting so the old PC stays up until the new one
+// ICE-connects (make-before-break).
 func (s *Session) createReplacementPeerConnection(
 	turnConfig config.TURNConfig,
 	debugTURN bool,
 	videoDiag renegotiateVideoOfferDiagnostics,
+	keepExisting bool,
 ) (*webrtc.PeerConnection, error) {
 	var videoOnTrackObserved atomic.Bool
 
 	s.mu.Lock()
 	oldPC := s.PeerConnection
-	s.PeerConnection = nil
+	oldAudio := s.AudioTrack
+	oldVideo := s.VideoTrack
 	s.pendingRemoteICE = nil
+	if !keepExisting {
+		s.PeerConnection = nil
+		s.legacyPeerConnection = nil
+		s.legacyAudioTrack = nil
+		s.legacyVideoTrack = nil
+	}
 	s.mu.Unlock()
 
-	if oldPC != nil {
+	if !keepExisting && oldPC != nil {
 		fmt.Printf("[%s] 🔄 Closing old PeerConnection\n", s.ID)
 		oldPC.Close()
 	}
@@ -76,6 +84,10 @@ func (s *Session) createReplacementPeerConnection(
 	}
 
 	s.mu.Lock()
+	if keepExisting && oldPC != nil {
+		s.armMakeBeforeBreakLocked(oldPC, oldAudio, oldVideo)
+		fmt.Printf("[%s] switch_renegotiate_make_before_break_armed\n", s.ID)
+	}
 	s.AudioTrack = audioTrack
 	s.VideoTrack = videoTrack
 	s.mu.Unlock()
@@ -195,6 +207,7 @@ func (s *Session) createReplacementPeerConnection(
 
 			fmt.Printf("[%s] ✅ Renegotiated connection established\n", id)
 			s.SetState(StateActive)
+			s.commitMakeBeforeBreak(newPC)
 			s.StartVideoRecoveryBurst("renegotiated-ice-connected")
 			s.RequestSIPVideoIDRReplay("renegotiated-ice-connected")
 			go func() {
@@ -207,6 +220,10 @@ func (s *Session) createReplacementPeerConnection(
 				s.SendPLItoWebRTC()
 			}()
 		} else if connectionState == webrtc.ICEConnectionStateFailed {
+			if s.AbortMakeBeforeBreak() {
+				fmt.Printf("[%s] ❌ Renegotiated connection failed; restored previous PeerConnection\n", id)
+				return
+			}
 			fmt.Printf("[%s] ❌ Renegotiated connection failed\n", id)
 			s.SetState(StateEnded)
 		}

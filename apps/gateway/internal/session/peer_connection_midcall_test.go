@@ -20,6 +20,9 @@ func TestPrepareSwitchPeerConnectionAnswersClientOffer(t *testing.T) {
 	if sess.PeerConnection == nil || sess.PeerConnection == old {
 		t.Fatal("expected @switch to replace the PeerConnection")
 	}
+	if sess.legacyPeerConnection != old {
+		t.Fatal("expected @switch to park the previous PeerConnection")
+	}
 
 	clientMedia, err := createCustomMediaEngine()
 	if err != nil {

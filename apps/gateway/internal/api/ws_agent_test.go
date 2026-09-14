@@ -526,6 +526,104 @@ func TestAgentAllowlistRejectsTrunkPushToken(t *testing.T) {
 	}
 }
 
+type agentMessageSIPMaker struct {
+	incomingTestSIPCallMaker
+	inDialogCount    int
+	outOfDialogCount int
+	lastSession      *session.Session
+	lastBody         string
+	lastContentType  string
+	inDialogErr      error
+}
+
+func (s *agentMessageSIPMaker) SendMessage(destination, from, body, contentType string) error {
+	s.outOfDialogCount++
+	return nil
+}
+
+func (s *agentMessageSIPMaker) SendMessageForSession(sess *session.Session, body, contentType string) error {
+	s.inDialogCount++
+	s.lastSession = sess
+	s.lastBody = body
+	s.lastContentType = contentType
+	return s.inDialogErr
+}
+
+func (s *agentMessageSIPMaker) SendMessageToSession(sess *session.Session, body, contentType string) error {
+	s.inDialogCount++
+	s.lastSession = sess
+	s.lastBody = body
+	s.lastContentType = contentType
+	return s.inDialogErr
+}
+
+func TestAgentSendMessageUsesOwnedSessionAndAcknowledgesHeldCall(t *testing.T) {
+	maker := &agentMessageSIPMaker{}
+	srv := newAgentTestServer(t, &agentTrunkManagerStub{})
+	srv.sipMaker = maker
+	client := newAgentWSClient()
+	sess, err := srv.sessionMgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	sess.UpdateState(session.StateActive)
+	sess.SetHeld(true)
+	sess.SetSIPDialogState("local", "remote", "<sip:2002@example.com>", "example.com", 5060, 1, nil)
+	srv.bindClientSession(client, sess.ID)
+
+	srv.handleWSMessage(client, []byte(`{"type":"send_message","sessionId":"`+sess.ID+`","destination":"2002","body":"hello"}`))
+
+	if maker.inDialogCount != 1 || maker.lastSession != sess {
+		t.Fatalf("expected one in-dialog MESSAGE for owned session, count=%d session=%v", maker.inDialogCount, maker.lastSession)
+	}
+	if maker.outOfDialogCount != 0 {
+		t.Fatalf("agent MESSAGE must not fall back to out-of-dialog send, got %d calls", maker.outOfDialogCount)
+	}
+	if maker.lastBody != "hello" || maker.lastContentType != "text/plain;charset=UTF-8" {
+		t.Fatalf("unexpected MESSAGE payload body=%q contentType=%q", maker.lastBody, maker.lastContentType)
+	}
+	msgs := readAgentWSMessages(t, client)
+	if len(msgs) != 1 || msgs[0].Type != "messageSent" || msgs[0].SessionID != sess.ID || msgs[0].Body != "hello" {
+		t.Fatalf("expected session-scoped messageSent, got %+v", msgs)
+	}
+}
+
+func TestAgentSendMessageRejectsMissingUnownedAndSIPFailure(t *testing.T) {
+	maker := &agentMessageSIPMaker{inDialogErr: errors.New("SIP 488")}
+	srv := newAgentTestServer(t, &agentTrunkManagerStub{})
+	srv.sipMaker = maker
+	client := newAgentWSClient()
+	owned, err := srv.sessionMgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("CreateSession owned: %v", err)
+	}
+	owned.UpdateState(session.StateActive)
+	owned.SetSIPDialogState("local", "remote", "<sip:2002@example.com>", "example.com", 5060, 1, nil)
+	srv.bindClientSession(client, owned.ID)
+	unowned, err := srv.sessionMgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("CreateSession unowned: %v", err)
+	}
+
+	srv.handleWSMessage(client, []byte(`{"type":"send_message","body":"missing"}`))
+	srv.handleWSMessage(client, []byte(`{"type":"send_message","sessionId":"`+unowned.ID+`","body":"unowned"}`))
+	srv.handleWSMessage(client, []byte(`{"type":"send_message","sessionId":"`+owned.ID+`","body":"fails"}`))
+
+	if maker.inDialogCount != 1 || maker.outOfDialogCount != 0 {
+		t.Fatalf("expected only the owned SIP attempt, in-dialog=%d out-of-dialog=%d", maker.inDialogCount, maker.outOfDialogCount)
+	}
+	msgs := readAgentWSMessages(t, client)
+	if len(msgs) != 3 || msgs[0].Type != "error" || msgs[1].Type != "error" || msgs[2].Type != "error" {
+		t.Fatalf("expected errors for missing, unowned, and SIP failure, got %+v", msgs)
+	}
+	if !strings.Contains(msgs[2].Error, "SIP 488") || msgs[2].SessionID != "" || msgs[2].OperationSessionID != owned.ID {
+		t.Fatalf("expected recoverable session-correlated SIP failure, got %+v", msgs[2])
+	}
+	if msgs[2].Operation != "send_message" {
+		t.Fatalf("expected recoverable send_message operation marker, got %+v", msgs[2])
+	}
+}
+
 func TestNormalizeDevicePlatformStillRejectsAgentValues(t *testing.T) {
 	if _, ok := normalizeDevicePlatform("agent"); ok {
 		t.Fatalf("agent must not be accepted as mobile devicePlatform")

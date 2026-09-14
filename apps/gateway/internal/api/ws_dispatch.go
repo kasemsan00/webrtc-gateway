@@ -98,7 +98,7 @@ func (s *Server) allowAgentWSMessage(client *WSClient, msg WSMessage) (bool, str
 			return true, ""
 		}
 		return s.agentClientCanAccessSession(client, msg)
-	case "call", "ice", "hangup", "accept", "reject", "dtmf", "request_keyframe", "renegotiate_answer", "hold", "unhold":
+	case "call", "ice", "hangup", "accept", "reject", "dtmf", "send_message", "request_keyframe", "renegotiate_answer", "hold", "unhold":
 		return s.agentClientCanAccessSession(client, msg)
 	case "trunk_push_token", "trunk_resolve", "resume":
 		return false, fmt.Sprintf("Message type %q is not allowed on agent WebSocket", msg.Type)

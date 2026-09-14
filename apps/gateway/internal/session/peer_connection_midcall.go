@@ -9,12 +9,12 @@ import (
 	"webrtc-sip-gateway/internal/config"
 )
 
-// PrepareSwitchPeerConnection replaces the live WebRTC PeerConnection without
-// creating a gateway offer. Android cannot reliably answer a mid-call remote
-// offer on a fresh PC; @switch therefore uses the resume contract: client
-// creates the offer, gateway answers.
+// PrepareSwitchPeerConnection creates a replacement PeerConnection without
+// creating a gateway offer and without closing the live PC. @switch uses the
+// resume contract (client offer / gateway answer) with make-before-break:
+// SIP audio keeps flowing on the old PC until the new ICE connects.
 func (s *Session) PrepareSwitchPeerConnection(turnConfig config.TURNConfig, debugTURN bool) error {
-	newPC, err := s.createReplacementPeerConnection(turnConfig, debugTURN, renegotiateVideoOfferDiagnostics{})
+	newPC, err := s.createReplacementPeerConnection(turnConfig, debugTURN, renegotiateVideoOfferDiagnostics{}, true)
 	if err != nil {
 		return err
 	}
@@ -22,7 +22,7 @@ func (s *Session) PrepareSwitchPeerConnection(turnConfig config.TURNConfig, debu
 	s.PeerConnection = newPC
 	s.UpdatedAt = time.Now()
 	s.mu.Unlock()
-	fmt.Printf("[%s] switch_renegotiate_pc_replaced\n", s.ID)
+	fmt.Printf("[%s] switch_renegotiate_pc_replaced make_before_break=true\n", s.ID)
 	return nil
 }
 

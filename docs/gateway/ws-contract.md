@@ -58,7 +58,7 @@ Auth behavior:
 - Multiple `/ws-agent` clients may share the same SIP identity (refcount). REGISTER stays while refcount ≥ 1.
 - When the last bound agent WebSocket disconnects: hang up any remaining call sessions for that trunk, then SIP UNREGISTER immediately (no grace period).
 - No FCM/APNs push for agent offline incoming; zero bound clients → offline reject.
-- Allowed messages: `agent_register`, `offer`, `ice`, `call`, `hangup`, `accept`, `reject`, `dtmf`, `hold`, `unhold`, `ping`, `request_keyframe`, `renegotiate_answer`, `client_state`.
+- Allowed messages: `agent_register`, `offer`, `ice`, `call`, `hangup`, `accept`, `reject`, `dtmf`, `send_message`, `hold`, `unhold`, `ping`, `request_keyframe`, `renegotiate_answer`, `client_state`.
 - Rejected on `/ws-agent`: `trunk_push_token`, `trunk_resolve`, `resume`, and other non-allowlisted types.
 
 #### `/ws-agent` multi-call negotiation
@@ -84,7 +84,7 @@ Auth behavior:
 - `reject` -> requires `sessionId` (`reason` optional, defaults to `busy`)
 - `dtmf` -> requires `sessionId`, `digits`
 - `hold` / `unhold` -> `/ws-agent` multi-call only; requires an active, owned `sessionId`
-- `send_message` -> requires `body`; use in-dialog if session exists, otherwise requires `destination`
+- `send_message` -> requires `body`; when a session exists, sends an out-of-dialog PBX-routed SIP MESSAGE using the remote/local identities and SIP credentials stored on that session. This is intentional for Asterisk B2BUA interoperability: a `2xx` response to an in-dialog MESSAGE does not guarantee forwarding to the other call leg. Without a session, `destination` is required. On `/ws-agent`, it requires an owned active-call `sessionId`, supports held calls, and never trusts caller-supplied `destination`/`from`. Success returns `messageSent` with the same `sessionId` and `body`. Chat bootstrap/control payloads are initiated by the Electron/Web client so the client can supply the dynamic queue extension and agent identity.
 - `resume` -> requires `sessionId`, optional `sdp`
 - `trunk_resolve` -> requires `sipDomain`, `sipUsername`, `sipPassword`, optional `sipPort` (resolve-only; no auto-create)
   - Mobile clients may include `devicePlatform` (`ios` or `android`) so the gateway can persist the latest online platform for incoming push routing.
@@ -111,11 +111,14 @@ Auth behavior:
   - Out-of-dialog MESSAGE (no matching call session, e.g. PBX DND `DND0`/`DND1`/`DND2`) is sent to every resolved `/ws` or `/ws-agent` client whose trunk username matches the SIP `To` user. `sessionId` is omitted.
 - `renegotiate`, `renegotiate_result`
   - `renegotiate` is additive mid-call WebRTC assistance for SIP re-INVITE/UPDATE media changes and for an accepted `@switch` MESSAGE (`reason=agent_switch`). It includes `sessionId`, `renegotiationId`, optional `sdp`, `reason`, `mediaDirection`, `hasVideo`, and `requiresAnswer`.
-  - Clients that support it respond with `renegotiate_answer` (`sessionId`, `renegotiationId`, optional `sdp`, `status`, optional `reason`). For `agent_switch`, the gateway applies the answer SDP to its active PeerConnection. SIP→WebRTC video is held until that answer is applied.
+  - SIP re-INVITE/UPDATE uses a gateway offer in `sdp`; the client answers with `renegotiate_answer`.
+  - For `agent_switch`, `sdp` is empty. The client must create an offer (resume-style, make-before-break: do not close the live PeerConnection first) and send it in `renegotiate_answer`. The gateway applies that client offer, creates an answer, and returns it in `renegotiate_result.sdp`. SIP→WebRTC video is held until that offer is applied; the previous PeerConnection stays parked until ICE connected.
+  - Clients that support it respond with `renegotiate_answer` (`sessionId`, `renegotiationId`, optional `sdp`, `status`, optional `reason`). Unsupported clients that ignore `renegotiate` will lose the WebRTC media path after `@switch` because the gateway has already created a replacement PeerConnection.
 - `resumed`, `resume_failed`, `resume_redirect`
 - `trunk_resolved`, `trunk_redirect`, `trunk_not_found`, `trunk_not_ready`
   - `trunk_resolved` now returns both `trunkId` and `trunkPublicId`
 - `pong`, `error`
+  - Recoverable `send_message` failures include `operation:"send_message"` and `operationSessionId`. They intentionally omit `sessionId` so SDK versions through `0.1.30` do not mistake a chat delivery failure for a terminal call failure and close the active PeerConnection.
 - `cancel` -> cancels a previously presented incoming call and includes
   `sessionId` plus `reason`.
 - `translation_caption` -> SIP-to-WebRTC caption event with `sessionId`,

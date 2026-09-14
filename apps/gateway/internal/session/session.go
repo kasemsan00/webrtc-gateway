@@ -59,10 +59,15 @@ type Session struct {
 	PeerConnection *webrtc.PeerConnection      `json:"-"`
 	AudioTrack     *webrtc.TrackLocalStaticRTP `json:"-"`
 	VideoTrack     *webrtc.TrackLocalStaticRTP `json:"-"`
-	RTPConn        *net.UDPConn                `json:"-"`
-	VideoRTPConn   *net.UDPConn                `json:"-"`
-	AudioRTCPConn  *net.UDPConn                `json:"-"` // Dedicated RTCP port for audio (RTP+1)
-	VideoRTCPConn  *net.UDPConn                `json:"-"` // Dedicated RTCP port for video (RTP+1)
+	// Make-before-break @switch: the previous WebRTC PC stays up until the
+	// replacement ICE-connects so the client keeps last-frame video and audio.
+	legacyPeerConnection *webrtc.PeerConnection      `json:"-"`
+	legacyAudioTrack     *webrtc.TrackLocalStaticRTP `json:"-"`
+	legacyVideoTrack     *webrtc.TrackLocalStaticRTP `json:"-"`
+	RTPConn              *net.UDPConn                `json:"-"`
+	VideoRTPConn         *net.UDPConn                `json:"-"`
+	AudioRTCPConn        *net.UDPConn                `json:"-"` // Dedicated RTCP port for audio (RTP+1)
+	VideoRTCPConn        *net.UDPConn                `json:"-"` // Dedicated RTCP port for video (RTP+1)
 	// mediaForwardReady is set after ResetMediaState and RTP listeners are bound.
 	// OnTrack can fire before MakeCall/AcceptCall finishes that setup.
 	mediaForwardReady bool         `json:"-"`

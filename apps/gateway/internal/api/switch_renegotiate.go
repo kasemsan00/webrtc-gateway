@@ -44,6 +44,7 @@ func (s *Server) StartSwitchVideoRenegotiation(sessionID string, generation int)
 	})
 	if !ok {
 		sess.ReleaseSwitchVideoRenegotiationClaim(generation)
+		sess.AbortMakeBeforeBreak()
 		fmt.Printf("[%s] switch_renegotiate_pending_blocked generation=%d\n", sessionID, generation)
 		return
 	}

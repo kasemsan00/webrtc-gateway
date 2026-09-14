@@ -347,7 +347,7 @@ func (s *Server) handleAudioRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 			outBuf := buffer[:n]
 			packet := &rtp.Packet{}
 			if err := packet.Unmarshal(buffer[:n]); err != nil {
-				if _, writeErr := sess.AudioTrack.Write(outBuf); writeErr != nil {
+				if writeErr := sess.WriteAudioToWebRTC(outBuf); writeErr != nil {
 					fmt.Printf("[%s] Error writing to audio track: %v\n", sess.ID, writeErr)
 					return
 				}
@@ -414,7 +414,7 @@ func (s *Server) handleAudioRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 				}
 			}
 
-			if _, err := sess.AudioTrack.Write(outBuf); err != nil {
+			if err := sess.WriteAudioToWebRTC(outBuf); err != nil {
 				fmt.Printf("[%s] Error writing to audio track: %v\n", sess.ID, err)
 				return
 			}

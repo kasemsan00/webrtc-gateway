@@ -5,3 +5,20 @@ export type GatewayConfigResponse = {
   source: string
   sections: GatewayConfigSections
 }
+
+export type ConfigValueType =
+  | 'boolean'
+  | 'number'
+  | 'string'
+  | 'secret'
+  | 'empty'
+  | 'other'
+
+export type FlatConfigItem = {
+  id: string
+  subsystem: string
+  key: string
+  fullKey: string
+  value: unknown
+  type: ConfigValueType
+}

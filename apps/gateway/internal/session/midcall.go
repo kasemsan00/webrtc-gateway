@@ -128,8 +128,8 @@ func (s *Session) CompleteMidCallRenegotiation(id, answerSDP string) bool {
 // FailMidCallRenegotiation clears a matching pending negotiation as failed.
 func (s *Session) FailMidCallRenegotiation(id string, statusCode int, reason string) bool {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.PendingMidCallRenegotiation == nil || s.PendingMidCallRenegotiation.ID != id {
+		s.mu.Unlock()
 		return false
 	}
 	clearSwitchVideoRenegotiateHoldLocked(s, s.PendingMidCallRenegotiation.Source)
@@ -138,6 +138,8 @@ func (s *Session) FailMidCallRenegotiation(id string, statusCode int, reason str
 	s.PendingMidCallRenegotiation.Reason = reason
 	s.PendingMidCallRenegotiation = nil
 	s.UpdatedAt = time.Now()
+	s.mu.Unlock()
+	s.AbortMakeBeforeBreak()
 	return true
 }
 

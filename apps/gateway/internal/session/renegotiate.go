@@ -96,7 +96,7 @@ func (s *Session) RenegotiatePeerConnection(newOfferSDP string, turnConfig confi
 		fmt.Printf("[%s] 💾 Cached SPS/PPS from SDP (renegotiate-offer) (SPS=%d bytes, PPS=%d bytes)\n", s.ID, len(offerSPS), len(offerPPS))
 	}
 
-	newPC, err := s.createReplacementPeerConnection(turnConfig, debugTURN, videoDiag)
+	newPC, err := s.createReplacementPeerConnection(turnConfig, debugTURN, videoDiag, false)
 	if err != nil {
 		return err
 	}

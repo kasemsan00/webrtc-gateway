@@ -77,11 +77,15 @@ func findInviteLogEvent(events []*logstore.Event, name string) *logstore.Event {
 type inviteNotifierStub struct {
 	calls   int
 	trunkID int64
+	from    string
+	to      string
 }
 
-func (n *inviteNotifierStub) NotifyIncomingCall(_ string, _, _ string, trunkID int64) {
+func (n *inviteNotifierStub) NotifyIncomingCall(_ string, from, to string, trunkID int64) {
 	n.calls++
 	n.trunkID = trunkID
+	n.from = from
+	n.to = to
 }
 
 func (n *inviteNotifierStub) NotifyIncomingCancel(string, int64, string) {}
@@ -126,6 +130,12 @@ func TestHandleINVITE_OriginMatchNotifiesIncomingCall(t *testing.T) {
 	}
 	if notifier.trunkID != 725 {
 		t.Fatalf("expected trunk 725, got %d", notifier.trunkID)
+	}
+	if notifier.from != "sip:0000178810139@203.150.245.41" {
+		t.Fatalf("expected routable SIP From instead of display name, got %q", notifier.from)
+	}
+	if notifier.to != "sip:00025@203.151.21.121:5090" {
+		t.Fatalf("unexpected SIP To identity: %q", notifier.to)
 	}
 	selected := findInviteLogEvent(logs.events, "sip_invite_trunk_match_selected")
 	if selected == nil {

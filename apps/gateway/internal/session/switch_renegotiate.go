@@ -18,10 +18,9 @@ func IsSwitchVideoRenegotiationSource(source string) bool {
 
 // TryClaimSwitchVideoRenegotiation reserves one renegotiation attempt per
 // switch generation while no other mid-call negotiation is pending.
-// It also holds SIP→WebRTC video until the client answers (or the attempt fails)
-// so Android is not decoding a live GOP during setRemoteDescription.
-// The offer is built on a replacement PeerConnection so the Android
-// client can answer on its own new PC (1.1.0 resume-style).
+// SIP→WebRTC video is held off the replacement PC until the client answers
+// (or the attempt fails). The live PC stays parked for make-before-break
+// so the last frame remains on the old decoder.
 func (s *Session) TryClaimSwitchVideoRenegotiation(generation int) bool {
 	if generation <= 0 {
 		return false

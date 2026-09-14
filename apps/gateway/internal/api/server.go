@@ -103,6 +103,7 @@ type SIPCallMaker interface {
 	RejectCall(sess *session.Session, reason string) error
 	// SIP Messaging
 	SendMessage(destination, from, body, contentType string) error
+	SendMessageForSession(sess *session.Session, body, contentType string) error
 	SendMessageToSession(sess *session.Session, body, contentType string) error
 	TriggerSwitchMessage(body, callerURI string) error
 }
@@ -146,7 +147,11 @@ type WSMessage struct {
 	Reason       string          `json:"reason,omitempty"`
 	ReasonSource string          `json:"reasonSource,omitempty"`
 	Error        string          `json:"error,omitempty"`
-	HasVideo     string          `json:"hasVideo,omitempty"`
+	Operation    string          `json:"operation,omitempty"`
+	// OperationSessionID correlates recoverable operation errors without using
+	// SessionID, which legacy SDKs interpret as a terminal call failure.
+	OperationSessionID string `json:"operationSessionId,omitempty"`
+	HasVideo           string `json:"hasVideo,omitempty"`
 	// Remote media presence (SIP→WebRTC): use Kind + Direction + State.
 	// Kind is audio|video; Direction is remote (v1). Direction is also used by translation captions.
 	Kind string `json:"kind,omitempty"`

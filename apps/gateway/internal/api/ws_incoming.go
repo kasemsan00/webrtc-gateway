@@ -520,6 +520,8 @@ func (s *Server) handleWSAccept(client *WSClient, msg WSMessage) {
 	webrtcSess.CopyIncomingInviteFrom(incomingSess)
 	_, from, to, sipCallID := incomingSess.GetCallInfo()
 	webrtcSess.SetCallInfo("inbound", from, to, sipCallID)
+	authMode, accountKey, trunkID, sipDomain, sipUsername, sipPassword, sipPort := incomingSess.GetSIPAuthContext()
+	webrtcSess.SetSIPAuthContext(authMode, accountKey, trunkID, sipDomain, sipUsername, sipPassword, sipPort)
 
 	// Determine which session to use for the call
 	callSession := webrtcSess

@@ -111,10 +111,8 @@ func (s *Server) handleINVITE(req *sip.Request, tx sip.ServerTransaction) {
 	}
 
 	fromURI := ""
-	fromDisplayName := ""
 	if fromHeader := req.From(); fromHeader != nil {
 		fromURI = fromHeader.Address.String()
-		fromDisplayName = fromHeader.DisplayName
 	}
 
 	toURI := ""
@@ -359,16 +357,16 @@ func (s *Server) handleINVITE(req *sip.Request, tx sip.ServerTransaction) {
 
 		// Let the API admission layer decide whether to fan out, push, or
 		// immediately reject with 486/480 before we emit 180 Ringing.
-		callerID := fromDisplayName
-		if callerID == "" {
-			callerID = fromURI
-		}
 		incomingTrunkID := int64(0)
 		if matchedTrunk != nil {
 			incomingTrunkID = matchedTrunk.ID
 		}
-		s.incomingNotifier.NotifyIncomingCall(sess.ID, callerID, toURI, incomingTrunkID)
-		fmt.Printf("📲 Notified browser about incoming call from: %s\n", callerID)
+		// The WebSocket `from` field is a routing identity, not a presentation
+		// label. Passing only the SIP display name (for example "Android
+		// Reviewer") prevents browser clients from recovering the caller number
+		// needed for incoming-detail lookup and SIP MESSAGE routing.
+		s.incomingNotifier.NotifyIncomingCall(sess.ID, fromURI, toURI, incomingTrunkID)
+		fmt.Printf("📲 Notified browser about incoming call from: %s\n", fromURI)
 
 		if sess.GetState() != session.StateIncoming {
 			fmt.Printf("📲 Incoming admission ended session %s before ringing\n", sess.ID)

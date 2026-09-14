@@ -152,7 +152,7 @@ func (s *Server) NotifyMidCallRenegotiation(sessionID string, renegotiation sess
 // handleWSSendMessage handles WebSocket send_message requests
 func (s *Server) handleWSSendMessage(client *WSClient, msg WSMessage) {
 	if msg.Body == "" {
-		s.sendWSError(client, "", "Message body required")
+		s.sendWSOperationError(client, msg.SessionID, "send_message", "Message body required")
 		return
 	}
 
@@ -164,32 +164,47 @@ func (s *Server) handleWSSendMessage(client *WSClient, msg WSMessage) {
 
 	// Send SIP MESSAGE
 	if s.sipMaker != nil {
-		// Try to find an active session for this client to send in-dialog message
+		// Prefer the explicitly addressed session. Agent connections require this
+		// value because client.sessionID is only a legacy projection in multi-call mode.
 		var sess *session.Session
-		if client.sessionID != "" {
-			sess, _ = s.sessionMgr.GetSession(client.sessionID)
+		sessionID := strings.TrimSpace(msg.SessionID)
+		if sessionID == "" && !client.agentOnly {
+			sessionID = client.sessionID
+		}
+		if sessionID != "" {
+			sess, _ = s.sessionMgr.GetSession(sessionID)
 		}
 
-		// If we have a session with remote contact, use in-dialog messaging
+		// Route session chat through the PBX. Asterisk is a B2BUA and may accept
+		// an in-dialog MESSAGE without forwarding it to the remote call leg.
 		if sess != nil {
-			_, _, remoteContact, _, _, _, _ := sess.GetSIPDialogState()
-			if remoteContact != "" {
-				log.Printf("💬 Sending in-dialog message via session %s to %s", sess.ID, remoteContact)
-				if err := s.sipMaker.SendMessageToSession(sess, msg.Body, contentType); err != nil {
-					s.sendWSError(client, "", fmt.Sprintf("Failed to send in-dialog message: %v", err))
-					return
-				}
+			log.Printf("💬 Sending PBX-routed message via session %s", sess.ID)
+			if err := s.sipMaker.SendMessageForSession(sess, msg.Body, contentType); err != nil {
+				log.Printf("⚠️ SIP MESSAGE failed for session %s: %v", sessionID, err)
+				s.sendWSOperationError(client, sessionID, "send_message", fmt.Sprintf("Failed to send session message: %v", err))
 				return
 			}
+			s.sendWSMessage(client, WSMessage{
+				Type:        "messageSent",
+				SessionID:   sessionID,
+				Destination: msg.Destination,
+				Body:        msg.Body,
+			})
+			log.Printf("💬 Message sent successfully via PBX for session %s", sessionID)
+			return
+		}
+		if client.agentOnly {
+			s.sendWSOperationError(client, sessionID, "send_message", "Active SIP session required for agent message")
+			return
 		}
 
 		// Fallback to out-of-dialog message - requires destination
 		if msg.Destination == "" {
-			s.sendWSError(client, "", "No active session and no destination specified")
+			s.sendWSOperationError(client, sessionID, "send_message", "No active session and no destination specified")
 			return
 		}
 		if err := s.sipMaker.SendMessage(msg.Destination, msg.From, msg.Body, contentType); err != nil {
-			s.sendWSError(client, "", fmt.Sprintf("Failed to send message: %v", err))
+			s.sendWSOperationError(client, sessionID, "send_message", fmt.Sprintf("Failed to send message: %v", err))
 			return
 		}
 	}
@@ -197,6 +212,7 @@ func (s *Server) handleWSSendMessage(client *WSClient, msg WSMessage) {
 	// Send confirmation to client
 	response := WSMessage{
 		Type:        "messageSent",
+		SessionID:   msg.SessionID,
 		Destination: msg.Destination,
 		Body:        msg.Body,
 	}

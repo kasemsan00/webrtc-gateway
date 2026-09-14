@@ -36,6 +36,22 @@ func (s *Server) sendWSError(client *WSClient, sessionID, errMsg string) {
 	s.sendWSMessage(client, msg)
 }
 
+func (s *Server) sendWSOperationError(client *WSClient, sessionID, operation, errMsg string) {
+	msg := WSMessage{
+		Type:      "error",
+		Operation: operation,
+		Error:     errMsg,
+	}
+	if operation == "send_message" {
+		// Compatibility with SDK <= 0.1.30: any error carrying the active
+		// sessionId is treated as terminal and closes its PeerConnection.
+		msg.OperationSessionID = sessionID
+	} else {
+		msg.SessionID = sessionID
+	}
+	s.sendWSMessage(client, msg)
+}
+
 func (s *Server) logTerminalAction(sess *session.Session, action string, sipStatus int, reason, source string) {
 	if sess == nil {
 		return

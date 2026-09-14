@@ -36,6 +36,9 @@ func (s *stubSIPCallMaker) RejectCall(sess *session.Session, reason string) erro
 func (s *stubSIPCallMaker) SendMessage(destination, from, body, contentType string) error {
 	return nil
 }
+func (s *stubSIPCallMaker) SendMessageForSession(sess *session.Session, body, contentType string) error {
+	return s.SendMessageToSession(sess, body, contentType)
+}
 func (s *stubSIPCallMaker) SendMessageToSession(sess *session.Session, body, contentType string) error {
 	return nil
 }
