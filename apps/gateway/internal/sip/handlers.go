@@ -274,6 +274,10 @@ func (s *Server) handleINVITE(req *sip.Request, tx sip.ServerTransaction) {
 					Address: sip.Uri{Host: s.publicAddress, Port: s.sipPort},
 				})
 				tx.Respond(ringingRes)
+				// Stay in the handler so sipgo does not TerminateGracefully the
+				// INVITE transaction before CANCEL/accept/reject.
+				s.waitForIncomingInviteTransaction(sess, tx)
+				return
 			}
 			// If already active, this might be a mid-call re-INVITE (hold/resume)
 			if sess.GetState() == session.StateActive {
@@ -389,6 +393,10 @@ func (s *Server) handleINVITE(req *sip.Request, tx sip.ServerTransaction) {
 			SIPCallID:     callIDValue,
 		})
 
+		// sipgo calls TerminateGracefully() when this handler returns. On TCP
+		// that immediately deletes the INVITE server transaction, so a later
+		// CANCEL cannot match and the agent never receives WS `cancel`.
+		s.waitForIncomingInviteTransaction(sess, tx)
 		return
 	}
 
@@ -802,16 +810,34 @@ func (s *Server) handleCANCEL(req *sip.Request, tx sip.ServerTransaction) {
 		callIDValue = callID.Value()
 	}
 
-	// Matched CANCEL requests are handled by sipgo's INVITE transaction layer:
-	// it sends 200 OK to CANCEL, 487 to the original INVITE, and invokes the
-	// transaction OnCancel callback registered by handleINVITE. Reaching this
-	// handler means the CANCEL did not match any active INVITE transaction.
-	res := sip.NewResponseFromRequest(req, 481, "Call/Transaction Does Not Exist", nil)
-	if err := tx.Respond(res); err != nil {
-		log.Printf("[SIP-CANCEL] respond error: callID=%s err=%v", callIDValue, err)
-	} else {
-		log.Printf("[SIP-CANCEL] 481 sent for unmatched CANCEL: callID=%s", callIDValue)
+	var sess *session.Session
+	if s.sessionMgr != nil && callIDValue != "" {
+		if found, ok := s.sessionMgr.GetSessionBySIPCallID(callIDValue); ok {
+			sess = found
+		}
 	}
+
+	if sess == nil {
+		// sipgo only delivers CANCEL here when it could not match an INVITE
+		// server transaction (TCP TerminateGracefully, Via-branch mismatch).
+		res := sip.NewResponseFromRequest(req, 481, "Call/Transaction Does Not Exist", nil)
+		if err := tx.Respond(res); err != nil {
+			log.Printf("[SIP-CANCEL] respond error: callID=%s err=%v", callIDValue, err)
+		} else {
+			log.Printf("[SIP-CANCEL] 481 sent for unmatched CANCEL: callID=%s", callIDValue)
+		}
+		return
+	}
+
+	// RFC 3261 9.2: a matching pending/established request exists → 200 to CANCEL.
+	res := sip.NewResponseFromRequest(req, 200, "OK", nil)
+	if err := tx.Respond(res); err != nil {
+		log.Printf("[SIP-CANCEL] 200 respond error: session=%s callID=%s err=%v", sess.ID, callIDValue, err)
+	} else {
+		log.Printf("[SIP-CANCEL] 200 sent for Call-ID matched CANCEL: session=%s callID=%s state=%s", sess.ID, callIDValue, sess.GetState())
+	}
+
+	s.applyIncomingCallerCancel(sess, req, "callid-fallback", true)
 }
 
 func (s *Server) registerIncomingCancelHandler(sess *session.Session, tx sip.ServerTransaction) {
@@ -824,36 +850,108 @@ func (s *Server) registerIncomingCancelHandler(sess *session.Session, tx sip.Ser
 			callIDValue = callID.Value()
 		}
 		log.Printf("[SIP-CANCEL] matched INVITE transaction canceled: session=%s callID=%s", sess.ID, callIDValue)
-		s.logEvent(&logstore.Event{
-			Timestamp: time.Now(),
-			SessionID: sess.ID,
-			Category:  "sip",
-			Name:      "sip_cancel_received",
-			SIPMethod: string(cancelReq.Method),
-			SIPCallID: callIDValue,
-		})
-
-		if sess.GetState() != session.StateIncoming {
-			log.Printf("[SIP-CANCEL] cancel ignored for non-incoming session=%s state=%s", sess.ID, sess.GetState())
-			return
-		}
-		if !sess.TryBeginTerminalAction("caller_cancel") {
-			log.Printf("[SIP-CANCEL] cancel ignored; terminal action already claimed: session=%s winner=%s", sess.ID, sess.GetTerminalAction())
-			return
-		}
-
-		authMode, _, trunkID, _, _, _, _ := sess.GetSIPAuthContext()
-		if authMode == "trunk" && trunkID > 0 && s.incomingNotifier != nil {
-			s.incomingNotifier.NotifyIncomingCancel(sess.ID, trunkID, "caller_cancelled")
-		}
-		sess.UpdateState(session.StateEnded)
-		s.notifySessionStateChange(sess, session.StateEnded)
-		s.logSessionSnapshot(context.Background(), sess, "sip_cancel_received")
-		if s.sessionMgr != nil {
-			s.sessionMgr.DeleteSession(sess.ID)
-		}
-		log.Printf("[SIP-CANCEL] session ended and cleaned up: session=%s", sess.ID)
+		// sipgo already sent 200 to CANCEL and 487 to INVITE on this path.
+		s.applyIncomingCallerCancel(sess, cancelReq, "invite-tx", false)
 	})
+}
+
+func (s *Server) applyIncomingCallerCancel(sess *session.Session, cancelReq *sip.Request, source string, terminateInvite bool) {
+	if sess == nil {
+		return
+	}
+
+	callIDValue := ""
+	if cancelReq != nil {
+		if callID := cancelReq.CallID(); callID != nil {
+			callIDValue = callID.Value()
+		}
+	}
+
+	s.logEvent(&logstore.Event{
+		Timestamp: time.Now(),
+		SessionID: sess.ID,
+		Category:  "sip",
+		Name:      "sip_cancel_received",
+		SIPMethod: string(sip.CANCEL),
+		SIPCallID: callIDValue,
+		Data:      map[string]interface{}{"source": source},
+	})
+
+	if sess.GetState() != session.StateIncoming {
+		log.Printf("[SIP-CANCEL] cancel ignored for non-incoming session=%s state=%s source=%s", sess.ID, sess.GetState(), source)
+		return
+	}
+	if !sess.TryBeginTerminalAction("caller_cancel") {
+		log.Printf("[SIP-CANCEL] cancel ignored; terminal action already claimed: session=%s winner=%s source=%s", sess.ID, sess.GetTerminalAction(), source)
+		return
+	}
+
+	if terminateInvite {
+		s.tryRespondInviteTerminated(sess)
+	}
+
+	authMode, _, trunkID, _, _, _, _ := sess.GetSIPAuthContext()
+	if authMode == "trunk" && trunkID > 0 && s.incomingNotifier != nil {
+		s.incomingNotifier.NotifyIncomingCancel(sess.ID, trunkID, "caller_cancelled")
+	}
+	sess.UpdateState(session.StateEnded)
+	s.notifySessionStateChange(sess, session.StateEnded)
+	s.logSessionSnapshot(context.Background(), sess, "sip_cancel_received")
+	if s.sessionMgr != nil {
+		s.sessionMgr.DeleteSession(sess.ID)
+	}
+	log.Printf("[SIP-CANCEL] session ended and cleaned up: session=%s source=%s", sess.ID, source)
+}
+
+func (s *Server) tryRespondInviteTerminated(sess *session.Session) {
+	if sess == nil {
+		return
+	}
+	storedTx, storedReq, _, _, _ := sess.GetIncomingInvite()
+	req, _ := storedReq.(*sip.Request)
+	if req == nil {
+		return
+	}
+	res := sip.NewResponseFromRequest(req, 487, "Request Terminated", nil)
+	if tx, ok := storedTx.(sip.ServerTransaction); ok && tx != nil {
+		if err := tx.Respond(res); err == nil {
+			log.Printf("[SIP-CANCEL] 487 sent on stored INVITE tx: session=%s", sess.ID)
+			return
+		} else {
+			log.Printf("[SIP-CANCEL] 487 via stored INVITE tx failed: session=%s err=%v", sess.ID, err)
+		}
+	}
+	if s.sipServer != nil {
+		if err := s.sipServer.WriteResponse(res); err != nil {
+			log.Printf("[SIP-CANCEL] 487 stateless write failed: session=%s err=%v", sess.ID, err)
+		} else {
+			log.Printf("[SIP-CANCEL] 487 sent stateless for canceled INVITE: session=%s", sess.ID)
+		}
+	}
+}
+
+func (s *Server) waitForIncomingInviteTransaction(sess *session.Session, tx sip.ServerTransaction) {
+	if tx == nil {
+		return
+	}
+	sessionID := ""
+	var sessionDone <-chan struct{}
+	if sess != nil {
+		sessionID = sess.ID
+		sessionDone = sess.Done()
+	}
+	log.Printf("[SIP-INVITE] waiting for INVITE transaction to complete: session=%s", sessionID)
+	if sessionDone == nil {
+		<-tx.Done()
+		log.Printf("[SIP-INVITE] INVITE transaction done: session=%s", sessionID)
+		return
+	}
+	select {
+	case <-tx.Done():
+		log.Printf("[SIP-INVITE] INVITE transaction done: session=%s", sessionID)
+	case <-sessionDone:
+		log.Printf("[SIP-INVITE] incoming session ended while INVITE still pending: session=%s", sessionID)
+	}
 }
 
 // handleACK handles ACK requests
