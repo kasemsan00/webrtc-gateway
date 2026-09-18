@@ -98,6 +98,9 @@ type Server struct {
 	// switchHandlerTestHook is nil in production. Tests use it to pause a
 	// handler after atomic acceptance and observe stale-token cancellation.
 	switchHandlerTestHook func(stage string, decision session.SwitchTargetDecision)
+	// switchPictureFastUpdateHook is nil in production. Tests replace the
+	// in-dialog SIP INFO send so @switch recovery can be asserted without a SIP client.
+	switchPictureFastUpdateHook func(sess *session.Session, generation int, mediaEpoch uint64)
 }
 
 // NewServer creates a new SIP server

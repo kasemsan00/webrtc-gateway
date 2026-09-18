@@ -9,7 +9,7 @@ func TestSIPAdvertisedCapabilitiesMatchImplementedMidCallFeatures(t *testing.T) 
 	allow := sipAllowHeaderValue()
 	supported := sipSupportedHeaderValue()
 
-	for _, method := range []string{"INVITE", "ACK", "CANCEL", "OPTIONS", "BYE", "MESSAGE", "UPDATE"} {
+	for _, method := range []string{"INVITE", "ACK", "CANCEL", "OPTIONS", "BYE", "MESSAGE", "INFO", "UPDATE"} {
 		if !strings.Contains(allow, method) {
 			t.Fatalf("expected Allow to include %s, got %q", method, allow)
 		}

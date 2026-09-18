@@ -74,6 +74,10 @@ func (s *Server) setupHandlers() {
 	s.sipServer.OnPrack(func(req *sip.Request, tx sip.ServerTransaction) {
 		s.handlePRACK(req, tx)
 	})
+
+	s.sipServer.OnInfo(func(req *sip.Request, tx sip.ServerTransaction) {
+		s.handleINFO(req, tx)
+	})
 }
 
 // handleINVITE handles incoming INVITE requests
@@ -714,21 +718,31 @@ func (s *Server) handleBYE(req *sip.Request, tx sip.ServerTransaction) {
 	var callIDValue string
 	if callID := req.CallID(); callID != nil {
 		callIDValue = callID.Value()
-		if s.config.DebugSIPInvite { fmt.Printf("Call-ID: %s\n", callIDValue) }
+		if s.config.DebugSIPInvite {
+			fmt.Printf("Call-ID: %s\n", callIDValue)
+		}
 	}
 
 	if cseq := req.CSeq(); cseq != nil {
 		fmt.Printf("CSeq: %s\n", cseq.Value())
 	}
 	fmt.Printf("Method: %s\n", req.Method)
-	if s.config.DebugSIPInvite { fmt.Printf("Request-URI: %s\n", req.Recipient.String()) }
+	if s.config.DebugSIPInvite {
+		fmt.Printf("Request-URI: %s\n", req.Recipient.String())
+	}
 
 	// Log Via headers (critical for response routing)
 	if s.config.DebugSIPInvite {
 		fmt.Printf("\nVia Headers:\n")
-		for i, via := range req.GetHeaders("Via") { fmt.Printf("  Via[%d]: %s\n", i, via.Value()) }
-		if req.Source() != "" { fmt.Printf("Request Source: %s\n", req.Source()) }
-		if req.Destination() != "" { fmt.Printf("Request Destination: %s\n", req.Destination()) }
+		for i, via := range req.GetHeaders("Via") {
+			fmt.Printf("  Via[%d]: %s\n", i, via.Value())
+		}
+		if req.Source() != "" {
+			fmt.Printf("Request Source: %s\n", req.Source())
+		}
+		if req.Destination() != "" {
+			fmt.Printf("Request Destination: %s\n", req.Destination())
+		}
 	}
 
 	// Find session by Call-ID
@@ -1348,8 +1362,7 @@ func (s *Server) handleSwitchMessage(body string, callerURI string) {
 		if !sess.StartSwitchVideoRecoveryIfAuthoritative(switchDecision.Generation, switchDecision.MediaEpoch, recoveryWindow, stableWindow) {
 			return
 		}
-		s.runSwitchHandlerTestHook("renegotiate", switchDecision)
-		s.startSwitchVideoRenegotiationAsync(sess.ID, switchDecision.Generation)
+		s.sendSwitchPictureFastUpdate(sess, switchDecision.Generation, switchDecision.MediaEpoch)
 	} else {
 		sess.StartSwitchVideoRecovery(recoveryWindow, stableWindow)
 	}
@@ -1484,13 +1497,6 @@ func (s *Server) handleSwitchMessage(body string, callerURI string) {
 	}
 
 	fmt.Printf("✅ Sent @switch immediate kick + FIR/PLI bursts (Browser + Asterisk) for session: %s\n", sess.ID)
-}
-
-func (s *Server) startSwitchVideoRenegotiationAsync(sessionID string, generation int) {
-	if s.switchRenegotiationStarter == nil || sessionID == "" || generation <= 0 {
-		return
-	}
-	go s.switchRenegotiationStarter.StartSwitchVideoRenegotiation(sessionID, generation)
 }
 
 func (s *Server) switchFeedbackBurstNeeded(sess *session.Session, genuine bool, decision session.SwitchTargetDecision) bool {

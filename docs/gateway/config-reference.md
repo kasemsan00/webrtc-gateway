@@ -78,21 +78,16 @@ When `FRONTEND_PASSWORD` is set and `AUTH_ENABLE=false`, authenticated `/api/*` 
 - `SIP_SWITCH_DUPLICATE_DEBOUNCE_ENABLED` (default `true`)
 - `SIP_SWITCH_DUPLICATE_DEBOUNCE_MS` (default `60000`)
 - `SIP_MIDCALL_RENEGOTIATION_ENABLE` (default `true`; enables SIP mid-call
-  re-INVITE/UPDATE handling and is also required by switch-triggered WebRTC
-  renegotiation)
-- `SIP_SWITCH_VIDEO_RENEGOTIATE_ENABLE` (default `false`; opt in to
-  client-assisted WebRTC renegotiation when an authoritative `@switch`
-  MESSAGE is accepted. When enabled, the gateway parks the live PeerConnection
-  (make-before-break), emits WebSocket `renegotiate` with `reason=agent_switch`,
-  empty SDP, and `requiresAnswer=true`. The client creates a fresh offer on a
-  parallel PeerConnection; the gateway answers that offer and returns the
-  answer SDP in `renegotiate_result.sdp`. SIP audio keeps flowing on the parked
-  PC until the replacement ICE-connects; SIP→WebRTC video is gated with
-  `renegotiate-pending` until the client offer is applied (or the attempt
-  fails/times out). The parked PC is closed after ICE connected. No switch
-  renegotiation is attempted, and no `switch_renegotiate_*` log is emitted,
-  while this flag is `false`. Configuration changes require a gateway process
-  restart.)
+  re-INVITE/UPDATE handling)
+- `SIP_SWITCH_VIDEO_RENEGOTIATE_ENABLE` (default `false`; unused on this test
+  branch. Accepted `@switch` does not start client-assisted WebRTC
+  renegotiation or replace the PeerConnection.)
+- `SIP_SWITCH_VIDEO_INFO_FIR_ENABLE` (default `true`; on an accepted `@switch`
+  MESSAGE the gateway sends an in-dialog SIP INFO with RFC 5168
+  `application/media_control+xml` `picture_fast_update`. Asterisk `chan_sip`
+  treats that as `AST_CONTROL_VIDUPDATE` on the bridged encoder. RTCP FIR/PLI
+  bursts and the complete-IDR gate still run. Set `false` only as a bounded
+  comparison. Configuration changes require a gateway process restart.)
 - `SIP_VIDEO_KEYFRAME_WATCHDOG` (default `true`)
 - `SIP_VIDEO_KEYFRAME_WATCHDOG_INTERVAL_MS` (default `2000`)
 - `SIP_VIDEO_KEYFRAME_STALE_MS` (default `4000`; must stay above a healthy SIP GOP or watchdog PLI never stops)
@@ -217,7 +212,7 @@ health instead of interrupting calls.
 ## Mid-call SIP behavior
 
 - In-dialog `re-INVITE` and `UPDATE` with valid Opus SDP can update hold/resume media direction without ending the SIP dialog.
-- H.264 video add/remove is accepted only when the SDP remains H.264-compatible. The gateway emits WebSocket `renegotiate` for client-assisted WebRTC changes and tracks a pending `renegotiationId` until `renegotiate_answer` or timeout. `@switch` uses a separate client-offer / gateway-answer contract (`reason=agent_switch`, empty offer SDP) and does not send a SIP re-INVITE.
+- H.264 video add/remove is accepted only when the SDP remains H.264-compatible. The gateway emits WebSocket `renegotiate` for client-assisted WebRTC changes and tracks a pending `renegotiationId` until `renegotiate_answer` or timeout. `@switch` does not emit `renegotiate`; it sends in-dialog SIP INFO RFC 5168 picture fast update plus FIR/PLI and holds SIP→WebRTC video until a complete IDR.
 - Glare/pending mid-call renegotiation returns `491`; malformed or unsupported SDP returns `488`; unknown in-dialog requests return `481`.
 - `Allow`/`Supported` are intentionally conservative. Do not advertise `PRACK`, `REFER`, `100rel`, or session timers until those flows are implemented as first-class behavior.
 - `REFER`, `PRACK`, `Require: 100rel`, and `Session-Expires` currently have explicit reject policies so PBX/trunk behavior is deterministic.

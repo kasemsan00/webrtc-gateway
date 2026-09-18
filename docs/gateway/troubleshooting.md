@@ -67,15 +67,15 @@ until release; set `SIP_SWITCH_VIDEO_TRANSITION_MODE=preserve` only as a bounded
 rollback if you need the queue still visible during the unsafe window. Audio
 continues independently.
 
-When `SIP_SWITCH_VIDEO_RENEGOTIATE_ENABLE=true`, `@switch` also starts a
-make-before-break WebRTC handoff: the live PeerConnection stays parked until
-the replacement ICE-connects. Look for `switch_renegotiate_make_before_break_armed`,
-`switch_renegotiate_pc_replaced make_before_break=true`, then
-`switch_renegotiate_legacy_pc_closed`. ttrs-vri (SIP→WebRTC) should keep the
-last frame until the new path is ready. A freeze of **Linphone’s remote video**
-(WebRTC→SIP uplink) after `@switch` is a separate path: the replacement
-PeerConnection must produce a new camera IDR toward Asterisk; correlate
-`OnTrack (renegotiated)` with SIP FIR/PLI after ICE connected.
+When `SIP_SWITCH_VIDEO_INFO_FIR_ENABLE=true` (default), an accepted `@switch`
+sends in-dialog SIP INFO (`application/media_control+xml` picture fast update)
+so Asterisk `chan_sip` can request an IDR from the agent encoder. Correlate
+`switch_picture_fast_update_sent` or `sip_info_picture_fast_update_response`
+with `h264_au_normalized status=complete-idr` and `switch_video_gate_release
+wait_ms`. This test branch does **not** start WebRTC renegotiation on `@switch`;
+leave `SIP_SWITCH_VIDEO_RENEGOTIATE_ENABLE=false`. A freeze of **Linphone’s
+remote video** (WebRTC→SIP uplink) after `@switch` is a separate path: inbound
+INFO picture fast update requests a browser/camera IDR via FIR/PLI.
 
 - `switch_video_gate_activation outcome=active` means the new media generation is gated.
 - `switch_video_au_rejected` identifies an unsafe AU; inspect `reason` for a

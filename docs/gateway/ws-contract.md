@@ -111,10 +111,10 @@ Auth behavior:
   - In-dialog MESSAGE is sent only to the WebSocket client bound to the matching active session.
   - Out-of-dialog MESSAGE (no matching call session, e.g. PBX DND `DND0`/`DND1`/`DND2`) is sent to every resolved `/ws` or `/ws-agent` client whose trunk username matches the SIP `To` user. `sessionId` is omitted.
 - `renegotiate`, `renegotiate_result`
-  - `renegotiate` is additive mid-call WebRTC assistance for SIP re-INVITE/UPDATE media changes and for an accepted `@switch` MESSAGE (`reason=agent_switch`). It includes `sessionId`, `renegotiationId`, optional `sdp`, `reason`, `mediaDirection`, `hasVideo`, and `requiresAnswer`.
+  - `renegotiate` is additive mid-call WebRTC assistance for SIP re-INVITE/UPDATE media changes. It includes `sessionId`, `renegotiationId`, optional `sdp`, `reason`, `mediaDirection`, `hasVideo`, and `requiresAnswer`.
   - SIP re-INVITE/UPDATE uses a gateway offer in `sdp`; the client answers with `renegotiate_answer`.
-  - For `agent_switch`, `sdp` is empty. The client must create an offer (resume-style, make-before-break: do not close the live PeerConnection first) and send it in `renegotiate_answer`. The gateway applies that client offer, creates an answer, and returns it in `renegotiate_result.sdp`. SIP→WebRTC video is held until that offer is applied; the previous PeerConnection stays parked until ICE connected.
-  - Clients that support it respond with `renegotiate_answer` (`sessionId`, `renegotiationId`, optional `sdp`, `status`, optional `reason`). Unsupported clients that ignore `renegotiate` will lose the WebRTC media path after `@switch` because the gateway has already created a replacement PeerConnection.
+  - Accepted `@switch` MESSAGE does **not** emit `renegotiate`. The gateway keeps the live PeerConnection and requests a SIP-side IDR with in-dialog INFO RFC 5168 picture fast update plus FIR/PLI. The complete-IDR gate still holds SIP→WebRTC video until a decoder-safe IDR arrives.
+  - Clients that support it respond with `renegotiate_answer` (`sessionId`, `renegotiationId`, optional `sdp`, `status`, optional `reason`) for SIP re-INVITE/UPDATE only.
 - `resumed`, `resume_failed`, `resume_redirect`
 - `trunk_resolved`, `trunk_redirect`, `trunk_not_found`, `trunk_not_ready`
   - `trunk_resolved` now returns both `trunkId` and `trunkPublicId`

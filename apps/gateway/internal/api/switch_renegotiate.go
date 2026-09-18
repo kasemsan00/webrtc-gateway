@@ -10,10 +10,9 @@ import (
 	"webrtc-sip-gateway/internal/session"
 )
 
-// StartSwitchVideoRenegotiation begins client-assisted WebRTC renegotiation
-// when an authoritative @switch MESSAGE is accepted. The gateway replaces
-// its PeerConnection and the Android client creates a fresh offer (same
-// contract as resume). Android cannot answer a mid-call remote offer.
+// StartSwitchVideoRenegotiation is retained for SIP re-INVITE/UPDATE WebRTC
+// assistance wiring, but accepted @switch no longer calls it on this test
+// branch. Queue→agent recovery uses in-dialog SIP INFO picture fast update.
 func (s *Server) StartSwitchVideoRenegotiation(sessionID string, generation int) {
 	if s.sessionMgr == nil || s.runtimeConfig == nil {
 		return

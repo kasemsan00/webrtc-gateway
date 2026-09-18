@@ -55,6 +55,7 @@ func TestHandleSwitchMessage_StartsVideoRecoveryBurst(t *testing.T) {
 			SwitchVideoRecoveryStableMS:    750,
 			SwitchDuplicateDebounceEnabled: true,
 			SwitchDuplicateDebounceMS:      60000,
+			SwitchVideoInfoFIREnable:       true,
 			VideoRecoveryBurstEnabled:      true,
 			VideoRecoveryBurstWindowMS:     12000,
 			VideoRecoveryBurstIntervalMS:   800,
@@ -88,11 +89,17 @@ func TestHandleSwitchMessage_StartsVideoRecoveryBurst(t *testing.T) {
 	}
 
 	starter := &recordingSwitchRenegotiateStarter{}
+	var infoCalls int
+	var infoGeneration int
 	srv := &Server{
 		config:                     cfg.SIP,
 		rtpConfig:                  cfg.RTP,
 		sessionMgr:                 mgr,
 		switchRenegotiationStarter: starter,
+		switchPictureFastUpdateHook: func(_ *session.Session, generation int, _ uint64) {
+			infoCalls++
+			infoGeneration = generation
+		},
 	}
 
 	srv.handleSwitchMessage("@switch:14131|00025", "sip:0900200002@example.com")
@@ -138,13 +145,13 @@ func TestHandleSwitchMessage_StartsVideoRecoveryBurst(t *testing.T) {
 		t.Fatalf("expected uplink SPS/PPS inject armed to 3, got %d", sess.SwitchSPSPPSInjectRemaining)
 	}
 
-	deadline := time.Now().Add(time.Second)
-	for starter.calls() == 0 && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
+	if starter.calls() != 0 {
+		t.Fatalf("expected @switch not to start WebRTC renegotiation, got calls=%d last=%s/%d",
+			starter.calls(), starter.lastID(), starter.lastGen())
 	}
-	if starter.calls() != 1 || starter.lastID() != sess.ID || starter.lastGen() != sess.GetSwitchGeneration() {
-		t.Fatalf("expected @switch renegotiate start session=%s generation=%d calls=%d last=%s/%d",
-			sess.ID, sess.GetSwitchGeneration(), starter.calls(), starter.lastID(), starter.lastGen())
+	if infoCalls != 1 || infoGeneration != sess.GetSwitchGeneration() {
+		t.Fatalf("expected one SIP INFO picture fast update generation=%d, got calls=%d generation=%d",
+			sess.GetSwitchGeneration(), infoCalls, infoGeneration)
 	}
 }
 
@@ -161,6 +168,7 @@ func TestHandleSwitchMessage_IgnoresDuplicateTargetInsideDebounce(t *testing.T) 
 			SwitchVideoRecoveryStableMS:    750,
 			SwitchDuplicateDebounceEnabled: true,
 			SwitchDuplicateDebounceMS:      60000,
+			SwitchVideoInfoFIREnable:       true,
 			VideoRecoveryBurstEnabled:      true,
 			VideoRecoveryBurstWindowMS:     12000,
 			VideoRecoveryBurstIntervalMS:   800,
@@ -184,11 +192,15 @@ func TestHandleSwitchMessage_IgnoresDuplicateTargetInsideDebounce(t *testing.T) 
 	sess.SetRemoteVideoSSRC(1234)
 
 	starter := &recordingSwitchRenegotiateStarter{}
+	var infoCalls int
 	srv := &Server{
 		config:                     cfg.SIP,
 		rtpConfig:                  cfg.RTP,
 		sessionMgr:                 mgr,
 		switchRenegotiationStarter: starter,
+		switchPictureFastUpdateHook: func(_ *session.Session, _ int, _ uint64) {
+			infoCalls++
+		},
 	}
 
 	srv.handleSwitchMessage("@switch:14131|00025", "sip:0900200002@example.com")
@@ -219,8 +231,11 @@ func TestHandleSwitchMessage_IgnoresDuplicateTargetInsideDebounce(t *testing.T) 
 			sess.SwitchVideoGateGeneration, sess.SwitchVideoGateStartedAt, sess.SwitchVideoGateLeaseNonce,
 			sess.SwitchVideoGateReservation, sess.SwitchVideoGateFeedbackBaseline, sess.SwitchVideoGateRejectedCount)
 	}
-	if starter.calls() != 1 {
-		t.Fatalf("expected one renegotiate start for first @switch, got %d", starter.calls())
+	if starter.calls() != 0 {
+		t.Fatalf("expected @switch not to start WebRTC renegotiation, got %d", starter.calls())
+	}
+	if infoCalls != 1 {
+		t.Fatalf("expected one SIP INFO picture fast update on first @switch, got %d", infoCalls)
 	}
 }
 
@@ -481,6 +496,7 @@ func switchStaleHandlerTestConfig(normalize bool) *config.Config {
 			SwitchVideoRecoveryStableMS:    750,
 			SwitchDuplicateDebounceEnabled: true,
 			SwitchDuplicateDebounceMS:      60000,
+			SwitchVideoInfoFIREnable:       true,
 			VideoRecoveryBurstEnabled:      true,
 			VideoRecoveryBurstWindowMS:     12000,
 			VideoRecoveryBurstIntervalMS:   800,

@@ -172,7 +172,8 @@ type SIPConfig struct {
 	VideoRecoveryBurstStaleMS    int  // Burst stale threshold for PLI in ms (default: 4000)
 	VideoRecoveryBurstFIRStaleMS int  // Burst stale threshold for FIR in ms (default: 7000)
 	MidCallRenegotiationEnable   bool // Enable SIP mid-call re-INVITE/UPDATE negotiation (default: true)
-	SwitchVideoRenegotiateEnable bool // Send WebRTC renegotiate on accepted @switch MESSAGE (default: false; opt in)
+	SwitchVideoRenegotiateEnable bool // Send WebRTC renegotiate on accepted @switch MESSAGE (default: false; unused on this test branch)
+	SwitchVideoInfoFIREnable     bool // Send in-dialog SIP INFO RFC 5168 picture fast update on accepted @switch (default: true)
 	// Inbound audio gain (SIP → WebRTC): decode Opus, apply PCM gain, re-encode Opus
 	AudioInboundGainEnable bool    // Enable inbound gain processing (default: false)
 	AudioInboundGain       float32 // Linear gain multiplier (default: 1.0)
@@ -331,6 +332,7 @@ func Load() (*Config, error) {
 			VideoRecoveryBurstFIRStaleMS:         getEnvAsInt("SIP_VIDEO_RECOVERY_BURST_FIR_STALE_MS", 7000),
 			MidCallRenegotiationEnable:           getEnvAsBool("SIP_MIDCALL_RENEGOTIATION_ENABLE", true),
 			SwitchVideoRenegotiateEnable:         getEnvAsBool("SIP_SWITCH_VIDEO_RENEGOTIATE_ENABLE", false),
+			SwitchVideoInfoFIREnable:             getEnvAsBool("SIP_SWITCH_VIDEO_INFO_FIR_ENABLE", true),
 			AudioInboundGainEnable:               getEnvAsBool("SIP_AUDIO_INBOUND_GAIN_ENABLE", false),
 			AudioInboundGain:                     clampInboundGain(getEnvAsFloat32("SIP_AUDIO_INBOUND_GAIN", 1.0), getEnvAsFloat32("SIP_AUDIO_INBOUND_GAIN_MAX", 3.0)),
 			AudioInboundGainMax:                  getEnvAsFloat32("SIP_AUDIO_INBOUND_GAIN_MAX", 3.0),
@@ -615,7 +617,8 @@ func (c *Config) Display() {
 		c.SIP.SwitchDuplicateDebounceMS,
 	)
 	fmt.Printf("  SIP Mid-Call Renegotiation: %v\n", c.SIP.MidCallRenegotiationEnable)
-	fmt.Printf("  @switch WebRTC Renegotiate: %v (on @switch message)\n", c.SIP.SwitchVideoRenegotiateEnable)
+	fmt.Printf("  @switch WebRTC Renegotiate: %v (disabled on this test branch; @switch does not start it)\n", c.SIP.SwitchVideoRenegotiateEnable)
+	fmt.Printf("  @switch SIP INFO picture fast update: %v\n", c.SIP.SwitchVideoInfoFIREnable)
 	fmt.Printf("  SIP Video RTP Disorder Monitor: %v (minPackets=%d, maxGap=%d, maxMissing=%d, maxOOO=%d, maxTimeout=%d, consecutive=%d, logInterval=%dms, containment=%v/%dms)\n",
 		c.SIP.VideoRTPDisorderMonitorEnabled,
 		c.SIP.VideoRTPDisorderMinPacketDelta,
