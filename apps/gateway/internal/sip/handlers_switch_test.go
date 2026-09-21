@@ -148,6 +148,69 @@ func TestHandleSwitchMessage_StartsVideoRecoveryBurst(t *testing.T) {
 	}
 }
 
+func TestHandleSwitchMessage_SkipsBlackoutWhenSwitchRenegotiateEnabled(t *testing.T) {
+	cfg := &config.Config{
+		SIP: config.SIPConfig{
+			VideoAUNormalizeEnabled:        true,
+			SwitchPLIDelayMS:               0,
+			SwitchVideoTransitionMode:      config.SIPSwitchVideoTransitionBlackout,
+			SwitchVideoBlackoutEnabled:     true,
+			SwitchVideoBlackoutMS:          300,
+			SwitchVideoBlackoutMaxWaitMS:   1200,
+			SwitchVideoRecoveryWindowMS:    5000,
+			SwitchVideoRecoveryStableMS:    750,
+			SwitchDuplicateDebounceEnabled: true,
+			SwitchDuplicateDebounceMS:      60000,
+			VideoRecoveryBurstEnabled:      true,
+			VideoRecoveryBurstWindowMS:     12000,
+			VideoRecoveryBurstIntervalMS:   800,
+			VideoRecoveryBurstStaleMS:      1200,
+			VideoRecoveryBurstFIRStaleMS:   2500,
+			MidCallRenegotiationEnable:     true,
+			SwitchVideoRenegotiateEnable:   true,
+		},
+		RTP: config.RTPConfig{BufferSize: 1500},
+	}
+
+	mgr := session.NewManager(cfg)
+	sess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+	t.Cleanup(func() {
+		mgr.DeleteSession(sess.ID)
+	})
+
+	sess.SetCallInfo("outbound", "sip:0900200002@example.com", "1002", "call-1")
+	sess.SetState(session.StateActive)
+
+	starter := &recordingSwitchRenegotiateStarter{}
+	srv := &Server{
+		config:                     cfg.SIP,
+		rtpConfig:                  cfg.RTP,
+		sessionMgr:                 mgr,
+		switchRenegotiationStarter: starter,
+	}
+
+	srv.handleSwitchMessage("@switch:14131|00025", "sip:0900200002@example.com")
+
+	if !sess.SwitchVideoBlackoutUntil.IsZero() || !sess.SwitchVideoBlackoutMaxWait.IsZero() {
+		t.Fatalf("expected renegotiate path to skip blackout hold, until=%s maxWait=%s",
+			sess.SwitchVideoBlackoutUntil, sess.SwitchVideoBlackoutMaxWait)
+	}
+	if !sess.SwitchVideoGateActive {
+		t.Fatal("expected complete-IDR gate to remain active without blackout")
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for starter.calls() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if starter.calls() != 1 {
+		t.Fatalf("expected renegotiate start when blackout is skipped, got %d", starter.calls())
+	}
+}
+
 func TestHandleSwitchMessage_IgnoresDuplicateTargetInsideDebounce(t *testing.T) {
 	cfg := &config.Config{
 		SIP: config.SIPConfig{

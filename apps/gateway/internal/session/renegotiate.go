@@ -11,6 +11,8 @@ import (
 )
 
 const RENEGOTIATE_ICE_GATHER_TIMEOUT = 3 * time.Second
+const SWITCH_ICE_GATHER_TIMEOUT = 250 * time.Millisecond
+const switchReplacementPCWait = 5 * time.Second
 const renegotiateVideoOnTrackWatchdog = 3 * time.Second
 
 type renegotiateVideoOfferDiagnostics = OfferVideoDiagnostics
@@ -29,13 +31,25 @@ func waitForGatheringComplete(gatherComplete <-chan struct{}, timeout time.Durat
 }
 
 func waitForRenegotiateIceGatheringComplete(pc *webrtc.PeerConnection, timeout time.Duration) bool {
-	if pc == nil {
+	return waitForIceGatheringComplete(pc, timeout, hasUsableResumeCandidatesInSDP)
+}
+
+// waitForSwitchIceGatheringComplete returns as soon as any local candidate is
+// in the answer SDP. @switch is same-network make-before-break, so a host
+// candidate is enough; remaining candidates trickle into LocalDescription
+// while ICE starts. Resume still uses the stricter handover wait.
+func waitForSwitchIceGatheringComplete(pc *webrtc.PeerConnection, timeout time.Duration) bool {
+	return waitForIceGatheringComplete(pc, timeout, hasAnyICECandidateInSDP)
+}
+
+func waitForIceGatheringComplete(pc *webrtc.PeerConnection, timeout time.Duration, usable func(string) bool) bool {
+	if pc == nil || usable == nil {
 		return false
 	}
 	gatherDone := webrtc.GatheringCompletePromise(pc)
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
-	ticker := time.NewTicker(50 * time.Millisecond)
+	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 
 	for {
@@ -43,9 +57,7 @@ func waitForRenegotiateIceGatheringComplete(pc *webrtc.PeerConnection, timeout t
 		case <-gatherDone:
 			return true
 		case <-ticker.C:
-			// Early-exit only when candidate set is reasonably usable for cross-network handover.
-			// A single host candidate can be a false-ready signal on Wi-Fi -> Cellular transitions.
-			if ld := pc.LocalDescription(); ld != nil && hasUsableResumeCandidatesInSDP(ld.SDP) {
+			if ld := pc.LocalDescription(); ld != nil && usable(ld.SDP) {
 				return true
 			}
 		case <-timer.C:
@@ -66,6 +78,10 @@ func hasUsableResumeCandidatesInSDP(sdp string) bool {
 		return true
 	}
 	return strings.Contains(sdp, " typ srflx ") || strings.Contains(sdp, " typ relay ")
+}
+
+func hasAnyICECandidateInSDP(sdp string) bool {
+	return sdp != "" && strings.Contains(sdp, "a=candidate:")
 }
 
 // RenegotiatePeerConnection recreates the PeerConnection with a new SDP offer

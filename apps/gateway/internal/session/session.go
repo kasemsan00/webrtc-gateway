@@ -203,6 +203,7 @@ type Session struct {
 	SwitchVideoFirstKeyframeAt       time.Time `json:"-"`
 	SwitchVideoRenegotiateGeneration int       `json:"-"`
 	SwitchVideoRenegotiateHold       bool      `json:"-"` // true from @switch claim until client answers or the attempt fails
+	switchReplacementPCReady         bool      `json:"-"` // replacement PeerConnection installed; client offer may wait for this
 	// RTP State for re-packetization
 	AudioSeq        uint16 `json:"-"`
 	AudioSSRC       uint32 `json:"-"`

@@ -38,6 +38,7 @@ func (s *Session) TryClaimSwitchVideoRenegotiation(generation int) bool {
 
 	s.SwitchVideoRenegotiateGeneration = generation
 	s.SwitchVideoRenegotiateHold = true
+	s.switchReplacementPCReady = false
 	return true
 }
 
@@ -49,6 +50,7 @@ func (s *Session) ReleaseSwitchVideoRenegotiationClaim(generation int) {
 	if s.SwitchVideoRenegotiateGeneration == generation {
 		s.SwitchVideoRenegotiateGeneration = 0
 		s.SwitchVideoRenegotiateHold = false
+		s.switchReplacementPCReady = false
 	}
 }
 

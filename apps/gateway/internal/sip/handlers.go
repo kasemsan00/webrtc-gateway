@@ -1382,7 +1382,13 @@ func (s *Server) handleSwitchMessage(body string, callerURI string) {
 	// 3.1 Enable temporary @switch transition hold on SIP->WebRTC video path (if enabled).
 	// Preserve mode avoids forcing a black screen by gating only unsafe packets
 	// until the target keyframe arrives; blackout mode keeps legacy rollback behavior.
-	if s.config.SwitchVideoBlackoutEnabled {
+	// Skip the 300ms blackout when switch renegotiation is active: the replacement
+	// decoder is the visual fix, and holding the old path only adds switch latency.
+	skipBlackoutForRenegotiate := genuineSwitch && s.config.SwitchVideoRenegotiateEnable && s.config.MidCallRenegotiationEnable
+	if skipBlackoutForRenegotiate {
+		fmt.Printf("[%s] switch_transition_hold_skipped reason=renegotiate\n", sess.ID)
+	}
+	if s.config.SwitchVideoBlackoutEnabled && !skipBlackoutForRenegotiate {
 		blackout := time.Duration(s.config.SwitchVideoBlackoutMS) * time.Millisecond
 		if blackout <= 0 {
 			blackout = 300 * time.Millisecond

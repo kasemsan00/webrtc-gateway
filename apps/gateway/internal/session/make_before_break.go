@@ -69,6 +69,7 @@ func (s *Session) AbortMakeBeforeBreak() bool {
 	s.legacyAudioTrack = nil
 	s.legacyVideoTrack = nil
 	s.pendingRemoteICE = nil
+	s.switchReplacementPCReady = false
 	s.mu.Unlock()
 	if newPC != nil && newPC != legacy {
 		go func() {

@@ -78,6 +78,15 @@ func TestRenegotiateIceGatherTimeoutIsHandoverSafe(t *testing.T) {
 	}
 }
 
+func TestSwitchIceGatherTimeoutIsShort(t *testing.T) {
+	if SWITCH_ICE_GATHER_TIMEOUT > 300*time.Millisecond {
+		t.Fatalf("expected switch ICE gather timeout <= 300ms, got %s", SWITCH_ICE_GATHER_TIMEOUT)
+	}
+	if SWITCH_ICE_GATHER_TIMEOUT <= 0 {
+		t.Fatal("expected switch ICE gather timeout to be positive")
+	}
+}
+
 func TestHasUsableResumeCandidatesInSDP(t *testing.T) {
 	t.Run("rejects empty SDP", func(t *testing.T) {
 		if hasUsableResumeCandidatesInSDP("") {
@@ -105,4 +114,17 @@ func TestHasUsableResumeCandidatesInSDP(t *testing.T) {
 			t.Fatalf("expected multiple candidates to be usable")
 		}
 	})
+}
+
+func TestHasAnyICECandidateInSDP(t *testing.T) {
+	if hasAnyICECandidateInSDP("") {
+		t.Fatal("expected empty SDP to have no candidates")
+	}
+	if hasAnyICECandidateInSDP("v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n") {
+		t.Fatal("expected SDP without candidates to be unusable for switch early-exit")
+	}
+	sdp := "v=0\r\na=candidate:1 1 udp 2122260223 10.0.0.2 59784 typ host\r\n"
+	if !hasAnyICECandidateInSDP(sdp) {
+		t.Fatal("expected a single host candidate to be enough for @switch")
+	}
 }

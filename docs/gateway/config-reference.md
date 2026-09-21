@@ -83,16 +83,19 @@ When `FRONTEND_PASSWORD` is set and `AUTH_ENABLE=false`, authenticated `/api/*` 
 - `SIP_SWITCH_VIDEO_RENEGOTIATE_ENABLE` (default `false`; opt in to
   client-assisted WebRTC renegotiation when an authoritative `@switch`
   MESSAGE is accepted. When enabled, the gateway parks the live PeerConnection
-  (make-before-break), emits WebSocket `renegotiate` with `reason=agent_switch`,
-  empty SDP, and `requiresAnswer=true`. The client creates a fresh offer on a
-  parallel PeerConnection; the gateway answers that offer and returns the
-  answer SDP in `renegotiate_result.sdp`. SIP audio keeps flowing on the parked
-  PC until the replacement ICE-connects; SIP→WebRTC video is gated with
-  `renegotiate-pending` until the client offer is applied (or the attempt
-  fails/times out). The parked PC is closed after ICE connected. No switch
-  renegotiation is attempted, and no `switch_renegotiate_*` log is emitted,
-  while this flag is `false`. Configuration changes require a gateway process
-  restart.)
+  (make-before-break), emits WebSocket `renegotiate` with `reason=agent_switch`
+  immediately (the client may createOffer while the gateway still prepares the
+  replacement PeerConnection), empty SDP, and `requiresAnswer=true`. The client
+  creates a fresh offer on a parallel PeerConnection; the gateway answers that
+  offer and returns the answer SDP in `renegotiate_result.sdp` as soon as a
+  local ICE candidate exists (it does not wait the resume 3s gather timeout).
+  SIP audio keeps flowing on the parked PC until the replacement ICE-connects;
+  SIP→WebRTC video is gated with `renegotiate-pending` until the client offer
+  is applied (or the attempt fails/times out). The 300ms switch blackout hold
+  is skipped while this flag is true. The parked PC is closed after ICE
+  connected. No switch renegotiation is attempted, and no `switch_renegotiate_*`
+  log is emitted, while this flag is `false`. Configuration changes require a
+  gateway process restart.)
 - `SIP_VIDEO_KEYFRAME_WATCHDOG` (default `true`)
 - `SIP_VIDEO_KEYFRAME_WATCHDOG_INTERVAL_MS` (default `2000`)
 - `SIP_VIDEO_KEYFRAME_STALE_MS` (default `4000`; must stay above a healthy SIP GOP or watchdog PLI never stops)

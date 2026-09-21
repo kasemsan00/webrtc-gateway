@@ -69,7 +69,12 @@ continues independently.
 
 When `SIP_SWITCH_VIDEO_RENEGOTIATE_ENABLE=true`, `@switch` also starts a
 make-before-break WebRTC handoff: the live PeerConnection stays parked until
-the replacement ICE-connects. Look for `switch_renegotiate_make_before_break_armed`,
+the replacement ICE-connects. The gateway emits `switch_renegotiate_started`
+before `switch_renegotiate_pc_replaced` so the client can createOffer in
+parallel. Gateway answers return after a short ICE budget (`ice_gathering=ready`
+or `partial`); they do not wait the resume 3s gather timeout. The 300ms
+blackout hold is skipped (`switch_transition_hold_skipped reason=renegotiate`).
+Look for `switch_renegotiate_make_before_break_armed`,
 `switch_renegotiate_pc_replaced make_before_break=true`, then
 `switch_renegotiate_legacy_pc_closed`. ttrs-vri (SIP→WebRTC) should keep the
 last frame until the new path is ready. A freeze of **Linphone’s remote video**

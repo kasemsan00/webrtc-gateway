@@ -31,6 +31,38 @@ func TestStartSwitchVideoRenegotiationDisabledByConfig(t *testing.T) {
 	}
 }
 
+func TestStartSwitchVideoRenegotiationNotifiesClient(t *testing.T) {
+	mgr := newTestSessionManager()
+	sess := createActiveSession(t, mgr)
+	client := &WSClient{sessionID: sess.ID, send: make(chan []byte, 2)}
+	server := &Server{
+		sessionMgr: mgr,
+		wsClients:  map[string]*WSClient{sess.ID: client},
+		runtimeConfig: &config.Config{
+			SIP: config.SIPConfig{
+				SwitchVideoRenegotiateEnable: true,
+				MidCallRenegotiationEnable:   true,
+			},
+		},
+	}
+
+	server.StartSwitchVideoRenegotiation(sess.ID, 4)
+	if sess.SwitchVideoRenegotiateGeneration != 4 {
+		t.Fatalf("expected claim generation 4, got %d", sess.SwitchVideoRenegotiateGeneration)
+	}
+	pending, ok := sess.GetPendingMidCallRenegotiation()
+	if !ok || pending.Reason != "agent_switch" {
+		t.Fatalf("expected pending agent_switch renegotiation, got %#v ok=%v", pending, ok)
+	}
+	msg := readWSTestMessage(t, client)
+	if msg.Type != "renegotiate" || msg.Reason != "agent_switch" || msg.SDP != "" || !msg.RequiresAnswer {
+		t.Fatalf("unexpected renegotiate payload: %#v", msg)
+	}
+	if msg.RenegotiationID != pending.ID {
+		t.Fatalf("renegotiationId=%s pending=%s", msg.RenegotiationID, pending.ID)
+	}
+}
+
 func TestNotifySwitchVideoRenegotiationSendsAgentSwitchOffer(t *testing.T) {
 	mgr := newTestSessionManager()
 	sess := createActiveSession(t, mgr)

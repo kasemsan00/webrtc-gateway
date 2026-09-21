@@ -20,10 +20,45 @@ func (s *Session) PrepareSwitchPeerConnection(turnConfig config.TURNConfig, debu
 	}
 	s.mu.Lock()
 	s.PeerConnection = newPC
+	s.switchReplacementPCReady = true
 	s.UpdatedAt = time.Now()
 	s.mu.Unlock()
 	fmt.Printf("[%s] switch_renegotiate_pc_replaced make_before_break=true\n", s.ID)
 	return nil
+}
+
+func (s *Session) waitForSwitchReplacementPeerConnectionIfNeeded(timeout time.Duration) error {
+	s.mu.RLock()
+	needed := s.SwitchVideoRenegotiateHold && !s.switchReplacementPCReady
+	s.mu.RUnlock()
+	if !needed {
+		return nil
+	}
+	return s.WaitForSwitchReplacementPeerConnection(timeout)
+}
+
+// WaitForSwitchReplacementPeerConnection blocks until PrepareSwitchPeerConnection
+// has installed the replacement PC, or until the claim is aborted / times out.
+func (s *Session) WaitForSwitchReplacementPeerConnection(timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	ticker := time.NewTicker(5 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		s.mu.RLock()
+		ready := s.switchReplacementPCReady
+		aborted := !ready && !s.SwitchVideoRenegotiateHold && s.PendingMidCallRenegotiation == nil
+		s.mu.RUnlock()
+		if ready {
+			return nil
+		}
+		if aborted {
+			return fmt.Errorf("switch peer connection aborted")
+		}
+		if !time.Now().Before(deadline) {
+			return fmt.Errorf("switch peer connection not ready")
+		}
+		<-ticker.C
+	}
 }
 
 // AnswerClientOffer applies a client offer (resume/@switch) onto the current
@@ -31,6 +66,9 @@ func (s *Session) PrepareSwitchPeerConnection(turnConfig config.TURNConfig, debu
 func (s *Session) AnswerClientOffer(offerSDP string) (string, error) {
 	if offerSDP == "" {
 		return "", fmt.Errorf("offer sdp missing")
+	}
+	if err := s.waitForSwitchReplacementPeerConnectionIfNeeded(switchReplacementPCWait); err != nil {
+		return "", err
 	}
 
 	s.mu.RLock()
@@ -63,10 +101,13 @@ func (s *Session) AnswerClientOffer(offerSDP string) (string, error) {
 	if err := pc.SetLocalDescription(answer); err != nil {
 		return "", fmt.Errorf("set local description: %w", err)
 	}
-	if waitForRenegotiateIceGatheringComplete(pc, RENEGOTIATE_ICE_GATHER_TIMEOUT) {
-		fmt.Printf("[%s] switch_renegotiate ice_gathering=complete\n", s.ID)
+	iceWaitStarted := time.Now()
+	if waitForSwitchIceGatheringComplete(pc, SWITCH_ICE_GATHER_TIMEOUT) {
+		fmt.Printf("[%s] switch_renegotiate ice_gathering=ready wait_ms=%d budget_ms=%d\n",
+			s.ID, time.Since(iceWaitStarted).Milliseconds(), SWITCH_ICE_GATHER_TIMEOUT.Milliseconds())
 	} else {
-		fmt.Printf("[%s] switch_renegotiate ice_gathering=timeout after=%s\n", s.ID, RENEGOTIATE_ICE_GATHER_TIMEOUT)
+		fmt.Printf("[%s] switch_renegotiate ice_gathering=partial wait_ms=%d budget_ms=%d\n",
+			s.ID, time.Since(iceWaitStarted).Milliseconds(), SWITCH_ICE_GATHER_TIMEOUT.Milliseconds())
 	}
 	ld := pc.LocalDescription()
 	if ld == nil || ld.SDP == "" {
