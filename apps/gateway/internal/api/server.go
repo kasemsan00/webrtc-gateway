@@ -14,6 +14,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"webrtc-sip-gateway/internal/auth"
+	"webrtc-sip-gateway/internal/chatimage"
 	"webrtc-sip-gateway/internal/config"
 	"webrtc-sip-gateway/internal/logstore"
 	"webrtc-sip-gateway/internal/push"
@@ -52,6 +53,8 @@ type Server struct {
 	wsClientStreamSeq  int
 	incomingCounters   map[string]int64
 	diagnosticLimits   map[string]*diagnosticRateState
+	chatImageStore     *chatimage.Store
+	chatImageLimits    map[string]*chatImageRateState
 	healthProviders    map[string]OperationalHealthProvider
 	mediaTelemetry     map[string]mediaRecoveryCounters
 	startTime          time.Time
@@ -91,6 +94,11 @@ type TrunkManager interface {
 	SetTrunkNotifyUserIDAndPlatform(ctx context.Context, trunkID int64, userID *string, platform *string) error
 	SetTrunkPushContact(ctx context.Context, trunkID int64, contact sip.TrunkPushContact) (bool, error)
 	UpsertAgentTrunk(ctx context.Context, payload sip.AgentTrunkPayload) (*sip.Trunk, error)
+	UpsertAgentDeviceTrunk(ctx context.Context, payload sip.AgentTrunkPayload) (*sip.Trunk, error)
+	SetTrunkFcmToken(ctx context.Context, trunkID int64, token string) error
+	ClearTrunkFcmToken(ctx context.Context, trunkID int64) error
+	ListAgentDeviceTrunksByNotifyUserID(ctx context.Context, userID string) ([]*sip.Trunk, error)
+	IdentityGroupTrunkIDs(trunkID int64) []int64
 }
 
 // SIPCallMaker interface for making SIP calls (implemented by SIP server)
@@ -126,6 +134,12 @@ type WSClient struct {
 	authClaims      *auth.VerifiedClaims // populated when tokenVerifier is set
 	publicOnly      bool                 // true for unauthenticated /ws-public clients
 	agentOnly       bool                 // true for unauthenticated /ws-agent clients
+	agentDeviceOnly bool                 // true for JWT /ws-agent-device clients
+	devicePlatform  string               // android|ios from upgrade query when present
+}
+
+func (c *WSClient) isAgentPresence() bool {
+	return c != nil && (c.agentOnly || c.agentDeviceOnly)
 }
 
 // WSMessage represents a WebSocket message
@@ -219,6 +233,7 @@ func NewServer(cfg config.APIConfig, turnCfg config.TURNConfig, gatewayCfg confi
 		wsClientStreams:    make(map[int]chan []byte),
 		incomingCounters:   make(map[string]int64),
 		diagnosticLimits:   make(map[string]*diagnosticRateState),
+		chatImageLimits:    make(map[string]*chatImageRateState),
 		healthProviders:    make(map[string]OperationalHealthProvider),
 		mediaTelemetry:     make(map[string]mediaRecoveryCounters),
 		startTime:          time.Now(),
@@ -286,6 +301,7 @@ func (s *Server) SetRuntimeConfig(cfg *config.Config) {
 // Start starts the HTTP server with graceful shutdown support
 func (s *Server) Start(ctx context.Context) error {
 	s.startStatsCollector(ctx)
+	s.startChatImageStore(ctx)
 	router := mux.NewRouter()
 
 	// Enable CORS
@@ -305,6 +321,10 @@ func (s *Server) Start(ctx context.Context) error {
 		router.HandleFunc("/ws-agent", s.handleAgentWebSocket)
 		fmt.Printf("Agent WebSocket endpoint enabled: /ws-agent\n")
 	}
+	if s.config.EnableAgentDeviceWS {
+		router.HandleFunc("/ws-agent-device", s.handleAgentDeviceWebSocket)
+		fmt.Printf("Agent-device WebSocket endpoint enabled: /ws-agent-device\n")
+	}
 
 	// REST API endpoints
 	if s.config.EnableREST {
@@ -317,6 +337,9 @@ func (s *Server) Start(ctx context.Context) error {
 		router.HandleFunc("/api/logs", s.handleListLogFiles).Methods("GET", "OPTIONS")
 		router.HandleFunc("/api/logs/current", s.handleGetCurrentLog).Methods("GET", "OPTIONS")
 		router.HandleFunc("/api/logs/{name}", s.handleGetLogFile).Methods("GET", "OPTIONS")
+		// Public VRI clients have no JWT; bind uploads to a live sessionId instead.
+		router.HandleFunc("/api/chat-images", s.handleUploadChatImage).Methods("POST", "OPTIONS")
+		router.HandleFunc("/api/chat-images/{id}", s.handleGetChatImage).Methods("GET", "OPTIONS")
 
 		api := router.PathPrefix("/api").Subrouter()
 		if s.restAuthEnabled() {
@@ -393,7 +416,7 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", s.config.CORSOrigins)
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Session-Id")
 
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)

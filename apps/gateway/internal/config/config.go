@@ -27,6 +27,7 @@ type Config struct {
 	PushNotification PushNotificationConfig
 	Translator       TranslatorConfig
 	Observability    ObservabilityConfig
+	ChatImage        ChatImageConfig
 }
 
 // ObservabilityConfig controls the optional OTLP connection to an adjacent
@@ -48,6 +49,25 @@ type ObservabilityConfig struct {
 	ScheduleDelayMS    int
 	ExportTimeoutMS    int
 	ShutdownTimeoutMS  int
+}
+
+const (
+	DefaultChatImageDir                    = "chat-images"
+	DefaultChatImageMaxBytes               = 10 * 1024 * 1024
+	DefaultChatImageMaxPerSession          = 20
+	DefaultChatImageTTLSeconds             = 86400
+	DefaultChatImageCleanupIntervalSeconds = 900
+)
+
+// ChatImageConfig controls in-call chat image upload and public GET serving.
+type ChatImageConfig struct {
+	Enable                 bool
+	Dir                    string
+	PublicBaseURL          string
+	MaxBytes               int64
+	MaxPerSession          int
+	TTLSeconds             int
+	CleanupIntervalSeconds int
 }
 
 // TranslatorConfig holds S2S speech translation configuration
@@ -73,6 +93,7 @@ type APIConfig struct {
 	EnableWS                   bool   // Enable WebSocket endpoint
 	EnablePublicWS             bool   // Enable unauthenticated public SIP WebSocket endpoint
 	EnableAgentWS              bool   // Enable unauthenticated PC agent WebSocket endpoint (/ws-agent)
+	EnableAgentDeviceWS        bool   // Enable JWT agent-device WebSocket endpoint (/ws-agent-device)
 	EnableREST                 bool   // Enable REST API
 	CORSOrigins                string // CORS allowed origins (comma-separated)
 	DebugWebSocket             bool   // Enable WebSocket debug logging (ping/pong, messages)
@@ -340,6 +361,7 @@ func Load() (*Config, error) {
 			EnableWS:                   getEnvAsBool("API_ENABLE_WS", true),
 			EnablePublicWS:             getEnvAsBool("API_ENABLE_PUBLIC_WS", false),
 			EnableAgentWS:              getEnvAsBool("API_ENABLE_AGENT_WS", false),
+			EnableAgentDeviceWS:        getEnvAsBool("API_ENABLE_AGENT_DEVICE_WS", false),
 			EnableREST:                 getEnvAsBool("API_ENABLE_REST", true),
 			CORSOrigins:                getEnvWithDefault("API_CORS_ORIGINS", "*"),
 			DebugWebSocket:             getEnvAsBool("DEBUG_WEBSOCKET", false),
@@ -449,6 +471,15 @@ func Load() (*Config, error) {
 			ScheduleDelayMS:    getEnvAsInt("OTEL_BSP_SCHEDULE_DELAY_MS", 5000),
 			ExportTimeoutMS:    getEnvAsInt("OTEL_EXPORTER_OTLP_TIMEOUT_MS", 3000),
 			ShutdownTimeoutMS:  getEnvAsInt("OTEL_SHUTDOWN_TIMEOUT_MS", 5000),
+		},
+		ChatImage: ChatImageConfig{
+			Enable:                 getEnvAsBool("CHAT_IMAGE_ENABLE", true),
+			Dir:                    strings.TrimSpace(getEnvWithDefault("CHAT_IMAGE_DIR", DefaultChatImageDir)),
+			PublicBaseURL:          strings.TrimRight(strings.TrimSpace(os.Getenv("CHAT_IMAGE_PUBLIC_BASE_URL")), "/"),
+			MaxBytes:               chatImageMaxBytesFromEnv(),
+			MaxPerSession:          getEnvAsInt("CHAT_IMAGE_MAX_PER_SESSION", DefaultChatImageMaxPerSession),
+			TTLSeconds:             getEnvAsInt("CHAT_IMAGE_TTL_SECONDS", DefaultChatImageTTLSeconds),
+			CleanupIntervalSeconds: getEnvAsInt("CHAT_IMAGE_CLEANUP_INTERVAL_SECONDS", DefaultChatImageCleanupIntervalSeconds),
 		},
 	}
 	if err := validateObservabilityEnvironment(); err != nil {
@@ -708,6 +739,21 @@ func (c *Config) Display() {
 		fmt.Println("  Public WS URL: Not configured (resume_redirect disabled)")
 	}
 
+	fmt.Println("\nChat Image Configuration:")
+	fmt.Printf("  Enabled: %v\n", c.ChatImage.Enable)
+	if c.ChatImage.Enable {
+		fmt.Printf("  Directory: %s\n", c.ChatImage.Dir)
+		if c.ChatImage.PublicBaseURL != "" {
+			fmt.Printf("  Public Base URL: %s\n", c.ChatImage.PublicBaseURL)
+		} else {
+			fmt.Println("  Public Base URL: derived from request Host")
+		}
+		fmt.Printf("  Max Bytes: %d\n", c.ChatImage.MaxBytes)
+		fmt.Printf("  Max Per Session: %d\n", c.ChatImage.MaxPerSession)
+		fmt.Printf("  TTL: %d seconds\n", c.ChatImage.TTLSeconds)
+		fmt.Printf("  Cleanup Interval: %d seconds\n", c.ChatImage.CleanupIntervalSeconds)
+	}
+
 	// Display Session Directory Configuration
 	fmt.Println("\nSession Directory Configuration:")
 	fmt.Printf("  TTL: %d seconds\n", c.SessionDir.TTLSeconds)
@@ -801,6 +847,19 @@ func maskPassword(password string) string {
 		return "****"
 	}
 	return password[:2] + strings.Repeat("*", len(password)-4) + password[len(password)-2:]
+}
+
+const legacyChatImageMaxBytes = 2 * 1024 * 1024
+
+func chatImageMaxBytesFromEnv() int64 {
+	maxBytes := int64(getEnvAsInt("CHAT_IMAGE_MAX_BYTES", DefaultChatImageMaxBytes))
+	if maxBytes == legacyChatImageMaxBytes {
+		return DefaultChatImageMaxBytes
+	}
+	if maxBytes <= 0 {
+		return DefaultChatImageMaxBytes
+	}
+	return maxBytes
 }
 
 // getEnvAsInt retrieves an environment variable as an integer with a default value

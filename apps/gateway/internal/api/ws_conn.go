@@ -32,21 +32,55 @@ const (
 
 // handleWebSocket handles WebSocket connections
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
-	s.handleWebSocketConn(w, r, false, false)
+	s.handleWebSocketConn(w, r, false, false, false)
 }
 
 func (s *Server) handlePublicWebSocket(w http.ResponseWriter, r *http.Request) {
-	s.handleWebSocketConn(w, r, true, false)
+	s.handleWebSocketConn(w, r, true, false, false)
 }
 
 func (s *Server) handleAgentWebSocket(w http.ResponseWriter, r *http.Request) {
-	s.handleWebSocketConn(w, r, false, true)
+	s.handleWebSocketConn(w, r, false, true, false)
 }
 
-func (s *Server) handleWebSocketConn(w http.ResponseWriter, r *http.Request, publicOnly, agentOnly bool) {
+func (s *Server) handleAgentDeviceWebSocket(w http.ResponseWriter, r *http.Request) {
+	s.handleWebSocketConn(w, r, false, false, true)
+}
+
+func (s *Server) handleWebSocketConn(w http.ResponseWriter, r *http.Request, publicOnly, agentOnly, agentDeviceOnly bool) {
 	req := r
 	var provisioned *MobileSIPProvisionResult
-	if agentOnly {
+	devicePlatform := ""
+	if agentDeviceOnly {
+		if !s.config.EnableAgentDeviceWS {
+			http.NotFound(w, r)
+			return
+		}
+		if s.tokenVerifier == nil {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		rawToken := strings.TrimSpace(r.URL.Query().Get("access_token"))
+		if rawToken == "" {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		platform, ok := normalizeDevicePlatform(r.URL.Query().Get("devicePlatform"))
+		if !ok || platform == "" {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		devicePlatform = platform
+		realmHint := extractAuthRealmHint(r)
+		claims, err := s.tokenVerifier.VerifyToken(r.Context(), rawToken, realmHint)
+		if err != nil {
+			log.Printf("Agent-device WebSocket auth rejected: hint=%s err=%v", realmHint, err)
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		log.Printf("Agent-device WebSocket auth accepted: hint=%s realm=%s sub=%s platform=%s", realmHint, claims.Realm, claims.Subject, platform)
+		req = withAuthClaims(r, claims)
+	} else if agentOnly {
 		log.Printf("Agent WebSocket connection accepted: remote=%s", r.RemoteAddr)
 	} else if s.tokenVerifier != nil && !publicOnly {
 		rawToken := strings.TrimSpace(r.URL.Query().Get("access_token"))
@@ -106,6 +140,8 @@ func (s *Server) handleWebSocketConn(w http.ResponseWriter, r *http.Request, pub
 		ConnectedAt:     time.Now(),
 		publicOnly:      publicOnly,
 		agentOnly:       agentOnly,
+		agentDeviceOnly: agentDeviceOnly,
+		devicePlatform:  devicePlatform,
 	}
 	if claims, ok := AuthClaimsFromContext(req.Context()); ok {
 		client.authClaims = claims
@@ -162,7 +198,12 @@ func (s *Server) handleWebSocketConn(w http.ResponseWriter, r *http.Request, pub
 
 	// Agent presence cleanup may hang up calls and unregister the trunk. The
 	// client is already absent from notification maps at this point.
-	s.cleanupAgentPresence(client)
+	// Agent-device presence is sticky: hang up owned sessions only.
+	if client.agentDeviceOnly {
+		s.cleanupAgentDevicePresence(client)
+	} else {
+		s.cleanupAgentPresence(client)
+	}
 	s.notifyWSClientChanged("disconnected", client)
 	telemetry.RecordWebSocketConnection(context.Background(), false)
 	_ = telemetry.Log(context.Background(), telemetry.LogEvent{Severity: telemetry.SeverityInfo, Component: "websocket", Name: "websocket.disconnected", Outcome: "success", Reason: "peer_closed"})

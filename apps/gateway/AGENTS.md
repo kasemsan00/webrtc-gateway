@@ -60,6 +60,7 @@ apps/gateway/
 |  |- api/           # HTTP/WS server (see file map below)
 |  |- auth/verifier.go
 |  |- audio/         # inbound Opus gain
+|  |- chatimage/     # in-call chat image disk store
 |  |- config/config.go
 |  |- logstore/
 |  |- push/          # FCM, APNS, TTRS
@@ -84,6 +85,7 @@ apps/gateway/
 | `client_diagnostics.go` | `/api/client-diagnostics` upload and query |
 | `ws_conn.go` | WebSocket upgrade, read/write pumps (`/ws`, `/ws-public`, `/ws-agent`) |
 | `ws_agent.go` | `/ws-agent` `agent_register`, refcount presence, last-disconnect hangup+unregister |
+| `ws_agent_device.go` | `/ws-agent-device` `device_register`, sticky REGISTER, FCM token, logout `unregister` |
 | `ws_dispatch.go` | `handleWSMessage` router, public-only guards |
 | `ws_call.go` | `offer`, `ice`, `call`, `hangup`, `dtmf` |
 | `ws_incoming.go` | `accept`, `reject`, push dispatch, ring timeout |
@@ -100,6 +102,7 @@ apps/gateway/
 | `handlers_ops.go` | dashboard, instances, ws-clients, public accounts |
 | `handlers_sse.go` | trunk/session/ws-client SSE streams |
 | `handlers_log.go` | `/api/logs/*` |
+| `handlers_chat_image.go` | `/api/chat-images` upload/get |
 
 ---
 
@@ -122,6 +125,7 @@ apps/gateway/
 | Session history / payloads | `handlers_session.go` |
 | Dashboard / ops REST | `handlers_ops.go` |
 | Log file API | `handlers_log.go` |
+| Chat images | `handlers_chat_image.go`, `internal/chatimage/` |
 | Client diagnostics | `client_diagnostics.go` |
 | SDP / codecs / RTP | `internal/sip/sdp.go`, `internal/session/session_media.go` |
 | Inbound audio gain | `internal/audio/inbound.go` |

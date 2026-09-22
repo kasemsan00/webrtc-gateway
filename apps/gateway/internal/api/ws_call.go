@@ -620,9 +620,60 @@ func (s *Server) handleWSHangup(client *WSClient, msg WSMessage) {
 		}
 	}
 
+	s.hangupBridgedPeerSession(sess, "bridged-remote-hangup")
+
 	// Delete session after BYE is sent
 	s.unbindClientSession(client, msg.SessionID)
 	s.sessionMgr.DeleteSession(msg.SessionID)
+}
+
+// hangupBridgedPeerSession ends the other WebRTC/SIP leg of a queue-bridged
+// call. Agent hangup only BYEs the inbound dialog; Asterisk may not forward
+// that onto the public VRI session, so VRI would otherwise stay in-call.
+func (s *Server) hangupBridgedPeerSession(origin *session.Session, reason string) {
+	if origin == nil || s.sessionMgr == nil {
+		return
+	}
+	dir, _, _, _ := origin.GetCallInfo()
+	var peer *session.Session
+	if strings.EqualFold(strings.TrimSpace(dir), "inbound") {
+		peer = s.findBridgedPublicSession(origin)
+	} else {
+		peer = s.findBridgedAgentSession(origin)
+	}
+	if peer == nil || peer.ID == origin.ID || peer.GetState() == session.StateEnded {
+		return
+	}
+	if !peer.TryBeginTerminalAction("bye") {
+		return
+	}
+	log.Printf("[%s] 📞 Hanging up bridged peer session %s reason=%s", origin.ID, peer.ID, reason)
+	s.NotifySessionStateWithReason(peer.ID, session.StateEnded, reason)
+	if s.sipMaker != nil && (peer.HasDialogState() || peer.GetState() == session.StateActive) {
+		if err := s.sipMaker.Hangup(peer); err != nil {
+			log.Printf("[%s] ⚠️ Bridged hangup failed for session %s: %v", origin.ID, peer.ID, err)
+		}
+	} else {
+		peer.UpdateState(session.StateEnded)
+	}
+
+	authMode, accountKey, trunkID, _, _, _, _ := peer.GetSIPAuthContext()
+	if authMode == "public" && accountKey != "" && s.publicRegistry != nil {
+		s.publicRegistry.DecrementRefCount(accountKey)
+	}
+	if authMode == "trunk" && trunkID > 0 && s.trunkManager != nil {
+		if err := s.trunkManager.SetTrunkInUseBy(context.Background(), trunkID, nil); err != nil {
+			log.Printf("⚠️ [Bridged Hangup] Failed to clear in_use_by for trunk %d: %v", trunkID, err)
+		}
+	}
+
+	s.mu.RLock()
+	peerClient := s.wsClients[peer.ID]
+	s.mu.RUnlock()
+	if peerClient != nil {
+		s.unbindClientSession(peerClient, peer.ID)
+	}
+	s.sessionMgr.DeleteSession(peer.ID)
 }
 
 // handleWSDTMF handles WebSocket DTMF messages

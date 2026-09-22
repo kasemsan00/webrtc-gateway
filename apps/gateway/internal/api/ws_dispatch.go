@@ -28,7 +28,14 @@ func (s *Server) handleWSMessage(client *WSClient, message []byte) {
 		_ = telemetry.Log(ctx, telemetry.LogEvent{Severity: telemetry.SeverityInfo, Component: "websocket", Name: "websocket.message.completed", Outcome: outcome, Reason: spanReason, Correlation: telemetry.Correlation{SessionID: msg.SessionID}})
 	}()
 
-	if client != nil && client.agentOnly {
+	if client != nil && client.agentDeviceOnly {
+		if ok, reason := s.allowAgentDeviceWSMessage(client, msg); !ok {
+			outcome, spanReason = "rejected", "forbidden"
+			log.Printf("Agent-device WebSocket message rejected: type=%s sessionID=%s reason=%s", msg.Type, msg.SessionID, reason)
+			s.sendWSError(client, msg.SessionID, reason)
+			return
+		}
+	} else if client != nil && client.agentOnly {
 		if ok, reason := s.allowAgentWSMessage(client, msg); !ok {
 			outcome, spanReason = "rejected", "forbidden"
 			log.Printf("Agent WebSocket message rejected: type=%s sessionID=%s reason=%s", msg.Type, msg.SessionID, reason)
@@ -77,6 +84,12 @@ func (s *Server) handleWSMessage(client *WSClient, message []byte) {
 		s.handleWSTrunkPushToken(client, msg)
 	case "agent_register":
 		s.handleWSAgentRegister(client, msg)
+	case "device_register":
+		s.handleWSDeviceRegister(client, msg)
+	case "device_push_token":
+		s.handleWSDevicePushToken(client, msg)
+	case "unregister":
+		s.handleWSDeviceUnregister(client, msg)
 	case "client_state":
 		s.handleWSClientState(client, msg)
 	case "translate":
@@ -86,6 +99,34 @@ func (s *Server) handleWSMessage(client *WSClient, message []byte) {
 	default:
 		outcome, spanReason = "rejected", "invalid_request"
 		s.sendWSError(client, msg.SessionID, "Unknown message type")
+	}
+}
+
+func (s *Server) allowAgentDeviceWSMessage(client *WSClient, msg WSMessage) (bool, string) {
+	switch msg.Type {
+	case "device_register", "ping", "client_state", "unregister":
+		return true, ""
+	case "device_push_token":
+		if client == nil || !client.trunkResolved || client.resolvedTrunkID <= 0 {
+			return false, "device_register is required before device_push_token"
+		}
+		return true, ""
+	case "offer":
+		if strings.TrimSpace(msg.SessionID) == "" {
+			return true, ""
+		}
+		return s.agentClientCanAccessSession(client, msg)
+	case "call", "ice", "hangup", "accept", "reject", "dtmf", "send_message", "request_keyframe", "renegotiate_answer", "hold", "unhold":
+		return s.agentClientCanAccessSession(client, msg)
+	case "resume":
+		if strings.TrimSpace(msg.SessionID) == "" {
+			return false, "Session ID required"
+		}
+		return true, ""
+	case "agent_register", "trunk_push_token", "trunk_resolve", "translate", "translate_stop":
+		return false, fmt.Sprintf("Message type %q is not allowed on agent-device WebSocket", msg.Type)
+	default:
+		return false, fmt.Sprintf("Message type %q is not allowed on agent-device WebSocket", msg.Type)
 	}
 }
 

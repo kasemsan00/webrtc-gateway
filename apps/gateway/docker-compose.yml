@@ -82,9 +82,14 @@ services:
       - DB_BATCH_SIZE=${DB_BATCH_SIZE:-100}
       - DB_BATCH_INTERVAL_MS=${DB_BATCH_INTERVAL_MS:-1000}
       - PUSH_FIREBASE_CREDENTIALS_FILE=/app/softphone-c5e2f-01c0a81fa2a5.json
+      - CHAT_IMAGE_ENABLE=${CHAT_IMAGE_ENABLE:-true}
+      - CHAT_IMAGE_DIR=/var/lib/webrtc-gateway/chat-images
+      - CHAT_IMAGE_PUBLIC_BASE_URL=${CHAT_IMAGE_PUBLIC_BASE_URL:-}
+      - CHAT_IMAGE_MAX_BYTES=10485760
 
     volumes:
       - ./softphone-c5e2f-01c0a81fa2a5.json:/app/softphone-c5e2f-01c0a81fa2a5.json:ro
+      - chat_images_data:/var/lib/webrtc-gateway/chat-images
 
     networks:
       - gateway_network
@@ -125,6 +130,8 @@ services:
 
 volumes:
   postgres_data:
+    driver: local
+  chat_images_data:
     driver: local
 
 networks:

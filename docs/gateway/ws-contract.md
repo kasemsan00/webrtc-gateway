@@ -1,6 +1,6 @@
 # Gateway WebSocket Contract
 
-Source of truth for `/ws`, `/ws-public`, and `/ws-agent` JSON messages.
+Source of truth for `/ws`, `/ws-public`, `/ws-agent`, and `/ws-agent-device` JSON messages.
 When changing message types, also update `internal/api/ws_dispatch.go`, the
 relevant `internal/api/ws_*.go` handler, and each client implementation that
 consumes the contract.
@@ -71,9 +71,30 @@ Auth behavior:
 - `client_state` may include `activeCalls` for diagnostics/admission visibility. The gateway still derives session ownership from successful offers and presented incoming calls.
 - Disconnect ends every call owned by that WebSocket. The last connection for the SIP identity then unregisters the agent trunk.
 
+---
+
+Endpoint: `/ws-agent-device` (opt-in via `API_ENABLE_AGENT_DEVICE_WS=true`)
+Payload format: JSON
+
+Auth behavior:
+
+- Requires `access_token` and `devicePlatform=android|ios`. JWT is verified against configured JWKS realms. The mobile SIP provisioner is **not** invoked.
+- Client MUST send `device_register` with `sipDomain`, `sipUsername`, `sipPassword`, optional `sipPort`, optional `multiCall` before placing/receiving calls.
+- Gateway upserts a deterministic agent-device trunk (`sipclient-agent-device-<username>@<domain>:<port>`), SIP REGISTERs when this instance does not already own it, binds `notify_user_id` to the JWT `sub`, and replies with `trunk_resolved`.
+- Presence is sticky: WebSocket disconnect hangs up sessions owned by that connection but does **not** SIP UNREGISTER and does **not** clear FCM.
+- Client `unregister` SIP UNREGISTERs the agent-device trunk, clears FCM and notify-user binding, then the client may disconnect.
+- Client `device_push_token` with `pnType:"fcm"` stores the FCM token on the trunk. Offline incoming sends that token via FCM and does not look up TTRS notification tokens.
+- `/ws-agent` last-disconnect UNREGISTER must not unregister an agent-device trunk.
+- Owned `/ws-agent` and `/ws-agent-device` trunks for the same SIP username/domain/port are one incoming identity group: live WS clients on either trunk are presented the call; if none are live, stored device FCM is used.
+- Allowed messages: `device_register`, `device_push_token`, `unregister`, `offer`, `ice`, `call`, `hangup`, `accept`, `reject`, `dtmf`, `send_message`, `hold`, `unhold`, `ping`, `request_keyframe`, `renegotiate_answer`, `client_state`, `resume`.
+- Rejected on `/ws-agent-device`: `agent_register`, `trunk_resolve`, `trunk_push_token`, `translate`, `translate_stop`.
+
 ### Client -> Server message types
 
 - `agent_register` -> `/ws-agent` only; requires `sipDomain`, `sipUsername`, `sipPassword`; optional `sipPort`, `multiCall`
+- `device_register` -> `/ws-agent-device` only; requires `sipDomain`, `sipUsername`, `sipPassword`; optional `sipPort`, `multiCall`
+- `device_push_token` -> `/ws-agent-device` only after `device_register`; requires `pnType:"fcm"` and `pnToken` (FCM registration token); optional `devicePlatform`
+- `unregister` -> `/ws-agent-device` only; SIP UNREGISTER the bound agent-device trunk and clear stored FCM
 - `offer` -> requires `sdp` (`sessionId` optional for existing session)
 - `ice` -> requires `candidate` and the owning `sessionId` once an offer has been answered
 - `call` -> requires `sessionId`, `destination` (`from` optional)
@@ -86,6 +107,7 @@ Auth behavior:
 - `dtmf` -> requires `sessionId`, `digits`
 - `hold` / `unhold` -> `/ws-agent` multi-call only; requires an active, owned `sessionId`
 - `send_message` -> requires `body`; when a session exists, sends an out-of-dialog PBX-routed SIP MESSAGE using the remote/local identities and SIP credentials stored on that session. This is intentional for Asterisk B2BUA interoperability: a `2xx` response to an in-dialog MESSAGE does not guarantee forwarding to the other call leg. Without a session, `destination` is required. On `/ws-agent`, it requires an owned active-call `sessionId`, supports held calls, and never trusts caller-supplied `destination`/`from`. Success returns `messageSent` with the same `sessionId` and `body`. Chat bootstrap/control payloads are initiated by the Electron/Web client so the client can supply the dynamic queue extension and agent identity.
+- Chat images are not sent as binary in `send_message`. Clients `POST /api/chat-images` (multipart `file` + live `sessionId`) and then send the returned URL as the whole SIP MESSAGE body, for example `https://host/api/chat-images/{uuid}`, with `contentType` `text/plain;charset=UTF-8`. Receivers render it when the origin matches the gateway and the path is `/api/chat-images/{uuid}`; others show the URL as text (desktop VRS can linkify it). Legacy whole-body `<image>URL</image>` tags are still accepted. Control tokens (`@switch`, `@open_chat`, `<operator>`) are unrelated.
 - `resume` -> requires `sessionId`, optional `sdp`
 - `trunk_resolve` -> requires `sipDomain`, `sipUsername`, `sipPassword`, optional `sipPort` (resolve-only; no auto-create)
   - Mobile clients may include `devicePlatform` (`ios` or `android`) so the gateway can persist the latest online platform for incoming push routing.

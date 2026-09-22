@@ -104,7 +104,7 @@ func (s *Server) bindAgentClient(client *WSClient, trunkID int64) (needRegister 
 		s.agentTrunkBindings = make(map[int64]map[*WSClient]struct{})
 	}
 
-	if client.agentOnly && client.resolvedTrunkID > 0 && client.resolvedTrunkID != trunkID {
+	if (client.agentOnly || client.agentDeviceOnly) && client.resolvedTrunkID > 0 && client.resolvedTrunkID != trunkID {
 		oldTrunkID = client.resolvedTrunkID
 		if set, ok := s.agentTrunkBindings[oldTrunkID]; ok {
 			delete(set, client)

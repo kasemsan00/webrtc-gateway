@@ -134,6 +134,10 @@ type Trunk struct {
 	PNToken     *string
 	PNUpdatedAt *time.Time
 
+	// FCM registration token for /ws-agent-device sticky incoming push.
+	FcmToken     *string
+	FcmUpdatedAt *time.Time
+
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -273,7 +277,7 @@ func (tm *TrunkManager) UpsertMobileTrunk(ctx context.Context, payload MobileTru
 		RETURNING id, public_id, name, domain, port, username, password, transport, enabled, is_default,
 		          lease_owner, lease_until, last_registered_at, last_unregistered_at, last_error, sip_auto_register, in_use_by, notify_user_id,
 		          last_online_platform, last_online_at,
-		          pn_app_id, pn_type, pn_token, pn_updated_at, created_at, updated_at
+		          pn_app_id, pn_type, pn_token, pn_updated_at, created_at, updated_at, fcm_token, fcm_updated_at
 	`, name, domain, port, username, password, transport, true).Scan(
 		&trunk.ID, &trunk.PublicID, &trunk.Name, &trunk.Domain, &trunk.Port,
 		&trunk.Username, &trunk.Password, &trunk.Transport,
@@ -283,6 +287,7 @@ func (tm *TrunkManager) UpsertMobileTrunk(ctx context.Context, payload MobileTru
 		&trunk.LastOnlinePlatform, &trunk.LastOnlineAt,
 		&trunk.PNAppID, &trunk.PNType, &trunk.PNToken, &trunk.PNUpdatedAt,
 		&trunk.CreatedAt, &trunk.UpdatedAt,
+		&trunk.FcmToken, &trunk.FcmUpdatedAt,
 	)
 	if err != nil {
 		msg := strings.ToLower(err.Error())
@@ -313,6 +318,36 @@ func BuildAgentTrunkName(domain, username string, port int) (string, error) {
 		port = 5060
 	}
 	return fmt.Sprintf("sipclient-agent-%s@%s:%d", username, domain, port), nil
+}
+
+const agentDeviceTrunkNamePrefix = "sipclient-agent-device-"
+const agentTrunkNamePrefix = "sipclient-agent-"
+
+// IsAgentDeviceTrunkName reports whether name uses the agent-device namespace.
+func IsAgentDeviceTrunkName(name string) bool {
+	return strings.HasPrefix(strings.TrimSpace(name), agentDeviceTrunkNamePrefix)
+}
+
+// IsAgentTrunkName reports whether name uses the PC agent namespace (not agent-device).
+func IsAgentTrunkName(name string) bool {
+	name = strings.TrimSpace(name)
+	return strings.HasPrefix(name, agentTrunkNamePrefix) && !IsAgentDeviceTrunkName(name)
+}
+
+// BuildAgentDeviceTrunkName returns the deterministic DB trunk name for an agent-device SIP identity.
+func BuildAgentDeviceTrunkName(domain, username string, port int) (string, error) {
+	domain = strings.ToLower(strings.TrimSpace(domain))
+	username = strings.TrimSpace(username)
+	if domain == "" {
+		return "", fmt.Errorf("%w: domain is required", ErrTrunkValidation)
+	}
+	if username == "" {
+		return "", fmt.Errorf("%w: username is required", ErrTrunkValidation)
+	}
+	if port <= 0 {
+		port = 5060
+	}
+	return fmt.Sprintf("sipclient-agent-device-%s@%s:%d", username, domain, port), nil
 }
 
 // UpsertAgentTrunk creates or updates the deterministic SIP trunk for a PC agent identity.
@@ -355,7 +390,7 @@ func (tm *TrunkManager) UpsertAgentTrunk(ctx context.Context, payload AgentTrunk
 		RETURNING id, public_id, name, domain, port, username, password, transport, enabled, is_default,
 		          lease_owner, lease_until, last_registered_at, last_unregistered_at, last_error, sip_auto_register, in_use_by, notify_user_id,
 		          last_online_platform, last_online_at,
-		          pn_app_id, pn_type, pn_token, pn_updated_at, created_at, updated_at
+		          pn_app_id, pn_type, pn_token, pn_updated_at, created_at, updated_at, fcm_token, fcm_updated_at
 	`, name, domain, port, username, password, transport, true).Scan(
 		&trunk.ID, &trunk.PublicID, &trunk.Name, &trunk.Domain, &trunk.Port,
 		&trunk.Username, &trunk.Password, &trunk.Transport,
@@ -365,6 +400,7 @@ func (tm *TrunkManager) UpsertAgentTrunk(ctx context.Context, payload AgentTrunk
 		&trunk.LastOnlinePlatform, &trunk.LastOnlineAt,
 		&trunk.PNAppID, &trunk.PNType, &trunk.PNToken, &trunk.PNUpdatedAt,
 		&trunk.CreatedAt, &trunk.UpdatedAt,
+		&trunk.FcmToken, &trunk.FcmUpdatedAt,
 	)
 	if err != nil {
 		msg := strings.ToLower(err.Error())
@@ -372,6 +408,71 @@ func (tm *TrunkManager) UpsertAgentTrunk(ctx context.Context, payload AgentTrunk
 			return nil, fmt.Errorf("%w: %v", ErrTrunkValidation, err)
 		}
 		return nil, fmt.Errorf("upsert agent trunk failed: %w", err)
+	}
+
+	tm.cacheUpsertedTrunk(trunk)
+
+	return trunk, nil
+}
+
+// UpsertAgentDeviceTrunk creates or updates the sticky SIP trunk for an agent-device identity.
+func (tm *TrunkManager) UpsertAgentDeviceTrunk(ctx context.Context, payload AgentTrunkPayload) (*Trunk, error) {
+	if tm.db == nil {
+		return nil, fmt.Errorf("database not available for trunk manager")
+	}
+
+	port := payload.Port
+	if port <= 0 {
+		port = 5060
+	}
+	name, err := BuildAgentDeviceTrunkName(payload.Domain, payload.Username, port)
+	if err != nil {
+		return nil, err
+	}
+	domain := strings.ToLower(strings.TrimSpace(payload.Domain))
+	username := strings.TrimSpace(payload.Username)
+	password := strings.TrimSpace(payload.Password)
+	if password == "" {
+		return nil, fmt.Errorf("%w: password is required", ErrTrunkValidation)
+	}
+
+	const transport = "tcp"
+
+	trunk := &Trunk{}
+	err = tm.db.QueryRow(ctx, `
+		INSERT INTO sip_trunks (
+			public_id, name, domain, port, username, password, transport, enabled, is_default
+		)
+		VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, false)
+		ON CONFLICT (name) DO UPDATE
+		SET domain = EXCLUDED.domain,
+		    port = EXCLUDED.port,
+		    username = EXCLUDED.username,
+		    password = EXCLUDED.password,
+		    transport = EXCLUDED.transport,
+		    enabled = true,
+		    updated_at = NOW()
+		RETURNING id, public_id, name, domain, port, username, password, transport, enabled, is_default,
+		          lease_owner, lease_until, last_registered_at, last_unregistered_at, last_error, sip_auto_register, in_use_by, notify_user_id,
+		          last_online_platform, last_online_at,
+		          pn_app_id, pn_type, pn_token, pn_updated_at, created_at, updated_at, fcm_token, fcm_updated_at
+	`, name, domain, port, username, password, transport, true).Scan(
+		&trunk.ID, &trunk.PublicID, &trunk.Name, &trunk.Domain, &trunk.Port,
+		&trunk.Username, &trunk.Password, &trunk.Transport,
+		&trunk.Enabled, &trunk.IsDefault,
+		&trunk.LeaseOwner, &trunk.LeaseUntil,
+		&trunk.LastRegisteredAt, &trunk.LastUnregisteredAt, &trunk.LastError, &trunk.SipAutoRegister, &trunk.InUseBy, &trunk.NotifyUserID,
+		&trunk.LastOnlinePlatform, &trunk.LastOnlineAt,
+		&trunk.PNAppID, &trunk.PNType, &trunk.PNToken, &trunk.PNUpdatedAt,
+		&trunk.CreatedAt, &trunk.UpdatedAt,
+		&trunk.FcmToken, &trunk.FcmUpdatedAt,
+	)
+	if err != nil {
+		msg := strings.ToLower(err.Error())
+		if strings.Contains(msg, "check constraint") {
+			return nil, fmt.Errorf("%w: %v", ErrTrunkValidation, err)
+		}
+		return nil, fmt.Errorf("upsert agent-device trunk failed: %w", err)
 	}
 
 	tm.cacheUpsertedTrunk(trunk)
@@ -509,7 +610,7 @@ func (tm *TrunkManager) loadTrunks() error {
 		SELECT id, public_id, name, domain, port, username, password, transport, enabled, is_default,
 		       lease_owner, lease_until, last_registered_at, last_unregistered_at, last_error, sip_auto_register, in_use_by, notify_user_id,
 		       last_online_platform, last_online_at,
-		       pn_app_id, pn_type, pn_token, pn_updated_at, created_at, updated_at
+		       pn_app_id, pn_type, pn_token, pn_updated_at, created_at, updated_at, fcm_token, fcm_updated_at
 		FROM sip_trunks
 		WHERE enabled = true
 		ORDER BY id
@@ -533,6 +634,7 @@ func (tm *TrunkManager) loadTrunks() error {
 			&trunk.LastOnlinePlatform, &trunk.LastOnlineAt,
 			&trunk.PNAppID, &trunk.PNType, &trunk.PNToken, &trunk.PNUpdatedAt,
 			&trunk.CreatedAt, &trunk.UpdatedAt,
+			&trunk.FcmToken, &trunk.FcmUpdatedAt,
 		)
 		if err != nil {
 			return fmt.Errorf("scan failed: %w", err)
@@ -1367,7 +1469,7 @@ func (tm *TrunkManager) ListTrunks(ctx context.Context, params TrunkListParams) 
 		SELECT id, public_id, name, domain, port, username, password, transport, enabled, is_default,
 		       lease_owner, lease_until, last_registered_at, last_unregistered_at, last_error, sip_auto_register, in_use_by, notify_user_id,
 		       last_online_platform, last_online_at,
-		       pn_app_id, pn_type, pn_token, pn_updated_at, created_at, updated_at
+		       pn_app_id, pn_type, pn_token, pn_updated_at, created_at, updated_at, fcm_token, fcm_updated_at
 		FROM sip_trunks
 		%s
 		ORDER BY %s %s
@@ -1393,6 +1495,7 @@ func (tm *TrunkManager) ListTrunks(ctx context.Context, params TrunkListParams) 
 			&trunk.LastOnlinePlatform, &trunk.LastOnlineAt,
 			&trunk.PNAppID, &trunk.PNType, &trunk.PNToken, &trunk.PNUpdatedAt,
 			&trunk.CreatedAt, &trunk.UpdatedAt,
+			&trunk.FcmToken, &trunk.FcmUpdatedAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scan failed: %w", err)
@@ -1576,7 +1679,7 @@ func (tm *TrunkManager) UpdateTrunk(ctx context.Context, trunkID int64, patch Tr
 		SELECT id, public_id, name, domain, port, username, password, transport, enabled, is_default,
 		       lease_owner, lease_until, last_registered_at, last_unregistered_at, last_error, sip_auto_register, in_use_by, notify_user_id,
 		       last_online_platform, last_online_at,
-		       pn_app_id, pn_type, pn_token, pn_updated_at, created_at, updated_at
+		       pn_app_id, pn_type, pn_token, pn_updated_at, created_at, updated_at, fcm_token, fcm_updated_at
 		FROM sip_trunks
 		WHERE id = $1
 		FOR UPDATE
@@ -1589,6 +1692,7 @@ func (tm *TrunkManager) UpdateTrunk(ctx context.Context, trunkID int64, patch Tr
 		&current.LastOnlinePlatform, &current.LastOnlineAt,
 		&current.PNAppID, &current.PNType, &current.PNToken, &current.PNUpdatedAt,
 		&current.CreatedAt, &current.UpdatedAt,
+		&current.FcmToken, &current.FcmUpdatedAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -1671,7 +1775,7 @@ func (tm *TrunkManager) UpdateTrunk(ctx context.Context, trunkID int64, patch Tr
 		SELECT id, public_id, name, domain, port, username, password, transport, enabled, is_default,
 		       lease_owner, lease_until, last_registered_at, last_unregistered_at, last_error, sip_auto_register, in_use_by, notify_user_id,
 		       last_online_platform, last_online_at,
-		       pn_app_id, pn_type, pn_token, pn_updated_at, created_at, updated_at
+		       pn_app_id, pn_type, pn_token, pn_updated_at, created_at, updated_at, fcm_token, fcm_updated_at
 		FROM sip_trunks
 		WHERE id = $1
 	`, trunkID).Scan(
@@ -1683,6 +1787,7 @@ func (tm *TrunkManager) UpdateTrunk(ctx context.Context, trunkID int64, patch Tr
 		&updated.LastOnlinePlatform, &updated.LastOnlineAt,
 		&updated.PNAppID, &updated.PNType, &updated.PNToken, &updated.PNUpdatedAt,
 		&updated.CreatedAt, &updated.UpdatedAt,
+		&updated.FcmToken, &updated.FcmUpdatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("reload trunk failed: %w", err)
@@ -1949,7 +2054,7 @@ func (tm *TrunkManager) getTrunkByIDFromDB(ctx context.Context, trunkID int64) (
 		SELECT id, public_id, name, domain, port, username, password, transport, enabled, is_default,
 		       lease_owner, lease_until, last_registered_at, last_unregistered_at, last_error, sip_auto_register, in_use_by, notify_user_id,
 		       last_online_platform, last_online_at,
-		       pn_app_id, pn_type, pn_token, pn_updated_at, created_at, updated_at
+		       pn_app_id, pn_type, pn_token, pn_updated_at, created_at, updated_at, fcm_token, fcm_updated_at
 		FROM sip_trunks
 		WHERE id = $1
 	`, trunkID).Scan(
@@ -1961,6 +2066,7 @@ func (tm *TrunkManager) getTrunkByIDFromDB(ctx context.Context, trunkID int64) (
 		&trunk.LastOnlinePlatform, &trunk.LastOnlineAt,
 		&trunk.PNAppID, &trunk.PNType, &trunk.PNToken, &trunk.PNUpdatedAt,
 		&trunk.CreatedAt, &trunk.UpdatedAt,
+		&trunk.FcmToken, &trunk.FcmUpdatedAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -2209,6 +2315,139 @@ func (tm *TrunkManager) SetTrunkPushContact(ctx context.Context, trunkID int64, 
 	return true, nil
 }
 
+func (tm *TrunkManager) SetTrunkFcmToken(ctx context.Context, trunkID int64, token string) error {
+	if tm.db == nil {
+		return fmt.Errorf("database not available for trunk manager")
+	}
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return fmt.Errorf("%w: fcm token is required", ErrTrunkValidation)
+	}
+	now := time.Now()
+	dbCtx, cancel := context.WithTimeout(ctx, trunkManagerDBTimeout)
+	defer cancel()
+	result, err := tm.db.Exec(dbCtx, `
+		UPDATE sip_trunks
+		SET fcm_token = $1, fcm_updated_at = $2, updated_at = NOW()
+		WHERE id = $3 AND enabled = true
+	`, token, now, trunkID)
+	if err != nil {
+		return fmt.Errorf("set trunk fcm token failed: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("%w: trunk %d", ErrTrunkNotFound, trunkID)
+	}
+	tm.mu.Lock()
+	if trunk, ok := tm.trunks[trunkID]; ok {
+		trunk.FcmToken = &token
+		trunk.FcmUpdatedAt = &now
+	}
+	tm.mu.Unlock()
+	return nil
+}
+
+func (tm *TrunkManager) ClearTrunkFcmToken(ctx context.Context, trunkID int64) error {
+	if tm.db == nil {
+		return fmt.Errorf("database not available for trunk manager")
+	}
+	dbCtx, cancel := context.WithTimeout(ctx, trunkManagerDBTimeout)
+	defer cancel()
+	_, err := tm.db.Exec(dbCtx, `
+		UPDATE sip_trunks
+		SET fcm_token = NULL, fcm_updated_at = NULL, updated_at = NOW()
+		WHERE id = $1
+	`, trunkID)
+	if err != nil {
+		return fmt.Errorf("clear trunk fcm token failed: %w", err)
+	}
+	tm.mu.Lock()
+	if trunk, ok := tm.trunks[trunkID]; ok {
+		trunk.FcmToken = nil
+		trunk.FcmUpdatedAt = nil
+	}
+	tm.mu.Unlock()
+	return nil
+}
+
+func (tm *TrunkManager) ListAgentDeviceTrunksByNotifyUserID(ctx context.Context, userID string) ([]*Trunk, error) {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return nil, nil
+	}
+	if tm.db == nil {
+		tm.mu.RLock()
+		defer tm.mu.RUnlock()
+		out := make([]*Trunk, 0)
+		for _, trunk := range tm.trunks {
+			if trunk == nil || !IsAgentDeviceTrunkName(trunk.Name) || trunk.NotifyUserID == nil {
+				continue
+			}
+			if strings.TrimSpace(*trunk.NotifyUserID) == userID {
+				out = append(out, cloneTrunk(trunk))
+			}
+		}
+		return out, nil
+	}
+	dbCtx, cancel := context.WithTimeout(ctx, trunkManagerDBTimeout)
+	defer cancel()
+	rows, err := tm.db.Query(dbCtx, `
+		SELECT id, public_id, name, domain, port, username, password, transport, enabled, is_default,
+		       lease_owner, lease_until, last_registered_at, last_unregistered_at, last_error, sip_auto_register, in_use_by, notify_user_id,
+		       last_online_platform, last_online_at,
+		       pn_app_id, pn_type, pn_token, pn_updated_at, created_at, updated_at, fcm_token, fcm_updated_at
+		FROM sip_trunks
+		WHERE notify_user_id = $1 AND name LIKE 'sipclient-agent-device-%'
+	`, userID)
+	if err != nil {
+		return nil, fmt.Errorf("list agent-device trunks failed: %w", err)
+	}
+	defer rows.Close()
+	out := make([]*Trunk, 0)
+	for rows.Next() {
+		trunk := &Trunk{}
+		if err := rows.Scan(
+			&trunk.ID, &trunk.PublicID, &trunk.Name, &trunk.Domain, &trunk.Port,
+			&trunk.Username, &trunk.Password, &trunk.Transport,
+			&trunk.Enabled, &trunk.IsDefault,
+			&trunk.LeaseOwner, &trunk.LeaseUntil,
+			&trunk.LastRegisteredAt, &trunk.LastUnregisteredAt, &trunk.LastError, &trunk.SipAutoRegister, &trunk.InUseBy, &trunk.NotifyUserID,
+			&trunk.LastOnlinePlatform, &trunk.LastOnlineAt,
+			&trunk.PNAppID, &trunk.PNType, &trunk.PNToken, &trunk.PNUpdatedAt,
+			&trunk.CreatedAt, &trunk.UpdatedAt,
+			&trunk.FcmToken, &trunk.FcmUpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan agent-device trunk failed: %w", err)
+		}
+		out = append(out, trunk)
+	}
+	return out, rows.Err()
+}
+
+func (tm *TrunkManager) IdentityGroupTrunkIDs(trunkID int64) []int64 {
+	tm.mu.RLock()
+	defer tm.mu.RUnlock()
+	source := tm.trunks[trunkID]
+	if source == nil {
+		return nil
+	}
+	user := strings.TrimSpace(source.Username)
+	domain := normalizeSIPHost(source.Domain)
+	port := normalizeSIPPort(source.Port)
+	ids := make([]int64, 0)
+	for id, trunk := range tm.trunks {
+		if trunk == nil || id == trunkID || !tm.ownedLeases[id] {
+			continue
+		}
+		if strings.TrimSpace(trunk.Username) != user || normalizeSIPHost(trunk.Domain) != domain || normalizeSIPPort(trunk.Port) != port {
+			continue
+		}
+		if IsAgentTrunkName(trunk.Name) || IsAgentDeviceTrunkName(trunk.Name) {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
 func trunkPushContactMatches(currentAppID, currentPNType, currentPNToken *string, contact TrunkPushContact) bool {
 	return trimStringPtr(currentAppID) == strings.TrimSpace(contact.PNAppID) &&
 		trimStringPtr(currentPNType) == strings.TrimSpace(contact.PNType) &&
@@ -2237,7 +2476,7 @@ func (tm *TrunkManager) FindTrunkByInUseBy(ctx context.Context, inUseBy string) 
 		SELECT id, public_id, name, domain, port, username, password, transport, enabled, is_default,
 		       lease_owner, lease_until, last_registered_at, last_unregistered_at, last_error, sip_auto_register, in_use_by, notify_user_id,
 		       last_online_platform, last_online_at,
-		       pn_app_id, pn_type, pn_token, pn_updated_at, created_at, updated_at
+		       pn_app_id, pn_type, pn_token, pn_updated_at, created_at, updated_at, fcm_token, fcm_updated_at
 		FROM sip_trunks
 		WHERE in_use_by = $1
 		LIMIT 1
@@ -2250,6 +2489,7 @@ func (tm *TrunkManager) FindTrunkByInUseBy(ctx context.Context, inUseBy string) 
 		&trunk.LastOnlinePlatform, &trunk.LastOnlineAt,
 		&trunk.PNAppID, &trunk.PNType, &trunk.PNToken, &trunk.PNUpdatedAt,
 		&trunk.CreatedAt, &trunk.UpdatedAt,
+		&trunk.FcmToken, &trunk.FcmUpdatedAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -86,6 +87,31 @@ func (s *Service) NotifyIncomingCall(userID, sessionID, from, to string, hasVide
 	}
 
 	log.Printf("🔔 [Push] Incoming call push summary: userID=%s sessionID=%s sent=%d/%d", userID, sessionID, sent, len(tokens))
+}
+
+// NotifyIncomingCallFCMToken sends an incoming-call FCM using a gateway-stored token.
+// It does not look up TTRS notification tokens and must not log the FCM token.
+func (s *Service) NotifyIncomingCallFCMToken(token, sessionID, from, to string, hasVideo bool) {
+	if s == nil || s.fcm == nil {
+		log.Printf("🔔 [Push] Stored FCM skipped: sender not configured (sessionID=%s)", sessionID)
+		return
+	}
+	token = strings.TrimSpace(token)
+	if token == "" {
+		log.Printf("🔔 [Push] Stored FCM skipped: empty token (sessionID=%s)", sessionID)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), pushTimeout)
+	defer cancel()
+
+	title := "SoftPhone Notification"
+	body := "You have an incoming call from " + from
+	data := buildIncomingCallPushData(sessionID, from, to, "android_agent_device", time.Now().UTC(), hasVideo)
+	if err := s.fcm.SendPush(ctx, token, title, body, data, "android_agent_device"); err != nil {
+		log.Printf("🔔 [Push] Stored FCM send failed: sessionID=%s err=%v", sessionID, err)
+		return
+	}
+	log.Printf("🔔 [Push] Stored FCM sent: sessionID=%s", sessionID)
 }
 
 // NotifyIncomingCallAPNS sends a PushKit VoIP push to the stored iOS token.

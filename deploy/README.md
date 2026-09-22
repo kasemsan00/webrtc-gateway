@@ -87,6 +87,7 @@ location / {
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection $connection_upgrade;
     proxy_read_timeout 3600s;
+    client_max_body_size 12m;
 }
 ```
 
@@ -105,6 +106,10 @@ Set `FRONTEND_PASSWORD` on both the frontend and gateway processes (unified `env
 `AUTH_ENABLE` and Keycloak JWKS stay for mobile `/ws` and JWT REST clients. The admin UI does not use Keycloak.
 
 The frontend process exits if `FRONTEND_PASSWORD` is empty. Do not set `VITE_FRONTEND_PASSWORD`.
+
+## Chat images
+
+`POST /api/chat-images` and `GET /api/chat-images/{id}` serve in-call chat photos from a local disk volume (`CHAT_IMAGE_DIR`, default `/var/lib/webrtc-gateway/chat-images`). Proxies in front of `/api/` need `client_max_body_size 12m` so 10MB uploads succeed. Set `CHAT_IMAGE_PUBLIC_BASE_URL=https://your-domain` so returned URLs are absolute.
 
 ## Images
 

@@ -73,9 +73,9 @@ func isClientAvailableForIncoming(client *WSClient) bool {
 		return false
 	}
 	if normalizeClientAvailability(client.availability) != clientAvailabilityIdle {
-		return client.agentOnly && client.multiCall && normalizeClientAvailability(client.availability) != clientAvailabilityUnavailable
+		return client.isAgentPresence() && client.multiCall && normalizeClientAvailability(client.availability) != clientAvailabilityUnavailable
 	}
-	if client.agentOnly && client.multiCall {
+	if client.isAgentPresence() && client.multiCall {
 		return true
 	}
 	return !isBusyCallState(client.callState)
@@ -128,6 +128,44 @@ func (s *Server) rejectIncomingSession(sessionID, statusReason, source string) {
 	s.sessionMgr.DeleteSession(sessionID)
 }
 
+func (s *Server) incomingTargetTrunkIDs(trunkID int64) map[int64]struct{} {
+	ids := map[int64]struct{}{}
+	if trunkID > 0 {
+		ids[trunkID] = struct{}{}
+	}
+	if s.trunkManager == nil || trunkID <= 0 {
+		return ids
+	}
+	for _, id := range s.trunkManager.IdentityGroupTrunkIDs(trunkID) {
+		if id > 0 {
+			ids[id] = struct{}{}
+		}
+	}
+	return ids
+}
+
+func (s *Server) isAgentPresenceTrunk(trunkID int64) bool {
+	if s.trunkManager == nil || trunkID <= 0 {
+		return false
+	}
+	raw, ok := s.trunkManager.GetTrunkByID(trunkID)
+	if !ok {
+		return false
+	}
+	trunk, ok := raw.(*sip.Trunk)
+	if !ok || trunk == nil {
+		return false
+	}
+	return sip.IsAgentTrunkName(trunk.Name) || sip.IsAgentDeviceTrunkName(trunk.Name)
+}
+
+func trunkStoredFcmToken(trunk *sip.Trunk) string {
+	if trunk == nil || trunk.FcmToken == nil {
+		return ""
+	}
+	return strings.TrimSpace(*trunk.FcmToken)
+}
+
 func (s *Server) hasIncomingPushTarget(trunkID int64) bool {
 	if s.config.IncomingOfflinePolicy != "" && s.config.IncomingOfflinePolicy != incomingOfflinePolicyPush480 {
 		return false
@@ -135,11 +173,23 @@ func (s *Server) hasIncomingPushTarget(trunkID int64) bool {
 	if s.pushService == nil || s.trunkManager == nil || trunkID <= 0 {
 		return false
 	}
+	for id := range s.incomingTargetTrunkIDs(trunkID) {
+		if s.trunkHasIncomingPushTarget(id) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Server) trunkHasIncomingPushTarget(trunkID int64) bool {
 	lookupCtx, cancel := context.WithTimeout(context.Background(), incomingPushTrunkLookupTimeout)
 	defer cancel()
 	trunk, err := s.trunkManager.GetTrunkByIDFromDB(lookupCtx, trunkID)
 	if err != nil || trunk == nil {
 		return false
+	}
+	if trunkStoredFcmToken(trunk) != "" {
+		return true
 	}
 	route := selectIncomingPushRoute(trunk, s.pushService.CanSendAPNS(), s.config.TrunkPNAppID)
 	return route.SendFCM || route.SendAPNS
@@ -215,6 +265,7 @@ func (s *Server) dispatchIncomingPush(sessionID, from, to string, trunkID int64,
 	if s.pushService == nil || s.trunkManager == nil {
 		return
 	}
+	targetIDs := s.incomingTargetTrunkIDs(trunkID)
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -224,27 +275,38 @@ func (s *Server) dispatchIncomingPush(sessionID, from, to string, trunkID int64,
 		lookupCtx, cancel := context.WithTimeout(context.Background(), incomingPushTrunkLookupTimeout)
 		defer cancel()
 
-		trunk, err := s.trunkManager.GetTrunkByIDFromDB(lookupCtx, trunkID)
-		if err != nil {
-			log.Printf("🔔 [Push] Skip incoming call push: failed to load trunk from DB (sessionID=%s trunkID=%d err=%v)", sessionID, trunkID, err)
-			return
-		}
 		dispatched := false
-		route := selectIncomingPushRoute(trunk, s.pushService.CanSendAPNS(), s.config.TrunkPNAppID)
-		if route.UnknownPlatformFallback {
-			log.Printf("🔔 [Push] Incoming push using unknown platform fallback: sessionID=%s trunkID=%d", sessionID, trunkID)
-		}
-		if route.SendAPNS {
-			s.pushService.NotifyIncomingCallAPNS(*trunk.PNToken, sessionID, from, to, hasVideo)
-			dispatched = true
-		}
-		if route.SendFCM {
-			log.Printf("🔔 [Push] Dispatch incoming call FCM fallback: userID=%s sessionID=%s trunkID=%d", *trunk.NotifyUserID, sessionID, trunkID)
-			s.pushService.NotifyIncomingCall(*trunk.NotifyUserID, sessionID, from, to, hasVideo)
-			dispatched = true
+		for id := range targetIDs {
+			trunk, err := s.trunkManager.GetTrunkByIDFromDB(lookupCtx, id)
+			if err != nil {
+				log.Printf("🔔 [Push] Skip incoming call push: failed to load trunk from DB (sessionID=%s trunkID=%d err=%v)", sessionID, id, err)
+				continue
+			}
+			if token := trunkStoredFcmToken(trunk); token != "" {
+				log.Printf("🔔 [Push] Dispatch incoming call stored FCM: sessionID=%s trunkID=%d", sessionID, id)
+				s.pushService.NotifyIncomingCallFCMToken(token, sessionID, from, to, hasVideo)
+				dispatched = true
+				continue
+			}
+			route := selectIncomingPushRoute(trunk, s.pushService.CanSendAPNS(), s.config.TrunkPNAppID)
+			if route.UnknownPlatformFallback {
+				log.Printf("🔔 [Push] Incoming push using unknown platform fallback: sessionID=%s trunkID=%d", sessionID, id)
+			}
+			if route.SendAPNS {
+				s.pushService.NotifyIncomingCallAPNS(*trunk.PNToken, sessionID, from, to, hasVideo)
+				dispatched = true
+			}
+			if route.SendFCM {
+				log.Printf("🔔 [Push] Dispatch incoming call FCM fallback: userID=%s sessionID=%s trunkID=%d", *trunk.NotifyUserID, sessionID, id)
+				s.pushService.NotifyIncomingCall(*trunk.NotifyUserID, sessionID, from, to, hasVideo)
+				dispatched = true
+			}
+			if !route.SendAPNS && !route.SendFCM {
+				log.Printf("🔔 [Push] Skip incoming call push: route=%s sessionID=%s trunkID=%d", route.Reason, sessionID, id)
+			}
 		}
 		if !dispatched {
-			log.Printf("🔔 [Push] Skip incoming call push: route=%s sessionID=%s trunkID=%d", route.Reason, sessionID, trunkID)
+			log.Printf("🔔 [Push] Skip incoming call push: no stored FCM or TTRS target sessionID=%s trunkID=%d", sessionID, trunkID)
 		}
 	}()
 }
@@ -291,6 +353,7 @@ func (s *Server) NotifyIncomingCall(sessionID, from, to string, trunkID int64) {
 	}
 	hasVideo := s.incomingSessionHasVideo(sessionID)
 	hasVideoValue := strconv.FormatBool(hasVideo)
+	targetIDs := s.incomingTargetTrunkIDs(trunkID)
 
 	s.mu.RLock()
 	totalConnections := len(s.wsConnections)
@@ -301,7 +364,10 @@ func (s *Server) NotifyIncomingCall(sessionID, from, to string, trunkID int64) {
 	recipientSessionIDs := make([]string, 0)
 
 	for client := range s.wsConnections {
-		if client == nil || !client.trunkResolved || client.resolvedTrunkID != trunkID {
+		if client == nil || !client.trunkResolved {
+			continue
+		}
+		if _, ok := targetIDs[client.resolvedTrunkID]; !ok {
 			continue
 		}
 		matchingClients++
@@ -328,10 +394,10 @@ func (s *Server) NotifyIncomingCall(sessionID, from, to string, trunkID int64) {
 				To:        to,
 				HasVideo:  hasVideoValue,
 			})
-			log.Printf("📲 Sent incoming call notification to resolved client (sessionID=%s trunkID=%d)", sessionID, trunkID)
+			log.Printf("📲 Sent incoming call notification to resolved client (sessionID=%s trunkID=%d)", sessionID, client.resolvedTrunkID)
 		}
 		s.incrementIncomingCounter("incoming_presented")
-		if s.hasIncomingPushTarget(trunkID) {
+		if !s.isAgentPresenceTrunk(trunkID) && s.hasIncomingPushTarget(trunkID) {
 			s.incrementIncomingCounter("incoming_push_wait")
 			s.dispatchIncomingPush(sessionID, from, to, trunkID, hasVideo)
 		}
@@ -414,9 +480,13 @@ func (s *Server) fanoutIncomingCancel(sessionID string, trunkID int64, reason st
 	totalConnections := len(s.wsConnections)
 	recipients := 0
 	recipientSessionIDs := make([]string, 0)
+	targetIDs := s.incomingTargetTrunkIDs(trunkID)
 
 	for client := range s.wsConnections {
-		if client == nil || client == skip || !client.trunkResolved || client.resolvedTrunkID != trunkID {
+		if client == nil || client == skip || !client.trunkResolved {
+			continue
+		}
+		if _, ok := targetIDs[client.resolvedTrunkID]; !ok {
 			continue
 		}
 		recipients++
@@ -426,7 +496,7 @@ func (s *Server) fanoutIncomingCancel(sessionID string, trunkID int64, reason st
 			SessionID: sessionID,
 			Reason:    reason,
 		})
-		log.Printf("📲 Sent incoming cancel notification to resolved client (sessionID=%s trunkID=%d reason=%s)", sessionID, trunkID, reason)
+		log.Printf("📲 Sent incoming cancel notification to resolved client (sessionID=%s trunkID=%d reason=%s)", sessionID, client.resolvedTrunkID, reason)
 	}
 	s.mu.RUnlock()
 	s.clearPendingIncoming(sessionID)
@@ -785,12 +855,16 @@ func (s *Server) notifyPendingIncomingForClient(client *WSClient, trunkID int64)
 		return
 	}
 
+	targetIDs := s.incomingTargetTrunkIDs(trunkID)
 	for _, sess := range s.sessionMgr.ListSessions() {
 		if sess == nil || sess.GetState() != session.StateIncoming {
 			continue
 		}
 		authMode, _, sessTrunkID, _, _, _, _ := sess.GetSIPAuthContext()
-		if authMode != "trunk" || sessTrunkID != trunkID {
+		if authMode != "trunk" {
+			continue
+		}
+		if _, ok := targetIDs[sessTrunkID]; !ok {
 			continue
 		}
 		if !isClientAvailableForIncoming(client) {
@@ -799,6 +873,7 @@ func (s *Server) notifyPendingIncomingForClient(client *WSClient, trunkID int64)
 		_, from, to, _ := sess.GetCallInfo()
 		_, _, inviteBody, _, _ := sess.GetIncomingInvite()
 		hasVideoValue := strconv.FormatBool(hasActiveVideoMedia(string(inviteBody)))
+		s.markPendingIncoming(client, sess.ID)
 		s.sendWSMessage(client, WSMessage{
 			Type:      "incoming",
 			SessionID: sess.ID,

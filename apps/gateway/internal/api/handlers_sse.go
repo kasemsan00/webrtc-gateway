@@ -81,6 +81,7 @@ func (s *Server) buildWSClientResponse(client *WSClient) WSClientResponse {
 		CallState:       client.callState,
 		PublicOnly:      client.publicOnly,
 		AgentOnly:       client.agentOnly,
+		AgentDeviceOnly: client.agentDeviceOnly,
 		MultiCall:       client.multiCall,
 		ActiveCalls:     client.activeCalls,
 	}
@@ -89,6 +90,8 @@ func (s *Server) buildWSClientResponse(client *WSClient) WSClientResponse {
 		if client.resolvedTrunkID > 0 {
 			resp.AgentTrunkRefCount = s.agentTrunkRefCountLocked(client.resolvedTrunkID)
 		}
+	} else if client.agentDeviceOnly {
+		resp.PresenceMode = "sticky"
 	} else if client.publicOnly {
 		resp.PresenceMode = "public"
 	} else {

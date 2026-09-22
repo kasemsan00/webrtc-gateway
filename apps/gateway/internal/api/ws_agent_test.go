@@ -28,6 +28,15 @@ type agentTrunkManagerStub struct {
 	unregisterID    int64
 	unregisterStart chan struct{}
 	unregisterAllow chan struct{}
+	fcmToken        string
+	fcmTrunkID      int64
+	fcmCleared      bool
+	fcmClearID      int64
+	fcmErr          error
+	deviceTrunks    []*sip.Trunk
+	identityGroup   map[int64][]int64
+	notifyTrunkID   int64
+	notifyUserID    *string
 }
 
 func (s *agentTrunkManagerStub) GetTrunkByID(id int64) (interface{}, bool) {
@@ -111,10 +120,25 @@ func (s *agentTrunkManagerStub) SetTrunkInUseBy(context.Context, int64, *string)
 func (s *agentTrunkManagerStub) FindTrunkByInUseBy(context.Context, string) (*sip.Trunk, error) {
 	return nil, nil
 }
-func (s *agentTrunkManagerStub) SetTrunkNotifyUserID(context.Context, int64, *string) error {
+func (s *agentTrunkManagerStub) SetTrunkNotifyUserID(_ context.Context, trunkID int64, userID *string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.notifyTrunkID = trunkID
+	s.notifyUserID = userID
+	if s.trunk != nil && s.trunk.ID == trunkID {
+		s.trunk.NotifyUserID = userID
+	}
 	return nil
 }
-func (s *agentTrunkManagerStub) SetTrunkNotifyUserIDAndPlatform(context.Context, int64, *string, *string) error {
+func (s *agentTrunkManagerStub) SetTrunkNotifyUserIDAndPlatform(_ context.Context, trunkID int64, userID *string, platform *string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.notifyTrunkID = trunkID
+	s.notifyUserID = userID
+	if s.trunk != nil && s.trunk.ID == trunkID {
+		s.trunk.NotifyUserID = userID
+		s.trunk.LastOnlinePlatform = platform
+	}
 	return nil
 }
 func (s *agentTrunkManagerStub) SetTrunkPushContact(context.Context, int64, sip.TrunkPushContact) (bool, error) {
@@ -138,6 +162,72 @@ func (s *agentTrunkManagerStub) UpsertAgentTrunk(_ context.Context, payload sip.
 		}
 	}
 	return s.trunk, nil
+}
+
+func (s *agentTrunkManagerStub) UpsertAgentDeviceTrunk(_ context.Context, payload sip.AgentTrunkPayload) (*sip.Trunk, error) {
+	s.upsertPayload = payload
+	if s.upsertErr != nil {
+		return nil, s.upsertErr
+	}
+	if s.trunk == nil {
+		s.trunk = &sip.Trunk{
+			ID:       100,
+			PublicID: "agent-device-public-100",
+			Name:     "sipclient-agent-device-1001@sip.example.com:5060",
+			Domain:   strings.ToLower(strings.TrimSpace(payload.Domain)),
+			Username: strings.TrimSpace(payload.Username),
+			Password: strings.TrimSpace(payload.Password),
+			Port:     5060,
+			Enabled:  true,
+		}
+	}
+	return s.trunk, nil
+}
+
+func (s *agentTrunkManagerStub) SetTrunkFcmToken(_ context.Context, trunkID int64, token string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.fcmToken = token
+	s.fcmTrunkID = trunkID
+	s.fcmCleared = false
+	if s.trunk != nil && s.trunk.ID == trunkID {
+		copied := token
+		s.trunk.FcmToken = &copied
+	}
+	return s.fcmErr
+}
+
+func (s *agentTrunkManagerStub) ClearTrunkFcmToken(_ context.Context, trunkID int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.fcmCleared = true
+	s.fcmClearID = trunkID
+	s.fcmToken = ""
+	if s.trunk != nil && s.trunk.ID == trunkID {
+		s.trunk.FcmToken = nil
+	}
+	return nil
+}
+
+func (s *agentTrunkManagerStub) ListAgentDeviceTrunksByNotifyUserID(_ context.Context, userID string) ([]*sip.Trunk, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]*sip.Trunk, 0, len(s.deviceTrunks))
+	for _, trunk := range s.deviceTrunks {
+		if trunk == nil || trunk.NotifyUserID == nil {
+			continue
+		}
+		if strings.TrimSpace(*trunk.NotifyUserID) == strings.TrimSpace(userID) {
+			out = append(out, trunk)
+		}
+	}
+	return out, nil
+}
+
+func (s *agentTrunkManagerStub) IdentityGroupTrunkIDs(trunkID int64) []int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]int64(nil), s.identityGroup[trunkID]...)
 }
 
 func (s *agentTrunkManagerStub) setOwned(owned bool) {
@@ -530,6 +620,8 @@ type agentMessageSIPMaker struct {
 	incomingTestSIPCallMaker
 	inDialogCount    int
 	outOfDialogCount int
+	toSessionCount   int
+	forSessionCount  int
 	lastSession      *session.Session
 	lastBody         string
 	lastContentType  string
@@ -543,6 +635,7 @@ func (s *agentMessageSIPMaker) SendMessage(destination, from, body, contentType 
 
 func (s *agentMessageSIPMaker) SendMessageForSession(sess *session.Session, body, contentType string) error {
 	s.inDialogCount++
+	s.forSessionCount++
 	s.lastSession = sess
 	s.lastBody = body
 	s.lastContentType = contentType
@@ -551,6 +644,7 @@ func (s *agentMessageSIPMaker) SendMessageForSession(sess *session.Session, body
 
 func (s *agentMessageSIPMaker) SendMessageToSession(sess *session.Session, body, contentType string) error {
 	s.inDialogCount++
+	s.toSessionCount++
 	s.lastSession = sess
 	s.lastBody = body
 	s.lastContentType = contentType
@@ -573,8 +667,8 @@ func TestAgentSendMessageUsesOwnedSessionAndAcknowledgesHeldCall(t *testing.T) {
 
 	srv.handleWSMessage(client, []byte(`{"type":"send_message","sessionId":"`+sess.ID+`","destination":"2002","body":"hello"}`))
 
-	if maker.inDialogCount != 1 || maker.lastSession != sess {
-		t.Fatalf("expected one in-dialog MESSAGE for owned session, count=%d session=%v", maker.inDialogCount, maker.lastSession)
+	if maker.toSessionCount != 1 || maker.forSessionCount != 0 || maker.lastSession != sess {
+		t.Fatalf("expected one in-dialog SendMessageToSession, to=%d for=%d session=%v", maker.toSessionCount, maker.forSessionCount, maker.lastSession)
 	}
 	if maker.outOfDialogCount != 0 {
 		t.Fatalf("agent MESSAGE must not fall back to out-of-dialog send, got %d calls", maker.outOfDialogCount)

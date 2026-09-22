@@ -147,6 +147,7 @@ type Session struct {
 	SwitchVideoRTPMaxReorderTimeoutDelta  int                  `json:"-"`
 	SwitchTargetQueue                     string               `json:"-"`
 	SwitchTargetAgent                     string               `json:"-"`
+	MessageRemoteUser                     string               `json:"-"`
 	SwitchTargetReceivedAt                time.Time            `json:"-"`
 	MediaEpoch                            uint64               `json:"-"`
 	SwitchGeneration                      int                  `json:"-"`
@@ -1187,6 +1188,28 @@ func (s *Session) GetCallInfo() (string, string, string, string) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.Direction, s.From, s.To, s.SIPCallID
+}
+
+// ChatMessageDestination is the agent SIP user for public/VRI chat relay
+// after @switch or an explicit send_message destination. It is not used to
+// rewrite Electron/agent SIP MESSAGE routing.
+func (s *Session) ChatMessageDestination() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if user := strings.TrimSpace(s.MessageRemoteUser); user != "" && !strings.EqualFold(user, "force send PLI") {
+		return user
+	}
+	agent := strings.TrimSpace(s.SwitchTargetAgent)
+	if agent == "" || strings.EqualFold(agent, "force send PLI") {
+		return ""
+	}
+	return agent
+}
+
+func (s *Session) SetMessageRemoteUser(user string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.MessageRemoteUser = strings.TrimSpace(user)
 }
 
 // CopyIncomingInviteFrom copies incoming INVITE state from another session (thread-safe)

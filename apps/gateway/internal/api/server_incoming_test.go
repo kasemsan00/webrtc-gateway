@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -73,6 +74,7 @@ type incomingNotifyTestTrunkManager struct {
 	getTrunkByDBCalls     int
 	getTrunkByDBErr       error
 	getTrunkByDBCompleted chan struct{}
+	identityGroup         map[int64][]int64
 }
 
 func (s *incomingNotifyTestTrunkManager) signalDBLookupComplete() {
@@ -169,6 +171,29 @@ func (s *incomingNotifyTestTrunkManager) SetTrunkPushContact(ctx context.Context
 
 func (s *incomingNotifyTestTrunkManager) UpsertAgentTrunk(_ context.Context, _ sip.AgentTrunkPayload) (*sip.Trunk, error) {
 	return nil, errors.New("not implemented")
+}
+
+func (s *incomingNotifyTestTrunkManager) UpsertAgentDeviceTrunk(_ context.Context, _ sip.AgentTrunkPayload) (*sip.Trunk, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (s *incomingNotifyTestTrunkManager) SetTrunkFcmToken(_ context.Context, _ int64, _ string) error {
+	return nil
+}
+
+func (s *incomingNotifyTestTrunkManager) ClearTrunkFcmToken(_ context.Context, _ int64) error {
+	return nil
+}
+
+func (s *incomingNotifyTestTrunkManager) ListAgentDeviceTrunksByNotifyUserID(_ context.Context, _ string) ([]*sip.Trunk, error) {
+	return nil, nil
+}
+
+func (s *incomingNotifyTestTrunkManager) IdentityGroupTrunkIDs(trunkID int64) []int64 {
+	if s.identityGroup == nil {
+		return nil
+	}
+	return append([]int64(nil), s.identityGroup[trunkID]...)
 }
 
 func waitForDBLookups(t *testing.T, trunkMgr *incomingNotifyTestTrunkManager, want int) {
@@ -745,6 +770,60 @@ func TestHandleWSAcceptRejectsWithoutWebRTCSession(t *testing.T) {
 	}
 }
 
+func TestHandleWSHangup_AgentAlsoEndsBridgedPublicSession(t *testing.T) {
+	mgr := newTestSessionManager()
+	publicSess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("create public session: %v", err)
+	}
+	publicSess.SetCallInfo("outbound", "sip:0000178992569@sipclient.ttrs.or.th", "sip:14131@sipclient.ttrs.or.th", "pub-call")
+	publicSess.SetSIPAuthContext("public", "", 0, "sipclient.ttrs.or.th", "0000178992569", "secret", 5060)
+	publicSess.SetState(session.StateActive)
+	publicSess.SetSIPDialogState("pub-from", "pub-to", "<sip:14131@example.com>", "example.com", 5060, 1, nil)
+
+	agentSess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("create agent session: %v", err)
+	}
+	agentSess.SetCallInfo("inbound", "sip:0000178992569@sipclient.ttrs.or.th", "sip:00025@sipagent.ttrs.or.th", "agent-call")
+	agentSess.SetSIPAuthContext("trunk", "", 1, "sipagent.ttrs.or.th", "00025", "secret", 5060)
+	agentSess.SetState(session.StateActive)
+	agentSess.SetSIPDialogState("agent-from", "agent-to", "<sip:caller@example.com>", "example.com", 5060, 1, nil)
+
+	sipMaker := &incomingTestSIPCallMaker{}
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, sipMaker, nil, nil, nil)
+	publicClient := &WSClient{sessionID: publicSess.ID, publicOnly: true, send: make(chan []byte, 8), ConnectedAt: time.Now()}
+	agentClient := &WSClient{sessionID: agentSess.ID, agentOnly: true, send: make(chan []byte, 8), ConnectedAt: time.Now()}
+	srv.mu.Lock()
+	srv.wsClients[publicSess.ID] = publicClient
+	srv.wsClients[agentSess.ID] = agentClient
+	srv.wsConnections[publicClient] = struct{}{}
+	srv.wsConnections[agentClient] = struct{}{}
+	srv.mu.Unlock()
+
+	srv.handleWSHangup(agentClient, WSMessage{Type: "hangup", SessionID: agentSess.ID})
+
+	if sipMaker.hangupCount != 2 {
+		t.Fatalf("expected BYE on agent and bridged public sessions, got %d", sipMaker.hangupCount)
+	}
+	if _, ok := mgr.GetSession(publicSess.ID); ok {
+		t.Fatalf("public VRI session should be deleted after agent hangup")
+	}
+	if _, ok := mgr.GetSession(agentSess.ID); ok {
+		t.Fatalf("agent session should be deleted after hangup")
+	}
+	publicMsgs := readWSMessages(t, publicClient.send)
+	gotEnded := false
+	for _, msg := range publicMsgs {
+		if msg.Type == "state" && msg.State == string(session.StateEnded) && msg.SessionID == publicSess.ID {
+			gotEnded = true
+		}
+	}
+	if !gotEnded {
+		t.Fatalf("expected public VRI to receive state=ended, got %+v", publicMsgs)
+	}
+}
+
 func TestHandleWSHangup_CancelsOutboundBeforeDialog(t *testing.T) {
 	mgr := newTestSessionManager()
 	sess, err := mgr.CreateSession(config.TURNConfig{})
@@ -1025,6 +1104,46 @@ func TestNotifySIPMessage_TargetsMatchingSessionOnly(t *testing.T) {
 	}
 }
 
+func TestNotifySIPMessage_DoesNotDeliverCallerAddressedChatToAgentSession(t *testing.T) {
+	mgr := newTestSessionManager()
+	publicSess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("create public session: %v", err)
+	}
+	publicSess.SetCallInfo("outbound", "sip:0000178990031@sipclient.ttrs.or.th", "sip:14131@sipclient.ttrs.or.th", "pub-call")
+	publicSess.SetSIPAuthContext("public", "", 0, "sipclient.ttrs.or.th", "0000178990031", "secret", 5060)
+	publicSess.SetState(session.StateActive)
+
+	agentSess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("create agent session: %v", err)
+	}
+	agentSess.SetCallInfo("inbound", "sip:0000178990031@sipclient.ttrs.or.th", "sip:00025@sipagent.ttrs.or.th", "agent-call")
+	agentSess.SetSIPAuthContext("trunk", "", 1, "sipagent.ttrs.or.th", "00025", "secret", 5060)
+	agentSess.SetState(session.StateActive)
+
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, nil, nil, nil, nil)
+	publicClient := &WSClient{sessionID: publicSess.ID, publicOnly: true, send: make(chan []byte, 8), ConnectedAt: time.Now()}
+	agentClient := &WSClient{sessionID: agentSess.ID, agentOnly: true, send: make(chan []byte, 8), ConnectedAt: time.Now()}
+	srv.mu.Lock()
+	srv.wsClients[publicSess.ID] = publicClient
+	srv.wsClients[agentSess.ID] = agentClient
+	srv.wsConnections[publicClient] = struct{}{}
+	srv.wsConnections[agentClient] = struct{}{}
+	srv.mu.Unlock()
+
+	srv.NotifySIPMessage("sip:0000178990031@203.150.245.39:5060", "00025", "หฟกก", "text/plain")
+
+	publicMsgs := readWSMessages(t, publicClient.send)
+	agentMsgs := readWSMessages(t, agentClient.send)
+	if len(publicMsgs) != 1 || publicMsgs[0].Body != "หฟกก" || publicMsgs[0].SessionID != publicSess.ID {
+		t.Fatalf("expected public VRI to receive caller-addressed chat, got %+v", publicMsgs)
+	}
+	if len(agentMsgs) != 0 {
+		t.Fatalf("agent session must not receive chat addressed to the public caller, got %+v", agentMsgs)
+	}
+}
+
 func TestNotifySIPMessage_DedupesStaleWSClientMapEntries(t *testing.T) {
 	mgr := newTestSessionManager()
 	targetSession, err := mgr.CreateSession(config.TURNConfig{})
@@ -1155,6 +1274,218 @@ func TestNotifySIPMessage_OutOfDialogFansOutToAllMatchingAgents(t *testing.T) {
 	}
 	if got := readWSMessages(t, second.send); len(got) != 1 || got[0].Body != "DND0" {
 		t.Fatalf("expected second matching agent to receive DND0, got %+v", got)
+	}
+}
+
+func TestPublicSendMessageRelaysToAgentWSWithoutSIP(t *testing.T) {
+	mgr := newTestSessionManager()
+	publicSess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("create public session: %v", err)
+	}
+	publicSess.SetCallInfo("outbound", "sip:0000178993659@sipclient.ttrs.or.th", "sip:14131@sipclient.ttrs.or.th", "pub-call")
+	publicSess.SetState(session.StateActive)
+	publicSess.PrepareAndActivateSwitchVideoTarget("14131", "00025", time.Now(), time.Minute, true)
+
+	agentSess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("create agent session: %v", err)
+	}
+	agentSess.SetCallInfo("inbound", "sip:0000178993659@sipclient.ttrs.or.th", "sip:00025@sipagent.ttrs.or.th", "agent-call")
+	agentSess.SetSIPAuthContext("trunk", "", 1, "sipagent.ttrs.or.th", "00025", "secret", 5060)
+	agentSess.SetState(session.StateActive)
+
+	maker := &agentMessageSIPMaker{}
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, maker, nil, nil, nil)
+	publicClient := &WSClient{sessionID: publicSess.ID, publicOnly: true, send: make(chan []byte, 8), ConnectedAt: time.Now()}
+	agentClient := &WSClient{sessionID: agentSess.ID, agentOnly: true, send: make(chan []byte, 8), ConnectedAt: time.Now()}
+	srv.mu.Lock()
+	srv.wsClients[publicSess.ID] = publicClient
+	srv.wsClients[agentSess.ID] = agentClient
+	srv.wsConnections[publicClient] = struct{}{}
+	srv.wsConnections[agentClient] = struct{}{}
+	srv.mu.Unlock()
+
+	srv.handleWSSendMessage(publicClient, WSMessage{
+		Type:      "send_message",
+		SessionID: publicSess.ID,
+		Body:      "hello from vri",
+	})
+
+	if maker.inDialogCount != 0 || maker.outOfDialogCount != 0 {
+		t.Fatalf("public chat must not SIP MESSAGE to 00025 on sipclient, sip calls=%d/%d", maker.inDialogCount, maker.outOfDialogCount)
+	}
+	publicMsgs := readWSMessages(t, publicClient.send)
+	if len(publicMsgs) != 1 || publicMsgs[0].Type != "messageSent" {
+		t.Fatalf("expected public messageSent, got %+v", publicMsgs)
+	}
+	agentMsgs := readWSMessages(t, agentClient.send)
+	if len(agentMsgs) != 1 || agentMsgs[0].Type != "message" || agentMsgs[0].Body != "hello from vri" {
+		t.Fatalf("expected agent to receive chat body, got %+v", agentMsgs)
+	}
+	if agentMsgs[0].From != "0000178993659" || agentMsgs[0].SessionID != agentSess.ID {
+		t.Fatalf("unexpected agent payload: %+v", agentMsgs[0])
+	}
+}
+
+func TestPublicSendMessageRelaysToInboundAgentBySharedCaller(t *testing.T) {
+	mgr := newTestSessionManager()
+	publicSess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("create public session: %v", err)
+	}
+	publicSess.SetCallInfo("outbound", "sip:0000178996046@sipclient.ttrs.or.th", "sip:14131@sipclient.ttrs.or.th", "pub-call")
+	publicSess.SetState(session.StateActive)
+
+	agentSess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("create agent session: %v", err)
+	}
+	agentSess.SetCallInfo("inbound", "sip:0000178996046@sipclient.ttrs.or.th", "sip:00025@sipagent.ttrs.or.th", "agent-call")
+	agentSess.SetSIPAuthContext("trunk", "", 1, "sipagent.ttrs.or.th", "00025", "secret", 5060)
+	agentSess.SetState(session.StateActive)
+
+	maker := &agentMessageSIPMaker{}
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, maker, nil, nil, nil)
+	publicClient := &WSClient{sessionID: publicSess.ID, publicOnly: true, send: make(chan []byte, 8), ConnectedAt: time.Now()}
+	agentClient := &WSClient{sessionID: agentSess.ID, agentOnly: true, send: make(chan []byte, 8), ConnectedAt: time.Now()}
+	srv.mu.Lock()
+	srv.wsClients[publicSess.ID] = publicClient
+	srv.wsClients[agentSess.ID] = agentClient
+	srv.wsConnections[publicClient] = struct{}{}
+	srv.wsConnections[agentClient] = struct{}{}
+	srv.mu.Unlock()
+
+	srv.handleWSSendMessage(publicClient, WSMessage{
+		Type:      "send_message",
+		SessionID: publicSess.ID,
+		Body:      "Bhg",
+	})
+
+	if maker.inDialogCount != 0 {
+		t.Fatalf("bridged public chat must not fall back to SIP 14131, sip calls=%d", maker.inDialogCount)
+	}
+	agentMsgs := readWSMessages(t, agentClient.send)
+	if len(agentMsgs) != 1 || agentMsgs[0].Body != "Bhg" {
+		t.Fatalf("expected inbound agent to receive bridged chat, got %+v", agentMsgs)
+	}
+}
+
+func TestAgentSendMessageRelaysToPublicWS(t *testing.T) {
+	mgr := newTestSessionManager()
+	publicSess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("create public session: %v", err)
+	}
+	publicSess.SetCallInfo("outbound", "sip:0000178995763@sipclient.ttrs.or.th", "sip:14131@sipclient.ttrs.or.th", "pub-call")
+	publicSess.SetSIPAuthContext("public", "", 0, "sipclient.ttrs.or.th", "0000178995763", "secret", 5060)
+	publicSess.SetState(session.StateActive)
+
+	agentSess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("create agent session: %v", err)
+	}
+	agentSess.SetCallInfo("inbound", "sip:0000178995763@sipclient.ttrs.or.th", "sip:00025@sipagent.ttrs.or.th", "agent-call")
+	agentSess.SetSIPAuthContext("trunk", "", 1, "sipagent.ttrs.or.th", "00025", "secret", 5060)
+	agentSess.SetState(session.StateActive)
+
+	maker := &agentMessageSIPMaker{}
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, maker, nil, nil, nil)
+	publicClient := &WSClient{sessionID: publicSess.ID, publicOnly: true, send: make(chan []byte, 8), ConnectedAt: time.Now()}
+	agentClient := &WSClient{sessionID: agentSess.ID, agentOnly: true, send: make(chan []byte, 8), ConnectedAt: time.Now()}
+	srv.mu.Lock()
+	srv.wsClients[publicSess.ID] = publicClient
+	srv.wsClients[agentSess.ID] = agentClient
+	srv.wsConnections[publicClient] = struct{}{}
+	srv.wsConnections[agentClient] = struct{}{}
+	srv.mu.Unlock()
+
+	srv.handleWSSendMessage(agentClient, WSMessage{
+		Type:      "send_message",
+		SessionID: agentSess.ID,
+		Body:      "zxcasdasd",
+	})
+
+	if maker.inDialogCount == 0 {
+		t.Fatalf("agent chat should still SIP MESSAGE to the caller")
+	}
+	publicMsgs := readWSMessages(t, publicClient.send)
+	if len(publicMsgs) != 1 || publicMsgs[0].Type != "message" || publicMsgs[0].Body != "zxcasdasd" {
+		t.Fatalf("expected public VRI to receive agent chat over WS, got %+v", publicMsgs)
+	}
+	if publicMsgs[0].From != "00025" || publicMsgs[0].SessionID != publicSess.ID {
+		t.Fatalf("unexpected public payload: %+v", publicMsgs[0])
+	}
+}
+
+func TestNotifySIPMessage_PrefersPublicClientWhenAgentMappedToPublicSession(t *testing.T) {
+	mgr := newTestSessionManager()
+	publicSess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("create public session: %v", err)
+	}
+	publicSess.SetCallInfo("outbound", "sip:0000178992569@sipclient.ttrs.or.th", "sip:14131@sipclient.ttrs.or.th", "pub-call")
+	publicSess.SetSIPAuthContext("public", "", 0, "sipclient.ttrs.or.th", "0000178992569", "secret", 5060)
+	publicSess.SetState(session.StateActive)
+
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, nil, nil, nil, nil)
+	publicClient := &WSClient{sessionID: publicSess.ID, publicOnly: true, send: make(chan []byte, 8), ConnectedAt: time.Now()}
+	agentClient := &WSClient{sessionID: publicSess.ID, agentOnly: true, send: make(chan []byte, 8), ConnectedAt: time.Now().Add(-time.Minute)}
+	srv.mu.Lock()
+	srv.wsClients[publicSess.ID] = agentClient
+	srv.wsConnections[publicClient] = struct{}{}
+	srv.wsConnections[agentClient] = struct{}{}
+	srv.mu.Unlock()
+
+	srv.NotifySIPMessage("sip:0000178992569@203.150.245.39:5060", "00025", "Hello", "text/plain")
+
+	publicMsgs := readWSMessages(t, publicClient.send)
+	agentMsgs := readWSMessages(t, agentClient.send)
+	if len(publicMsgs) != 1 || publicMsgs[0].Body != "Hello" || publicMsgs[0].SessionID != publicSess.ID {
+		t.Fatalf("expected displaced public VRI to receive chat, got %+v", publicMsgs)
+	}
+	if len(agentMsgs) != 0 {
+		t.Fatalf("agent WS mapped over public session must not steal VRI chat, got %+v", agentMsgs)
+	}
+}
+
+func TestNotifySIPMessageOnDialog_UsesCallIDSession(t *testing.T) {
+	mgr := newTestSessionManager()
+	publicSess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("create public session: %v", err)
+	}
+	publicSess.SetCallInfo("outbound", "sip:0000178992569@sipclient.ttrs.or.th", "sip:14131@sipclient.ttrs.or.th", "public-dialog-id")
+	publicSess.SetSIPAuthContext("public", "", 0, "sipclient.ttrs.or.th", "0000178992569", "secret", 5060)
+	publicSess.SetState(session.StateActive)
+
+	otherSess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("create other session: %v", err)
+	}
+	otherSess.SetCallInfo("outbound", "sip:0000178992569@sipclient.ttrs.or.th", "sip:14131@sipclient.ttrs.or.th", "other-dialog-id")
+	otherSess.SetSIPAuthContext("public", "", 0, "sipclient.ttrs.or.th", "0000178992569", "secret", 5060)
+	otherSess.SetState(session.StateActive)
+
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, nil, nil, nil, nil)
+	publicClient := &WSClient{sessionID: publicSess.ID, publicOnly: true, send: make(chan []byte, 8), ConnectedAt: time.Now()}
+	otherClient := &WSClient{sessionID: otherSess.ID, publicOnly: true, send: make(chan []byte, 8), ConnectedAt: time.Now()}
+	srv.mu.Lock()
+	srv.wsClients[publicSess.ID] = publicClient
+	srv.wsClients[otherSess.ID] = otherClient
+	srv.wsConnections[publicClient] = struct{}{}
+	srv.wsConnections[otherClient] = struct{}{}
+	srv.mu.Unlock()
+
+	srv.NotifySIPMessageOnDialog("public-dialog-id", "sip:0000178992569@sipclient.ttrs.or.th", "00025", "Hello", "text/plain")
+
+	publicMsgs := readWSMessages(t, publicClient.send)
+	otherMsgs := readWSMessages(t, otherClient.send)
+	if len(publicMsgs) != 1 || publicMsgs[0].Body != "Hello" || publicMsgs[0].SessionID != publicSess.ID {
+		t.Fatalf("expected Call-ID session to receive in-dialog chat, got %+v", publicMsgs)
+	}
+	if len(otherMsgs) != 0 {
+		t.Fatalf("To-header fallback must not win over matching Call-ID, got %+v", otherMsgs)
 	}
 }
 
@@ -1345,5 +1676,122 @@ func TestIncomingAcceptThenHangup_UsesSessionWithDialogState(t *testing.T) {
 	// trunk ID and credentials must still survive the incoming->WebRTC transfer.
 	if authMode != "trunk" || trunkID != 25 || authDomain == "" || authUsername != "1100" || authPassword != "secret" || authPort != 5060 {
 		t.Fatalf("incoming SIP auth context was not transferred to call session: mode=%q trunk=%d domain=%q username=%q port=%d", authMode, trunkID, authDomain, authUsername, authPort)
+	}
+}
+
+func TestNotifyIncomingCall_AgentDeviceOfflineUsesStoredFCMNotTTRS(t *testing.T) {
+	mgr := newTestSessionManager()
+	incomingSess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create incoming session: %v", err)
+	}
+	incomingSess.SetState(session.StateIncoming)
+	incomingSess.SetCallInfo("inbound", "1001", "1002", "sip-call-device-fcm")
+	incomingSess.SetSIPAuthContext("trunk", "", 11, "sip.example.com", "1001", "secret", 5060)
+
+	token := "fcm-device-token"
+	trunkMgr := &incomingNotifyTestTrunkManager{
+		trunkByID: map[int64]*sip.Trunk{
+			11: {
+				ID:       11,
+				Name:     "sipclient-agent-device-1001@sip.example.com:5060",
+				FcmToken: &token,
+			},
+		},
+		getTrunkByDBCompleted: make(chan struct{}, 4),
+	}
+	sipMaker := &incomingTestSIPCallMaker{}
+	srv := NewServer(
+		config.APIConfig{IncomingRingTimeoutSeconds: 30},
+		config.TURNConfig{},
+		config.GatewayConfig{},
+		config.TranslatorConfig{},
+		mgr,
+		sipMaker,
+		nil,
+		trunkMgr,
+		nil,
+	)
+	srv.SetPushService(push.NewService(nil, nil))
+
+	logs := captureStandardLogs(t, func() {
+		srv.NotifyIncomingCall(incomingSess.ID, "sip:2002@example.com", "sip:1001@example.com", 11)
+		waitForDBLookups(t, trunkMgr, 2)
+		time.Sleep(100 * time.Millisecond)
+	})
+	if !strings.Contains(logs, "Dispatch incoming call stored FCM") && !strings.Contains(logs, "Stored FCM skipped") {
+		t.Fatalf("expected stored FCM dispatch path, logs=%s", logs)
+	}
+	if strings.Contains(logs, "Start incoming call push") || strings.Contains(logs, "FCM fallback") {
+		t.Fatalf("stored FCM path must not use TTRS lookup, logs=%s", logs)
+	}
+	if sipMaker.rejectCount != 0 {
+		t.Fatalf("expected ring wait, not immediate reject, got %d", sipMaker.rejectCount)
+	}
+}
+
+func TestNotifyIncomingCall_AgentOnlyOfflineHasNoFCM(t *testing.T) {
+	mgr := newTestSessionManager()
+	incomingSess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create incoming session: %v", err)
+	}
+	incomingSess.SetState(session.StateIncoming)
+	incomingSess.SetCallInfo("inbound", "1001", "1002", "sip-call-agent-offline")
+	incomingSess.SetSIPAuthContext("trunk", "", 12, "sip.example.com", "1001", "secret", 5060)
+
+	trunkMgr := &incomingNotifyTestTrunkManager{
+		trunkByID: map[int64]*sip.Trunk{
+			12: {ID: 12, Name: "sipclient-agent-1001@sip.example.com:5060"},
+		},
+		getTrunkByDBCompleted: make(chan struct{}, 2),
+	}
+	sipMaker := &incomingTestSIPCallMaker{}
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, sipMaker, nil, trunkMgr, nil)
+	srv.SetPushService(push.NewService(nil, nil))
+
+	srv.NotifyIncomingCall(incomingSess.ID, "1001", "1002", 12)
+	if sipMaker.rejectCount != 1 || sipMaker.lastReject != "offline" {
+		t.Fatalf("expected offline reject for agent-only, count=%d reason=%q", sipMaker.rejectCount, sipMaker.lastReject)
+	}
+}
+
+func TestNotifyIncomingCall_IdentityGroupFansOutToAgentAndDevice(t *testing.T) {
+	trunkMgr := &incomingNotifyTestTrunkManager{
+		trunkByID: map[int64]*sip.Trunk{
+			10: {ID: 10, Name: "sipclient-agent-1001@sip.example.com:5060"},
+			20: {ID: 20, Name: "sipclient-agent-device-1001@sip.example.com:5060"},
+		},
+		identityGroup: map[int64][]int64{10: {20}, 20: {10}},
+	}
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, nil, nil, nil, trunkMgr, nil)
+	agent := &WSClient{
+		sessionID:       "agent-live",
+		send:            make(chan []byte, 8),
+		trunkResolved:   true,
+		resolvedTrunkID: 10,
+		agentOnly:       true,
+		availability:    clientAvailabilityIdle,
+	}
+	device := &WSClient{
+		sessionID:       "device-live",
+		send:            make(chan []byte, 8),
+		trunkResolved:   true,
+		resolvedTrunkID: 20,
+		agentDeviceOnly: true,
+		availability:    clientAvailabilityIdle,
+	}
+	srv.wsConnections[agent] = struct{}{}
+	srv.wsConnections[device] = struct{}{}
+
+	srv.NotifyIncomingCall("incoming-identity", "sip:2002@example.com", "sip:1001@example.com", 10)
+
+	agentMsgs := readWSMessages(t, agent.send)
+	deviceMsgs := readWSMessages(t, device.send)
+	if len(agentMsgs) != 1 || agentMsgs[0].Type != "incoming" {
+		t.Fatalf("expected agent incoming, got %+v", agentMsgs)
+	}
+	if len(deviceMsgs) != 1 || deviceMsgs[0].Type != "incoming" {
+		t.Fatalf("expected device incoming, got %+v", deviceMsgs)
 	}
 }

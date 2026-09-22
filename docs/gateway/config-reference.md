@@ -16,6 +16,7 @@ From `internal/config/config.go`.
 - `API_ENABLE_WS` (default `true`)
 - `API_ENABLE_PUBLIC_WS` (default `false`; enables unauthenticated `/ws-public` for public SIP per-call credentials only)
 - `API_ENABLE_AGENT_WS` (default `false`; enables unauthenticated `/ws-agent` for PC agent SIP REGISTER presence with client-provided credentials)
+- `API_ENABLE_AGENT_DEVICE_WS` (default `false`; enables JWT `/ws-agent-device` for sticky agent-device SIP REGISTER, stored FCM, and logout unregister)
 - `API_ENABLE_REST` (default `true`)
 - `API_CORS_ORIGINS` (default `*`; for single-domain deploy use e.g. `https://gateway.example.com` — see [`deploy/README.md`](../../deploy/README.md))
 - `SIPCLIENT_AUTH_REGISTER_URL` (optional; when set, user-realm WebSocket auth auto-provisions a mobile SIP trunk)
@@ -41,8 +42,9 @@ When `AUTH_ENABLE=true`:
 - Startup is fail-fast if initial JWKS prefetch fails.
 - Protected `/api/*` routes require `Authorization: Bearer <jwt>` or a bearer
   matching `FRONTEND_PASSWORD` when that env is set. All read-only
-  `/api/logs*` routes and the four GET `/api/client-diagnostics*` query routes
-  are intentionally public.
+  `/api/logs*` routes, the four GET `/api/client-diagnostics*` query routes,
+  `POST /api/chat-images`, and `GET /api/chat-images/{id}` are intentionally
+  public. Chat-image POST still requires a live call `sessionId`.
 - `/ws` requires `?access_token=<jwt>`. The admin password is not accepted on `/ws`.
 
 When `FRONTEND_PASSWORD` is set and `AUTH_ENABLE=false`, authenticated `/api/*` routes still require the matching bearer. Set the same `FRONTEND_PASSWORD` on the frontend process. Do not use a `VITE_` prefix; the frontend server reads it from process env and never injects it into the browser bundle.
@@ -235,6 +237,22 @@ health instead of interrupting calls.
 - `GATEWAY_PUBLIC_WS_URL` (for redirects; single-domain example `wss://gateway.example.com/ws` — see [`deploy/README.md`](../../deploy/README.md))
 - `SESSION_DIRECTORY_TTL_SECONDS` (default `7200`)
 - `SESSION_DIRECTORY_CLEANUP_INTERVAL_SECONDS` (default `300`)
+
+## Chat images
+
+In-call clients upload a file, receive an HTTPS URL, and send that URL as the whole SIP MESSAGE body. Receivers that allowlist the gateway `/api/chat-images/{uuid}` path render it as an image; unknown clients show the URL as text. Legacy `<image>URL</image>` bodies are still accepted. Binary images are not carried over WebSocket `send_message` (16KB frame limit).
+
+- `CHAT_IMAGE_ENABLE` (default `true`)
+- `CHAT_IMAGE_DIR` (default `chat-images`)
+- `CHAT_IMAGE_PUBLIC_BASE_URL` (optional absolute origin such as `https://k2-gateway.kasemsan.com`; if empty, the upload response URL uses `X-Forwarded-Proto`/`X-Forwarded-Host` or the request host)
+- `CHAT_IMAGE_MAX_BYTES` (default `10485760`)
+- `CHAT_IMAGE_MAX_PER_SESSION` (default `20`)
+- `CHAT_IMAGE_TTL_SECONDS` (default `86400`)
+- `CHAT_IMAGE_CLEANUP_INTERVAL_SECONDS` (default `900`)
+
+`POST /api/chat-images` is unauthenticated REST (VRI public calls have no JWT) and requires multipart field `file` plus `sessionId` of a live, non-ended session (form field or `X-Session-Id`). Allowed magic types: JPEG, PNG, WebP, GIF. `GET /api/chat-images/{id}` is public; ids are UUIDs with no directory listing.
+
+Nginx in front of `/api/` must allow bodies larger than `CHAT_IMAGE_MAX_BYTES` (`client_max_body_size 12m`).
 
 ## Translator
 

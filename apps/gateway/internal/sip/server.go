@@ -46,6 +46,10 @@ type IncomingCallNotifier interface {
 // MessageNotifier interface for notifying about incoming SIP messages
 type MessageNotifier interface {
 	NotifySIPMessage(to, from, body, contentType string)
+	// NotifySIPMessageOnDialog delivers chat to the WebSocket bound to the
+	// SIP dialog Call-ID first (Linphone in-dialog MESSAGE), then falls back
+	// to To-header matching for out-of-dialog messages.
+	NotifySIPMessageOnDialog(sipCallID, to, from, body, contentType string)
 }
 
 // SessionCreator interface for creating sessions from incoming calls

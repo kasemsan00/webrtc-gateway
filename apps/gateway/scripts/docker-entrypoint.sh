@@ -4,8 +4,11 @@ set -eu
 # Named volumes such as gateway_logs:/app/gateway/logs are created as root.
 # Take ownership, then drop to gateway before bootstrap or gateway start.
 if [ "$(id -u)" = "0" ]; then
-  mkdir -p logs
-  chown -R gateway:gateway logs
+    mkdir -p logs /var/lib/webrtc-gateway/chat-images
+    chown -R gateway:gateway logs
+    if [ -d /var/lib/webrtc-gateway/chat-images ]; then
+      chown -R gateway:gateway /var/lib/webrtc-gateway/chat-images
+    fi
   exec su-exec gateway "$0" "$@"
 fi
 

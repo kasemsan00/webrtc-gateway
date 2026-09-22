@@ -57,8 +57,9 @@ http {
             proxy_set_header X-Forwarded-Host $forwarded_host;
         }
 
-        # Gateway REST API
+        # Gateway REST API (chat image uploads up to 10MB plus multipart overhead)
         location /api/ {
+            client_max_body_size 12m;
             proxy_pass http://gateway;
             proxy_http_version 1.1;
             proxy_set_header Host $forwarded_host;

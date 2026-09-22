@@ -144,6 +144,19 @@ func (s *apiHandlerTrunkManagerStub) SetTrunkPushContact(_ context.Context, _ in
 func (s *apiHandlerTrunkManagerStub) UpsertAgentTrunk(_ context.Context, _ sip.AgentTrunkPayload) (*sip.Trunk, error) {
 	return nil, errors.New("not implemented")
 }
+func (s *apiHandlerTrunkManagerStub) UpsertAgentDeviceTrunk(_ context.Context, _ sip.AgentTrunkPayload) (*sip.Trunk, error) {
+	return nil, errors.New("not implemented")
+}
+func (s *apiHandlerTrunkManagerStub) SetTrunkFcmToken(_ context.Context, _ int64, _ string) error {
+	return nil
+}
+func (s *apiHandlerTrunkManagerStub) ClearTrunkFcmToken(_ context.Context, _ int64) error {
+	return nil
+}
+func (s *apiHandlerTrunkManagerStub) ListAgentDeviceTrunksByNotifyUserID(_ context.Context, _ string) ([]*sip.Trunk, error) {
+	return nil, nil
+}
+func (s *apiHandlerTrunkManagerStub) IdentityGroupTrunkIDs(int64) []int64 { return nil }
 
 func (s *apiHandlerTrunkManagerStub) FindTrunkByInUseBy(_ context.Context, inUseBy string) (*sip.Trunk, error) {
 	for _, t := range s.byID {

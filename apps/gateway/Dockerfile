@@ -54,6 +54,7 @@ ARG RTP_PORT_MAX=10600
 # Environment variables (can be overridden at runtime)
 ENV RTP_PORT_MIN=${RTP_PORT_MIN}
 ENV RTP_PORT_MAX=${RTP_PORT_MAX}
+ENV CHAT_IMAGE_MAX_BYTES=10485760
 
 # Expose ports
 # HTTP/WebSocket API
@@ -71,8 +72,8 @@ EXPOSE ${RTP_PORT_MIN}-${RTP_PORT_MAX}/udp
 RUN chmod +x /app/docker-entrypoint.sh && \
     addgroup -g 1000 gateway && \
     adduser -D -u 1000 -G gateway gateway && \
-    mkdir -p /app/logs && \
-    chown -R gateway:gateway /app
+    mkdir -p /app/logs /var/lib/webrtc-gateway/chat-images && \
+    chown -R gateway:gateway /app /var/lib/webrtc-gateway
 
 # Health check (optional - check if process is running)
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \

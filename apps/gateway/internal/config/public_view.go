@@ -25,6 +25,7 @@ type PublicConfigSections struct {
 	Push          PushNotificationConfig    `json:"push"`
 	Translator    TranslatorConfig          `json:"translator"`
 	Observability PublicObservabilityConfig `json:"observability"`
+	ChatImage     ChatImageConfig           `json:"chatImage"`
 }
 
 // PublicObservabilityConfig deliberately omits endpoint, headers and arbitrary
@@ -101,6 +102,7 @@ func (c *Config) PublicView() PublicConfigView {
 			Push:          push,
 			Translator:    c.Translator,
 			Observability: observability,
+			ChatImage:     c.ChatImage,
 		},
 	}
 }

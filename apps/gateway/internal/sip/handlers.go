@@ -1185,9 +1185,10 @@ func (s *Server) handleMESSAGE(req *sip.Request, tx sip.ServerTransaction) {
 		fmt.Printf("ERROR responding to MESSAGE: %v\n", err)
 	}
 
-	// Notify WebSocket clients
+	// Notify WebSocket clients. Prefer the dialog Call-ID so in-dialog
+	// MESSAGE from Linphone/Asterisk lands on the public VRI session.
 	if s.messageNotifier != nil {
-		s.messageNotifier.NotifySIPMessage(toURI, caller, body, contentType)
+		s.messageNotifier.NotifySIPMessageOnDialog(callIDValue, toURI, caller, body, contentType)
 	}
 }
 

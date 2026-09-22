@@ -50,12 +50,10 @@ func (s *Server) NotifySessionStateWithReason(sessionID string, state session.Se
 		}
 	}
 
-	// Notify WebSocket client
-	s.mu.RLock()
-	client, ok := s.wsClients[sessionID]
-	s.mu.RUnlock()
-
-	if !ok {
+	// Notify WebSocket client. Prefer the public /ws-public binding when an
+	// agent connection has overwritten wsClients[sessionID].
+	targets, _, _ := s.selectSIPMessageTargets(sessionID)
+	if len(targets) == 0 {
 		return
 	}
 
@@ -66,18 +64,22 @@ func (s *Server) NotifySessionStateWithReason(sessionID string, state session.Se
 		Reason:    reason,
 	}
 	log.Printf("[%s] 📡 WS call-progress type=state state=%s reason=%s", sessionID, state, reason)
-	s.sendWSMessage(client, msg)
-	if state == session.StateEnded {
-		s.unbindClientSession(client, sessionID)
+	for _, client := range targets {
+		s.sendWSMessage(client, msg)
+		if state == session.StateEnded {
+			s.unbindClientSession(client, sessionID)
+		}
 	}
 
 	// Additive ringing message for softphone-kmp-sdk RingingMessage compatibility.
 	if state == session.StateRinging {
 		log.Printf("[%s] 📡 WS call-progress type=ringing reason=%s", sessionID, reason)
-		s.sendWSMessage(client, WSMessage{
-			Type:      "ringing",
-			SessionID: sessionID,
-		})
+		for _, client := range targets {
+			s.sendWSMessage(client, WSMessage{
+				Type:      "ringing",
+				SessionID: sessionID,
+			})
+		}
 	}
 }
 
@@ -168,7 +170,7 @@ func (s *Server) handleWSSendMessage(client *WSClient, msg WSMessage) {
 		// value because client.sessionID is only a legacy projection in multi-call mode.
 		var sess *session.Session
 		sessionID := strings.TrimSpace(msg.SessionID)
-		if sessionID == "" && !client.agentOnly {
+		if sessionID == "" && !client.isAgentPresence() {
 			sessionID = client.sessionID
 		}
 		if sessionID != "" {
@@ -178,11 +180,53 @@ func (s *Server) handleWSSendMessage(client *WSClient, msg WSMessage) {
 		// Route session chat through the PBX. Asterisk is a B2BUA and may accept
 		// an in-dialog MESSAGE without forwarding it to the remote call leg.
 		if sess != nil {
-			log.Printf("💬 Sending PBX-routed message via session %s", sess.ID)
-			if err := s.sipMaker.SendMessageForSession(sess, msg.Body, contentType); err != nil {
+			if !client.isAgentPresence() {
+				if dest := strings.TrimSpace(msg.Destination); dest != "" {
+					sess.SetMessageRemoteUser(sipURIUsername(dest))
+				}
+				_, callFrom, _, _ := sess.GetCallInfo()
+				from := sipURIUsername(callFrom)
+				if from == "" {
+					from = strings.TrimSpace(msg.From)
+				}
+				agentSess := s.findBridgedAgentSession(sess)
+				if agentSess != nil && s.relayChatToSession(agentSess, from, msg.Body, contentType) {
+					dest := sess.ChatMessageDestination()
+					if dest == "" {
+						_, _, _, _, dest, _, _ = agentSess.GetSIPAuthContext()
+						dest = sipURIUsername(dest)
+					}
+					s.sendWSMessage(client, WSMessage{
+						Type:        "messageSent",
+						SessionID:   sessionID,
+						Destination: dest,
+						Body:        msg.Body,
+					})
+					return
+				}
+			}
+			var err error
+			if client.isAgentPresence() && sess.HasDialogState() {
+				log.Printf("💬 Sending in-dialog message via session %s", sess.ID)
+				err = s.sipMaker.SendMessageToSession(sess, msg.Body, contentType)
+			} else {
+				log.Printf("💬 Sending PBX-routed message via session %s", sess.ID)
+				err = s.sipMaker.SendMessageForSession(sess, msg.Body, contentType)
+			}
+			if err != nil {
 				log.Printf("⚠️ SIP MESSAGE failed for session %s: %v", sessionID, err)
 				s.sendWSOperationError(client, sessionID, "send_message", fmt.Sprintf("Failed to send session message: %v", err))
 				return
+			}
+			if client.isAgentPresence() {
+				_, _, _, _, agentUser, _, _ := sess.GetSIPAuthContext()
+				from := sipURIUsername(agentUser)
+				if from == "" {
+					from = strings.TrimSpace(msg.From)
+				}
+				if publicSess := s.findBridgedPublicSession(sess); publicSess != nil {
+					s.relayChatToSession(publicSess, from, msg.Body, contentType)
+				}
 			}
 			s.sendWSMessage(client, WSMessage{
 				Type:        "messageSent",
@@ -193,7 +237,7 @@ func (s *Server) handleWSSendMessage(client *WSClient, msg WSMessage) {
 			log.Printf("💬 Message sent successfully via PBX for session %s", sessionID)
 			return
 		}
-		if client.agentOnly {
+		if client.isAgentPresence() {
 			s.sendWSOperationError(client, sessionID, "send_message", "Active SIP session required for agent message")
 			return
 		}
@@ -240,6 +284,103 @@ func sipURIUsername(value string) string {
 	return strings.TrimSpace(value)
 }
 
+func (s *Server) findAgentChatSession(agentUser string) *session.Session {
+	agentUser = sipURIUsername(agentUser)
+	if agentUser == "" || s.sessionMgr == nil {
+		return nil
+	}
+	for _, sess := range s.sessionMgr.ListSessions() {
+		if sess == nil || sess.GetState() == session.StateEnded {
+			continue
+		}
+		_, _, _, _, sipUser, _, _ := sess.GetSIPAuthContext()
+		if sipURIUsername(sipUser) == agentUser {
+			return sess
+		}
+	}
+	return nil
+}
+
+func (s *Server) findBridgedAgentSession(publicSess *session.Session) *session.Session {
+	if publicSess == nil || s.sessionMgr == nil {
+		return nil
+	}
+	if found := s.findAgentChatSession(publicSess.ChatMessageDestination()); found != nil && found.ID != publicSess.ID {
+		return found
+	}
+	_, pubFrom, _, _ := publicSess.GetCallInfo()
+	pubUser := sipURIUsername(pubFrom)
+	if pubUser == "" {
+		return nil
+	}
+	for _, sess := range s.sessionMgr.ListSessions() {
+		if sess == nil || sess.ID == publicSess.ID || sess.GetState() == session.StateEnded {
+			continue
+		}
+		dir, fromField, _, _ := sess.GetCallInfo()
+		if !strings.EqualFold(strings.TrimSpace(dir), "inbound") {
+			continue
+		}
+		if sipURIUsername(fromField) == pubUser {
+			return sess
+		}
+	}
+	return nil
+}
+
+func (s *Server) findBridgedPublicSession(agentSess *session.Session) *session.Session {
+	if agentSess == nil || s.sessionMgr == nil {
+		return nil
+	}
+	dir, fromField, _, _ := agentSess.GetCallInfo()
+	if !strings.EqualFold(strings.TrimSpace(dir), "inbound") {
+		return nil
+	}
+	caller := sipURIUsername(fromField)
+	if caller == "" {
+		return nil
+	}
+	for _, sess := range s.sessionMgr.ListSessions() {
+		if sess == nil || sess.ID == agentSess.ID || sess.GetState() == session.StateEnded {
+			continue
+		}
+		pubDir, pubFrom, _, _ := sess.GetCallInfo()
+		if !strings.EqualFold(strings.TrimSpace(pubDir), "outbound") {
+			continue
+		}
+		if sipURIUsername(pubFrom) == caller {
+			return sess
+		}
+	}
+	return nil
+}
+
+func (s *Server) relayChatToSession(agentSess *session.Session, from, body, contentType string) bool {
+	if agentSess == nil {
+		return false
+	}
+	targets, _, _ := s.selectSIPMessageTargets(agentSess.ID)
+	if len(targets) == 0 {
+		log.Printf("⚠️ Public chat agent session %s has no WebSocket client", agentSess.ID)
+		return false
+	}
+	_, _, _, _, agentUser, _, _ := agentSess.GetSIPAuthContext()
+	agentUser = sipURIUsername(agentUser)
+	msg := WSMessage{
+		Type:        "message",
+		SessionID:   agentSess.ID,
+		From:        from,
+		To:          agentUser,
+		Body:        body,
+		ContentType: contentType,
+	}
+	for _, client := range targets {
+		s.sendWSMessage(client, msg)
+	}
+	log.Printf("💬 Relayed chat to session %s localUser=%s recipients=%d", agentSess.ID, agentUser, len(targets))
+	return true
+}
+
 func sipAddressMatches(target, targetUser, candidate string) bool {
 	candidate = strings.TrimSpace(candidate)
 	if candidate == "" {
@@ -252,26 +393,39 @@ func sipAddressMatches(target, targetUser, candidate string) bool {
 	return targetUser != "" && candidateUser == targetUser
 }
 
+func sessionLocalChatIdentities(sess *session.Session) (sipUsername, localParty string) {
+	dir, fromField, toField, _ := sess.GetCallInfo()
+	_, _, _, _, sipUsername, _, _ = sess.GetSIPAuthContext()
+	localParty = fromField
+	if strings.EqualFold(strings.TrimSpace(dir), "inbound") {
+		localParty = toField
+	}
+	return sipUsername, localParty
+}
+
 func (s *Server) findSIPMessageSessionID(to string) string {
 	if s.sessionMgr == nil {
 		return ""
 	}
 
 	targetUser := sipURIUsername(to)
+	var bySIPUser, byLocalParty string
 	for _, sess := range s.sessionMgr.ListSessions() {
 		if sess == nil || sess.GetState() == session.StateEnded {
 			continue
 		}
-		_, fromField, toField, _ := sess.GetCallInfo()
-		_, _, _, _, sipUsername, _, _ := sess.GetSIPAuthContext()
-		if sipAddressMatches(to, targetUser, fromField) ||
-			sipAddressMatches(to, targetUser, toField) ||
-			sipAddressMatches(to, targetUser, sipUsername) {
-			return sess.ID
+		sipUsername, localParty := sessionLocalChatIdentities(sess)
+		if bySIPUser == "" && sipAddressMatches(to, targetUser, sipUsername) {
+			bySIPUser = sess.ID
+		}
+		if byLocalParty == "" && sipAddressMatches(to, targetUser, localParty) {
+			byLocalParty = sess.ID
 		}
 	}
-
-	return ""
+	if bySIPUser != "" {
+		return bySIPUser
+	}
+	return byLocalParty
 }
 
 func (s *Server) selectSIPMessageTargets(sessionID string) (targets []*WSClient, totalConnections int, droppedDuplicate int) {
@@ -296,13 +450,33 @@ func (s *Server) selectSIPMessageTargets(sessionID string) (targets []*WSClient,
 		return targets, totalConnections, droppedDuplicate
 	}
 
-	if client := s.wsClients[sessionID]; client != nil {
-		addTarget(client)
-		for key, mapped := range s.wsClients {
+	mapped := s.wsClients[sessionID]
+	preferred := mapped
+	if mapped != nil && mapped.isAgentPresence() {
+		var publicClient *WSClient
+		for client := range s.wsConnections {
+			if client == nil || client.isAgentPresence() {
+				continue
+			}
+			if !wsClientMatchesSession(client, sessionID) {
+				continue
+			}
+			if publicClient == nil || client.ConnectedAt.After(publicClient.ConnectedAt) {
+				publicClient = client
+			}
+		}
+		if publicClient != nil {
+			preferred = publicClient
+		}
+	}
+
+	if preferred != nil {
+		addTarget(preferred)
+		for key, other := range s.wsClients {
 			if key == sessionID {
 				continue
 			}
-			if mapped == client || (mapped != nil && mapped.sessionID == sessionID) {
+			if other == preferred || (other != nil && other.sessionID == sessionID) {
 				droppedDuplicate++
 			}
 		}
@@ -381,9 +555,35 @@ func (s *Server) selectOutOfDialogSIPMessageTargets(to string) (targets []*WSCli
 	return targets, droppedDuplicate
 }
 
+func wsClientMatchesSession(client *WSClient, sessionID string) bool {
+	if client == nil || strings.TrimSpace(sessionID) == "" {
+		return false
+	}
+	if client.ownedSessionIDs != nil {
+		if _, ok := client.ownedSessionIDs[sessionID]; ok {
+			return true
+		}
+	}
+	return client.sessionID == sessionID
+}
+
 // NotifySIPMessage notifies the WebSocket client associated with an incoming SIP message.
 func (s *Server) NotifySIPMessage(to, from, body, contentType string) {
-	sessionID := s.findSIPMessageSessionID(to)
+	s.NotifySIPMessageOnDialog("", to, from, body, contentType)
+}
+
+// NotifySIPMessageOnDialog prefers the SIP dialog Call-ID session (in-dialog
+// Linphone/Asterisk MESSAGE) and falls back to To-header matching.
+func (s *Server) NotifySIPMessageOnDialog(sipCallID, to, from, body, contentType string) {
+	sessionID := ""
+	if sipCallID != "" && s.sessionMgr != nil {
+		if sess, ok := s.sessionMgr.GetSessionBySIPCallID(sipCallID); ok && sess != nil && sess.GetState() != session.StateEnded {
+			sessionID = sess.ID
+		}
+	}
+	if sessionID == "" {
+		sessionID = s.findSIPMessageSessionID(to)
+	}
 	targets, totalConnections, droppedDuplicate := s.selectSIPMessageTargets(sessionID)
 	if len(targets) == 0 && sessionID == "" {
 		fallback, extraDup := s.selectOutOfDialogSIPMessageTargets(to)

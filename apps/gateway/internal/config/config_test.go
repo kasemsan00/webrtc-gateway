@@ -119,6 +119,30 @@ func TestAgentWebSocketConfigCanBeEnabled(t *testing.T) {
 	}
 }
 
+func TestAgentDeviceWebSocketConfigDefaultDisabled(t *testing.T) {
+	t.Setenv("API_ENABLE_AGENT_DEVICE_WS", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.API.EnableAgentDeviceWS {
+		t.Fatalf("expected agent-device WebSocket endpoint to be disabled by default")
+	}
+}
+
+func TestAgentDeviceWebSocketConfigCanBeEnabled(t *testing.T) {
+	t.Setenv("API_ENABLE_AGENT_DEVICE_WS", "true")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.API.EnableAgentDeviceWS {
+		t.Fatalf("expected agent-device WebSocket endpoint to be enabled by env")
+	}
+}
+
 func TestVideoAUNormalizationConfigDefaultsEnabled(t *testing.T) {
 	t.Setenv("SIP_VIDEO_AU_NORMALIZE_ENABLE", "")
 
@@ -152,5 +176,73 @@ func TestFrontendPasswordConfigIsTrimmed(t *testing.T) {
 	}
 	if cfg.Auth.FrontendPassword != "ops-secret" {
 		t.Fatalf("expected trimmed FRONTEND_PASSWORD, got %q", cfg.Auth.FrontendPassword)
+	}
+}
+
+func TestChatImageConfigDefaults(t *testing.T) {
+	t.Setenv("CHAT_IMAGE_ENABLE", "")
+	t.Setenv("CHAT_IMAGE_DIR", "")
+	t.Setenv("CHAT_IMAGE_PUBLIC_BASE_URL", "")
+	t.Setenv("CHAT_IMAGE_MAX_BYTES", "")
+	t.Setenv("CHAT_IMAGE_MAX_PER_SESSION", "")
+	t.Setenv("CHAT_IMAGE_TTL_SECONDS", "")
+	t.Setenv("CHAT_IMAGE_CLEANUP_INTERVAL_SECONDS", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.ChatImage.Enable {
+		t.Fatal("expected chat images enabled by default")
+	}
+	if cfg.ChatImage.Dir != DefaultChatImageDir {
+		t.Fatalf("dir = %q, want %q", cfg.ChatImage.Dir, DefaultChatImageDir)
+	}
+	if cfg.ChatImage.MaxBytes != DefaultChatImageMaxBytes {
+		t.Fatalf("maxBytes = %d", cfg.ChatImage.MaxBytes)
+	}
+	if cfg.ChatImage.MaxPerSession != DefaultChatImageMaxPerSession {
+		t.Fatalf("maxPerSession = %d", cfg.ChatImage.MaxPerSession)
+	}
+	if cfg.ChatImage.TTLSeconds != DefaultChatImageTTLSeconds {
+		t.Fatalf("ttl = %d", cfg.ChatImage.TTLSeconds)
+	}
+}
+
+func TestChatImageConfigCanBeCustomized(t *testing.T) {
+	t.Setenv("CHAT_IMAGE_ENABLE", "false")
+	t.Setenv("CHAT_IMAGE_DIR", " /var/lib/webrtc-gateway/chat-images ")
+	t.Setenv("CHAT_IMAGE_PUBLIC_BASE_URL", " https://k2-gateway.kasemsan.com/ ")
+	t.Setenv("CHAT_IMAGE_MAX_BYTES", "1048576")
+	t.Setenv("CHAT_IMAGE_MAX_PER_SESSION", "5")
+	t.Setenv("CHAT_IMAGE_TTL_SECONDS", "3600")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.ChatImage.Enable {
+		t.Fatal("expected chat images disabled")
+	}
+	if cfg.ChatImage.Dir != "/var/lib/webrtc-gateway/chat-images" {
+		t.Fatalf("dir = %q", cfg.ChatImage.Dir)
+	}
+	if cfg.ChatImage.PublicBaseURL != "https://k2-gateway.kasemsan.com" {
+		t.Fatalf("publicBaseURL = %q", cfg.ChatImage.PublicBaseURL)
+	}
+	if cfg.ChatImage.MaxBytes != 1048576 || cfg.ChatImage.MaxPerSession != 5 || cfg.ChatImage.TTLSeconds != 3600 {
+		t.Fatalf("unexpected chat image limits %#v", cfg.ChatImage)
+	}
+}
+
+func TestChatImageConfigPromotesLegacyTwoMegabyteLimit(t *testing.T) {
+	t.Setenv("CHAT_IMAGE_MAX_BYTES", "2097152")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.ChatImage.MaxBytes != DefaultChatImageMaxBytes {
+		t.Fatalf("maxBytes = %d, want %d", cfg.ChatImage.MaxBytes, DefaultChatImageMaxBytes)
 	}
 }

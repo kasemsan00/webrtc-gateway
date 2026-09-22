@@ -53,15 +53,73 @@ func selectSingleMatch(matches []*Trunk, rule string) TrunkInviteMatchResult {
 		Rule:         rule,
 		CandidateIDs: collectCandidateIDs(matches),
 	}
-	if len(matches) == 1 {
-		result.Trunk = matches[0]
+	collapsed := collapseAgentIdentityGroup(matches)
+	if len(collapsed) == 1 {
+		result.Trunk = collapsed[0]
 		return result
 	}
-	if len(matches) > 1 {
+	if len(collapsed) > 1 {
 		result.Ambiguous = true
 		result.Reason = "multiple_candidates"
 	}
 	return result
+}
+
+func collapseAgentIdentityGroup(matches []*Trunk) []*Trunk {
+	if len(matches) <= 1 {
+		return matches
+	}
+	type identityKey struct {
+		user   string
+		domain string
+		port   int
+	}
+	groups := make(map[identityKey][]*Trunk)
+	passthrough := make([]*Trunk, 0)
+	for _, trunk := range matches {
+		if trunk == nil {
+			continue
+		}
+		if !IsAgentTrunkName(trunk.Name) && !IsAgentDeviceTrunkName(trunk.Name) {
+			passthrough = append(passthrough, trunk)
+			continue
+		}
+		key := identityKey{
+			user:   strings.TrimSpace(trunk.Username),
+			domain: normalizeSIPHost(trunk.Domain),
+			port:   normalizeSIPPort(trunk.Port),
+		}
+		groups[key] = append(groups[key], trunk)
+	}
+	out := passthrough
+	for _, group := range groups {
+		out = append(out, pickIdentityGroupCanonical(group))
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
+func pickIdentityGroupCanonical(group []*Trunk) *Trunk {
+	var chosen *Trunk
+	for _, trunk := range group {
+		if trunk == nil {
+			continue
+		}
+		if chosen == nil {
+			chosen = trunk
+			continue
+		}
+		deviceChosen := IsAgentDeviceTrunkName(chosen.Name)
+		deviceTrunk := IsAgentDeviceTrunkName(trunk.Name)
+		if deviceTrunk && !deviceChosen {
+			chosen = trunk
+			continue
+		}
+		if deviceTrunk == deviceChosen && trunk.ID < chosen.ID {
+			chosen = trunk
+		}
+	}
+	return chosen
 }
 
 func cloneTrunk(trunk *Trunk) *Trunk {

@@ -176,6 +176,8 @@ CREATE TABLE IF NOT EXISTS sip_trunks (
   pn_type            TEXT,
   pn_token           TEXT,
   pn_updated_at      TIMESTAMPTZ,
+  fcm_token          TEXT,
+  fcm_updated_at     TIMESTAMPTZ,
 
   created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -192,6 +194,7 @@ CREATE INDEX IF NOT EXISTS idx_sip_trunks_in_use_by ON sip_trunks (in_use_by) WH
 CREATE INDEX IF NOT EXISTS idx_sip_trunks_notify_user_id ON sip_trunks (notify_user_id) WHERE notify_user_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_sip_trunks_last_online_platform ON sip_trunks (last_online_platform) WHERE last_online_platform IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_sip_trunks_pn_token ON sip_trunks (pn_token) WHERE pn_token IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_sip_trunks_fcm_token ON sip_trunks (fcm_token) WHERE fcm_token IS NOT NULL;
 
 
 -- ============================================================================

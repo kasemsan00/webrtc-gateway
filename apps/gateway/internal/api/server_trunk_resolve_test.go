@@ -149,6 +149,19 @@ func (s *stubResolveTrunkManager) SetTrunkPushContact(_ context.Context, trunkID
 func (s *stubResolveTrunkManager) UpsertAgentTrunk(_ context.Context, _ sip.AgentTrunkPayload) (*sip.Trunk, error) {
 	return nil, errors.New("not implemented")
 }
+func (s *stubResolveTrunkManager) UpsertAgentDeviceTrunk(_ context.Context, _ sip.AgentTrunkPayload) (*sip.Trunk, error) {
+	return nil, errors.New("not implemented")
+}
+func (s *stubResolveTrunkManager) SetTrunkFcmToken(_ context.Context, _ int64, _ string) error {
+	return nil
+}
+func (s *stubResolveTrunkManager) ClearTrunkFcmToken(_ context.Context, _ int64) error {
+	return nil
+}
+func (s *stubResolveTrunkManager) ListAgentDeviceTrunksByNotifyUserID(_ context.Context, _ string) ([]*sip.Trunk, error) {
+	return nil, nil
+}
+func (s *stubResolveTrunkManager) IdentityGroupTrunkIDs(int64) []int64 { return nil }
 
 func (s *stubResolveStore) ResolveTrunkByCredentials(ctx context.Context, domain string, port int, username, password string) (int64, *string, *time.Time, bool, error) {
 	return s.resolveTrunkID, s.resolveLeaseOwner, s.resolveLeaseUntil, s.resolveFound, s.resolveErr

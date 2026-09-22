@@ -73,6 +73,10 @@ func (r mobileTrunkTestRow) Scan(dest ...any) error {
 	*(dest[23].(**time.Time)) = trunk.PNUpdatedAt
 	*(dest[24].(*time.Time)) = trunk.CreatedAt
 	*(dest[25].(*time.Time)) = trunk.UpdatedAt
+	if len(dest) > 26 {
+		*(dest[26].(**string)) = trunk.FcmToken
+		*(dest[27].(**time.Time)) = trunk.FcmUpdatedAt
+	}
 	return nil
 }
 
