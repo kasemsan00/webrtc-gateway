@@ -14,13 +14,15 @@ import (
 )
 
 type incomingTestSIPCallMaker struct {
-	acceptCount int
-	rejectCount int
-	lastReject  string
-	rejectErr   error
-	hangupCount int
-	cancelCount int
-	lastHangup  *session.Session
+	acceptCount     int
+	rejectCount     int
+	lastReject      string
+	rejectErr       error
+	hangupCount     int
+	cancelCount     int
+	lastHangup      *session.Session
+	restartPLICount int
+	lastRestartPLI  *session.Session
 }
 
 func (s *incomingTestSIPCallMaker) MakeCall(destination, from string, sess *session.Session) error {
@@ -66,6 +68,10 @@ func (s *incomingTestSIPCallMaker) SendMessageToSession(sess *session.Session, b
 }
 func (s *incomingTestSIPCallMaker) TriggerSwitchMessage(body, callerURI string) error {
 	return nil
+}
+func (s *incomingTestSIPCallMaker) RestartPeriodicPLI(sess *session.Session) {
+	s.restartPLICount++
+	s.lastRestartPLI = sess
 }
 
 type incomingNotifyTestTrunkManager struct {
@@ -767,6 +773,61 @@ func TestHandleWSAcceptRejectsWithoutWebRTCSession(t *testing.T) {
 	msgs := readWSMessages(t, client.send)
 	if len(msgs) != 1 || msgs[0].Type != "error" {
 		t.Fatalf("expected one error message, got %+v", msgs)
+	}
+}
+
+func TestHandleWSAcceptKicksBridgedCallerUplinkKeyframe(t *testing.T) {
+	mgr := newTestSessionManager()
+	publicSess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("create public session: %v", err)
+	}
+	publicSess.SetCallInfo("outbound", "sip:lab90001@kasemsan.com", "sip:14131@kasemsan.com", "pub-call")
+	publicSess.SetSIPAuthContext("public", "", 0, "kasemsan.com", "lab90001", "secret", 5060)
+	publicSess.SetState(session.StateActive)
+	publicSess.RecordUplinkKeyframe()
+	time.Sleep(2 * time.Millisecond)
+
+	incomingSess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("create incoming session: %v", err)
+	}
+	incomingSess.SetState(session.StateIncoming)
+	incomingSess.SetCallInfo("inbound", "sip:lab90001@kasemsan.com", "sip:00025@kasemsan.com", "agent-call")
+	incomingSess.SetSIPAuthContext("trunk", "", 1320, "kasemsan.com", "00025", "secret", 5060)
+
+	webrtcSess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("create webrtc session: %v", err)
+	}
+
+	sipMaker := &incomingTestSIPCallMaker{}
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, sipMaker, nil, nil, nil)
+	client := &WSClient{sessionID: webrtcSess.ID, send: make(chan []byte, 8)}
+
+	if publicSess.NeedsBridgedPeerAnswerUplinkKeyframe() {
+		t.Fatal("queued caller must not owe a post-answer IDR before accept")
+	}
+
+	srv.handleWSAccept(client, WSMessage{Type: "accept", SessionID: incomingSess.ID})
+
+	if sipMaker.acceptCount != 1 {
+		t.Fatalf("expected AcceptCall once, got %d", sipMaker.acceptCount)
+	}
+	if !publicSess.NeedsBridgedPeerAnswerUplinkKeyframe() {
+		t.Fatal("expected queued caller to request a fresh uplink IDR after the agent answers")
+	}
+	if sipMaker.restartPLICount != 1 {
+		t.Fatalf("expected periodic PLI restart on the caller session, got %d", sipMaker.restartPLICount)
+	}
+	if sipMaker.lastRestartPLI == nil || sipMaker.lastRestartPLI.ID != publicSess.ID {
+		t.Fatalf("expected PLI restart on public session %s, got %+v", publicSess.ID, sipMaker.lastRestartPLI)
+	}
+
+	time.Sleep(2 * time.Millisecond)
+	publicSess.RecordUplinkKeyframe()
+	if publicSess.NeedsBridgedPeerAnswerUplinkKeyframe() {
+		t.Fatal("expected post-answer uplink IDR to satisfy the late joiner")
 	}
 }
 
@@ -1727,6 +1788,105 @@ func TestNotifyIncomingCall_AgentDeviceOfflineUsesStoredFCMNotTTRS(t *testing.T)
 	}
 	if sipMaker.rejectCount != 0 {
 		t.Fatalf("expected ring wait, not immediate reject, got %d", sipMaker.rejectCount)
+	}
+}
+
+func TestNotifyIncomingCall_AgentDeviceOnlineStillSendsStoredFCM(t *testing.T) {
+	mgr := newTestSessionManager()
+	incomingSess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create incoming session: %v", err)
+	}
+	incomingSess.SetState(session.StateIncoming)
+	incomingSess.SetCallInfo("inbound", "1001", "1002", "sip-call-device-online-fcm")
+	incomingSess.SetSIPAuthContext("trunk", "", 11, "sip.example.com", "1001", "secret", 5060)
+
+	token := "fcm-device-token"
+	trunkMgr := &incomingNotifyTestTrunkManager{
+		trunkByID: map[int64]*sip.Trunk{
+			11: {
+				ID:       11,
+				Name:     "sipclient-agent-device-1001@sip.example.com:5060",
+				FcmToken: &token,
+			},
+		},
+		getTrunkByDBCompleted: make(chan struct{}, 4),
+	}
+	srv := NewServer(
+		config.APIConfig{IncomingRingTimeoutSeconds: 30},
+		config.TURNConfig{},
+		config.GatewayConfig{},
+		config.TranslatorConfig{},
+		mgr,
+		&incomingTestSIPCallMaker{},
+		nil,
+		trunkMgr,
+		nil,
+	)
+	srv.SetPushService(push.NewService(nil, nil))
+	device := &WSClient{
+		sessionID:       "device-live",
+		send:            make(chan []byte, 8),
+		trunkResolved:   true,
+		resolvedTrunkID: 11,
+		agentDeviceOnly: true,
+		availability:    clientAvailabilityIdle,
+	}
+	srv.wsConnections[device] = struct{}{}
+
+	logs := captureStandardLogs(t, func() {
+		srv.NotifyIncomingCall(incomingSess.ID, "sip:2002@example.com", "sip:1001@example.com", 11)
+		waitForDBLookups(t, trunkMgr, 2)
+		time.Sleep(100 * time.Millisecond)
+	})
+	msgs := readWSMessages(t, device.send)
+	if len(msgs) != 1 || msgs[0].Type != "incoming" {
+		t.Fatalf("expected websocket incoming while connected, got %+v", msgs)
+	}
+	if !strings.Contains(logs, "Dispatch incoming call stored FCM") && !strings.Contains(logs, "Stored FCM skipped") {
+		t.Fatalf("expected stored FCM while the device websocket is connected, logs=%s", logs)
+	}
+}
+
+func TestNotifyIncomingCall_AgentOnlyOnlineDoesNotSendFCM(t *testing.T) {
+	mgr := newTestSessionManager()
+	incomingSess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create incoming session: %v", err)
+	}
+	incomingSess.SetState(session.StateIncoming)
+	incomingSess.SetCallInfo("inbound", "1001", "1002", "sip-call-agent-online")
+	incomingSess.SetSIPAuthContext("trunk", "", 12, "sip.example.com", "1001", "secret", 5060)
+
+	token := "fcm-should-not-send"
+	trunkMgr := &incomingNotifyTestTrunkManager{
+		trunkByID: map[int64]*sip.Trunk{
+			12: {
+				ID:       12,
+				Name:     "sipclient-agent-1001@sip.example.com:5060",
+				FcmToken: &token,
+			},
+		},
+		getTrunkByDBCompleted: make(chan struct{}, 2),
+	}
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, &incomingTestSIPCallMaker{}, nil, trunkMgr, nil)
+	srv.SetPushService(push.NewService(nil, nil))
+	agent := &WSClient{
+		sessionID:       "agent-live",
+		send:            make(chan []byte, 8),
+		trunkResolved:   true,
+		resolvedTrunkID: 12,
+		agentOnly:       true,
+		availability:    clientAvailabilityIdle,
+	}
+	srv.wsConnections[agent] = struct{}{}
+
+	logs := captureStandardLogs(t, func() {
+		srv.NotifyIncomingCall(incomingSess.ID, "1001", "1002", 12)
+		time.Sleep(50 * time.Millisecond)
+	})
+	if strings.Contains(logs, "Dispatch incoming call stored FCM") || strings.Contains(logs, "Stored FCM skipped") {
+		t.Fatalf("desktop agent must not push while connected, logs=%s", logs)
 	}
 }
 

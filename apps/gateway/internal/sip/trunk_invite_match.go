@@ -413,12 +413,11 @@ func selectByOrigin(candidates []*Trunk, state inviteMatchState, origins []invit
 	}
 
 	if sourceRule != "" {
-		return TrunkInviteMatchResult{
-			Rule:         sourceRule,
-			Ambiguous:    true,
-			CandidateIDs: collectCandidateIDs(remaining),
-			Reason:       "multiple_source_matches",
+		result := selectSingleMatch(remaining, sourceRule)
+		if result.Ambiguous {
+			result.Reason = "multiple_source_matches"
 		}
+		return result
 	}
 
 	result := selectSingleMatch(candidates, "username_only_online")

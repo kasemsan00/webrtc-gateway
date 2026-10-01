@@ -159,6 +159,21 @@ func (s *Server) isAgentPresenceTrunk(trunkID int64) bool {
 	return sip.IsAgentTrunkName(trunk.Name) || sip.IsAgentDeviceTrunkName(trunk.Name)
 }
 
+func (s *Server) isAgentDeviceTrunk(trunkID int64) bool {
+	if s.trunkManager == nil || trunkID <= 0 {
+		return false
+	}
+	raw, ok := s.trunkManager.GetTrunkByID(trunkID)
+	if !ok {
+		return false
+	}
+	trunk, ok := raw.(*sip.Trunk)
+	if !ok || trunk == nil {
+		return false
+	}
+	return sip.IsAgentDeviceTrunkName(trunk.Name)
+}
+
 func trunkStoredFcmToken(trunk *sip.Trunk) string {
 	if trunk == nil || trunk.FcmToken == nil {
 		return ""
@@ -397,7 +412,9 @@ func (s *Server) NotifyIncomingCall(sessionID, from, to string, trunkID int64) {
 			log.Printf("📲 Sent incoming call notification to resolved client (sessionID=%s trunkID=%d)", sessionID, client.resolvedTrunkID)
 		}
 		s.incrementIncomingCounter("incoming_presented")
-		if !s.isAgentPresenceTrunk(trunkID) && s.hasIncomingPushTarget(trunkID) {
+		// A connected phone still needs FCM to bring the app forward and answer.
+		// Desktop /ws-agent stays websocket-only while that client is live.
+		if (s.isAgentDeviceTrunk(trunkID) || !s.isAgentPresenceTrunk(trunkID)) && s.hasIncomingPushTarget(trunkID) {
 			s.incrementIncomingCounter("incoming_push_wait")
 			s.dispatchIncomingPush(sessionID, from, to, trunkID, hasVideo)
 		}
@@ -710,6 +727,32 @@ func (s *Server) handleWSAccept(client *WSClient, msg WSMessage) {
 	}
 	s.notifyIncomingAnsweredElsewhere(incomingSessionID, trunkID, client)
 	s.incrementIncomingCounter("incoming_accepted")
+	s.kickBridgedCallerUplinkOnAccept(callSession)
+}
+
+type periodicPLIRestarter interface {
+	RestartPeriodicPLI(sess *session.Session)
+}
+
+// kickBridgedCallerUplinkOnAccept asks the queue-bridged public/mobile leg for a
+// fresh IDR. Queue auto-200 already consumed the dest-ready PLI window, so a
+// late agent answer otherwise joins mid-GOP until the caller moves the camera.
+func (s *Server) kickBridgedCallerUplinkOnAccept(agentSess *session.Session) {
+	if agentSess == nil {
+		return
+	}
+	peer := s.findBridgedPublicSession(agentSess)
+	if peer == nil || peer.ID == agentSess.ID || peer.GetState() == session.StateEnded {
+		return
+	}
+	if !peer.MarkBridgedPeerAnswered() {
+		return
+	}
+	log.Printf("[%s] 📈 bridged_peer_answered kicking caller uplink keyframe session=%s", agentSess.ID, peer.ID)
+	peer.KickUplinkKeyframeForSIPDecoder("bridged-peer-answered")
+	if restarter, ok := s.sipMaker.(periodicPLIRestarter); ok {
+		restarter.RestartPeriodicPLI(peer)
+	}
 }
 
 func isBenignIncomingRejectError(err error) bool {

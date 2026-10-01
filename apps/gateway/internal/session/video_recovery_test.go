@@ -501,6 +501,63 @@ func TestShouldStopStartupBrowserPLI(t *testing.T) {
 	}
 }
 
+func TestShouldStopPeriodicBrowserPLIKeepsGoingUntilBridgedPeerAnswerIDR(t *testing.T) {
+	sess := newBurstTestSession("bridged-peer-answer-pli")
+	sess.CachedSPS = []byte{0x67}
+	sess.CachedPPS = []byte{0x68}
+	sess.RecordUplinkKeyframe()
+	sess.sipVideoDestReadyAt = time.Now().Add(-lateJoinBrowserPLIWindow - time.Second)
+	if !sess.ShouldStopPeriodicBrowserPLI() {
+		t.Fatal("expected periodic PLI to stop after late-join window before the agent answers")
+	}
+
+	time.Sleep(2 * time.Millisecond)
+	if !sess.MarkBridgedPeerAnswered() {
+		t.Fatal("first bridged-peer-answered mark should succeed")
+	}
+	if sess.MarkBridgedPeerAnswered() {
+		t.Fatal("second bridged-peer-answered mark must be ignored")
+	}
+	if sess.ShouldStopPeriodicBrowserPLI() {
+		t.Fatal("expected periodic PLI to continue until a post-answer uplink IDR")
+	}
+	if !sess.NeedsBridgedPeerAnswerUplinkKeyframe() {
+		t.Fatal("expected NeedsBridgedPeerAnswerUplinkKeyframe before the post-answer IDR")
+	}
+
+	time.Sleep(2 * time.Millisecond)
+	sess.RecordUplinkKeyframe()
+	if sess.NeedsBridgedPeerAnswerUplinkKeyframe() {
+		t.Fatal("expected post-answer uplink IDR to satisfy the late joiner")
+	}
+	if !sess.ShouldStopPeriodicBrowserPLI() {
+		t.Fatal("expected periodic PLI to stop after post-answer uplink IDR and late-join window")
+	}
+}
+
+func TestNeedsBridgedPeerAnswerUplinkKeyframeExpires(t *testing.T) {
+	sess := newBurstTestSession("bridged-peer-expired")
+	sess.bridgedPeerAnsweredAt = time.Now().Add(-lateJoinBrowserPLIWindow - time.Millisecond)
+	if sess.NeedsBridgedPeerAnswerUplinkKeyframe() {
+		t.Fatal("expected bridged-peer-answer uplink request window to expire")
+	}
+}
+
+func TestBeginPeriodicBrowserPLIEpochSupersedesPriorSender(t *testing.T) {
+	sess := newBurstTestSession("pli-epoch")
+	if sess.PeriodicBrowserPLIEpoch() != 0 {
+		t.Fatalf("expected initial epoch 0, got %d", sess.PeriodicBrowserPLIEpoch())
+	}
+	first := sess.BeginPeriodicBrowserPLIEpoch()
+	if first != 1 {
+		t.Fatalf("expected first restart epoch 1, got %d", first)
+	}
+	second := sess.BeginPeriodicBrowserPLIEpoch()
+	if second != 2 || sess.PeriodicBrowserPLIEpoch() != 2 {
+		t.Fatalf("expected epoch 2 after second restart, got %d", sess.PeriodicBrowserPLIEpoch())
+	}
+}
+
 func TestShouldStopPeriodicBrowserPLIKeepsGoingUntilPostSwitchUplinkIDR(t *testing.T) {
 	sess := newBurstTestSession("post-switch-browser-pli")
 	sess.CachedSPS = []byte{0x67}

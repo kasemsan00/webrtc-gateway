@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -998,16 +999,82 @@ func (tm *TrunkManager) unregisterTrunk(trunkID int64) {
 		tm.mu.Unlock()
 	}
 
-	if err := tm.sendUnregister(trunk); err != nil {
+	if err := tm.releaseTrunkContact(trunk); err != nil {
 		fmt.Printf("⚠️ [TrunkManager] Trunk %d unregister failed (ignored): %v\n", trunkID, err)
-	} else {
-		fmt.Printf("📞 [TrunkManager] Trunk %d unregistered\n", trunkID)
 	}
 
 	tm.mu.Lock()
 	delete(tm.registrations, trunkID)
 	delete(tm.leaseRetryRuns, trunkID)
 	tm.mu.Unlock()
+}
+
+// releaseTrunkContact removes this trunk's SIP binding. Agent and agent-device
+// trunks for the same username/domain/port share one Contact URI, so removing it
+// would also drop the sibling that is still online. In that case the sibling is
+// refreshed and the shared binding stays.
+func (tm *TrunkManager) releaseTrunkContact(trunk *Trunk) error {
+	if trunk == nil {
+		return nil
+	}
+	siblings := tm.liveSharedAgentContactSiblingIDs(trunk)
+	if len(siblings) == 0 {
+		if err := tm.sendUnregister(trunk); err != nil {
+			return err
+		}
+		fmt.Printf("📞 [TrunkManager] Trunk %d unregistered\n", trunk.ID)
+		return nil
+	}
+
+	fmt.Printf("📞 [TrunkManager] Trunk %d kept shared SIP contact; refreshing sibling trunks %v\n", trunk.ID, siblings)
+	if tm.sipClient == nil {
+		fmt.Printf("⚠️ [TrunkManager] Trunk %d sibling contact refresh skipped: SIP client not initialized\n", trunk.ID)
+		return nil
+	}
+	for _, id := range siblings {
+		if err := tm.registerTrunk(id); err != nil {
+			fmt.Printf("⚠️ [TrunkManager] Trunk %d sibling %d REGISTER refresh failed: %v\n", trunk.ID, id, err)
+		}
+	}
+	return nil
+}
+
+func (tm *TrunkManager) liveSharedAgentContactSiblingIDs(trunk *Trunk) []int64 {
+	if tm == nil || trunk == nil {
+		return nil
+	}
+	tm.mu.RLock()
+	defer tm.mu.RUnlock()
+	return tm.liveSharedAgentContactSiblingIDsLocked(trunk)
+}
+
+func (tm *TrunkManager) liveSharedAgentContactSiblingIDsLocked(trunk *Trunk) []int64 {
+	if trunk == nil || (!IsAgentTrunkName(trunk.Name) && !IsAgentDeviceTrunkName(trunk.Name)) {
+		return nil
+	}
+	user := strings.TrimSpace(trunk.Username)
+	domain := normalizeSIPHost(trunk.Domain)
+	port := normalizeSIPPort(trunk.Port)
+	now := time.Now()
+	ids := make([]int64, 0, 1)
+	for id, other := range tm.trunks {
+		if other == nil || id == trunk.ID || !tm.ownedLeases[id] {
+			continue
+		}
+		if strings.TrimSpace(other.Username) != user || normalizeSIPHost(other.Domain) != domain || normalizeSIPPort(other.Port) != port {
+			continue
+		}
+		if !IsAgentTrunkName(other.Name) && !IsAgentDeviceTrunkName(other.Name) {
+			continue
+		}
+		_, refreshing := tm.refreshWorkers[id]
+		if !refreshing && !tm.registrarIdentities[id].isCurrent(now) {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	return ids
 }
 
 func (tm *TrunkManager) sendUnregister(trunk *Trunk) error {
@@ -1919,7 +1986,7 @@ func (tm *TrunkManager) UnregisterTrunk(trunkID int64, force bool) error {
 	}
 	tm.mu.Unlock()
 
-	unregisterErr := tm.sendUnregister(trunk)
+	unregisterErr := tm.releaseTrunkContact(trunk)
 	if force {
 		tm.releaseLeaseForce(trunkID)
 	} else {

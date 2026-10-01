@@ -85,7 +85,7 @@ Auth behavior:
 - Client `unregister` SIP UNREGISTERs the agent-device trunk, clears FCM and notify-user binding, then the client may disconnect.
 - Client `device_push_token` with `pnType:"fcm"` stores the FCM token on the trunk. Offline incoming sends that token via FCM and does not look up TTRS notification tokens.
 - `/ws-agent` last-disconnect UNREGISTER must not unregister an agent-device trunk.
-- Owned `/ws-agent` and `/ws-agent-device` trunks for the same SIP username/domain/port are one incoming identity group: live WS clients on either trunk are presented the call; if none are live, stored device FCM is used.
+- Owned `/ws-agent` and `/ws-agent-device` trunks for the same SIP username/domain/port are one incoming identity group: live WS clients on either trunk are presented the call. Stored device FCM is sent for every agent-device incoming call that is presented or waiting offline, including while that device WebSocket is connected, so the phone app is woken to answer. A live desktop `/ws-agent` client does not receive that push.
 - Allowed messages: `device_register`, `device_push_token`, `unregister`, `offer`, `ice`, `call`, `hangup`, `accept`, `reject`, `dtmf`, `send_message`, `hold`, `unhold`, `ping`, `request_keyframe`, `renegotiate_answer`, `client_state`, `resume`.
 - Rejected on `/ws-agent-device`: `agent_register`, `trunk_resolve`, `trunk_push_token`, `translate`, `translate_stop`.
 

@@ -56,30 +56,30 @@ func (s *Server) handleWebSocketConn(w http.ResponseWriter, r *http.Request, pub
 			http.NotFound(w, r)
 			return
 		}
-		if s.tokenVerifier == nil {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
-		}
-		rawToken := strings.TrimSpace(r.URL.Query().Get("access_token"))
-		if rawToken == "" {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
-		}
 		platform, ok := normalizeDevicePlatform(r.URL.Query().Get("devicePlatform"))
 		if !ok || platform == "" {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
 		devicePlatform = platform
-		realmHint := extractAuthRealmHint(r)
-		claims, err := s.tokenVerifier.VerifyToken(r.Context(), rawToken, realmHint)
-		if err != nil {
-			log.Printf("Agent-device WebSocket auth rejected: hint=%s err=%v", realmHint, err)
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
+		rawToken := strings.TrimSpace(r.URL.Query().Get("access_token"))
+		if rawToken != "" {
+			if s.tokenVerifier == nil {
+				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				return
+			}
+			realmHint := extractAuthRealmHint(r)
+			claims, err := s.tokenVerifier.VerifyToken(r.Context(), rawToken, realmHint)
+			if err != nil {
+				log.Printf("Agent-device WebSocket auth rejected: hint=%s err=%v", realmHint, err)
+				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				return
+			}
+			log.Printf("Agent-device WebSocket auth accepted: hint=%s realm=%s sub=%s platform=%s", realmHint, claims.Realm, claims.Subject, platform)
+			req = withAuthClaims(r, claims)
+		} else {
+			log.Printf("Agent-device WebSocket accepted without JWT: remote=%s platform=%s", r.RemoteAddr, platform)
 		}
-		log.Printf("Agent-device WebSocket auth accepted: hint=%s realm=%s sub=%s platform=%s", realmHint, claims.Realm, claims.Subject, platform)
-		req = withAuthClaims(r, claims)
 	} else if agentOnly {
 		log.Printf("Agent WebSocket connection accepted: remote=%s", r.RemoteAddr)
 	} else if s.tokenVerifier != nil && !publicOnly {

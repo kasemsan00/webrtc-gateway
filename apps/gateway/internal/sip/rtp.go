@@ -1025,21 +1025,30 @@ func (s *Server) handleRTCPFromSIP(data []byte, sess *session.Session, rtcpCount
 
 // startPeriodicPLIForSession sends PLI requests to the browser at regular intervals
 func (s *Server) startPeriodicPLIForSession(sess *session.Session) {
-	fmt.Printf("[%s] 🔄 Starting periodic PLI sender for fast video start\n", sess.ID)
+	epoch := sess.PeriodicBrowserPLIEpoch()
+	fmt.Printf("[%s] 🔄 Starting periodic PLI sender for fast video start epoch=%d\n", sess.ID, epoch)
 
 	// Wait a bit for the connection to establish
 	time.Sleep(500 * time.Millisecond)
 
 	// Keep requesting browser IDRs through the late-join window so a SIP
-	// decoder that answers after queue auto-200 (Linphone after 5–10s ring)
-	// is not stuck on P-frames. Stop once dest-ready + 12s has elapsed and
-	// an uplink IDR has already been forwarded.
+	// decoder that answers after queue auto-200 (Linphone after 5–10s ring,
+	// or a queue-bridged agent that answers even later) is not stuck on
+	// P-frames. Stop once dest-ready + 12s has elapsed, no bridged-peer
+	// answer / @switch IDR is still owed, and an uplink IDR was forwarded.
 	pliDeadline := time.Now().Add(15 * time.Second)
 
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 
 	pliCount := 0
+	superseded := func() bool {
+		if sess.PeriodicBrowserPLIEpoch() == epoch {
+			return false
+		}
+		fmt.Printf("[%s] Stopping periodic PLI sender - superseded epoch=%d\n", sess.ID, epoch)
+		return true
+	}
 	stopIfReady := func(reason string) bool {
 		if !sess.ShouldStopPeriodicBrowserPLI() {
 			return false
@@ -1051,6 +1060,9 @@ func (s *Server) startPeriodicPLIForSession(sess *session.Session) {
 	for i := 0; i < 3; i++ {
 		state := sess.GetState()
 		if state == session.StateEnded || state == session.StateReconnecting {
+			return
+		}
+		if superseded() {
 			return
 		}
 		if stopIfReady("late-join window elapsed") {
@@ -1071,10 +1083,13 @@ func (s *Server) startPeriodicPLIForSession(sess *session.Session) {
 			fmt.Printf("[%s] Stopping periodic PLI sender - session reconnecting\n", sess.ID)
 			return
 		}
+		if superseded() {
+			return
+		}
 		if stopIfReady("late-join window elapsed") {
 			return
 		}
-		if time.Now().After(pliDeadline) && !sess.NeedsPostSwitchUplinkKeyframe() {
+		if time.Now().After(pliDeadline) && !sess.NeedsPostSwitchUplinkKeyframe() && !sess.NeedsBridgedPeerAnswerUplinkKeyframe() {
 			fmt.Printf("[%s] Stopping periodic PLI sender - startup window ended\n", sess.ID)
 			return
 		}
@@ -1084,6 +1099,18 @@ func (s *Server) startPeriodicPLIForSession(sess *session.Session) {
 		}
 		sess.SendPLItoWebRTC()
 	}
+}
+
+// RestartPeriodicPLI supersedes any in-flight sender and starts a new late-join
+// browser PLI window. Used when a queue-bridged agent answers after the
+// caller's dest-ready window already elapsed.
+func (s *Server) RestartPeriodicPLI(sess *session.Session) {
+	if sess == nil || sess.GetState() == session.StateEnded {
+		return
+	}
+	epoch := sess.BeginPeriodicBrowserPLIEpoch()
+	fmt.Printf("[%s] 🔄 Restarting periodic PLI sender epoch=%d reason=bridged-peer-answered\n", sess.ID, epoch)
+	go s.startPeriodicPLIForSession(sess)
 }
 
 // startKeyframeWatchdogForSession requests keyframes when video stalls (SIP → WebRTC)

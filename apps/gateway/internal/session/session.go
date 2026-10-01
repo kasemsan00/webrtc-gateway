@@ -83,7 +83,13 @@ type Session struct {
 	// One-shot WebRTC→SIP keyframe kick on the first SIP video SR/RR.
 	uplinkKeyframeKickOnFirstSIPRTCP bool `json:"-"`
 	// When SIP video dest first became reachable (200 OK / first RTP dest).
-	sipVideoDestReadyAt    time.Time `json:"-"`
+	sipVideoDestReadyAt time.Time `json:"-"`
+	// Queue-bridged callee answered after this outbound session already sent
+	// an auto-200 IDR. A new WebRTC→SIP IDR is required so the late joiner
+	// is not stuck on P-frames.
+	bridgedPeerAnsweredAt time.Time `json:"-"`
+	// Bumped when periodic browser PLI is restarted so an older sender exits.
+	periodicPLIEpoch       int       `json:"-"`
 	Direction              string    `json:"direction"` // "inbound" or "outbound"
 	From                   string    `json:"from,omitempty"`
 	To                     string    `json:"to,omitempty"`

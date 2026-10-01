@@ -19,8 +19,9 @@ const (
 	browserPLIStale      = 600 * time.Millisecond
 	browserFIRStale      = 1500 * time.Millisecond
 	// Keep requesting browser IDRs after the queue/auto-200 IDR so a SIP
-	// decoder that answers several seconds later (Linphone after ring) is
-	// not stuck on P-frames. First-packet PLI still stops on the first IDR.
+	// decoder that answers several seconds later (Linphone after ring, or a
+	// queue-bridged agent that answers after dest-ready) is not stuck on
+	// P-frames. First-packet PLI still stops on the first IDR.
 	lateJoinBrowserPLIWindow = 12 * time.Second
 	// After @switch the SIP dest often does not change, so Linphone joins
 	// mid-GOP. Keep asking the browser for an IDR until one is forwarded
@@ -371,22 +372,25 @@ func (s *Session) ShouldStopStartupBrowserPLI() bool {
 
 // ShouldStopPeriodicBrowserPLI is true only after an uplink IDR has been
 // forwarded and the late-join window since SIP video dest-ready has elapsed.
-// Queue auto-answer IDRs must not stop periodic PLI before Linphone answers.
+// Queue auto-answer IDRs must not stop periodic PLI before Linphone or a
+// queue-bridged agent answers.
 func (s *Session) ShouldStopPeriodicBrowserPLI() bool {
 	if !s.ShouldStopStartupBrowserPLI() {
 		return false
 	}
+	now := time.Now()
 	s.mu.RLock()
 	readyAt := s.sipVideoDestReadyAt
-	needPostSwitch := s.needsPostSwitchUplinkKeyframeLocked(time.Now())
+	needPostSwitch := s.needsPostSwitchUplinkKeyframeLocked(now)
+	needBridgedAnswer := s.needsBridgedPeerAnswerUplinkKeyframeLocked(now)
 	s.mu.RUnlock()
-	if needPostSwitch {
+	if needPostSwitch || needBridgedAnswer {
 		return false
 	}
 	if readyAt.IsZero() {
 		return false
 	}
-	return time.Since(readyAt) >= lateJoinBrowserPLIWindow
+	return now.Sub(readyAt) >= lateJoinBrowserPLIWindow
 }
 
 // NeedsPostSwitchUplinkKeyframe is true until a WebRTC→SIP IDR is forwarded
@@ -405,6 +409,52 @@ func (s *Session) needsPostSwitchUplinkKeyframeLocked(now time.Time) bool {
 		return false
 	}
 	return s.LastUplinkKeyframe.IsZero() || s.LastUplinkKeyframe.Before(s.SwitchTargetReceivedAt)
+}
+
+// MarkBridgedPeerAnswered records that the other gateway leg of a queue-bridged
+// call just answered. Returns true on the first mark so the caller can kick a
+// fresh uplink IDR. Queue auto-200 IDRs are already stale for that decoder.
+func (s *Session) MarkBridgedPeerAnswered() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.bridgedPeerAnsweredAt.IsZero() {
+		return false
+	}
+	s.bridgedPeerAnsweredAt = time.Now()
+	return true
+}
+
+// NeedsBridgedPeerAnswerUplinkKeyframe is true until a WebRTC→SIP IDR is
+// forwarded after the bridged callee answers, or the late-join window elapses.
+func (s *Session) NeedsBridgedPeerAnswerUplinkKeyframe() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.needsBridgedPeerAnswerUplinkKeyframeLocked(time.Now())
+}
+
+func (s *Session) needsBridgedPeerAnswerUplinkKeyframeLocked(now time.Time) bool {
+	if s.bridgedPeerAnsweredAt.IsZero() {
+		return false
+	}
+	if now.Sub(s.bridgedPeerAnsweredAt) > lateJoinBrowserPLIWindow {
+		return false
+	}
+	return s.LastUplinkKeyframe.IsZero() || !s.LastUplinkKeyframe.After(s.bridgedPeerAnsweredAt)
+}
+
+// BeginPeriodicBrowserPLIEpoch supersedes any in-flight periodic PLI sender.
+func (s *Session) BeginPeriodicBrowserPLIEpoch() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.periodicPLIEpoch++
+	return s.periodicPLIEpoch
+}
+
+// PeriodicBrowserPLIEpoch is the generation captured by the active PLI sender.
+func (s *Session) PeriodicBrowserPLIEpoch() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.periodicPLIEpoch
 }
 
 // ShouldContinueSwitchFeedbackBurst reports whether delayed @switch FIR/PLI

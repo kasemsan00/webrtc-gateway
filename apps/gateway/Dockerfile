@@ -69,7 +69,8 @@ EXPOSE 5060/udp
 EXPOSE ${RTP_PORT_MIN}-${RTP_PORT_MAX}/udp
 
 # Remain root so the entrypoint can chown a mounted logs volume, then su-exec gateway.
-RUN chmod +x /app/docker-entrypoint.sh && \
+RUN sed -i 's/\r$//' /app/docker-entrypoint.sh && \
+    chmod +x /app/docker-entrypoint.sh && \
     addgroup -g 1000 gateway && \
     adduser -D -u 1000 -G gateway gateway && \
     mkdir -p /app/logs /var/lib/webrtc-gateway/chat-images && \

@@ -628,6 +628,86 @@ func TestMatchTrunkFromInvite_NATSourcePortRewriteUsesRelaxedSource(t *testing.T
 	}
 }
 
+func TestMatchTrunkFromInvite_AgentAndDeviceSameOriginRingTogether(t *testing.T) {
+	t.Parallel()
+
+	agent := &Trunk{
+		ID:        1320,
+		Name:      "sipclient-agent-00025@kasemsan.com:25351",
+		Domain:    "kasemsan.com",
+		Port:      25351,
+		Username:  "00025",
+		Transport: "tcp",
+		Enabled:   true,
+	}
+	device := &Trunk{
+		ID:        1344,
+		Name:      "sipclient-agent-device-00025@kasemsan.com:25351",
+		Domain:    "kasemsan.com",
+		Port:      25351,
+		Username:  "00025",
+		Transport: "tcp",
+		Enabled:   true,
+	}
+	tm := &TrunkManager{
+		publicIP:    "172.30.121.1",
+		localPort:   48340,
+		trunks:      map[int64]*Trunk{agent.ID: agent, device.ID: device},
+		ownedLeases: map[int64]bool{agent.ID: true, device.ID: true},
+	}
+	setRegistrarIdentity(tm, agent, "171.6.126.104")
+	setRegistrarIdentity(tm, device, "171.6.126.104")
+
+	req := gosip.NewRequest(gosip.INVITE, gosip.Uri{User: "00025", Host: "172.30.121.1", Port: 48340})
+	req.SetSource("171.6.126.104:25351")
+	req.SetTransport("tcp")
+	req.AppendHeader(&gosip.ViaHeader{ProtocolName: "SIP", ProtocolVersion: "2.0", Transport: "TCP", Host: "172.30.121.22", Port: 25351})
+	req.AppendHeader(&gosip.ToHeader{Address: gosip.Uri{User: "00025", Host: "172.30.121.1"}})
+	req.AppendHeader(&gosip.ContactHeader{Address: gosip.Uri{User: "asterisk", Host: "172.30.121.22", Port: 25351}})
+
+	result := tm.MatchTrunkFromInviteDetailed(req)
+	if result.Ambiguous || result.Trunk == nil {
+		t.Fatalf("expected agent identity group to collapse, ambiguous=%v reason=%s candidates=%v", result.Ambiguous, result.Reason, result.CandidateIDs)
+	}
+	if result.Trunk.ID != device.ID {
+		t.Fatalf("expected device canonical trunk %d, got %d", device.ID, result.Trunk.ID)
+	}
+	if result.Rule != "username_origin_source" {
+		t.Fatalf("expected username_origin_source, got %s", result.Rule)
+	}
+	if !result.Owned {
+		t.Fatalf("expected canonical trunk to be owned")
+	}
+	if len(result.CandidateIDs) != 2 || result.CandidateIDs[0] != agent.ID || result.CandidateIDs[1] != device.ID {
+		t.Fatalf("expected both identity candidates retained, got %v", result.CandidateIDs)
+	}
+}
+
+func TestMatchTrunkFromInvite_DistinctAgentDomainsStayAmbiguousOnSharedSource(t *testing.T) {
+	t.Parallel()
+
+	a := &Trunk{ID: 1, Name: "sipclient-agent-00025@a.example:25351", Domain: "a.example", Port: 25351, Username: "00025", Transport: "tcp", Enabled: true}
+	b := &Trunk{ID: 2, Name: "sipclient-agent-00025@b.example:25351", Domain: "b.example", Port: 25351, Username: "00025", Transport: "tcp", Enabled: true}
+	tm := &TrunkManager{
+		publicIP:    "172.30.121.1",
+		localPort:   48340,
+		trunks:      map[int64]*Trunk{1: a, 2: b},
+		ownedLeases: map[int64]bool{1: true, 2: true},
+	}
+	setRegistrarIdentity(tm, a, "171.6.126.104")
+	setRegistrarIdentity(tm, b, "171.6.126.104")
+
+	req := gosip.NewRequest(gosip.INVITE, gosip.Uri{User: "00025", Host: "172.30.121.1", Port: 48340})
+	req.SetSource("171.6.126.104:25351")
+	req.SetTransport("tcp")
+	req.AppendHeader(&gosip.ToHeader{Address: gosip.Uri{User: "00025", Host: "172.30.121.1"}})
+
+	result := tm.MatchTrunkFromInviteDetailed(req)
+	if result.Trunk != nil || !result.Ambiguous || result.Reason != "multiple_source_matches" {
+		t.Fatalf("expected distinct agent domains to stay ambiguous, got trunk=%v ambiguous=%v reason=%s", result.Trunk, result.Ambiguous, result.Reason)
+	}
+}
+
 func TestMatchTrunkFromInvite_SharedProxyEndpointRemainsAmbiguous(t *testing.T) {
 	t.Parallel()
 

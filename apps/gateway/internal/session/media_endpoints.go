@@ -408,6 +408,7 @@ func (s *Session) ResetMediaState() {
 	s.uplinkKeyframeKickOnRemoteJoinDone = false
 	s.uplinkKeyframeKickOnFirstSIPRTCP = false
 	s.sipVideoDestReadyAt = time.Time{}
+	s.bridgedPeerAnsweredAt = time.Time{}
 	s.PendingBrowserKeyframeRequest = false
 	s.PendingBrowserKeyframeRequestAt = time.Time{}
 	s.PendingBrowserKeyframeRequestEpoch = 0

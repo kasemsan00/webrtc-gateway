@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"log"
+	"strconv"
 	"strings"
 
 	"webrtc-sip-gateway/internal/sip"
@@ -11,10 +12,6 @@ import (
 func (s *Server) handleWSDeviceRegister(client *WSClient, msg WSMessage) {
 	if client == nil || !client.agentDeviceOnly {
 		s.sendWSError(client, msg.SessionID, "device_register requires /ws-agent-device")
-		return
-	}
-	if client.authClaims == nil || strings.TrimSpace(client.authClaims.Subject) == "" {
-		s.sendWSError(client, msg.SessionID, "Authenticated subject is required")
 		return
 	}
 	if s.trunkManager == nil {
@@ -52,7 +49,7 @@ func (s *Server) handleWSDeviceRegister(client *WSClient, msg WSMessage) {
 		return
 	}
 
-	subject := strings.TrimSpace(client.authClaims.Subject)
+	subject := agentDeviceIdentitySubject(client, username, domain, port)
 	platform := strings.TrimSpace(client.devicePlatform)
 	if msgPlatform, ok := normalizeDevicePlatform(msg.DevicePlatform); ok && msgPlatform != "" {
 		platform = msgPlatform
@@ -194,6 +191,18 @@ func (s *Server) cleanupAgentDevicePresence(client *WSClient) {
 			}
 		}
 	}
+}
+
+func agentDeviceIdentitySubject(client *WSClient, username, domain string, port int) string {
+	if client != nil && client.authClaims != nil {
+		if subject := strings.TrimSpace(client.authClaims.Subject); subject != "" {
+			return subject
+		}
+	}
+	if port <= 0 {
+		port = 5060
+	}
+	return "sip:" + strings.TrimSpace(username) + "@" + strings.TrimSpace(domain) + ":" + strconv.Itoa(port)
 }
 
 func (s *Server) releaseStaleAgentDeviceTrunks(ctx context.Context, subject string, keepTrunkID int64) {
