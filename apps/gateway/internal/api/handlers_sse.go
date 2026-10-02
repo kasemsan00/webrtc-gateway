@@ -40,6 +40,19 @@ func (s *Server) notifyTrunkListChanged(eventType string, trunkID *int64) {
 	s.broadcastTrunkStream(payload)
 }
 
+// AttachTrunkListChangeCallback wires TrunkManager state changes to the trunk SSE stream.
+func (s *Server) AttachTrunkListChangeCallback(tm *sip.TrunkManager) {
+	if tm == nil {
+		return
+	}
+	tm.SetTrunkListChangeCallback(func(eventType string, trunkIDs []int64) {
+		for _, id := range trunkIDs {
+			tid := id
+			s.notifyTrunkListChanged(eventType, &tid)
+		}
+	})
+}
+
 func (s *Server) notifySessionListChanged(eventType string, sessionID *string) {
 	payload, err := json.Marshal(SessionStreamEvent{
 		Type:      eventType,

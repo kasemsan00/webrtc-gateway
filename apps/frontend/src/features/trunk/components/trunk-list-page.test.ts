@@ -4,6 +4,7 @@ import {
   canTestIncomingPush,
   getTrunkLifecycleActionLabel,
   getTrunkStatusLabel,
+  getPushContactDetailText,
   isPushContactReady,
   isRegisterActionDisabled,
 } from './trunk-list-page'
@@ -94,6 +95,31 @@ describe('isPushContactReady', () => {
         }),
       ),
     ).toBe(false)
+  })
+})
+
+describe('getPushContactDetailText', () => {
+  it('describes ready SIP PN contact', () => {
+    expect(
+      getPushContactDetailText(
+        makeTrunk({
+          pnAppId: 'app',
+          pnType: 'apple',
+          pnTokenMasked: 'ABCD...EF',
+          pushContactReady: true,
+        }),
+      ),
+    ).toBe('apple; ABCD...EF')
+  })
+
+  it('notes FCM when SIP PN contact is absent', () => {
+    expect(
+      getPushContactDetailText(makeTrunk({ fcmTokenReady: true })),
+    ).toBe('Uses FCM (no SIP PN contact)')
+  })
+
+  it('notes no push paths when nothing is bound', () => {
+    expect(getPushContactDetailText(makeTrunk())).toBe('No SIP PN contact')
   })
 })
 

@@ -39,8 +39,8 @@ func (s *Server) NotifySessionStateWithReason(sessionID string, state session.Se
 	sid := sessionID
 	s.notifySessionListChanged(eventType, &sid)
 
-	// Notify trunk stream listeners if trunk mode
-	if s.sessionMgr != nil && (state == session.StateActive || state == session.StateEnded) {
+	// Notify trunk stream listeners for trunk-mode sessions (active call counts include connecting/ringing).
+	if s.sessionMgr != nil {
 		if sess, ok := s.sessionMgr.GetSession(sessionID); ok {
 			authMode, _, trunkID, _, _, _, _ := sess.GetSIPAuthContext()
 			if authMode == "trunk" && trunkID > 0 {

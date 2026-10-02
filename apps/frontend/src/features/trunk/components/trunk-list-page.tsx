@@ -150,6 +150,20 @@ export function canTestIncomingPush(trunk: Trunk) {
   )
 }
 
+/** Secondary line under Push Contact badge (SIP PN vs FCM/notify paths). */
+export function getPushContactDetailText(trunk: Trunk): string {
+  if (isPushContactReady(trunk)) {
+    return `${trunk.pnType}; ${trunk.pnTokenMasked}`
+  }
+  const via: string[] = []
+  if (trunk.fcmTokenReady) via.push('FCM')
+  if (trunk.notifyUserBound) via.push('notify user')
+  if (via.length > 0) {
+    return `Uses ${via.join(', ')} (no SIP PN contact)`
+  }
+  return 'No SIP PN contact'
+}
+
 function PushContactBadge({ trunk }: { trunk: Trunk }) {
   const ready = isPushContactReady(trunk)
   return (
@@ -160,12 +174,14 @@ function PushContactBadge({ trunk }: { trunk: Trunk }) {
 }
 
 function PushContactDetails({ trunk }: { trunk: Trunk }) {
-  if (!isPushContactReady(trunk)) {
-    return <span className="text-muted-foreground">-</span>
-  }
+  const text = getPushContactDetailText(trunk)
+  const ready = isPushContactReady(trunk)
   return (
-    <span className="font-mono text-[10px] text-muted-foreground">
-      {trunk.pnType}; {trunk.pnTokenMasked}
+    <span
+      className={`block text-[10px] leading-snug text-muted-foreground ${ready ? 'font-mono' : ''}`}
+      title="SIP REGISTER Contact push params (Kamailio PN). Mobile may use FCM instead."
+    >
+      {text}
     </span>
   )
 }
@@ -384,6 +400,8 @@ export function TrunkListPage() {
   useVisibilityRealtimeReload({
     subscribe: subscribeTrunkEvents,
     onReload: handleSilentReload,
+    reloadDebounceMs: 500,
+    pollIntervalMs: 10_000,
   })
 
   const debouncedSearch = useMemo(
@@ -1400,11 +1418,6 @@ function TrunkTable({
             >
               {row.original.isRegistered ? 'Registered' : 'Unregistered'}
             </Badge>
-            {row.original.sipAutoRegister === false ? (
-              <div className="text-[10px] text-muted-foreground">
-                Auto-register off
-              </div>
-            ) : null}
           </div>
         ),
       },
@@ -1651,17 +1664,17 @@ function TrunkCard({
                 >
                   {trunk.isRegistered ? 'Registered' : 'Unregistered'}
                 </Badge>
-                {trunk.sipAutoRegister === false ? (
-                  <div className="text-[10px] text-muted-foreground">
-                    Auto-register off
-                  </div>
-                ) : null}
               </div>
             }
           />
           <Detail
             label="Push Contact"
-            value={<PushContactBadge trunk={trunk} />}
+            value={
+              <div className="space-y-0.5">
+                <PushContactBadge trunk={trunk} />
+                <PushContactDetails trunk={trunk} />
+              </div>
+            }
           />
           <Detail label="PN App ID" value={trunk.pnAppId || '-'} />
           <Detail label="PN Type" value={trunk.pnType || '-'} />

@@ -245,6 +245,9 @@ func runAPIMode(ctx context.Context, cfg *config.Config, unicastAddress string, 
 		trunkMgrInterface = trunkManager
 	}
 	apiServer := api.NewServer(cfg.API, cfg.TURN, cfg.Gateway, cfg.Translator, sessionMgr, sipServer, publicRegistry, trunkMgrInterface, store)
+	if trunkManager != nil {
+		apiServer.AttachTrunkListChangeCallback(trunkManager)
+	}
 	apiServer.SetRuntimeConfig(cfg)
 	apiServer.SetOperationalHealthProvider("telemetry", telemetryHealthAdapter{runtime: telemetryRuntime})
 	if cfg.Auth.FrontendPassword != "" {

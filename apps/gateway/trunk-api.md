@@ -130,7 +130,7 @@ GET /api/trunks?search=agent&page=1&pageSize=5&createdAfter=2025-06-01T00:00:00Z
 | `lastRegisteredAt`   | string | Last successful SIP REGISTER time (RFC 3339)         |
 | `lastUnregisteredAt` | string | Last SIP UNREGISTER time (RFC 3339), empty if none   |
 | `isRegistered`       | bool   | Whether trunk is currently considered registered     |
-| `sipAutoRegister`    | bool   | Whether gateway should auto-register on start/refresh |
+| `sipAutoRegister`    | bool   | Restore SIP registration on gateway start/refresh after Register; false for new trunks and after Unregister |
 | `lastError`        | string | Last registration error message, empty if none       |
 | `createdAt`        | string | Trunk creation time (RFC 3339)                       |
 | `updatedAt`        | string | Last update time (RFC 3339)                          |

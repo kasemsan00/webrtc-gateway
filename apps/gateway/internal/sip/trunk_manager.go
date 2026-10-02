@@ -168,6 +168,8 @@ type TrunkManager struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
+
+	onTrunkListChange TrunkListChangeFunc
 }
 
 type trunkDB interface {
@@ -195,6 +197,20 @@ type TrunkInviteMatchResult struct {
 }
 
 const trunkManagerDBTimeout = 5 * time.Second
+
+// TrunkListChangeFunc is invoked when trunk list rows change in ways visible to admin UI.
+type TrunkListChangeFunc func(eventType string, trunkIDs []int64)
+
+func (tm *TrunkManager) SetTrunkListChangeCallback(fn TrunkListChangeFunc) {
+	tm.onTrunkListChange = fn
+}
+
+func (tm *TrunkManager) emitTrunkListChange(eventType string, trunkIDs ...int64) {
+	if tm.onTrunkListChange == nil || len(trunkIDs) == 0 {
+		return
+	}
+	tm.onTrunkListChange(eventType, trunkIDs)
+}
 
 func (tm *TrunkManager) dbContext() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(tm.ctx, trunkManagerDBTimeout)
@@ -697,7 +713,7 @@ func (tm *TrunkManager) acquireAndRegisterAll() error {
 	trunkIDs := make([]int64, 0, len(tm.trunks))
 	for id, trunk := range tm.trunks {
 		if !trunkWantsAutoRegister(trunk) {
-			fmt.Printf("📞 [TrunkManager] Skipping auto-register for trunk %d (sip_auto_register=false)\n", id)
+			fmt.Printf("📞 [TrunkManager] Skipping restore registration for trunk %d (restore disabled)\n", id)
 			continue
 		}
 		trunkIDs = append(trunkIDs, id)
@@ -756,6 +772,10 @@ func (tm *TrunkManager) acquireLease(trunkID int64) error {
 		return fmt.Errorf("%w: trunk %d lease held by another instance or trunk disabled", ErrTrunkLeaseLost, trunkID)
 	}
 
+	tm.mu.RLock()
+	wasOwned := tm.ownedLeases[trunkID]
+	tm.mu.RUnlock()
+
 	// Successfully acquired/renewed lease
 	tm.mu.Lock()
 	tm.ownedLeases[trunkID] = true
@@ -766,6 +786,10 @@ func (tm *TrunkManager) acquireLease(trunkID int64) error {
 		trunk.LeaseUntil = &leaseUntil
 	}
 	tm.mu.Unlock()
+
+	if !wasOwned {
+		tm.emitTrunkListChange("lease_updated", trunkID)
+	}
 
 	fmt.Printf("📞 [TrunkManager] Acquired lease for trunk %d (until %s)\n", trunkID, leaseUntil.Format(time.RFC3339))
 	return nil
@@ -786,6 +810,8 @@ func (tm *TrunkManager) markLeaseLost(trunkID int64) {
 	delete(tm.ownedLeases, trunkID)
 	delete(tm.leaseRetryRuns, trunkID)
 	tm.mu.Unlock()
+
+	tm.emitTrunkListChange("lease_updated", trunkID)
 }
 
 func (tm *TrunkManager) incrementLeaseRetry(trunkID int64) int {
@@ -836,6 +862,8 @@ func (tm *TrunkManager) releaseLease(trunkID int64) {
 	delete(tm.ownedLeases, trunkID)
 	delete(tm.leaseRetryRuns, trunkID)
 	tm.mu.Unlock()
+
+	tm.emitTrunkListChange("lease_updated", trunkID)
 }
 
 // registerTrunk performs SIP REGISTER for a trunk
@@ -1305,6 +1333,8 @@ func (tm *TrunkManager) updateRegistrationSuccess(trunkID int64) {
 		trunk.LastError = nil
 	}
 	tm.mu.Unlock()
+
+	tm.emitTrunkListChange("registration_updated", trunkID)
 }
 
 // updateRegistrationError updates DB with registration error
@@ -1327,6 +1357,8 @@ func (tm *TrunkManager) updateRegistrationError(trunkID int64, errMsg string) {
 		trunk.LastError = &errMsg
 	}
 	tm.mu.Unlock()
+
+	tm.emitTrunkListChange("registration_updated", trunkID)
 }
 
 // GetTrunkByID returns a trunk by ID (if loaded and enabled)
@@ -1636,8 +1668,8 @@ func (tm *TrunkManager) CreateTrunk(ctx context.Context, payload CreateTrunkPayl
 	created := &Trunk{}
 	publicID := uuid.NewString()
 	err = tx.QueryRow(ctx, `
-		INSERT INTO sip_trunks (public_id, name, domain, port, username, password, transport, enabled, is_default)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		INSERT INTO sip_trunks (public_id, name, domain, port, username, password, transport, enabled, is_default, sip_auto_register)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, false)
 		RETURNING id, public_id, name, domain, port, username, password, transport, enabled, is_default,
 		          lease_owner, lease_until, last_registered_at, last_unregistered_at, last_error, sip_auto_register, in_use_by, created_at, updated_at
 	`, publicID, payload.Name, payload.Domain, payload.Port, payload.Username, payload.Password,
@@ -2027,6 +2059,8 @@ func (tm *TrunkManager) releaseLeaseForce(trunkID int64) {
 		trunk.LeaseUntil = nil
 	}
 	tm.mu.Unlock()
+
+	tm.emitTrunkListChange("lease_updated", trunkID)
 }
 
 func (tm *TrunkManager) updateUnregisteredStatus(trunkID int64) {
@@ -2170,6 +2204,7 @@ func (tm *TrunkManager) SetTrunkInUseBy(ctx context.Context, trunkID int64, user
 	}
 	tm.mu.Unlock()
 
+	tm.emitTrunkListChange("usage_updated", trunkID)
 	return nil
 }
 
@@ -2279,6 +2314,7 @@ func (tm *TrunkManager) setTrunkNotifyUserIDAndPlatform(ctx context.Context, tru
 			trunk.LastOnlineAt = &now
 		}
 	}
+	bindingIDs := []int64{trunkID}
 	if normalizedUserID != nil {
 		for id, trunk := range tm.trunks {
 			if id == trunkID || trunk.NotifyUserID == nil || *trunk.NotifyUserID != *normalizedUserID {
@@ -2286,11 +2322,13 @@ func (tm *TrunkManager) setTrunkNotifyUserIDAndPlatform(ctx context.Context, tru
 			}
 			if trunk.Username != targetUsername || trunk.Domain != targetDomain || trunk.Port != targetPort {
 				trunk.NotifyUserID = nil
+				bindingIDs = append(bindingIDs, id)
 			}
 		}
 	}
 	tm.mu.Unlock()
 
+	tm.emitTrunkListChange("binding_updated", bindingIDs...)
 	return nil
 }
 
@@ -2412,6 +2450,7 @@ func (tm *TrunkManager) SetTrunkFcmToken(ctx context.Context, trunkID int64, tok
 		trunk.FcmUpdatedAt = &now
 	}
 	tm.mu.Unlock()
+	tm.emitTrunkListChange("push_updated", trunkID)
 	return nil
 }
 
@@ -2435,6 +2474,7 @@ func (tm *TrunkManager) ClearTrunkFcmToken(ctx context.Context, trunkID int64) e
 		trunk.FcmUpdatedAt = nil
 	}
 	tm.mu.Unlock()
+	tm.emitTrunkListChange("push_updated", trunkID)
 	return nil
 }
 
