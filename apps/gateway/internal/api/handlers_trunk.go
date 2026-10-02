@@ -433,7 +433,10 @@ func (s *Server) handleRefreshTrunks(w http.ResponseWriter, r *http.Request) {
 	})
 	s.notifyTrunkListChanged("refreshed", nil)
 
-	s.respondJSON(w, http.StatusOK, map[string]string{"status": "refreshed"})
+	s.respondJSON(w, http.StatusOK, map[string]interface{}{
+		"status":  "refreshed",
+		"message": "Trunk list reloaded from database",
+	})
 }
 
 type trunkActiveCallInfo struct {

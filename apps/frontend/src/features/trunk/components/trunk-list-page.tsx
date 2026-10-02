@@ -404,7 +404,7 @@ export function TrunkListPage() {
       await refreshTrunks()
       await load()
       toast.success('Refresh completed', {
-        description: 'Trunk list has been updated',
+        description: 'Trunk list reloaded from the database',
       })
     } catch (err) {
       toast.error('Refresh failed', {
@@ -1055,28 +1055,28 @@ export function TrunkListPage() {
           </DialogHeader>
           <div className="grid gap-2">
             <p className="text-sm font-medium">Payload style</p>
-            <div className="grid gap-2 sm:grid-cols-2">
+            <div className="grid min-w-0 gap-2 sm:grid-cols-2">
               <Button
                 type="button"
                 variant={testPushStyle === 'data' ? 'default' : 'outline'}
-                className="h-auto flex-col items-start gap-1 px-3 py-2 text-left"
+                className="h-auto w-full min-w-0 shrink whitespace-normal flex-col items-start gap-1 px-3 py-2 text-left"
                 onClick={() => setTestPushStyle('data')}
                 disabled={testingPush}
               >
                 <span className="text-sm font-medium">Data</span>
-                <span className="text-[11px] font-normal opacity-80">
+                <span className="block w-full text-[11px] font-normal leading-snug opacity-80">
                   Silent incoming_call payload. No tray text on Android.
                 </span>
               </Button>
               <Button
                 type="button"
                 variant={testPushStyle === 'message' ? 'default' : 'outline'}
-                className="h-auto flex-col items-start gap-1 px-3 py-2 text-left"
+                className="h-auto w-full min-w-0 shrink whitespace-normal flex-col items-start gap-1 px-3 py-2 text-left"
                 onClick={() => setTestPushStyle('message')}
                 disabled={testingPush}
               >
                 <span className="text-sm font-medium">Message</span>
-                <span className="text-[11px] font-normal opacity-80">
+                <span className="block w-full text-[11px] font-normal leading-snug opacity-80">
                   Visible notification title and body plus the same data.
                 </span>
               </Button>

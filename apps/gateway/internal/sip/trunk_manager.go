@@ -562,7 +562,9 @@ func (tm *TrunkManager) RefreshTrunks() error {
 		return fmt.Errorf("failed to load trunks: %w", err)
 	}
 	if err := tm.acquireAndRegisterAll(); err != nil {
-		return fmt.Errorf("failed to acquire/register trunks: %w", err)
+		// Admin refresh reloads trunk state from the DB; bad credentials or
+		// offline registrars must not fail the whole operation (same as startup).
+		fmt.Printf("⚠️ [TrunkManager] Refresh reloaded trunks but failed to register some: %v\n", err)
 	}
 	return nil
 }
