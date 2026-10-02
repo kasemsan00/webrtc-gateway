@@ -9,6 +9,7 @@ func TestBuildFCMPayloadAndroidIsDataOnlyHighPriority(t *testing.T) {
 		"Call from 1001",
 		map[string]string{"type": "incoming_call"},
 		"android_abc",
+		false,
 	)
 
 	if payload.Message.Notification != nil {
@@ -32,6 +33,7 @@ func TestBuildFCMPayloadIOSKeepsNotificationFallback(t *testing.T) {
 		"Call from 1001",
 		map[string]string{"type": "incoming_call"},
 		"ios_abc",
+		false,
 	)
 
 	if payload.Message.Notification == nil {
@@ -42,5 +44,22 @@ func TestBuildFCMPayloadIOSKeepsNotificationFallback(t *testing.T) {
 	}
 	if payload.Message.Notification.Title != "Incoming" {
 		t.Fatalf("unexpected notification title: %q", payload.Message.Notification.Title)
+	}
+}
+
+func TestBuildFCMPayloadAndroidMessageStyleKeepsNotification(t *testing.T) {
+	payload := buildFCMPayload(
+		"token-3",
+		"SoftPhone Notification",
+		"You have an incoming call from sip:push-test@gateway",
+		map[string]string{"type": "incoming_call"},
+		"android_agent_device",
+		true,
+	)
+	if payload.Message.Notification == nil {
+		t.Fatal("expected visible notification in message style")
+	}
+	if payload.Message.Notification.Title != "SoftPhone Notification" {
+		t.Fatalf("unexpected title: %q", payload.Message.Notification.Title)
 	}
 }

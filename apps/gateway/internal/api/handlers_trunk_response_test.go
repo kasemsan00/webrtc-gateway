@@ -1,6 +1,8 @@
 package api
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -60,6 +62,44 @@ func TestTrunkResponseFrom_IncludesPublicIDBothFields(t *testing.T) {
 	}
 	if resp.PNTokenMasked == pnToken {
 		t.Fatalf("full pn_token leaked in response")
+	}
+}
+
+func TestTrunkResponseFrom_IncludesMaskedFCMAndNotifyBound(t *testing.T) {
+	now := time.Now()
+	fcmToken := "fcm-secret-token-abcdefghijklmnopqrstuvwxyz"
+	notifyUser := "user-123"
+	trunk := &sip.Trunk{
+		ID:           8,
+		PublicID:     "public-8",
+		Name:         "Agent device",
+		Domain:       "sip.example.com",
+		Port:         5060,
+		Username:     "1001",
+		Transport:    "tcp",
+		Enabled:      true,
+		FcmToken:     &fcmToken,
+		FcmUpdatedAt: &now,
+		NotifyUserID: &notifyUser,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+
+	resp := trunkResponseFrom(trunk, 0, nil)
+	if !resp.FcmTokenReady {
+		t.Fatalf("expected fcmTokenReady")
+	}
+	if resp.FcmTokenMasked == "" || resp.FcmTokenMasked == fcmToken {
+		t.Fatalf("expected masked FCM token, got %q", resp.FcmTokenMasked)
+	}
+	if !resp.NotifyUserBound {
+		t.Fatalf("expected notifyUserBound")
+	}
+	if strings.Contains(fmt.Sprintf("%+v", resp), notifyUser) {
+		t.Fatalf("notify_user_id leaked in response: %+v", resp)
+	}
+	if strings.Contains(fmt.Sprintf("%+v", resp), fcmToken) {
+		t.Fatalf("fcm token leaked in response: %+v", resp)
 	}
 }
 

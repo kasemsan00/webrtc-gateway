@@ -116,6 +116,10 @@ WebSocket clients real-time stream:
 
 - `GET /api/ws-clients/stream` — SSE stream of WS client connect/disconnect/update events (each event carries the full `WSClientResponse`).
 
+Admin test incoming push (no SIP session):
+
+- `POST /api/trunk/{id}/test-incoming-push` sends an `incoming_call` FCM/APNs payload for that trunk. Body `{ "style": "data" | "message" }` defaults to `data` (Android data-only). `message` also includes a visible notification title/body. It does not create a SIP or WebRTC session and does not send a WebSocket `incoming`. Answering on the device will expire. Requires the same bearer auth as other trunk write routes. The Trunks UI exposes this as **Test push**.
+
 TTRS VRI client diagnostics uploaded to gateway:
 
 - `POST /api/client-diagnostics` accepts authenticated mobile uploads, max 100 events/request.

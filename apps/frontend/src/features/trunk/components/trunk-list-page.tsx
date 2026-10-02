@@ -23,6 +23,7 @@ import type {
 
 import type {
   CreateTrunkPayload,
+  TestIncomingPushStyle,
   Trunk,
   TrunkListParams,
   UpdateTrunkPayload,
@@ -71,6 +72,7 @@ import {
   restoreTrunk,
   softDeleteTrunk,
   subscribeTrunkEvents,
+  testIncomingPush,
   unregisterTrunk,
   updateTrunk,
 } from '@/features/trunk/services/trunk-api'
@@ -137,6 +139,14 @@ export function isPushContactReady(trunk: Trunk) {
     trunk.pnAppId?.trim() &&
     trunk.pnType?.trim() &&
     trunk.pnTokenMasked?.trim(),
+  )
+}
+
+export function canTestIncomingPush(trunk: Trunk) {
+  return Boolean(
+    trunk.fcmTokenReady ||
+      trunk.notifyUserBound ||
+      isPushContactReady(trunk),
   )
 }
 
@@ -271,6 +281,10 @@ export function TrunkListPage() {
   const [registering, setRegistering] = useState(false)
   const [unregisterTarget, setUnregisterTarget] = useState<Trunk | null>(null)
   const [unregistering, setUnregistering] = useState(false)
+  const [testPushTarget, setTestPushTarget] = useState<Trunk | null>(null)
+  const [testPushStyle, setTestPushStyle] =
+    useState<TestIncomingPushStyle>('data')
+  const [testingPush, setTestingPush] = useState(false)
   const [softDeleteTarget, setSoftDeleteTarget] = useState<Trunk | null>(null)
   const [softDeleting, setSoftDeleting] = useState(false)
   const [restoreTarget, setRestoreTarget] = useState<Trunk | null>(null)
@@ -438,6 +452,31 @@ export function TrunkListPage() {
   const openUnregisterModal = useCallback((trunk: Trunk) => {
     setUnregisterTarget(trunk)
   }, [])
+
+  const openTestPushModal = useCallback((trunk: Trunk) => {
+    setTestPushStyle('data')
+    setTestPushTarget(trunk)
+  }, [])
+
+  const confirmTestPush = useCallback(async () => {
+    if (!testPushTarget) return
+    setTestingPush(true)
+    try {
+      const result = await testIncomingPush(testPushTarget.id, testPushStyle)
+      setTestPushTarget(null)
+      const channels = result.channels?.filter(Boolean).join(', ') || 'unknown'
+      const style = result.style || testPushStyle
+      toast.success('Test push sent', {
+        description: `${trunkIdentityText(testPushTarget)} via ${channels} (${style})`,
+      })
+    } catch (err) {
+      toast.error('Test push failed', {
+        description: err instanceof Error ? err.message : 'Unknown error',
+      })
+    } finally {
+      setTestingPush(false)
+    }
+  }, [testPushStyle, testPushTarget])
 
   const confirmUnregister = useCallback(async () => {
     if (!unregisterTarget) return
@@ -799,6 +838,7 @@ export function TrunkListPage() {
                 onEdit={openEditModal}
                 onRegister={openRegisterModal}
                 onUnregister={openUnregisterModal}
+                onTestPush={openTestPushModal}
                 onSoftDelete={openSoftDeleteModal}
                 onRestore={openRestoreModal}
               />
@@ -812,6 +852,7 @@ export function TrunkListPage() {
             onEdit={openEditModal}
             onRegister={openRegisterModal}
             onUnregister={openUnregisterModal}
+            onTestPush={openTestPushModal}
             onSoftDelete={openSoftDeleteModal}
             onRestore={openRestoreModal}
           />
@@ -997,6 +1038,67 @@ export function TrunkListPage() {
         </DialogContent>
       </Dialog>
 
+      <Dialog
+        open={!!testPushTarget}
+        onOpenChange={(open) => {
+          if (!open) setTestPushTarget(null)
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Test incoming push</DialogTitle>
+            <DialogDescription>
+              Send a fake incoming-call notification to{' '}
+              <strong>{trunkIdentityText(testPushTarget)}</strong>? This is not
+              a real SIP call, so answering will expire.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-2">
+            <p className="text-sm font-medium">Payload style</p>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <Button
+                type="button"
+                variant={testPushStyle === 'data' ? 'default' : 'outline'}
+                className="h-auto flex-col items-start gap-1 px-3 py-2 text-left"
+                onClick={() => setTestPushStyle('data')}
+                disabled={testingPush}
+              >
+                <span className="text-sm font-medium">Data</span>
+                <span className="text-[11px] font-normal opacity-80">
+                  Silent incoming_call payload. No tray text on Android.
+                </span>
+              </Button>
+              <Button
+                type="button"
+                variant={testPushStyle === 'message' ? 'default' : 'outline'}
+                className="h-auto flex-col items-start gap-1 px-3 py-2 text-left"
+                onClick={() => setTestPushStyle('message')}
+                disabled={testingPush}
+              >
+                <span className="text-sm font-medium">Message</span>
+                <span className="text-[11px] font-normal opacity-80">
+                  Visible notification title and body plus the same data.
+                </span>
+              </Button>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setTestPushTarget(null)}
+              disabled={testingPush}
+            >
+              Cancel
+            </Button>
+            <Button onClick={confirmTestPush} disabled={testingPush}>
+              {testingPush ? (
+                <RiLoader4Line className="mr-1 size-3.5 animate-spin" />
+              ) : null}
+              Send test push
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       {/* Unregister confirmation modal */}
       <Dialog
         open={!!unregisterTarget}
@@ -1247,6 +1349,7 @@ function TrunkTable({
   onEdit,
   onRegister,
   onUnregister,
+  onTestPush,
   onSoftDelete,
   onRestore,
 }: {
@@ -1256,6 +1359,7 @@ function TrunkTable({
   onEdit: (trunk: Trunk) => void
   onRegister: (trunk: Trunk) => void
   onUnregister: (trunk: Trunk) => void
+  onTestPush: (trunk: Trunk) => void
   onSoftDelete: (trunk: Trunk) => void
   onRestore: (trunk: Trunk) => void
 }) {
@@ -1426,6 +1530,15 @@ function TrunkTable({
             >
               Unregister
             </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-6 px-2 text-[10px]"
+              onClick={() => onTestPush(row.original)}
+              disabled={!canTestIncomingPush(row.original)}
+            >
+              Test push
+            </Button>
             {row.original.enabled ? (
               <Button
                 size="sm"
@@ -1449,7 +1562,7 @@ function TrunkTable({
         ),
       },
     ],
-    [onEdit, onRegister, onRestore, onSoftDelete, onUnregister],
+    [onEdit, onRegister, onRestore, onSoftDelete, onTestPush, onUnregister],
   )
 
   return (
@@ -1467,6 +1580,7 @@ function TrunkCard({
   onEdit,
   onRegister,
   onUnregister,
+  onTestPush,
   onSoftDelete,
   onRestore,
 }: {
@@ -1474,6 +1588,7 @@ function TrunkCard({
   onEdit: (trunk: Trunk) => void
   onRegister: (trunk: Trunk) => void
   onUnregister: (trunk: Trunk) => void
+  onTestPush: (trunk: Trunk) => void
   onSoftDelete: (trunk: Trunk) => void
   onRestore: (trunk: Trunk) => void
 }) {
@@ -1620,6 +1735,15 @@ function TrunkCard({
               disabled={!trunk.isRegistered}
             >
               Unregister
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-6 px-2 text-[10px]"
+              onClick={() => onTestPush(trunk)}
+              disabled={!canTestIncomingPush(trunk)}
+            >
+              Test push
             </Button>
             {trunk.enabled ? (
               <Button

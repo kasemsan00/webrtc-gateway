@@ -378,6 +378,7 @@ func (s *Server) Start(ctx context.Context) error {
 		api.HandleFunc("/trunk/{id}", s.handleUpdateTrunk).Methods("PUT", "OPTIONS")
 		api.HandleFunc("/trunk/{id}/register", s.handleTrunkRegister).Methods("POST", "OPTIONS")
 		api.HandleFunc("/trunk/{id}/unregister", s.handleTrunkUnregister).Methods("POST", "OPTIONS")
+		api.HandleFunc("/trunk/{id}/test-incoming-push", s.handleTrunkTestIncomingPush).Methods("POST", "OPTIONS")
 		api.HandleFunc("/user/trunk", s.handleUserTrunkHeartbeat).Methods("PUT", "OPTIONS")
 		fmt.Printf("REST API endpoints enabled: /api/*\n")
 	}

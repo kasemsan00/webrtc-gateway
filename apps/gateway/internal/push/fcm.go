@@ -74,14 +74,23 @@ type fcmAndroidConfig struct {
 	TTL      string `json:"ttl,omitempty"`
 }
 
-// SendPush sends a push notification with notification + data payload.
-func (s *FCMSender) SendPush(ctx context.Context, token, title, notificationBody string, data map[string]string, mobileDevice string) (err error) {
+// SendPush sends a push using the production incoming-call style for the device.
+func (s *FCMSender) SendPush(ctx context.Context, token, title, notificationBody string, data map[string]string, mobileDevice string) error {
+	return s.sendPush(ctx, token, title, notificationBody, data, mobileDevice, false)
+}
+
+// SendDisplayPush always includes a visible notification title/body.
+func (s *FCMSender) SendDisplayPush(ctx context.Context, token, title, notificationBody string, data map[string]string, mobileDevice string) error {
+	return s.sendPush(ctx, token, title, notificationBody, data, mobileDevice, true)
+}
+
+func (s *FCMSender) sendPush(ctx context.Context, token, title, notificationBody string, data map[string]string, mobileDevice string, forceNotification bool) (err error) {
 	started := time.Now()
 	ctx, span := telemetry.StartDependencySpan(ctx, "push_fcm")
 	defer func() { telemetry.EndDependency(ctx, span, "push_fcm", started, err) }()
 	url := fmt.Sprintf("%s/%s/messages:send", fcmBaseURL, s.projectID)
 
-	payload := buildFCMPayload(token, title, notificationBody, data, mobileDevice)
+	payload := buildFCMPayload(token, title, notificationBody, data, mobileDevice, forceNotification)
 
 	requestBody, err := json.Marshal(payload)
 	if err != nil {
@@ -115,12 +124,13 @@ func (s *FCMSender) SendPush(ctx context.Context, token, title, notificationBody
 	return nil
 }
 
-func buildFCMPayload(token, title, notificationBody string, data map[string]string, mobileDevice string) fcmRequest {
+func buildFCMPayload(token, title, notificationBody string, data map[string]string, mobileDevice string, forceNotification bool) fcmRequest {
 	var notification *fcmNotificationPayload
 	isAndroid := len(mobileDevice) >= 8 && mobileDevice[:8] == "android_"
 	// Android incoming call pushes stay data-only so the background handler can
-	// wake immediately and foreground the app for the call UI.
-	if !isAndroid && (title != "" || notificationBody != "") {
+	// wake immediately and foreground the app for the call UI. Test "message"
+	// style can force a visible notification on Android.
+	if (forceNotification || !isAndroid) && (title != "" || notificationBody != "") {
 		notification = &fcmNotificationPayload{
 			Title: title,
 			Body:  notificationBody,

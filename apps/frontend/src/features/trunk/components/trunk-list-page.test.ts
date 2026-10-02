@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  canTestIncomingPush,
   getTrunkLifecycleActionLabel,
   getTrunkStatusLabel,
   isPushContactReady,
@@ -93,5 +94,32 @@ describe('isPushContactReady', () => {
         }),
       ),
     ).toBe(false)
+  })
+})
+
+describe('canTestIncomingPush', () => {
+  it('enables when a stored FCM token is ready', () => {
+    expect(canTestIncomingPush(makeTrunk({ fcmTokenReady: true }))).toBe(true)
+  })
+
+  it('enables when a notify user is bound', () => {
+    expect(canTestIncomingPush(makeTrunk({ notifyUserBound: true }))).toBe(true)
+  })
+
+  it('enables when Apple push contact is ready', () => {
+    expect(
+      canTestIncomingPush(
+        makeTrunk({
+          pnAppId: 'th.or.ttrs.video.prod',
+          pnType: 'apple',
+          pnTokenMasked: 'D6F5DF...2A74CCF',
+          pushContactReady: true,
+        }),
+      ),
+    ).toBe(true)
+  })
+
+  it('disables when the trunk has no push target', () => {
+    expect(canTestIncomingPush(makeTrunk())).toBe(false)
   })
 })
