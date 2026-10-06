@@ -5,7 +5,6 @@ import {
   RiListCheck,
   RiLoader4Line,
   RiMoonLine,
-  RiPhoneLine,
   RiRefreshLine,
   RiServerLine,
   RiSunLine,
@@ -13,6 +12,7 @@ import {
 import { debounce } from '@tanstack/pacer'
 import { useStore } from '@tanstack/react-store'
 import { useSearch } from '@tanstack/react-router'
+import { motion } from 'motion/react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import type {
@@ -62,6 +62,7 @@ import { ServerPaginationControls } from '@/components/ui/server-pagination-cont
 import { Separator } from '@/components/ui/separator'
 import Header from '@/components/Header'
 import { formatThaiDateTime } from '@/lib/date-time'
+import { cn } from '@/lib/utils'
 import { useTheme } from '@/lib/theme'
 import { useVisibilityRealtimeReload } from '@/lib/use-visibility-realtime-reload'
 import {
@@ -83,6 +84,16 @@ import {
   toggleColumnVisibility,
   trunkPrefsStore,
 } from '@/features/trunk/store/trunk-prefs-store'
+import {
+  ActiveCallsDisplay,
+  ActiveDestinationDetailValue,
+  isTrunkOnCall,
+  PageActiveCallsChip,
+  TrunkOnCallCardShell,
+  TrunkOnCallDestinationBanner,
+  TrunkOnCallHeaderBadge,
+  trunkTableRowClassName,
+} from '@/features/trunk/components/trunk-active-visuals'
 
 const DEFAULT_PAGE_SIZE = 20
 
@@ -313,6 +324,18 @@ export function TrunkListPage() {
   const [savingCreate, setSavingCreate] = useState(false)
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
+
+  const { pageActiveCalls, pageTrunksOnCall } = useMemo(() => {
+    let calls = 0
+    let onCall = 0
+    for (const trunk of trunks) {
+      if (isTrunkOnCall(trunk)) {
+        onCall += 1
+        calls += trunk.activeCallCount
+      }
+    }
+    return { pageActiveCalls: calls, pageTrunksOnCall: onCall }
+  }, [trunks])
 
   // Map sortMode to backend sort parameters
   const getSortParams = useCallback((): {
@@ -724,6 +747,10 @@ export function TrunkListPage() {
               <SelectItem value="nameDesc">Name (Z-A)</SelectItem>
             </SelectContent>
           </Select>
+          <PageActiveCallsChip
+            totalCalls={pageActiveCalls}
+            trunksOnCall={pageTrunksOnCall}
+          />
           <Separator orientation="vertical" className="h-4" />
           {/* View mode toggle */}
           <div className="flex items-center gap-0.5">
@@ -849,17 +876,27 @@ export function TrunkListPage() {
           </div>
         ) : viewMode === 'card' ? (
           <div className="grid gap-3 sm:grid-cols-1 md:grid-cols-2 xl:grid-cols-3">
-            {trunks.map((trunk) => (
-              <TrunkCard
+            {trunks.map((trunk, index) => (
+              <motion.div
                 key={trunk.id}
-                trunk={trunk}
-                onEdit={openEditModal}
-                onRegister={openRegisterModal}
-                onUnregister={openUnregisterModal}
-                onTestPush={openTestPushModal}
-                onSoftDelete={openSoftDeleteModal}
-                onRestore={openRestoreModal}
-              />
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{
+                  duration: 0.25,
+                  delay: Math.min(index * 0.04, 0.32),
+                }}
+                className="motion-reduce:transform-none motion-reduce:opacity-100"
+              >
+                <TrunkCard
+                  trunk={trunk}
+                  onEdit={openEditModal}
+                  onRegister={openRegisterModal}
+                  onUnregister={openUnregisterModal}
+                  onTestPush={openTestPushModal}
+                  onSoftDelete={openSoftDeleteModal}
+                  onRestore={openRestoreModal}
+                />
+              </motion.div>
             ))}
           </div>
         ) : (
@@ -1478,10 +1515,7 @@ function TrunkTable({
         id: 'calls',
         header: 'Calls',
         cell: ({ row }) => (
-          <span className="flex items-center gap-1">
-            <RiPhoneLine className="size-3 text-cyan-400" />
-            {row.original.activeCallCount}
-          </span>
+          <ActiveCallsDisplay count={row.original.activeCallCount} />
         ),
       },
       {
@@ -1584,6 +1618,7 @@ function TrunkTable({
       data={trunks}
       columnVisibility={columnVisibility}
       onColumnVisibilityChange={onColumnVisibilityChange}
+      getRowClassName={trunkTableRowClassName}
     />
   )
 }
@@ -1605,17 +1640,29 @@ function TrunkCard({
   onSoftDelete: (trunk: Trunk) => void
   onRestore: (trunk: Trunk) => void
 }) {
+  const onCall = isTrunkOnCall(trunk)
+
   return (
-    <Card className="border-border/60">
-      <CardContent className="space-y-2 p-3">
-        {/* Header row */}
-        <div className="flex items-center justify-between">
-          <div className="min-w-0">
-            <span className="text-sm font-semibold">{trunk.name}</span>
-            <p className="truncate font-mono text-[11px] text-muted-foreground">
-              #{trunk.id} · uid: {formatUid(normalizeTrunkUid(trunk))}
-            </p>
-          </div>
+    <TrunkOnCallCardShell trunk={trunk}>
+      <Card
+        className={cn(
+          'border-border/60 ring-0',
+          onCall &&
+            'bg-linear-to-br from-cyan-500/8 via-card to-card dark:from-cyan-500/12',
+        )}
+      >
+        <CardContent className="space-y-2 p-3">
+          {/* Header row */}
+          <div className="flex items-center justify-between">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-sm font-semibold">{trunk.name}</span>
+                <TrunkOnCallHeaderBadge trunk={trunk} />
+              </div>
+              <p className="truncate font-mono text-[11px] text-muted-foreground">
+                #{trunk.id} · uid: {formatUid(normalizeTrunkUid(trunk))}
+              </p>
+            </div>
           <div className="flex items-center gap-1.5">
             {trunk.isDefault ? (
               <Badge variant="default" className="text-[10px]">
@@ -1631,6 +1678,8 @@ function TrunkCard({
           </div>
         </div>
 
+        <TrunkOnCallDestinationBanner trunk={trunk} />
+
         <Separator />
 
         {/* Details */}
@@ -1641,16 +1690,16 @@ function TrunkCard({
           <Detail label="Transport" value={trunk.transport.toUpperCase()} />
           <Detail
             label="Destination"
-            value={formatDestinations(trunk.activeDestinations)}
+            value={
+              <ActiveDestinationDetailValue
+                destinations={trunk.activeDestinations}
+                onCall={onCall}
+              />
+            }
           />
           <Detail
             label="Active Calls"
-            value={
-              <span className="flex items-center gap-1">
-                <RiPhoneLine className="size-3 text-cyan-400" />
-                {trunk.activeCallCount}
-              </span>
-            }
+            value={<ActiveCallsDisplay count={trunk.activeCallCount} />}
           />
           <Detail label="In Use By" value={formatInUseBy(trunk)} />
           <Detail label="Lease Owner" value={trunk.leaseOwner || '-'} />
@@ -1781,6 +1830,7 @@ function TrunkCard({
         </div>
       </CardContent>
     </Card>
+    </TrunkOnCallCardShell>
   )
 }
 

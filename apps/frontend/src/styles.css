@@ -155,3 +155,13 @@ code {
     @apply bg-background text-foreground;
   }
 }
+
+@keyframes trunk-ring-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@utility animate-trunk-ring-spin {
+  animation: trunk-ring-spin 3.5s linear infinite;
+}
