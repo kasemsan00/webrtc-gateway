@@ -80,7 +80,7 @@ export function TrunkOnCallCardShell({ trunk, children }: TrunkOnCallCardShellPr
 
   return (
     <div
-      className="relative rounded-xl"
+      className="relative h-full rounded-xl"
       title={label}
       aria-label={label}
     >
@@ -108,33 +108,7 @@ export function TrunkOnCallCardShell({ trunk, children }: TrunkOnCallCardShellPr
           </motion.div>
         ) : null}
       </AnimatePresence>
-      <div className="relative z-1">{children}</div>
-    </div>
-  )
-}
-
-export function TrunkOnCallDestinationBanner({ trunk }: { trunk: Trunk }) {
-  if (!isTrunkOnCall(trunk)) return null
-  const destination = formatActiveDestinationLabel(trunk.activeDestinations)
-  if (!destination) return null
-
-  return (
-    <div
-      className={cn(
-        'flex items-center justify-between gap-3 rounded-lg border px-3 py-2',
-        'border-cyan-400/45 bg-linear-to-r from-cyan-500/15 via-cyan-500/8 to-emerald-500/10',
-        'shadow-[inset_0_0_0_1px_rgba(34,211,238,0.12)]',
-      )}
-    >
-      <span className="text-[10px] font-medium uppercase tracking-wider text-cyan-700/90 dark:text-cyan-200/80">
-        Destination
-      </span>
-      <span
-        className="min-w-0 truncate text-right font-mono text-xl font-bold tabular-nums tracking-tight text-cyan-950 dark:text-cyan-50"
-        title={destination}
-      >
-        {destination}
-      </span>
+      <div className="relative z-1 h-full">{children}</div>
     </div>
   )
 }
@@ -151,7 +125,10 @@ export function ActiveDestinationDetailValue({
     return <span>{label}</span>
   }
   return (
-    <span className="font-mono text-sm font-bold tabular-nums text-cyan-700 dark:text-cyan-300">
+    <span
+      className="font-mono text-base font-bold tabular-nums text-cyan-950 dark:text-cyan-100"
+      title={label}
+    >
       {label}
     </span>
   )

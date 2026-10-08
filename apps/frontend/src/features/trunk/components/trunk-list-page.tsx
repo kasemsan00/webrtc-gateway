@@ -90,7 +90,6 @@ import {
   isTrunkOnCall,
   PageActiveCallsChip,
   TrunkOnCallCardShell,
-  TrunkOnCallDestinationBanner,
   TrunkOnCallHeaderBadge,
   trunkTableRowClassName,
 } from '@/features/trunk/components/trunk-active-visuals'
@@ -184,13 +183,23 @@ function PushContactBadge({ trunk }: { trunk: Trunk }) {
   )
 }
 
-function PushContactDetails({ trunk }: { trunk: Trunk }) {
+function PushContactDetails({
+  trunk,
+  compact,
+}: {
+  trunk: Trunk
+  compact?: boolean
+}) {
   const text = getPushContactDetailText(trunk)
   const ready = isPushContactReady(trunk)
   return (
     <span
-      className={`block text-[10px] leading-snug text-muted-foreground ${ready ? 'font-mono' : ''}`}
-      title="SIP REGISTER Contact push params (Kamailio PN). Mobile may use FCM instead."
+      className={cn(
+        'block text-[10px] leading-snug text-muted-foreground',
+        ready && 'font-mono',
+        compact && 'min-h-8 line-clamp-2',
+      )}
+      title={text}
     >
       {text}
     </span>
@@ -875,7 +884,7 @@ export function TrunkListPage() {
             <p className="text-sm">No trunks found</p>
           </div>
         ) : viewMode === 'card' ? (
-          <div className="grid gap-3 sm:grid-cols-1 md:grid-cols-2 xl:grid-cols-3">
+          <div className="grid items-stretch gap-3 sm:grid-cols-1 md:grid-cols-2 xl:grid-cols-3">
             {trunks.map((trunk, index) => (
               <motion.div
                 key={trunk.id}
@@ -885,7 +894,7 @@ export function TrunkListPage() {
                   duration: 0.25,
                   delay: Math.min(index * 0.04, 0.32),
                 }}
-                className="motion-reduce:transform-none motion-reduce:opacity-100"
+                className="h-full motion-reduce:transform-none motion-reduce:opacity-100"
               >
                 <TrunkCard
                   trunk={trunk}
@@ -1646,14 +1655,14 @@ function TrunkCard({
     <TrunkOnCallCardShell trunk={trunk}>
       <Card
         className={cn(
-          'border-border/60 ring-0',
+          'h-full border-border/60 ring-0',
           onCall &&
-            'bg-linear-to-br from-cyan-500/8 via-card to-card dark:from-cyan-500/12',
+            'animate-trunk-card-shimmer bg-size-[200%_200%] bg-linear-to-br from-cyan-500/12 via-emerald-500/6 to-cyan-500/10 dark:from-cyan-500/16 dark:via-emerald-500/8 dark:to-cyan-500/12 motion-reduce:animate-none',
         )}
       >
-        <CardContent className="space-y-2 p-3">
+        <CardContent className="flex flex-1 flex-col space-y-2 p-3">
           {/* Header row */}
-          <div className="flex items-center justify-between">
+          <div className="flex min-h-[2.75rem] shrink-0 items-center justify-between">
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-1.5">
                 <span className="text-sm font-semibold">{trunk.name}</span>
@@ -1678,12 +1687,10 @@ function TrunkCard({
           </div>
         </div>
 
-        <TrunkOnCallDestinationBanner trunk={trunk} />
-
-        <Separator />
+        <Separator className="shrink-0" />
 
         {/* Details */}
-        <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+        <div className="grid min-h-0 flex-1 grid-cols-2 gap-x-4 gap-y-1 text-xs">
           <Detail label="Domain" value={trunk.domain} />
           <Detail label="Port" value={String(trunk.port)} />
           <Detail label="Username" value={trunk.username} />
@@ -1721,7 +1728,7 @@ function TrunkCard({
             value={
               <div className="space-y-0.5">
                 <PushContactBadge trunk={trunk} />
-                <PushContactDetails trunk={trunk} />
+                <PushContactDetails trunk={trunk} compact />
               </div>
             }
           />
@@ -1758,16 +1765,21 @@ function TrunkCard({
           />
         </div>
 
-        {trunk.lastError ? (
-          <div className="rounded bg-red-500/10 px-2 py-1 text-[11px] text-red-400">
-            {trunk.lastError}
-          </div>
-        ) : null}
+        <div className="min-h-9 shrink-0">
+          {trunk.lastError ? (
+            <div
+              className="line-clamp-2 rounded bg-red-500/10 px-2 py-1 text-[11px] text-red-400"
+              title={trunk.lastError}
+            >
+              {trunk.lastError}
+            </div>
+          ) : null}
+        </div>
 
-        <Separator />
+        <Separator className="shrink-0" />
 
         {/* Footer */}
-        <div className="flex items-center justify-between">
+        <div className="flex shrink-0 items-center justify-between">
           <span className="text-[10px] text-muted-foreground">
             Created {formatThaiDateTime(trunk.createdAt)}
           </span>

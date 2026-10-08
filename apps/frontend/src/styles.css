@@ -165,3 +165,17 @@ code {
 @utility animate-trunk-ring-spin {
   animation: trunk-ring-spin 3.5s linear infinite;
 }
+
+@keyframes trunk-card-shimmer {
+  0%,
+  100% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+}
+
+@utility animate-trunk-card-shimmer {
+  animation: trunk-card-shimmer 7s ease-in-out infinite;
+}

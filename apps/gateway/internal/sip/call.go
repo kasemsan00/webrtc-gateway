@@ -1383,12 +1383,14 @@ func (s *Server) createBYERequest(sess *session.Session) (*sip.Request, error) {
 	// Add Call-ID
 	req.AppendHeader(sip.NewHeader("Call-ID", sipCallID))
 
-	// Add CSeq
-	var cseq int
-	if direction == "inbound" {
+	// Add CSeq. Each side of the dialog has its own sequence, and every new
+	// request in that direction must be strictly higher than the last one
+	// (RFC 3261 §12.2.2). Inbound calls seed SIPCSeq at 1, then in-dialog
+	// MESSAGE/re-INVITE advance it. A BYE that reuses CSeq 1 is older than
+	// those requests, and chan_sip answers "500 Server error" without hanging up.
+	cseq := dialogCSeq + 1
+	if cseq < 1 {
 		cseq = 1
-	} else {
-		cseq = dialogCSeq + 1
 	}
 	req.AppendHeader(sip.NewHeader("CSeq", fmt.Sprintf("%d BYE", cseq)))
 
