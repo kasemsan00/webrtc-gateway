@@ -119,7 +119,18 @@ The frontend process exits if `FRONTEND_PASSWORD` is empty. Do not set `VITE_FRO
 | `webrtc-sip-gateway` | [`apps/gateway/Dockerfile`](../apps/gateway/Dockerfile) |
 | `webrtc-sip-gateway-stack` | [`Dockerfile.unified`](Dockerfile.unified) |
 
-Built via [`docker-ci.ps1`](../docker-ci.ps1).
+Built via [`docker-ci.ps1`](../docker-ci.ps1) locally or [`.github/workflows/docker-ci.yml`](../.github/workflows/docker-ci.yml) in GitHub Actions.
+
+### GitHub Actions registry publish
+
+The **Deploy registry image** workflow runs `docker-ci.ps1` (same Dockerfile, tags, platforms, and Vite build-args as a local publish).
+
+- Manual: Actions → Deploy registry image → Run workflow. Optional image tag, platforms, `latest` tag, and goose migrations.
+- Automatic: push to `1.*` / `main` or tags `v*`.
+
+Required secrets: `REGISTRY_USERNAME`, `REGISTRY_PASSWORD`. Optional secret: `DB_DSN` (only when migrations are enabled). Optional variables: `REGISTRY`, `VITE_GATEWAY_URL`, `VITE_CONFIG_AUTORECORD`, `VITE_BASE_PATH`, `LEGACY_IMAGE_NAMES`.
+
+Default image: `registry.kasemsan.com/webrtc-sip-gateway-stack:<branch>` plus `:latest` unless `TAG_LATEST=false`.
 
 ## Rename compatibility window
 
