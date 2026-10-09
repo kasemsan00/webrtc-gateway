@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -167,6 +168,8 @@ type TrunkManager struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
+
+	onTrunkListChange TrunkListChangeFunc
 }
 
 type trunkDB interface {
@@ -194,6 +197,20 @@ type TrunkInviteMatchResult struct {
 }
 
 const trunkManagerDBTimeout = 5 * time.Second
+
+// TrunkListChangeFunc is invoked when trunk list rows change in ways visible to admin UI.
+type TrunkListChangeFunc func(eventType string, trunkIDs []int64)
+
+func (tm *TrunkManager) SetTrunkListChangeCallback(fn TrunkListChangeFunc) {
+	tm.onTrunkListChange = fn
+}
+
+func (tm *TrunkManager) emitTrunkListChange(eventType string, trunkIDs ...int64) {
+	if tm.onTrunkListChange == nil || len(trunkIDs) == 0 {
+		return
+	}
+	tm.onTrunkListChange(eventType, trunkIDs)
+}
 
 func (tm *TrunkManager) dbContext() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(tm.ctx, trunkManagerDBTimeout)
@@ -561,7 +578,9 @@ func (tm *TrunkManager) RefreshTrunks() error {
 		return fmt.Errorf("failed to load trunks: %w", err)
 	}
 	if err := tm.acquireAndRegisterAll(); err != nil {
-		return fmt.Errorf("failed to acquire/register trunks: %w", err)
+		// Admin refresh reloads trunk state from the DB; bad credentials or
+		// offline registrars must not fail the whole operation (same as startup).
+		fmt.Printf("⚠️ [TrunkManager] Refresh reloaded trunks but failed to register some: %v\n", err)
 	}
 	return nil
 }
@@ -694,7 +713,7 @@ func (tm *TrunkManager) acquireAndRegisterAll() error {
 	trunkIDs := make([]int64, 0, len(tm.trunks))
 	for id, trunk := range tm.trunks {
 		if !trunkWantsAutoRegister(trunk) {
-			fmt.Printf("📞 [TrunkManager] Skipping auto-register for trunk %d (sip_auto_register=false)\n", id)
+			fmt.Printf("📞 [TrunkManager] Skipping restore registration for trunk %d (restore disabled)\n", id)
 			continue
 		}
 		trunkIDs = append(trunkIDs, id)
@@ -753,6 +772,10 @@ func (tm *TrunkManager) acquireLease(trunkID int64) error {
 		return fmt.Errorf("%w: trunk %d lease held by another instance or trunk disabled", ErrTrunkLeaseLost, trunkID)
 	}
 
+	tm.mu.RLock()
+	wasOwned := tm.ownedLeases[trunkID]
+	tm.mu.RUnlock()
+
 	// Successfully acquired/renewed lease
 	tm.mu.Lock()
 	tm.ownedLeases[trunkID] = true
@@ -763,6 +786,10 @@ func (tm *TrunkManager) acquireLease(trunkID int64) error {
 		trunk.LeaseUntil = &leaseUntil
 	}
 	tm.mu.Unlock()
+
+	if !wasOwned {
+		tm.emitTrunkListChange("lease_updated", trunkID)
+	}
 
 	fmt.Printf("📞 [TrunkManager] Acquired lease for trunk %d (until %s)\n", trunkID, leaseUntil.Format(time.RFC3339))
 	return nil
@@ -783,6 +810,8 @@ func (tm *TrunkManager) markLeaseLost(trunkID int64) {
 	delete(tm.ownedLeases, trunkID)
 	delete(tm.leaseRetryRuns, trunkID)
 	tm.mu.Unlock()
+
+	tm.emitTrunkListChange("lease_updated", trunkID)
 }
 
 func (tm *TrunkManager) incrementLeaseRetry(trunkID int64) int {
@@ -833,6 +862,8 @@ func (tm *TrunkManager) releaseLease(trunkID int64) {
 	delete(tm.ownedLeases, trunkID)
 	delete(tm.leaseRetryRuns, trunkID)
 	tm.mu.Unlock()
+
+	tm.emitTrunkListChange("lease_updated", trunkID)
 }
 
 // registerTrunk performs SIP REGISTER for a trunk
@@ -998,16 +1029,82 @@ func (tm *TrunkManager) unregisterTrunk(trunkID int64) {
 		tm.mu.Unlock()
 	}
 
-	if err := tm.sendUnregister(trunk); err != nil {
+	if err := tm.releaseTrunkContact(trunk); err != nil {
 		fmt.Printf("⚠️ [TrunkManager] Trunk %d unregister failed (ignored): %v\n", trunkID, err)
-	} else {
-		fmt.Printf("📞 [TrunkManager] Trunk %d unregistered\n", trunkID)
 	}
 
 	tm.mu.Lock()
 	delete(tm.registrations, trunkID)
 	delete(tm.leaseRetryRuns, trunkID)
 	tm.mu.Unlock()
+}
+
+// releaseTrunkContact removes this trunk's SIP binding. Agent and agent-device
+// trunks for the same username/domain/port share one Contact URI, so removing it
+// would also drop the sibling that is still online. In that case the sibling is
+// refreshed and the shared binding stays.
+func (tm *TrunkManager) releaseTrunkContact(trunk *Trunk) error {
+	if trunk == nil {
+		return nil
+	}
+	siblings := tm.liveSharedAgentContactSiblingIDs(trunk)
+	if len(siblings) == 0 {
+		if err := tm.sendUnregister(trunk); err != nil {
+			return err
+		}
+		fmt.Printf("📞 [TrunkManager] Trunk %d unregistered\n", trunk.ID)
+		return nil
+	}
+
+	fmt.Printf("📞 [TrunkManager] Trunk %d kept shared SIP contact; refreshing sibling trunks %v\n", trunk.ID, siblings)
+	if tm.sipClient == nil {
+		fmt.Printf("⚠️ [TrunkManager] Trunk %d sibling contact refresh skipped: SIP client not initialized\n", trunk.ID)
+		return nil
+	}
+	for _, id := range siblings {
+		if err := tm.registerTrunk(id); err != nil {
+			fmt.Printf("⚠️ [TrunkManager] Trunk %d sibling %d REGISTER refresh failed: %v\n", trunk.ID, id, err)
+		}
+	}
+	return nil
+}
+
+func (tm *TrunkManager) liveSharedAgentContactSiblingIDs(trunk *Trunk) []int64 {
+	if tm == nil || trunk == nil {
+		return nil
+	}
+	tm.mu.RLock()
+	defer tm.mu.RUnlock()
+	return tm.liveSharedAgentContactSiblingIDsLocked(trunk)
+}
+
+func (tm *TrunkManager) liveSharedAgentContactSiblingIDsLocked(trunk *Trunk) []int64 {
+	if trunk == nil || (!IsAgentTrunkName(trunk.Name) && !IsAgentDeviceTrunkName(trunk.Name)) {
+		return nil
+	}
+	user := strings.TrimSpace(trunk.Username)
+	domain := normalizeSIPHost(trunk.Domain)
+	port := normalizeSIPPort(trunk.Port)
+	now := time.Now()
+	ids := make([]int64, 0, 1)
+	for id, other := range tm.trunks {
+		if other == nil || id == trunk.ID || !tm.ownedLeases[id] {
+			continue
+		}
+		if strings.TrimSpace(other.Username) != user || normalizeSIPHost(other.Domain) != domain || normalizeSIPPort(other.Port) != port {
+			continue
+		}
+		if !IsAgentTrunkName(other.Name) && !IsAgentDeviceTrunkName(other.Name) {
+			continue
+		}
+		_, refreshing := tm.refreshWorkers[id]
+		if !refreshing && !tm.registrarIdentities[id].isCurrent(now) {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	return ids
 }
 
 func (tm *TrunkManager) sendUnregister(trunk *Trunk) error {
@@ -1236,6 +1333,8 @@ func (tm *TrunkManager) updateRegistrationSuccess(trunkID int64) {
 		trunk.LastError = nil
 	}
 	tm.mu.Unlock()
+
+	tm.emitTrunkListChange("registration_updated", trunkID)
 }
 
 // updateRegistrationError updates DB with registration error
@@ -1258,6 +1357,8 @@ func (tm *TrunkManager) updateRegistrationError(trunkID int64, errMsg string) {
 		trunk.LastError = &errMsg
 	}
 	tm.mu.Unlock()
+
+	tm.emitTrunkListChange("registration_updated", trunkID)
 }
 
 // GetTrunkByID returns a trunk by ID (if loaded and enabled)
@@ -1567,8 +1668,8 @@ func (tm *TrunkManager) CreateTrunk(ctx context.Context, payload CreateTrunkPayl
 	created := &Trunk{}
 	publicID := uuid.NewString()
 	err = tx.QueryRow(ctx, `
-		INSERT INTO sip_trunks (public_id, name, domain, port, username, password, transport, enabled, is_default)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		INSERT INTO sip_trunks (public_id, name, domain, port, username, password, transport, enabled, is_default, sip_auto_register)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, false)
 		RETURNING id, public_id, name, domain, port, username, password, transport, enabled, is_default,
 		          lease_owner, lease_until, last_registered_at, last_unregistered_at, last_error, sip_auto_register, in_use_by, created_at, updated_at
 	`, publicID, payload.Name, payload.Domain, payload.Port, payload.Username, payload.Password,
@@ -1898,6 +1999,12 @@ func (tm *TrunkManager) UnregisterTrunk(trunkID int64, force bool) error {
 	if err != nil {
 		return err
 	}
+	// Persist logout intent before releasing SIP so a refresh/restart cannot
+	// register the trunk again if later cleanup fails.
+	if err := tm.setSipAutoRegister(trunkID, false); err != nil {
+		return fmt.Errorf("disable automatic registration: %w", err)
+	}
+	trunk.SipAutoRegister = false
 
 	// Stop refresh worker and clear registration cache
 	tm.mu.Lock()
@@ -1919,7 +2026,7 @@ func (tm *TrunkManager) UnregisterTrunk(trunkID int64, force bool) error {
 	}
 	tm.mu.Unlock()
 
-	unregisterErr := tm.sendUnregister(trunk)
+	unregisterErr := tm.releaseTrunkContact(trunk)
 	if force {
 		tm.releaseLeaseForce(trunkID)
 	} else {
@@ -1930,9 +2037,7 @@ func (tm *TrunkManager) UnregisterTrunk(trunkID int64, force bool) error {
 		tm.updateRegistrationError(trunkID, unregisterErr.Error())
 		return unregisterErr
 	}
-	tm.updateUnregisteredStatus(trunkID)
-
-	return nil
+	return tm.updateUnregisteredStatus(trunkID)
 }
 
 func (tm *TrunkManager) releaseLeaseForce(trunkID int64) {
@@ -1958,9 +2063,11 @@ func (tm *TrunkManager) releaseLeaseForce(trunkID int64) {
 		trunk.LeaseUntil = nil
 	}
 	tm.mu.Unlock()
+
+	tm.emitTrunkListChange("lease_updated", trunkID)
 }
 
-func (tm *TrunkManager) updateUnregisteredStatus(trunkID int64) {
+func (tm *TrunkManager) updateUnregisteredStatus(trunkID int64) error {
 	ctx, cancel := tm.dbContext()
 	defer cancel()
 
@@ -1972,6 +2079,7 @@ func (tm *TrunkManager) updateUnregisteredStatus(trunkID int64) {
 	`, now, trunkID)
 	if err != nil {
 		fmt.Printf("⚠️ [TrunkManager] Failed to clear registration status for trunk %d: %v\n", trunkID, err)
+		return fmt.Errorf("persist unregistered status: %w", err)
 	}
 
 	tm.mu.Lock()
@@ -1982,6 +2090,7 @@ func (tm *TrunkManager) updateUnregisteredStatus(trunkID int64) {
 		trunk.SipAutoRegister = false
 	}
 	tm.mu.Unlock()
+	return nil
 }
 
 func (tm *TrunkManager) setSipAutoRegister(trunkID int64, enabled bool) error {
@@ -2101,6 +2210,7 @@ func (tm *TrunkManager) SetTrunkInUseBy(ctx context.Context, trunkID int64, user
 	}
 	tm.mu.Unlock()
 
+	tm.emitTrunkListChange("usage_updated", trunkID)
 	return nil
 }
 
@@ -2210,6 +2320,7 @@ func (tm *TrunkManager) setTrunkNotifyUserIDAndPlatform(ctx context.Context, tru
 			trunk.LastOnlineAt = &now
 		}
 	}
+	bindingIDs := []int64{trunkID}
 	if normalizedUserID != nil {
 		for id, trunk := range tm.trunks {
 			if id == trunkID || trunk.NotifyUserID == nil || *trunk.NotifyUserID != *normalizedUserID {
@@ -2217,11 +2328,13 @@ func (tm *TrunkManager) setTrunkNotifyUserIDAndPlatform(ctx context.Context, tru
 			}
 			if trunk.Username != targetUsername || trunk.Domain != targetDomain || trunk.Port != targetPort {
 				trunk.NotifyUserID = nil
+				bindingIDs = append(bindingIDs, id)
 			}
 		}
 	}
 	tm.mu.Unlock()
 
+	tm.emitTrunkListChange("binding_updated", bindingIDs...)
 	return nil
 }
 
@@ -2343,6 +2456,7 @@ func (tm *TrunkManager) SetTrunkFcmToken(ctx context.Context, trunkID int64, tok
 		trunk.FcmUpdatedAt = &now
 	}
 	tm.mu.Unlock()
+	tm.emitTrunkListChange("push_updated", trunkID)
 	return nil
 }
 
@@ -2366,6 +2480,7 @@ func (tm *TrunkManager) ClearTrunkFcmToken(ctx context.Context, trunkID int64) e
 		trunk.FcmUpdatedAt = nil
 	}
 	tm.mu.Unlock()
+	tm.emitTrunkListChange("push_updated", trunkID)
 	return nil
 }
 

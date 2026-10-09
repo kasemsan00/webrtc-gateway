@@ -56,7 +56,7 @@ func TestAgentDeviceWSFlagOffReturns404(t *testing.T) {
 	}
 }
 
-func TestAgentDeviceWSRequiresJWTAndPlatform(t *testing.T) {
+func TestAgentDeviceWSRequiresPlatformAndAcceptsOptionalJWT(t *testing.T) {
 	srv := NewServer(config.APIConfig{EnableAgentDeviceWS: true}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, nil, nil, nil, nil, nil)
 	srv.SetTokenVerifier(tokenVerifierStub{
 		verify: func(_ context.Context, raw string, _ auth.TokenRealm) (*auth.VerifiedClaims, error) {
@@ -91,9 +91,14 @@ func TestAgentDeviceWSRequiresJWTAndPlatform(t *testing.T) {
 
 	assertUnauthorized("")
 	assertUnauthorized("?access_token=valid-token")
-	assertUnauthorized("?devicePlatform=android")
 	assertUnauthorized("?access_token=bad&devicePlatform=android")
 	assertUnauthorized("?access_token=valid-token&devicePlatform=mobile")
+
+	noJWT, resp, err := dialer.Dial(wsURL+"?devicePlatform=android", nil)
+	if err != nil {
+		t.Fatalf("expected SIP-only upgrade, err=%v status=%v", err, resp)
+	}
+	_ = noJWT.Close()
 	if provisioner.called {
 		t.Fatalf("mobile provisioner must not be invoked for /ws-agent-device")
 	}
@@ -105,6 +110,28 @@ func TestAgentDeviceWSRequiresJWTAndPlatform(t *testing.T) {
 	_ = conn.Close()
 	if provisioner.called {
 		t.Fatalf("mobile provisioner must not be invoked after accepted agent-device upgrade")
+	}
+}
+
+func TestDeviceRegisterWithoutJWTBindsSipIdentity(t *testing.T) {
+	tm := &agentTrunkManagerStub{}
+	srv := newAgentDeviceTestServer(t, tm)
+	client := newAgentDeviceWSClient()
+	client.authClaims = nil
+
+	srv.handleWSDeviceRegister(client, WSMessage{
+		Type:        "device_register",
+		SIPDomain:   "sip.example.com",
+		SIPUsername: "1001",
+		SIPPassword: "super-secret",
+	})
+
+	msgs := readAgentWSMessages(t, client)
+	if len(msgs) != 1 || msgs[0].Type != "trunk_resolved" {
+		t.Fatalf("expected trunk_resolved, got %+v", msgs)
+	}
+	if tm.notifyUserID == nil || *tm.notifyUserID != "sip:1001@sip.example.com:5060" {
+		t.Fatalf("expected SIP identity subject, got %#v", tm.notifyUserID)
 	}
 }
 

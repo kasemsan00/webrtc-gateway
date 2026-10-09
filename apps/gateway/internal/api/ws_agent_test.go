@@ -33,6 +33,7 @@ type agentTrunkManagerStub struct {
 	fcmCleared      bool
 	fcmClearID      int64
 	fcmErr          error
+	fcmClearErr     error
 	deviceTrunks    []*sip.Trunk
 	identityGroup   map[int64][]int64
 	notifyTrunkID   int64
@@ -200,6 +201,9 @@ func (s *agentTrunkManagerStub) SetTrunkFcmToken(_ context.Context, trunkID int6
 func (s *agentTrunkManagerStub) ClearTrunkFcmToken(_ context.Context, trunkID int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.fcmClearErr != nil {
+		return s.fcmClearErr
+	}
 	s.fcmCleared = true
 	s.fcmClearID = trunkID
 	s.fcmToken = ""

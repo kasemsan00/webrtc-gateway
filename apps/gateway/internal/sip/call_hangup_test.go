@@ -93,3 +93,24 @@ func TestCreateBYERequest_OutboundKeepsCSeqIncrement(t *testing.T) {
 		t.Fatalf("expected outbound BYE CSeq=3, got %#v", cseq)
 	}
 }
+
+func TestCreateBYERequest_InboundBYEAdvancesPastInDialogCSeq(t *testing.T) {
+	srv := &Server{
+		config:        config.SIPConfig{Domain: "sipagent.ttrs.or.th", Port: 5060},
+		publicAddress: "203.151.21.121",
+		sipPort:       5090,
+	}
+	sess := &session.Session{ID: "s5"}
+	sess.SetCallInfo("inbound", "sip:1429900148716@203.150.245.41", "sip:00025@203.151.21.121:5090", "call-5")
+	sess.SetSIPDialogState("local-tag", "as168514b7", "<sip:1429900148716@203.150.245.41:5060;transport=tcp>", "sipagent.ttrs.or.th", 5060, 6, nil)
+
+	req, err := srv.createBYERequest(sess)
+	if err != nil {
+		t.Fatalf("createBYERequest failed: %v", err)
+	}
+
+	cseq := req.CSeq()
+	if cseq == nil || cseq.SeqNo != 7 || cseq.MethodName != "BYE" {
+		t.Fatalf("expected inbound BYE CSeq=7 BYE after in-dialog CSeq 6, got %#v", cseq)
+	}
+}

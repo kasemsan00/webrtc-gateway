@@ -93,6 +93,7 @@ func TestResetMediaStateClearsSIPEndpointsKeepsCachedSPSPPS(t *testing.T) {
 		uplinkKeyframeKickOnRemoteJoinDone: true,
 		uplinkKeyframeKickOnFirstSIPRTCP:   true,
 		sipVideoDestReadyAt:                time.Now(),
+		bridgedPeerAnsweredAt:              time.Now(),
 	}
 
 	sess.ResetMediaState()
@@ -126,6 +127,9 @@ func TestResetMediaStateClearsSIPEndpointsKeepsCachedSPSPPS(t *testing.T) {
 	}
 	if !sess.sipVideoDestReadyAt.IsZero() {
 		t.Fatalf("expected sipVideoDestReadyAt to be cleared after reset")
+	}
+	if !sess.bridgedPeerAnsweredAt.IsZero() {
+		t.Fatalf("expected bridgedPeerAnsweredAt to be cleared after reset")
 	}
 	if sess.IsMediaForwardReady() {
 		t.Fatal("expected media forward ready to be cleared on ResetMediaState")

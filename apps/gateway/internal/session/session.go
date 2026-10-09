@@ -83,7 +83,13 @@ type Session struct {
 	// One-shot WebRTC→SIP keyframe kick on the first SIP video SR/RR.
 	uplinkKeyframeKickOnFirstSIPRTCP bool `json:"-"`
 	// When SIP video dest first became reachable (200 OK / first RTP dest).
-	sipVideoDestReadyAt    time.Time `json:"-"`
+	sipVideoDestReadyAt time.Time `json:"-"`
+	// Queue-bridged callee answered after this outbound session already sent
+	// an auto-200 IDR. A new WebRTC→SIP IDR is required so the late joiner
+	// is not stuck on P-frames.
+	bridgedPeerAnsweredAt time.Time `json:"-"`
+	// Bumped when periodic browser PLI is restarted so an older sender exits.
+	periodicPLIEpoch       int       `json:"-"`
 	Direction              string    `json:"direction"` // "inbound" or "outbound"
 	From                   string    `json:"from,omitempty"`
 	To                     string    `json:"to,omitempty"`
@@ -166,6 +172,11 @@ type Session struct {
 	VideoRTPDisorderContainmentEnabled    bool                 `json:"-"`
 	VideoRTPDisorderContainmentDuration   time.Duration        `json:"-"`
 	VideoAUNormalizeEnabled               bool                 `json:"-"`
+	SwitchVideoGateMinIDRPackets          int                  `json:"-"`
+	VideoReorderPacing                    time.Duration        `json:"-"`
+	VideoTimestampJumpPLI                 bool                 `json:"-"`
+	VideoSuppressEarlyMedia               bool                 `json:"-"`
+	videoDiscontinuityIDRAt               time.Time            `json:"-"`
 	SwitchVideoGateActive                 bool                 `json:"-"`
 	SwitchVideoGateReleasing              bool                 `json:"-"`
 	SwitchVideoGateGeneration             int                  `json:"-"`
@@ -587,6 +598,10 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 		VideoRTPDisorderContainmentEnabled:   cfg.SIP.VideoRTPDisorderContainmentEnabled,
 		VideoRTPDisorderContainmentDuration:  time.Duration(cfg.SIP.VideoRTPDisorderContainmentMS) * time.Millisecond,
 		VideoAUNormalizeEnabled:              cfg.SIP.VideoAUNormalizeEnabled,
+		SwitchVideoGateMinIDRPackets:         cfg.SIP.SwitchVideoGateMinIDRPackets,
+		VideoReorderPacing:                   time.Duration(cfg.SIP.VideoReorderPacingMS) * time.Millisecond,
+		VideoTimestampJumpPLI:                cfg.SIP.VideoTimestampJumpPLI,
+		VideoSuppressEarlyMedia:              cfg.SIP.VideoSuppressEarlyMedia,
 		sipVideoIDRReplayNotify:              make(chan struct{}, 1),
 	}
 	session.initVideoRTPHistory()

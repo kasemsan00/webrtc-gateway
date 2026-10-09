@@ -63,7 +63,8 @@ COPY --from=gateway-build /go/bin/goose ./goose
 COPY --from=gateway-build /build/migrations ./migrations
 COPY --from=gateway-build /build/schema ./schema
 COPY apps/gateway/scripts/docker-entrypoint.sh ./docker-entrypoint.sh
-RUN chmod +x docker-entrypoint.sh && \
+RUN sed -i 's/\r$//' docker-entrypoint.sh && \
+    chmod +x docker-entrypoint.sh && \
     mkdir -p /app/gateway/logs /var/lib/webrtc-gateway/chat-images && \
     chown -R gateway:gateway /app/gateway /var/lib/webrtc-gateway
 
@@ -76,7 +77,8 @@ COPY apps/frontend/package.json ./package.json
 
 COPY deploy/nginx.conf.template /etc/nginx/nginx.conf.template
 COPY deploy/stack-entrypoint.sh /app/stack-entrypoint.sh
-RUN chmod +x /app/stack-entrypoint.sh
+RUN sed -i 's/\r$//' /etc/nginx/nginx.conf.template /app/stack-entrypoint.sh && \
+    chmod +x /app/stack-entrypoint.sh
 
 ENV NODE_ENV=production
 ENV VITE_BASE_PATH=/admin/

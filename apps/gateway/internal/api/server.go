@@ -59,6 +59,7 @@ type Server struct {
 	mediaTelemetry     map[string]mediaRecoveryCounters
 	startTime          time.Time
 	mu                 sync.RWMutex
+	mobileOps          map[string]bool // reservations; mu is released before provisioning/SIP I/O
 }
 
 // TokenVerifier verifies bearer JWT tokens.
@@ -125,6 +126,7 @@ type WSClient struct {
 	pendingIncoming map[string]struct{}
 	trunkResolved   bool
 	resolvedTrunkID int64
+	mobileTrunkID   int64 // immutable /ws provisioning target; never supplied by unregister
 	availability    string
 	callState       string
 	multiCall       bool
@@ -144,6 +146,7 @@ func (c *WSClient) isAgentPresence() bool {
 
 // WSMessage represents a WebSocket message
 type WSMessage struct {
+	RequestID    string          `json:"requestId,omitempty"`
 	Type         string          `json:"type"`
 	SessionID    string          `json:"sessionId,omitempty"`
 	SDP          string          `json:"sdp,omitempty"`
@@ -378,6 +381,7 @@ func (s *Server) Start(ctx context.Context) error {
 		api.HandleFunc("/trunk/{id}", s.handleUpdateTrunk).Methods("PUT", "OPTIONS")
 		api.HandleFunc("/trunk/{id}/register", s.handleTrunkRegister).Methods("POST", "OPTIONS")
 		api.HandleFunc("/trunk/{id}/unregister", s.handleTrunkUnregister).Methods("POST", "OPTIONS")
+		api.HandleFunc("/trunk/{id}/test-incoming-push", s.handleTrunkTestIncomingPush).Methods("POST", "OPTIONS")
 		api.HandleFunc("/user/trunk", s.handleUserTrunkHeartbeat).Methods("PUT", "OPTIONS")
 		fmt.Printf("REST API endpoints enabled: /api/*\n")
 	}

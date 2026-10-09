@@ -16,20 +16,30 @@ const (
 	undersizedIDRRetryPLIDelay = 800 * time.Millisecond
 )
 
-// MinSwitchVideoGateIDRPackets is the smallest post-switch IDR the gate treats
-// as a real camera GOP before the stall timeout. Linphone's 800ms PLI reply is
-// sometimes a 22-packet flush (CAoRE65fuUZG) that blacks n1669, while the same
-// phone paints when the first IDR is 30–40 packets (kNmvwqMU4rXK, ws2AHWfsi171).
-// After the stall timeout the gate accepts a smaller IDR so the picture is not
-// held forever.
-const MinSwitchVideoGateIDRPackets = 24
+// MinSwitchVideoGateIDRPackets is the default post-switch IDR packet floor.
+// Completeness is already enforced by the AU normalizer (marker, closed FU-A,
+// SPS/PPS ready). A packet-count heuristic of 24 rejected valid 640x480 IDRs
+// (S5CDifyVuoul: 6- and 19-packet complete IDRs held for 2s). Raise
+// SIP_SWITCH_VIDEO_GATE_MIN_IDR_PACKETS only if a specific encoder's flush
+// IDRs still poison the decoder; after the stall timeout the gate accepts a
+// smaller IDR so the picture is not held forever.
+const MinSwitchVideoGateIDRPackets = 1
 
 const (
 	SwitchVideoGateActivationActive    = "active"
 	SwitchVideoGateActivationDisabled  = "disabled"
 	SwitchVideoGateActivationRejected  = "rejected"
 	SwitchVideoGateActivationUnchanged = "unchanged"
+	// SwitchVideoGateActivationSatisfied means a discontinuity IDR already
+	// started this segment, so the later @switch notice must not hold for
+	// another keyframe.
+	SwitchVideoGateActivationSatisfied = "satisfied-by-discontinuity-idr"
 )
+
+// videoDiscontinuityIDRCredit is how long a just-forwarded stream-switch IDR
+// satisfies the @switch gate. Agent media beats the notice by a few tens of
+// milliseconds; a later switch must still hold for its own IDR.
+const videoDiscontinuityIDRCredit = 150 * time.Millisecond
 
 // SwitchVideoGateActivation is a lock-consistent snapshot of a gate-start
 // attempt. Callers may safely log it after the session lock is released.
@@ -119,7 +129,7 @@ func (s *Session) EvaluateSwitchVideoAccessUnit(au NormalizedH264AccessUnit, now
 		reason = "non-idr"
 	case !au.ParameterSetsReady:
 		reason = "parameter-sets-not-ready"
-	case len(au.Packets) < MinSwitchVideoGateIDRPackets && elapsed < switchVideoGateStallThreshold:
+	case len(au.Packets) < s.minSwitchVideoGateIDRPacketsLocked() && elapsed < switchVideoGateStallThreshold:
 		reason = "undersized-idr"
 	case s.SwitchVideoGateLeaseNonce == ^uint64(0):
 		reason = "reservation-exhausted"
@@ -252,6 +262,16 @@ func (s *Session) startSwitchVideoGateLocked(generation int, now time.Time, reas
 		return SwitchVideoGateActivation{
 			Active: true, Outcome: SwitchVideoGateActivationActive, Generation: generation,
 			StartedAt: s.SwitchVideoGateStartedAt, FeedbackBaseline: s.SwitchVideoGateFeedbackBaseline,
+		}
+	}
+	if reason == "agent-switch" && s.videoDiscontinuityIDRFreshLocked(now) {
+		if generation > s.SwitchVideoGateAcceptedGeneration {
+			s.SwitchVideoGateAcceptedGeneration = generation
+		}
+		s.videoDiscontinuityIDRAt = time.Time{}
+		s.clearSwitchVideoGateLocked()
+		return SwitchVideoGateActivation{
+			Outcome: SwitchVideoGateActivationSatisfied, Generation: generation,
 		}
 	}
 
@@ -402,6 +422,30 @@ func (s *Session) clearSwitchVideoGateReservationLocked() {
 	s.SwitchVideoGateReservedPackets = 0
 	s.SwitchVideoGateReservedSSRC = 0
 	s.SwitchVideoGateReservedInjection = false
+}
+
+func (s *Session) minSwitchVideoGateIDRPacketsLocked() int {
+	if s.SwitchVideoGateMinIDRPackets > 0 {
+		return s.SwitchVideoGateMinIDRPackets
+	}
+	return MinSwitchVideoGateIDRPackets
+}
+
+// NoteVideoDiscontinuityIDR records that an IDR was written on a repaired
+// timestamp. A following @switch within videoDiscontinuityIDRCredit does not
+// wait for a second keyframe.
+func (s *Session) NoteVideoDiscontinuityIDR(now time.Time) {
+	s.mu.Lock()
+	s.videoDiscontinuityIDRAt = now
+	s.mu.Unlock()
+}
+
+func (s *Session) videoDiscontinuityIDRFreshLocked(now time.Time) bool {
+	if s.videoDiscontinuityIDRAt.IsZero() {
+		return false
+	}
+	age := now.Sub(s.videoDiscontinuityIDRAt)
+	return age >= 0 && age <= videoDiscontinuityIDRCredit
 }
 
 func switchVideoGateElapsed(start, now time.Time) time.Duration {

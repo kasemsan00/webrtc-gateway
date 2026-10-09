@@ -225,6 +225,33 @@ export function WSClientsPage() {
         },
       },
       {
+        accessorKey: 'sipUsername',
+        header: 'SIP User',
+        cell: ({ row }) => (
+          <span className="whitespace-nowrap font-mono text-xs">
+            {row.original.sipUsername || '-'}
+          </span>
+        ),
+      },
+      {
+        accessorKey: 'sipDomain',
+        header: 'SIP Domain',
+        cell: ({ row }) => (
+          <span className="whitespace-nowrap font-mono text-xs">
+            {row.original.sipDomain || '-'}
+          </span>
+        ),
+      },
+      {
+        accessorKey: 'sipPort',
+        header: 'SIP Port',
+        cell: ({ row }) => (
+          <span className="font-mono text-xs">
+            {row.original.sipPort || '-'}
+          </span>
+        ),
+      },
+      {
         accessorKey: 'availability',
         header: 'Availability',
         cell: ({ row }) => {

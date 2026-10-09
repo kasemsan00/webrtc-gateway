@@ -1,5 +1,7 @@
 import type {
   CreateTrunkPayload,
+  TestIncomingPushResponse,
+  TestIncomingPushStyle,
   Trunk,
   TrunkListParams,
   TrunkListResponse,
@@ -66,6 +68,22 @@ export async function registerTrunk(
     `${API_BASE}/trunk/${id}/register`,
     {
       method: 'POST',
+    },
+  )
+}
+
+export async function testIncomingPush(
+  id: number,
+  style: TestIncomingPushStyle = 'data',
+): Promise<TestIncomingPushResponse> {
+  return fetchJson<TestIncomingPushResponse>(
+    `${API_BASE}/trunk/${id}/test-incoming-push`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ style }),
     },
   )
 }

@@ -27,8 +27,22 @@ export interface Trunk {
   lastOnlinePlatform?: string
   lastOnlineAt?: string
   pushContactReady?: boolean
+  fcmTokenReady?: boolean
+  fcmTokenMasked?: string
+  fcmUpdatedAt?: string
+  notifyUserBound?: boolean
   createdAt: string
   updatedAt: string
+}
+
+export type TestIncomingPushStyle = 'data' | 'message'
+
+export interface TestIncomingPushResponse {
+  trunkId: number
+  sessionId: string
+  channels: Array<string>
+  style?: TestIncomingPushStyle
+  status: string
 }
 
 export interface UpdateTrunkPayload {

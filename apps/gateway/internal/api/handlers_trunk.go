@@ -10,9 +10,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 
 	"webrtc-sip-gateway/internal/logstore"
+	"webrtc-sip-gateway/internal/push"
 	"webrtc-sip-gateway/internal/session"
 	"webrtc-sip-gateway/internal/sip"
 )
@@ -46,6 +48,10 @@ type TrunkResponse struct {
 	PNTokenMasked      string   `json:"pnTokenMasked,omitempty"`
 	PNUpdatedAt        string   `json:"pnUpdatedAt,omitempty"`
 	PushContactReady   bool     `json:"pushContactReady"`
+	FcmTokenReady      bool     `json:"fcmTokenReady"`
+	FcmTokenMasked     string   `json:"fcmTokenMasked,omitempty"`
+	FcmUpdatedAt       string   `json:"fcmUpdatedAt,omitempty"`
+	NotifyUserBound    bool     `json:"notifyUserBound"`
 	CreatedAt          string   `json:"createdAt"`
 	UpdatedAt          string   `json:"updatedAt"`
 }
@@ -427,7 +433,10 @@ func (s *Server) handleRefreshTrunks(w http.ResponseWriter, r *http.Request) {
 	})
 	s.notifyTrunkListChanged("refreshed", nil)
 
-	s.respondJSON(w, http.StatusOK, map[string]string{"status": "refreshed"})
+	s.respondJSON(w, http.StatusOK, map[string]interface{}{
+		"status":  "refreshed",
+		"message": "Trunk list reloaded from database",
+	})
 }
 
 type trunkActiveCallInfo struct {
@@ -519,6 +528,123 @@ func (s *Server) handleTrunkUnregister(w http.ResponseWriter, r *http.Request) {
 	s.respondJSON(w, http.StatusOK, map[string]interface{}{"trunkId": trunkID, "status": "unregistered"})
 }
 
+// handleTrunkTestIncomingPush sends a production incoming-call push payload
+// for a trunk without creating a SIP or WebRTC session.
+func (s *Server) handleTrunkTestIncomingPush(w http.ResponseWriter, r *http.Request) {
+	if s.trunkManager == nil {
+		s.respondError(w, http.StatusServiceUnavailable, "Trunk manager not available")
+		return
+	}
+	if s.pushService == nil {
+		s.respondError(w, http.StatusServiceUnavailable, "Push service not configured")
+		return
+	}
+
+	vars := mux.Vars(r)
+	idStr := vars["id"]
+	trunkID, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil || trunkID <= 0 {
+		s.respondError(w, http.StatusBadRequest, "Invalid trunk ID")
+		return
+	}
+
+	trunk, err := s.trunkManager.GetTrunkByIDFromDB(r.Context(), trunkID)
+	if err != nil || trunk == nil {
+		s.respondError(w, http.StatusNotFound, "Trunk not found")
+		return
+	}
+
+	var req struct {
+		Style string `json:"style"`
+	}
+	if r.Body != nil && r.ContentLength != 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			s.respondError(w, http.StatusBadRequest, "Invalid request body")
+			return
+		}
+	}
+	style, err := push.NormalizeTestPushStyle(req.Style)
+	if err != nil {
+		s.respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	sessionID := "push-test-" + uuid.NewString()
+	from := "sip:push-test@gateway"
+	to := strings.TrimSpace(trunk.Username)
+	if to == "" {
+		to = "sip:unknown@gateway"
+	} else if domain := strings.TrimSpace(trunk.Domain); domain != "" {
+		to = "sip:" + to + "@" + domain
+	}
+
+	channels, sendErr := s.sendTestIncomingPush(trunk, sessionID, from, to, style)
+	if sendErr != nil {
+		switch {
+		case errors.Is(sendErr, errTestPushNoTarget):
+			s.respondError(w, http.StatusConflict, "Trunk has no incoming push target")
+		case errors.Is(sendErr, push.ErrPushNotConfigured):
+			s.respondError(w, http.StatusServiceUnavailable, "Push sender not configured")
+		default:
+			s.respondError(w, http.StatusBadGateway, fmt.Sprintf("Failed to send test push: %v", sendErr))
+		}
+		return
+	}
+
+	s.logEvent(&logstore.Event{
+		Timestamp: time.Now(),
+		Category:  "rest",
+		Name:      "rest_trunk_test_incoming_push",
+		Data: map[string]interface{}{
+			"trunkId":   trunkID,
+			"sessionId": sessionID,
+			"channels":  channels,
+			"style":     style,
+		},
+	})
+
+	s.respondJSON(w, http.StatusOK, map[string]interface{}{
+		"trunkId":   trunkID,
+		"sessionId": sessionID,
+		"channels":  channels,
+		"style":     style,
+		"status":    "sent",
+	})
+}
+
+var errTestPushNoTarget = errors.New("no incoming push target")
+
+func (s *Server) sendTestIncomingPush(trunk *sip.Trunk, sessionID, from, to, style string) ([]string, error) {
+	if token := trunkStoredFcmToken(trunk); token != "" {
+		if err := s.pushService.SendIncomingCallFCMTokenStyled(token, sessionID, from, to, false, style); err != nil {
+			return nil, err
+		}
+		return []string{"fcm"}, nil
+	}
+
+	route := selectIncomingPushRoute(trunk, s.pushService.CanSendAPNS(), s.config.TrunkPNAppID)
+	channels := make([]string, 0, 2)
+	if route.SendAPNS && trunk.PNToken != nil {
+		if err := s.pushService.SendIncomingCallAPNS(strings.TrimSpace(*trunk.PNToken), sessionID, from, to, false); err != nil {
+			return nil, err
+		}
+		channels = append(channels, "apns")
+	}
+	if route.SendFCM && trunk.NotifyUserID != nil {
+		userID := strings.TrimSpace(*trunk.NotifyUserID)
+		if userID != "" {
+			if err := s.pushService.SendIncomingCallStyled(userID, sessionID, from, to, false, style); err != nil {
+				return nil, err
+			}
+			channels = append(channels, "ttrs_fcm")
+		}
+	}
+	if len(channels) == 0 {
+		return nil, errTestPushNoTarget
+	}
+	return channels, nil
+}
+
 func trunkResponseFrom(trunk *sip.Trunk, activeCallCount int, activeDestinations []string) TrunkResponse {
 	isRegistered := trunk.LastRegisteredAt != nil
 	if trunk.LastError != nil && *trunk.LastError != "" {
@@ -572,6 +698,16 @@ func trunkResponseFrom(trunk *sip.Trunk, activeCallCount int, activeDestinations
 	}
 	if trunk.PNUpdatedAt != nil {
 		response.PNUpdatedAt = trunk.PNUpdatedAt.Format(time.RFC3339)
+	}
+	if trunk.FcmToken != nil {
+		response.FcmTokenMasked = maskPushToken(*trunk.FcmToken)
+	}
+	if trunk.FcmUpdatedAt != nil {
+		response.FcmUpdatedAt = trunk.FcmUpdatedAt.Format(time.RFC3339)
+	}
+	response.FcmTokenReady = response.FcmTokenMasked != ""
+	if trunk.NotifyUserID != nil && strings.TrimSpace(*trunk.NotifyUserID) != "" {
+		response.NotifyUserBound = true
 	}
 	response.PushContactReady = response.PNAppID != "" && response.PNType != "" && response.PNTokenMasked != ""
 	return response

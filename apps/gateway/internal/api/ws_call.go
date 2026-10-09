@@ -463,6 +463,7 @@ func (s *Server) handleWSCall(client *WSClient, msg WSMessage) {
 	// ICE failure can cancel MakeCall immediately; starting it first could drop
 	// the terminal reason and then incorrectly send a late connecting ack.
 	s.bindClientSession(client, sess.ID)
+	s.notifyWSClientChanged("updated", client)
 
 	// Acknowledge dialing progress explicitly. Do not echo an ICE-promoted
 	// active snapshot — active means SIP answered.

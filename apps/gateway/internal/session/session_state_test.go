@@ -107,6 +107,21 @@ func TestOutboundCallAckState(t *testing.T) {
 	}
 }
 
+func TestSuppressEarlyVideoDefaultsOff(t *testing.T) {
+	sess := &Session{ID: "early", State: StateRinging}
+	if sess.SuppressEarlyVideo() {
+		t.Fatal("default should forward pre-answer video")
+	}
+	sess.VideoSuppressEarlyMedia = true
+	if !sess.SuppressEarlyVideo() {
+		t.Fatal("ringing should suppress when the knob is off")
+	}
+	sess.SetState(StateActive)
+	if sess.SuppressEarlyVideo() {
+		t.Fatal("answered calls should forward video")
+	}
+}
+
 func TestTakeProgressNotifyDedupes(t *testing.T) {
 	sess := &Session{ID: "s1", State: StateConnecting}
 	if !sess.TakeProgressNotify(StateConnecting) {

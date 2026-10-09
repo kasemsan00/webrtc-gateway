@@ -85,7 +85,7 @@ Auth behavior:
 - Client `unregister` SIP UNREGISTERs the agent-device trunk, clears FCM and notify-user binding, then the client may disconnect.
 - Client `device_push_token` with `pnType:"fcm"` stores the FCM token on the trunk. Offline incoming sends that token via FCM and does not look up TTRS notification tokens.
 - `/ws-agent` last-disconnect UNREGISTER must not unregister an agent-device trunk.
-- Owned `/ws-agent` and `/ws-agent-device` trunks for the same SIP username/domain/port are one incoming identity group: live WS clients on either trunk are presented the call; if none are live, stored device FCM is used.
+- Owned `/ws-agent` and `/ws-agent-device` trunks for the same SIP username/domain/port are one incoming identity group: live WS clients on either trunk are presented the call. Stored device FCM is sent for every agent-device incoming call that is presented or waiting offline, including while that device WebSocket is connected, so the phone app is woken to answer. A live desktop `/ws-agent` client does not receive that push.
 - Allowed messages: `device_register`, `device_push_token`, `unregister`, `offer`, `ice`, `call`, `hangup`, `accept`, `reject`, `dtmf`, `send_message`, `hold`, `unhold`, `ping`, `request_keyframe`, `renegotiate_answer`, `client_state`, `resume`.
 - Rejected on `/ws-agent-device`: `agent_register`, `trunk_resolve`, `trunk_push_token`, `translate`, `translate_stop`.
 
@@ -94,7 +94,7 @@ Auth behavior:
 - `agent_register` -> `/ws-agent` only; requires `sipDomain`, `sipUsername`, `sipPassword`; optional `sipPort`, `multiCall`
 - `device_register` -> `/ws-agent-device` only; requires `sipDomain`, `sipUsername`, `sipPassword`; optional `sipPort`, `multiCall`
 - `device_push_token` -> `/ws-agent-device` only after `device_register`; requires `pnType:"fcm"` and `pnToken` (FCM registration token); optional `devicePlatform`
-- `unregister` -> `/ws-agent-device` only; SIP UNREGISTER the bound agent-device trunk and clear stored FCM
+- `unregister` -> provisioned user-realm `/ws` or `/ws-agent-device`; SIP UNREGISTER the connection's mobile/device trunk and clear stored FCM and notify-user binding. Optional `requestId` is echoed in the acknowledgement or error.
 - `offer` -> requires `sdp` (`sessionId` optional for existing session)
 - `ice` -> requires `candidate` and the owning `sessionId` once an offer has been answered
 - `call` -> requires `sessionId`, `destination` (`from` optional)
@@ -125,6 +125,33 @@ Auth behavior:
 - `translate_stop` -> disables translation for the owning session.
 
 ### Server -> Client message types
+
+- `unregistered` -> successful explicit logout; optional `requestId` matches the request. Sent only after SIP unregister and notification cleanup succeed.
+- Unregister failures return `error` with `operation:"unregister"`, `error`, and the request's optional `requestId`. Clients must retain logout state and allow retry instead of reporting success.
+
+### Explicit mobile logout
+
+Send `{"type":"unregister","requestId":"logout-1"}` and wait for
+`{"type":"unregistered","requestId":"logout-1"}` before closing the socket
+and clearing authentication. Existing clients may omit `requestId`.
+Ordinary mobile WebSocket disconnect retains sticky SIP registration and push.
+
+On `/ws`, logout requires a verified user-realm subject and the mobile trunk
+provisioned during that connection's authentication. Supplied trunk IDs cannot
+select another account's trunk. On `/ws-agent-device`, it releases the registered
+device trunk. Logout disables automatic SIP registration, clears notification
+bindings, and ends the connection's owned sessions. Partial failures preserve the
+logout target for retry; repeated successful requests are idempotent.
+
+If another connected client shares the registration, unregister is refused.
+Disconnect that client before retrying so logout does not stop its calls or
+registration. Concurrent account provisioning/logout is refused for retry.
+
+Deploy the Gateway change before clients that require this acknowledgement.
+Older Gateways without user-mode unregister support cannot complete this logout
+flow; clients should display the pending failure and retain authentication.
+
+### Call and media events
 
 - `answer`, `state`, `incoming`, `ringing`, `media`, `hold_state`
   - `hold_state` includes `sessionId` and `held: true|false` and confirms a successful or idempotent `hold`/`unhold` request.
@@ -200,6 +227,16 @@ Additive server→client signal when remote SIP media is first observed as ready
 | `state`     | `receiving`        | First ready observation |
 
 Video `receiving` is emitted once per session when the gateway has parameter sets (SPS/PPS) and observes a complete IDR (or legacy keyframe with cached sets). Audio `receiving` is emitted once on the first accepted SIP audio RTP write to the WebRTC track. SSRC-learn alone does not emit video ready. Missing WS clients are non-fatal.
+
+### Admin WebSocket connection diagnostics
+
+`GET /api/ws-clients` and the `client` object in `/api/ws-clients/stream`
+SSE events include optional `sipUsername`, `sipDomain`, and `sipPort` fields.
+These identify the SIP account associated with the connection, including idle
+connections with a resolved trunk. The gateway uses the resolved trunk's account
+or falls back to the current session's SIP authentication context for public
+connections and sessions whose trunk is unavailable. Fields are omitted when
+the SIP account is not yet known. SIP passwords are never included.
 
 If you add/change a message type, update all of:
 

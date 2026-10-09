@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  canTestIncomingPush,
   getTrunkLifecycleActionLabel,
   getTrunkStatusLabel,
+  getPushContactDetailText,
   isPushContactReady,
   isRegisterActionDisabled,
 } from './trunk-list-page'
@@ -93,5 +95,57 @@ describe('isPushContactReady', () => {
         }),
       ),
     ).toBe(false)
+  })
+})
+
+describe('getPushContactDetailText', () => {
+  it('describes ready SIP PN contact', () => {
+    expect(
+      getPushContactDetailText(
+        makeTrunk({
+          pnAppId: 'app',
+          pnType: 'apple',
+          pnTokenMasked: 'ABCD...EF',
+          pushContactReady: true,
+        }),
+      ),
+    ).toBe('apple; ABCD...EF')
+  })
+
+  it('notes FCM when SIP PN contact is absent', () => {
+    expect(
+      getPushContactDetailText(makeTrunk({ fcmTokenReady: true })),
+    ).toBe('Uses FCM (no SIP PN contact)')
+  })
+
+  it('notes no push paths when nothing is bound', () => {
+    expect(getPushContactDetailText(makeTrunk())).toBe('No SIP PN contact')
+  })
+})
+
+describe('canTestIncomingPush', () => {
+  it('enables when a stored FCM token is ready', () => {
+    expect(canTestIncomingPush(makeTrunk({ fcmTokenReady: true }))).toBe(true)
+  })
+
+  it('enables when a notify user is bound', () => {
+    expect(canTestIncomingPush(makeTrunk({ notifyUserBound: true }))).toBe(true)
+  })
+
+  it('enables when Apple push contact is ready', () => {
+    expect(
+      canTestIncomingPush(
+        makeTrunk({
+          pnAppId: 'th.or.ttrs.video.prod',
+          pnType: 'apple',
+          pnTokenMasked: 'D6F5DF...2A74CCF',
+          pushContactReady: true,
+        }),
+      ),
+    ).toBe(true)
+  })
+
+  it('disables when the trunk has no push target', () => {
+    expect(canTestIncomingPush(makeTrunk())).toBe(false)
   })
 })

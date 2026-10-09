@@ -501,6 +501,63 @@ func TestShouldStopStartupBrowserPLI(t *testing.T) {
 	}
 }
 
+func TestShouldStopPeriodicBrowserPLIKeepsGoingUntilBridgedPeerAnswerIDR(t *testing.T) {
+	sess := newBurstTestSession("bridged-peer-answer-pli")
+	sess.CachedSPS = []byte{0x67}
+	sess.CachedPPS = []byte{0x68}
+	sess.RecordUplinkKeyframe()
+	sess.sipVideoDestReadyAt = time.Now().Add(-lateJoinBrowserPLIWindow - time.Second)
+	if !sess.ShouldStopPeriodicBrowserPLI() {
+		t.Fatal("expected periodic PLI to stop after late-join window before the agent answers")
+	}
+
+	time.Sleep(2 * time.Millisecond)
+	if !sess.MarkBridgedPeerAnswered() {
+		t.Fatal("first bridged-peer-answered mark should succeed")
+	}
+	if sess.MarkBridgedPeerAnswered() {
+		t.Fatal("second bridged-peer-answered mark must be ignored")
+	}
+	if sess.ShouldStopPeriodicBrowserPLI() {
+		t.Fatal("expected periodic PLI to continue until a post-answer uplink IDR")
+	}
+	if !sess.NeedsBridgedPeerAnswerUplinkKeyframe() {
+		t.Fatal("expected NeedsBridgedPeerAnswerUplinkKeyframe before the post-answer IDR")
+	}
+
+	time.Sleep(2 * time.Millisecond)
+	sess.RecordUplinkKeyframe()
+	if sess.NeedsBridgedPeerAnswerUplinkKeyframe() {
+		t.Fatal("expected post-answer uplink IDR to satisfy the late joiner")
+	}
+	if !sess.ShouldStopPeriodicBrowserPLI() {
+		t.Fatal("expected periodic PLI to stop after post-answer uplink IDR and late-join window")
+	}
+}
+
+func TestNeedsBridgedPeerAnswerUplinkKeyframeExpires(t *testing.T) {
+	sess := newBurstTestSession("bridged-peer-expired")
+	sess.bridgedPeerAnsweredAt = time.Now().Add(-lateJoinBrowserPLIWindow - time.Millisecond)
+	if sess.NeedsBridgedPeerAnswerUplinkKeyframe() {
+		t.Fatal("expected bridged-peer-answer uplink request window to expire")
+	}
+}
+
+func TestBeginPeriodicBrowserPLIEpochSupersedesPriorSender(t *testing.T) {
+	sess := newBurstTestSession("pli-epoch")
+	if sess.PeriodicBrowserPLIEpoch() != 0 {
+		t.Fatalf("expected initial epoch 0, got %d", sess.PeriodicBrowserPLIEpoch())
+	}
+	first := sess.BeginPeriodicBrowserPLIEpoch()
+	if first != 1 {
+		t.Fatalf("expected first restart epoch 1, got %d", first)
+	}
+	second := sess.BeginPeriodicBrowserPLIEpoch()
+	if second != 2 || sess.PeriodicBrowserPLIEpoch() != 2 {
+		t.Fatalf("expected epoch 2 after second restart, got %d", sess.PeriodicBrowserPLIEpoch())
+	}
+}
+
 func TestShouldStopPeriodicBrowserPLIKeepsGoingUntilPostSwitchUplinkIDR(t *testing.T) {
 	sess := newBurstTestSession("post-switch-browser-pli")
 	sess.CachedSPS = []byte{0x67}
@@ -657,7 +714,7 @@ func TestNoteSIPVideoRTPClearedOnResetMediaState(t *testing.T) {
 }
 
 func TestHasHealthySIPVideoIDRAfterSwitchRequiresFullGOP(t *testing.T) {
-	sess := &Session{ID: "healthy-idr", VideoAUNormalizeEnabled: true, SwitchGeneration: 1}
+	sess := &Session{ID: "healthy-idr", VideoAUNormalizeEnabled: true, SwitchGeneration: 1, SwitchVideoGateMinIDRPackets: 24}
 	if !sess.HasHealthySIPVideoIDR() {
 		t.Fatal("expected healthy before first switch")
 	}
@@ -667,12 +724,26 @@ func TestHasHealthySIPVideoIDRAfterSwitchRequiresFullGOP(t *testing.T) {
 	if sess.HasHealthySIPVideoIDR() {
 		t.Fatal("expected unhealthy until a full GOP after switch")
 	}
-	sess.MarkSIPVideoIDRSize(MinSwitchVideoGateIDRPackets - 1)
+	sess.MarkSIPVideoIDRSize(23)
 	if sess.HasHealthySIPVideoIDR() {
 		t.Fatal("undersized IDR should not count as healthy")
 	}
-	sess.MarkSIPVideoIDRSize(MinSwitchVideoGateIDRPackets)
+	sess.MarkSIPVideoIDRSize(24)
 	if !sess.HasHealthySIPVideoIDR() {
 		t.Fatal("expected healthy after full GOP")
+	}
+}
+
+func TestHasHealthySIPVideoIDRAfterSwitchAcceptsSmallCompleteIDR(t *testing.T) {
+	sess := &Session{ID: "healthy-small-idr", VideoAUNormalizeEnabled: true, SwitchGeneration: 1}
+	if !sess.StartSwitchVideoGate(1, time.Unix(1, 0), "switch") {
+		t.Fatal("gate start")
+	}
+	if sess.HasHealthySIPVideoIDR() {
+		t.Fatal("expected unhealthy until the first complete IDR")
+	}
+	sess.MarkSIPVideoIDRSize(6)
+	if !sess.HasHealthySIPVideoIDR() {
+		t.Fatal("expected healthy after a small complete IDR")
 	}
 }

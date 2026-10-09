@@ -5,7 +5,6 @@ import {
   RiListCheck,
   RiLoader4Line,
   RiMoonLine,
-  RiPhoneLine,
   RiRefreshLine,
   RiServerLine,
   RiSunLine,
@@ -13,6 +12,7 @@ import {
 import { debounce } from '@tanstack/pacer'
 import { useStore } from '@tanstack/react-store'
 import { useSearch } from '@tanstack/react-router'
+import { motion } from 'motion/react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import type {
@@ -23,6 +23,7 @@ import type {
 
 import type {
   CreateTrunkPayload,
+  TestIncomingPushStyle,
   Trunk,
   TrunkListParams,
   UpdateTrunkPayload,
@@ -61,6 +62,7 @@ import { ServerPaginationControls } from '@/components/ui/server-pagination-cont
 import { Separator } from '@/components/ui/separator'
 import Header from '@/components/Header'
 import { formatThaiDateTime } from '@/lib/date-time'
+import { cn } from '@/lib/utils'
 import { useTheme } from '@/lib/theme'
 import { useVisibilityRealtimeReload } from '@/lib/use-visibility-realtime-reload'
 import {
@@ -71,6 +73,7 @@ import {
   restoreTrunk,
   softDeleteTrunk,
   subscribeTrunkEvents,
+  testIncomingPush,
   unregisterTrunk,
   updateTrunk,
 } from '@/features/trunk/services/trunk-api'
@@ -81,6 +84,15 @@ import {
   toggleColumnVisibility,
   trunkPrefsStore,
 } from '@/features/trunk/store/trunk-prefs-store'
+import {
+  ActiveCallsDisplay,
+  ActiveDestinationDetailValue,
+  isTrunkOnCall,
+  PageActiveCallsChip,
+  TrunkOnCallCardShell,
+  TrunkOnCallHeaderBadge,
+  trunkTableRowClassName,
+} from '@/features/trunk/components/trunk-active-visuals'
 
 const DEFAULT_PAGE_SIZE = 20
 
@@ -140,6 +152,28 @@ export function isPushContactReady(trunk: Trunk) {
   )
 }
 
+export function canTestIncomingPush(trunk: Trunk) {
+  return Boolean(
+    trunk.fcmTokenReady ||
+      trunk.notifyUserBound ||
+      isPushContactReady(trunk),
+  )
+}
+
+/** Secondary line under Push Contact badge (SIP PN vs FCM/notify paths). */
+export function getPushContactDetailText(trunk: Trunk): string {
+  if (isPushContactReady(trunk)) {
+    return `${trunk.pnType}; ${trunk.pnTokenMasked}`
+  }
+  const via: string[] = []
+  if (trunk.fcmTokenReady) via.push('FCM')
+  if (trunk.notifyUserBound) via.push('notify user')
+  if (via.length > 0) {
+    return `Uses ${via.join(', ')} (no SIP PN contact)`
+  }
+  return 'No SIP PN contact'
+}
+
 function PushContactBadge({ trunk }: { trunk: Trunk }) {
   const ready = isPushContactReady(trunk)
   return (
@@ -149,13 +183,25 @@ function PushContactBadge({ trunk }: { trunk: Trunk }) {
   )
 }
 
-function PushContactDetails({ trunk }: { trunk: Trunk }) {
-  if (!isPushContactReady(trunk)) {
-    return <span className="text-muted-foreground">-</span>
-  }
+function PushContactDetails({
+  trunk,
+  compact,
+}: {
+  trunk: Trunk
+  compact?: boolean
+}) {
+  const text = getPushContactDetailText(trunk)
+  const ready = isPushContactReady(trunk)
   return (
-    <span className="font-mono text-[10px] text-muted-foreground">
-      {trunk.pnType}; {trunk.pnTokenMasked}
+    <span
+      className={cn(
+        'block text-[10px] leading-snug text-muted-foreground',
+        ready && 'font-mono',
+        compact && 'min-h-8 line-clamp-2',
+      )}
+      title={text}
+    >
+      {text}
     </span>
   )
 }
@@ -271,6 +317,10 @@ export function TrunkListPage() {
   const [registering, setRegistering] = useState(false)
   const [unregisterTarget, setUnregisterTarget] = useState<Trunk | null>(null)
   const [unregistering, setUnregistering] = useState(false)
+  const [testPushTarget, setTestPushTarget] = useState<Trunk | null>(null)
+  const [testPushStyle, setTestPushStyle] =
+    useState<TestIncomingPushStyle>('data')
+  const [testingPush, setTestingPush] = useState(false)
   const [softDeleteTarget, setSoftDeleteTarget] = useState<Trunk | null>(null)
   const [softDeleting, setSoftDeleting] = useState(false)
   const [restoreTarget, setRestoreTarget] = useState<Trunk | null>(null)
@@ -283,6 +333,18 @@ export function TrunkListPage() {
   const [savingCreate, setSavingCreate] = useState(false)
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
+
+  const { pageActiveCalls, pageTrunksOnCall } = useMemo(() => {
+    let calls = 0
+    let onCall = 0
+    for (const trunk of trunks) {
+      if (isTrunkOnCall(trunk)) {
+        onCall += 1
+        calls += trunk.activeCallCount
+      }
+    }
+    return { pageActiveCalls: calls, pageTrunksOnCall: onCall }
+  }, [trunks])
 
   // Map sortMode to backend sort parameters
   const getSortParams = useCallback((): {
@@ -370,6 +432,8 @@ export function TrunkListPage() {
   useVisibilityRealtimeReload({
     subscribe: subscribeTrunkEvents,
     onReload: handleSilentReload,
+    reloadDebounceMs: 500,
+    pollIntervalMs: 10_000,
   })
 
   const debouncedSearch = useMemo(
@@ -390,7 +454,7 @@ export function TrunkListPage() {
       await refreshTrunks()
       await load()
       toast.success('Refresh completed', {
-        description: 'Trunk list has been updated',
+        description: 'Trunk list reloaded from the database',
       })
     } catch (err) {
       toast.error('Refresh failed', {
@@ -438,6 +502,31 @@ export function TrunkListPage() {
   const openUnregisterModal = useCallback((trunk: Trunk) => {
     setUnregisterTarget(trunk)
   }, [])
+
+  const openTestPushModal = useCallback((trunk: Trunk) => {
+    setTestPushStyle('data')
+    setTestPushTarget(trunk)
+  }, [])
+
+  const confirmTestPush = useCallback(async () => {
+    if (!testPushTarget) return
+    setTestingPush(true)
+    try {
+      const result = await testIncomingPush(testPushTarget.id, testPushStyle)
+      setTestPushTarget(null)
+      const channels = result.channels?.filter(Boolean).join(', ') || 'unknown'
+      const style = result.style || testPushStyle
+      toast.success('Test push sent', {
+        description: `${trunkIdentityText(testPushTarget)} via ${channels} (${style})`,
+      })
+    } catch (err) {
+      toast.error('Test push failed', {
+        description: err instanceof Error ? err.message : 'Unknown error',
+      })
+    } finally {
+      setTestingPush(false)
+    }
+  }, [testPushStyle, testPushTarget])
 
   const confirmUnregister = useCallback(async () => {
     if (!unregisterTarget) return
@@ -667,6 +756,10 @@ export function TrunkListPage() {
               <SelectItem value="nameDesc">Name (Z-A)</SelectItem>
             </SelectContent>
           </Select>
+          <PageActiveCallsChip
+            totalCalls={pageActiveCalls}
+            trunksOnCall={pageTrunksOnCall}
+          />
           <Separator orientation="vertical" className="h-4" />
           {/* View mode toggle */}
           <div className="flex items-center gap-0.5">
@@ -791,17 +884,28 @@ export function TrunkListPage() {
             <p className="text-sm">No trunks found</p>
           </div>
         ) : viewMode === 'card' ? (
-          <div className="grid gap-3 sm:grid-cols-1 md:grid-cols-2 xl:grid-cols-3">
-            {trunks.map((trunk) => (
-              <TrunkCard
+          <div className="grid items-stretch gap-3 sm:grid-cols-1 md:grid-cols-2 xl:grid-cols-3">
+            {trunks.map((trunk, index) => (
+              <motion.div
                 key={trunk.id}
-                trunk={trunk}
-                onEdit={openEditModal}
-                onRegister={openRegisterModal}
-                onUnregister={openUnregisterModal}
-                onSoftDelete={openSoftDeleteModal}
-                onRestore={openRestoreModal}
-              />
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{
+                  duration: 0.25,
+                  delay: Math.min(index * 0.04, 0.32),
+                }}
+                className="h-full motion-reduce:transform-none motion-reduce:opacity-100"
+              >
+                <TrunkCard
+                  trunk={trunk}
+                  onEdit={openEditModal}
+                  onRegister={openRegisterModal}
+                  onUnregister={openUnregisterModal}
+                  onTestPush={openTestPushModal}
+                  onSoftDelete={openSoftDeleteModal}
+                  onRestore={openRestoreModal}
+                />
+              </motion.div>
             ))}
           </div>
         ) : (
@@ -812,6 +916,7 @@ export function TrunkListPage() {
             onEdit={openEditModal}
             onRegister={openRegisterModal}
             onUnregister={openUnregisterModal}
+            onTestPush={openTestPushModal}
             onSoftDelete={openSoftDeleteModal}
             onRestore={openRestoreModal}
           />
@@ -997,6 +1102,67 @@ export function TrunkListPage() {
         </DialogContent>
       </Dialog>
 
+      <Dialog
+        open={!!testPushTarget}
+        onOpenChange={(open) => {
+          if (!open) setTestPushTarget(null)
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Test incoming push</DialogTitle>
+            <DialogDescription>
+              Send a fake incoming-call notification to{' '}
+              <strong>{trunkIdentityText(testPushTarget)}</strong>? This is not
+              a real SIP call, so answering will expire.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-2">
+            <p className="text-sm font-medium">Payload style</p>
+            <div className="grid min-w-0 gap-2 sm:grid-cols-2">
+              <Button
+                type="button"
+                variant={testPushStyle === 'data' ? 'default' : 'outline'}
+                className="h-auto w-full min-w-0 shrink whitespace-normal flex-col items-start gap-1 px-3 py-2 text-left"
+                onClick={() => setTestPushStyle('data')}
+                disabled={testingPush}
+              >
+                <span className="text-sm font-medium">Data</span>
+                <span className="block w-full text-[11px] font-normal leading-snug opacity-80">
+                  Silent incoming_call payload. No tray text on Android.
+                </span>
+              </Button>
+              <Button
+                type="button"
+                variant={testPushStyle === 'message' ? 'default' : 'outline'}
+                className="h-auto w-full min-w-0 shrink whitespace-normal flex-col items-start gap-1 px-3 py-2 text-left"
+                onClick={() => setTestPushStyle('message')}
+                disabled={testingPush}
+              >
+                <span className="text-sm font-medium">Message</span>
+                <span className="block w-full text-[11px] font-normal leading-snug opacity-80">
+                  Visible notification title and body plus the same data.
+                </span>
+              </Button>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setTestPushTarget(null)}
+              disabled={testingPush}
+            >
+              Cancel
+            </Button>
+            <Button onClick={confirmTestPush} disabled={testingPush}>
+              {testingPush ? (
+                <RiLoader4Line className="mr-1 size-3.5 animate-spin" />
+              ) : null}
+              Send test push
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       {/* Unregister confirmation modal */}
       <Dialog
         open={!!unregisterTarget}
@@ -1247,6 +1413,7 @@ function TrunkTable({
   onEdit,
   onRegister,
   onUnregister,
+  onTestPush,
   onSoftDelete,
   onRestore,
 }: {
@@ -1256,6 +1423,7 @@ function TrunkTable({
   onEdit: (trunk: Trunk) => void
   onRegister: (trunk: Trunk) => void
   onUnregister: (trunk: Trunk) => void
+  onTestPush: (trunk: Trunk) => void
   onSoftDelete: (trunk: Trunk) => void
   onRestore: (trunk: Trunk) => void
 }) {
@@ -1296,11 +1464,6 @@ function TrunkTable({
             >
               {row.original.isRegistered ? 'Registered' : 'Unregistered'}
             </Badge>
-            {row.original.sipAutoRegister === false ? (
-              <div className="text-[10px] text-muted-foreground">
-                Auto-register off
-              </div>
-            ) : null}
           </div>
         ),
       },
@@ -1361,10 +1524,7 @@ function TrunkTable({
         id: 'calls',
         header: 'Calls',
         cell: ({ row }) => (
-          <span className="flex items-center gap-1">
-            <RiPhoneLine className="size-3 text-cyan-400" />
-            {row.original.activeCallCount}
-          </span>
+          <ActiveCallsDisplay count={row.original.activeCallCount} />
         ),
       },
       {
@@ -1426,6 +1586,15 @@ function TrunkTable({
             >
               Unregister
             </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-6 px-2 text-[10px]"
+              onClick={() => onTestPush(row.original)}
+              disabled={!canTestIncomingPush(row.original)}
+            >
+              Test push
+            </Button>
             {row.original.enabled ? (
               <Button
                 size="sm"
@@ -1449,7 +1618,7 @@ function TrunkTable({
         ),
       },
     ],
-    [onEdit, onRegister, onRestore, onSoftDelete, onUnregister],
+    [onEdit, onRegister, onRestore, onSoftDelete, onTestPush, onUnregister],
   )
 
   return (
@@ -1458,6 +1627,7 @@ function TrunkTable({
       data={trunks}
       columnVisibility={columnVisibility}
       onColumnVisibilityChange={onColumnVisibilityChange}
+      getRowClassName={trunkTableRowClassName}
     />
   )
 }
@@ -1467,6 +1637,7 @@ function TrunkCard({
   onEdit,
   onRegister,
   onUnregister,
+  onTestPush,
   onSoftDelete,
   onRestore,
 }: {
@@ -1474,20 +1645,33 @@ function TrunkCard({
   onEdit: (trunk: Trunk) => void
   onRegister: (trunk: Trunk) => void
   onUnregister: (trunk: Trunk) => void
+  onTestPush: (trunk: Trunk) => void
   onSoftDelete: (trunk: Trunk) => void
   onRestore: (trunk: Trunk) => void
 }) {
+  const onCall = isTrunkOnCall(trunk)
+
   return (
-    <Card className="border-border/60">
-      <CardContent className="space-y-2 p-3">
-        {/* Header row */}
-        <div className="flex items-center justify-between">
-          <div className="min-w-0">
-            <span className="text-sm font-semibold">{trunk.name}</span>
-            <p className="truncate font-mono text-[11px] text-muted-foreground">
-              #{trunk.id} · uid: {formatUid(normalizeTrunkUid(trunk))}
-            </p>
-          </div>
+    <TrunkOnCallCardShell trunk={trunk}>
+      <Card
+        className={cn(
+          'h-full border-border/60 ring-0',
+          onCall &&
+            'animate-trunk-card-shimmer bg-size-[200%_200%] bg-linear-to-br from-cyan-500/12 via-emerald-500/6 to-cyan-500/10 dark:from-cyan-500/16 dark:via-emerald-500/8 dark:to-cyan-500/12 motion-reduce:animate-none',
+        )}
+      >
+        <CardContent className="flex flex-1 flex-col space-y-2 p-3">
+          {/* Header row */}
+          <div className="flex min-h-[2.75rem] shrink-0 items-center justify-between">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-sm font-semibold">{trunk.name}</span>
+                <TrunkOnCallHeaderBadge trunk={trunk} />
+              </div>
+              <p className="truncate font-mono text-[11px] text-muted-foreground">
+                #{trunk.id} · uid: {formatUid(normalizeTrunkUid(trunk))}
+              </p>
+            </div>
           <div className="flex items-center gap-1.5">
             {trunk.isDefault ? (
               <Badge variant="default" className="text-[10px]">
@@ -1503,26 +1687,26 @@ function TrunkCard({
           </div>
         </div>
 
-        <Separator />
+        <Separator className="shrink-0" />
 
         {/* Details */}
-        <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+        <div className="grid min-h-0 flex-1 grid-cols-2 gap-x-4 gap-y-1 text-xs">
           <Detail label="Domain" value={trunk.domain} />
           <Detail label="Port" value={String(trunk.port)} />
           <Detail label="Username" value={trunk.username} />
           <Detail label="Transport" value={trunk.transport.toUpperCase()} />
           <Detail
             label="Destination"
-            value={formatDestinations(trunk.activeDestinations)}
+            value={
+              <ActiveDestinationDetailValue
+                destinations={trunk.activeDestinations}
+                onCall={onCall}
+              />
+            }
           />
           <Detail
             label="Active Calls"
-            value={
-              <span className="flex items-center gap-1">
-                <RiPhoneLine className="size-3 text-cyan-400" />
-                {trunk.activeCallCount}
-              </span>
-            }
+            value={<ActiveCallsDisplay count={trunk.activeCallCount} />}
           />
           <Detail label="In Use By" value={formatInUseBy(trunk)} />
           <Detail label="Lease Owner" value={trunk.leaseOwner || '-'} />
@@ -1536,17 +1720,17 @@ function TrunkCard({
                 >
                   {trunk.isRegistered ? 'Registered' : 'Unregistered'}
                 </Badge>
-                {trunk.sipAutoRegister === false ? (
-                  <div className="text-[10px] text-muted-foreground">
-                    Auto-register off
-                  </div>
-                ) : null}
               </div>
             }
           />
           <Detail
             label="Push Contact"
-            value={<PushContactBadge trunk={trunk} />}
+            value={
+              <div className="space-y-0.5">
+                <PushContactBadge trunk={trunk} />
+                <PushContactDetails trunk={trunk} compact />
+              </div>
+            }
           />
           <Detail label="PN App ID" value={trunk.pnAppId || '-'} />
           <Detail label="PN Type" value={trunk.pnType || '-'} />
@@ -1581,16 +1765,21 @@ function TrunkCard({
           />
         </div>
 
-        {trunk.lastError ? (
-          <div className="rounded bg-red-500/10 px-2 py-1 text-[11px] text-red-400">
-            {trunk.lastError}
-          </div>
-        ) : null}
+        <div className="min-h-9 shrink-0">
+          {trunk.lastError ? (
+            <div
+              className="line-clamp-2 rounded bg-red-500/10 px-2 py-1 text-[11px] text-red-400"
+              title={trunk.lastError}
+            >
+              {trunk.lastError}
+            </div>
+          ) : null}
+        </div>
 
-        <Separator />
+        <Separator className="shrink-0" />
 
         {/* Footer */}
-        <div className="flex items-center justify-between">
+        <div className="flex shrink-0 items-center justify-between">
           <span className="text-[10px] text-muted-foreground">
             Created {formatThaiDateTime(trunk.createdAt)}
           </span>
@@ -1621,6 +1810,15 @@ function TrunkCard({
             >
               Unregister
             </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-6 px-2 text-[10px]"
+              onClick={() => onTestPush(trunk)}
+              disabled={!canTestIncomingPush(trunk)}
+            >
+              Test push
+            </Button>
             {trunk.enabled ? (
               <Button
                 size="sm"
@@ -1644,6 +1842,7 @@ function TrunkCard({
         </div>
       </CardContent>
     </Card>
+    </TrunkOnCallCardShell>
   )
 }
 

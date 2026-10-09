@@ -166,3 +166,57 @@ func TestCollapseAgentIdentityGroupDoesNotAmbiguate(t *testing.T) {
 		t.Fatalf("expected both candidate ids retained, got %v", result.CandidateIDs)
 	}
 }
+
+func TestReleaseTrunkContactKeepsSharedAgentDeviceBinding(t *testing.T) {
+	t.Parallel()
+
+	agent := &Trunk{ID: 1320, Name: "sipclient-agent-00025@kasemsan.com:25351", Username: "00025", Domain: "kasemsan.com", Port: 25351, Transport: "tcp"}
+	device := &Trunk{ID: 1344, Name: "sipclient-agent-device-00025@kasemsan.com:25351", Username: "00025", Domain: "kasemsan.com", Port: 25351, Transport: "tcp"}
+	tm := &TrunkManager{
+		trunks:      map[int64]*Trunk{agent.ID: agent, device.ID: device},
+		ownedLeases: map[int64]bool{agent.ID: true, device.ID: true},
+		refreshWorkers: map[int64]chan struct{}{
+			device.ID: make(chan struct{}),
+		},
+		registrarIdentities: map[int64]*registrarIdentity{
+			device.ID: {ExpiresAt: time.Now().Add(time.Hour)},
+		},
+	}
+
+	if err := tm.releaseTrunkContact(agent); err != nil {
+		t.Fatalf("shared contact must stay registered while device is online: %v", err)
+	}
+	got := tm.liveSharedAgentContactSiblingIDs(agent)
+	if len(got) != 1 || got[0] != device.ID {
+		t.Fatalf("expected live device sibling %d, got %v", device.ID, got)
+	}
+}
+
+func TestReleaseTrunkContactUnregistersLastAgentIdentity(t *testing.T) {
+	t.Parallel()
+
+	device := &Trunk{ID: 1344, Name: "sipclient-agent-device-00025@kasemsan.com:25351", Username: "00025", Domain: "kasemsan.com", Port: 25351, Transport: "tcp"}
+	tm := &TrunkManager{
+		trunks:      map[int64]*Trunk{device.ID: device},
+		ownedLeases: map[int64]bool{device.ID: true},
+	}
+
+	if err := tm.releaseTrunkContact(device); err == nil {
+		t.Fatalf("expected SIP unregister when no sibling registration remains")
+	}
+}
+
+func TestLiveSharedAgentContactIgnoresDifferentDomain(t *testing.T) {
+	t.Parallel()
+
+	agent := &Trunk{ID: 1, Name: "sipclient-agent-00025@a.example:25351", Username: "00025", Domain: "a.example", Port: 25351}
+	other := &Trunk{ID: 2, Name: "sipclient-agent-00025@b.example:25351", Username: "00025", Domain: "b.example", Port: 25351}
+	tm := &TrunkManager{
+		trunks:              map[int64]*Trunk{agent.ID: agent, other.ID: other},
+		ownedLeases:         map[int64]bool{agent.ID: true, other.ID: true},
+		registrarIdentities: map[int64]*registrarIdentity{other.ID: {ExpiresAt: time.Now().Add(time.Hour)}},
+	}
+	if siblings := tm.liveSharedAgentContactSiblingIDs(agent); len(siblings) != 0 {
+		t.Fatalf("different domains must not share a contact binding, got %v", siblings)
+	}
+}

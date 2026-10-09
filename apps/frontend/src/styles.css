@@ -155,3 +155,27 @@ code {
     @apply bg-background text-foreground;
   }
 }
+
+@keyframes trunk-ring-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@utility animate-trunk-ring-spin {
+  animation: trunk-ring-spin 3.5s linear infinite;
+}
+
+@keyframes trunk-card-shimmer {
+  0%,
+  100% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+}
+
+@utility animate-trunk-card-shimmer {
+  animation: trunk-card-shimmer 7s ease-in-out infinite;
+}

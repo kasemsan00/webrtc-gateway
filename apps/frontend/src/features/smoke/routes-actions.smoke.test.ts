@@ -24,7 +24,7 @@ describe('gateway smoke route and action contracts', () => {
   })
 
   it('keeps trunks and sessions API action wiring', async () => {
-    const { fetchTrunks, refreshTrunks } =
+    const { fetchTrunks, refreshTrunks, testIncomingPush } =
       await import('@/features/trunk/services/trunk-api')
     const { fetchSessionHistory } =
       await import('@/features/session-history/services/session-history-api')
@@ -51,6 +51,24 @@ describe('gateway smoke route and action contracts', () => {
     expect(fetchJsonMock).toHaveBeenCalledWith(
       'http://gateway.local/api/trunks/refresh',
       { method: 'POST' },
+    )
+
+    fetchJsonMock.mockResolvedValueOnce({
+      trunkId: 11,
+      sessionId: 'push-test-1',
+      channels: ['fcm'],
+      status: 'sent',
+    })
+    await testIncomingPush(11, 'message')
+    expect(fetchJsonMock).toHaveBeenCalledWith(
+      'http://gateway.local/api/trunk/11/test-incoming-push',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ style: 'message' }),
+      },
     )
 
     fetchJsonMock.mockResolvedValueOnce({

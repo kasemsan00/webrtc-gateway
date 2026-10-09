@@ -107,6 +107,9 @@ type WSClientResponse struct {
 	TrunkResolved         bool   `json:"trunkResolved"`
 	ResolvedTrunkID       int64  `json:"resolvedTrunkId,omitempty"`
 	ResolvedTrunkPublicID string `json:"resolvedTrunkPublicId,omitempty"`
+	SIPUsername           string `json:"sipUsername,omitempty"`
+	SIPDomain             string `json:"sipDomain,omitempty"`
+	SIPPort               int    `json:"sipPort,omitempty"`
 	Availability          string `json:"availability,omitempty"`
 	CallState             string `json:"callState,omitempty"`
 	AuthSubject           string `json:"authSubject,omitempty"`

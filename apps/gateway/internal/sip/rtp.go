@@ -3,6 +3,7 @@ package sip
 import (
 	"fmt"
 	"net"
+	"sync/atomic"
 	"time"
 
 	"github.com/pion/rtcp"
@@ -53,6 +54,7 @@ func writeNormalizedVideoAccessUnit(
 	}
 
 	sess.NumberSIPVideoAccessUnit(&au)
+	logVideoTimestampDiscontinuity(sess.ID, au.Discontinuity)
 
 	for _, packet := range au.Packets {
 		data, err := packet.Marshal()
@@ -77,6 +79,11 @@ func writeNormalizedVideoAccessUnit(
 	if au.IsIDR {
 		sess.RememberSIPVideoIDR(au, true)
 	}
+	noteDiscontinuityIDR := func() {
+		if au.IsIDR && au.Discontinuity != nil {
+			sess.NoteVideoDiscontinuityIDR(now)
+		}
+	}
 
 	if decision.Reservation != 0 {
 		if !sess.CommitSwitchVideoGateRelease(
@@ -88,13 +95,23 @@ func writeNormalizedVideoAccessUnit(
 				sess.ID, au.Generation, decision.Reservation)
 			return normalizedVideoWriteResult{}
 		}
+		noteDiscontinuityIDR()
 		return normalizedVideoWriteResult{
 			emitted:      true,
 			gateReleased: true,
 			generation:   au.Generation,
 		}
 	}
+	noteDiscontinuityIDR()
 	return normalizedVideoWriteResult{emitted: true}
+}
+
+func logVideoTimestampDiscontinuity(sessionID string, d *session.H264TimestampDiscontinuity) {
+	if d == nil {
+		return
+	}
+	fmt.Printf("[%s] sip_video_ts_discontinuity reason=%s in_prev=%d in=%d out_prev=%d out=%d wall_ms=%d\n",
+		sessionID, d.Reason, d.PreviousIncoming, d.Incoming, d.PreviousOutgoing, d.Outgoing, d.Wall.Milliseconds())
 }
 
 // startRTPListener starts an RTP listener and returns the port
@@ -464,11 +481,12 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 	seqGapPackets := 0
 	seqOutOfOrder := 0
 	seqDuplicates := 0
-	lastGapRecovery := time.Time{}
+	var lastGapRecoveryNano atomic.Int64
+	var lastVideoTS uint32
+	haveLastVideoTS := false
+	loggedEarlyVideoSuppress := false
 
 	const (
-		burstGapTrigger        = 8
-		gapRecoveryMinInterval = 1200 * time.Millisecond
 		startupPLIAttempts     = 4
 		startupPLIInterval     = 300 * time.Millisecond
 		startupKeyframeFresh   = 800 * time.Millisecond
@@ -573,6 +591,23 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 			_, _ = sess.WriteVideoToWebRTC(data)
 		}
 	})
+	if sess.VideoReorderPacing > 0 {
+		reorderBuf.SetPacing(sess.VideoReorderPacing)
+	}
+	reorderBuf.SetSkipHandler(func(skipped int, fromSeq, toSeq uint16) {
+		now := time.Now()
+		var lastRecovery time.Time
+		if nano := lastGapRecoveryNano.Load(); nano != 0 {
+			lastRecovery = time.Unix(0, nano)
+		}
+		if !sipVideoShouldRecoverGap(skipped, lastRecovery, now) {
+			return
+		}
+		fmt.Printf("[%s] ⚠️ SIP→WebRTC burst loss detected: missing=%d (seq %d→%d) - requesting keyframe\n",
+			sess.ID, skipped, fromSeq, uint16(toSeq+1))
+		sess.SendBrowserRecoveryToAsterisk("sip-gap")
+		lastGapRecoveryNano.Store(now.UnixNano())
+	})
 	lastSwitchGeneration := sess.GetSwitchGeneration()
 	idrReplayNotify := sess.SIPVideoIDRReplayNotify()
 	idrReplayTicker := time.NewTicker(250 * time.Millisecond)
@@ -593,11 +628,14 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 	}()
 	buildVideoSummary := func(keyframeAge time.Duration) session.VideoRecoverySummary {
 		rBuf, rRel, rDrop, rTO := reorderBuf.GetStats()
+		// Gaps/Missing/OOO used by @switch recovery and disorder monitors must
+		// reflect post-reorder loss. Arrival-order holes that the buffer later
+		// fills are still logged on the sampled stats line.
 		return session.VideoRecoverySummary{
 			Packets:         packetCount,
-			Gaps:            seqGapEvents,
-			Missing:         seqGapPackets,
-			OutOfOrder:      seqOutOfOrder,
+			Gaps:            int(reorderBuf.SkipEventCount()),
+			Missing:         int(rTO),
+			OutOfOrder:      0,
 			Duplicates:      seqDuplicates,
 			ReorderBuffered: rBuf,
 			ReorderReleased: rRel,
@@ -677,6 +715,13 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 			}
 			continue
 		}
+		if sess.SuppressEarlyVideo() {
+			if !loggedEarlyVideoSuppress {
+				loggedEarlyVideoSuppress = true
+				fmt.Printf("[%s] sip_video_early_media_suppressed state=%s\n", sess.ID, sess.GetState())
+			}
+			continue
+		}
 		sess.NoteSIPVideoRTP(time.Now())
 
 		// A switch generation is authoritative even when RTPengine preserves the
@@ -686,6 +731,7 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 		if currentGeneration != lastSwitchGeneration {
 			reorderBuf.Reset()
 			haveLastSeq = false
+			haveLastVideoTS = false
 			if auNormalizer != nil {
 				auNormalizer.ResetForSwitch(currentGeneration)
 			}
@@ -717,8 +763,13 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 			if previousSSRC == 0 || previousSSRC != ssrc {
 				if previousSSRC != 0 {
 					reorderBuf.Reset()
+					haveLastSeq = false
+					haveLastVideoTS = false
 					if auNormalizer != nil {
-						auNormalizer.ResetSource()
+						auNormalizer.ResetForStreamSwitch(currentGeneration, "ssrc")
+						if !sess.IsSwitchVideoGateActive() {
+							sess.StartSwitchVideoGate(currentGeneration, time.Now(), "ssrc")
+						}
 					}
 					fmt.Printf("[%s] h264_au_source_reset reason=ssrc-change previous_ssrc=%d ssrc=%d\n", sess.ID, previousSSRC, ssrc)
 				}
@@ -781,9 +832,11 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 			seq := packet.Header.SequenceNumber
 			isKeyframe := false
 
+			forwardSeq := false
 			if !haveLastSeq {
 				lastSeq = seq
 				haveLastSeq = true
+				forwardSeq = true
 			} else {
 				delta := uint16(seq - lastSeq)
 				switch {
@@ -791,21 +844,40 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 					seqDuplicates++
 				case delta < 0x8000:
 					if delta > 1 {
-						missing := int(delta - 1)
+						// Arrival-order holes are diagnostic only. Recovery PLI/FIR
+						// fires from the reorder skip handler after the buffer fails
+						// to fill the gap (S5CDifyVuoul: 27-32% reorder was not loss).
 						seqGapEvents++
-						seqGapPackets += missing
-						if missing >= burstGapTrigger && (lastGapRecovery.IsZero() || time.Since(lastGapRecovery) >= gapRecoveryMinInterval) {
-							fmt.Printf("[%s] ⚠️ SIP→WebRTC burst loss detected: missing=%d (seq %d→%d) - requesting keyframe\n",
-								sess.ID, missing, lastSeq, seq)
-							sess.SendBrowserRecoveryToAsterisk("sip-gap")
-							lastGapRecovery = time.Now()
-						}
+						seqGapPackets += int(delta - 1)
 					}
 					lastSeq = seq
+					forwardSeq = true
 				default:
 					// Old/reordered packet (or wrap edge mis-order): keep baseline for normal progression.
 					seqOutOfOrder++
 				}
+			}
+
+			if forwardSeq {
+				if sipVideoTimestampJumped(haveLastVideoTS, lastVideoTS, packet.Timestamp) {
+					fmt.Printf("[%s] sip_video_timestamp_jump prev=%d next=%d - stream switch\n",
+						sess.ID, lastVideoTS, packet.Timestamp)
+					if sess.VideoTimestampJumpPLI {
+						sess.SendPLIToAsteriskForced("sip-ts-jump")
+					}
+					// Same-SSRC queue→agent handoff. Arm the keyframe gate before
+					// this packet is forwarded so the agent's first IDR, not a
+					// P-frame on the early-media timeline, starts the segment.
+					reorderBuf.Reset()
+					if auNormalizer != nil {
+						auNormalizer.ResetForStreamSwitch(currentGeneration, "timestamp-jump")
+						if !sess.IsSwitchVideoGateActive() {
+							sess.StartSwitchVideoGate(currentGeneration, time.Now(), "timestamp-jump")
+						}
+					}
+				}
+				lastVideoTS = packet.Timestamp
+				haveLastVideoTS = true
 			}
 
 			if packetCount%300 == 0 {
@@ -818,9 +890,9 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 				}
 				rBuf, rRel, rDrop, rTO := reorderBuf.GetStats()
 				rPend := reorderBuf.Pending()
-				fmt.Printf("[%s] 📊 SIP→WebRTC video stats: packets=%d gaps=%d missing=%d ooo=%d dup=%d reorder(buf=%d rel=%d drop=%d to=%d pend=%d) keyframeAge=%s\n",
+				fmt.Printf("[%s] 📊 SIP→WebRTC video stats: packets=%d gaps=%d missing=%d ooo=%d dup=%d reorder(buf=%d rel=%d drop=%d to=%d pend=%d skip=%d) keyframeAge=%s\n",
 					sess.ID, packetCount, seqGapEvents, seqGapPackets, seqOutOfOrder, seqDuplicates,
-					rBuf, rRel, rDrop, rTO, rPend, keyframeAge)
+					rBuf, rRel, rDrop, rTO, rPend, reorderBuf.SkipEventCount(), keyframeAge)
 				summary := updateSwitchSummary(keyframeAgeDuration)
 				sess.ObserveSIPVideoRTPDisorder(summary, time.Now())
 				if stall, ok := sess.ObserveSwitchVideoGateStall(time.Now(), summary); ok {
@@ -1025,21 +1097,30 @@ func (s *Server) handleRTCPFromSIP(data []byte, sess *session.Session, rtcpCount
 
 // startPeriodicPLIForSession sends PLI requests to the browser at regular intervals
 func (s *Server) startPeriodicPLIForSession(sess *session.Session) {
-	fmt.Printf("[%s] 🔄 Starting periodic PLI sender for fast video start\n", sess.ID)
+	epoch := sess.PeriodicBrowserPLIEpoch()
+	fmt.Printf("[%s] 🔄 Starting periodic PLI sender for fast video start epoch=%d\n", sess.ID, epoch)
 
 	// Wait a bit for the connection to establish
 	time.Sleep(500 * time.Millisecond)
 
 	// Keep requesting browser IDRs through the late-join window so a SIP
-	// decoder that answers after queue auto-200 (Linphone after 5–10s ring)
-	// is not stuck on P-frames. Stop once dest-ready + 12s has elapsed and
-	// an uplink IDR has already been forwarded.
+	// decoder that answers after queue auto-200 (Linphone after 5–10s ring,
+	// or a queue-bridged agent that answers even later) is not stuck on
+	// P-frames. Stop once dest-ready + 12s has elapsed, no bridged-peer
+	// answer / @switch IDR is still owed, and an uplink IDR was forwarded.
 	pliDeadline := time.Now().Add(15 * time.Second)
 
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 
 	pliCount := 0
+	superseded := func() bool {
+		if sess.PeriodicBrowserPLIEpoch() == epoch {
+			return false
+		}
+		fmt.Printf("[%s] Stopping periodic PLI sender - superseded epoch=%d\n", sess.ID, epoch)
+		return true
+	}
 	stopIfReady := func(reason string) bool {
 		if !sess.ShouldStopPeriodicBrowserPLI() {
 			return false
@@ -1051,6 +1132,9 @@ func (s *Server) startPeriodicPLIForSession(sess *session.Session) {
 	for i := 0; i < 3; i++ {
 		state := sess.GetState()
 		if state == session.StateEnded || state == session.StateReconnecting {
+			return
+		}
+		if superseded() {
 			return
 		}
 		if stopIfReady("late-join window elapsed") {
@@ -1071,10 +1155,13 @@ func (s *Server) startPeriodicPLIForSession(sess *session.Session) {
 			fmt.Printf("[%s] Stopping periodic PLI sender - session reconnecting\n", sess.ID)
 			return
 		}
+		if superseded() {
+			return
+		}
 		if stopIfReady("late-join window elapsed") {
 			return
 		}
-		if time.Now().After(pliDeadline) && !sess.NeedsPostSwitchUplinkKeyframe() {
+		if time.Now().After(pliDeadline) && !sess.NeedsPostSwitchUplinkKeyframe() && !sess.NeedsBridgedPeerAnswerUplinkKeyframe() {
 			fmt.Printf("[%s] Stopping periodic PLI sender - startup window ended\n", sess.ID)
 			return
 		}
@@ -1084,6 +1171,18 @@ func (s *Server) startPeriodicPLIForSession(sess *session.Session) {
 		}
 		sess.SendPLItoWebRTC()
 	}
+}
+
+// RestartPeriodicPLI supersedes any in-flight sender and starts a new late-join
+// browser PLI window. Used when a queue-bridged agent answers after the
+// caller's dest-ready window already elapsed.
+func (s *Server) RestartPeriodicPLI(sess *session.Session) {
+	if sess == nil || sess.GetState() == session.StateEnded {
+		return
+	}
+	epoch := sess.BeginPeriodicBrowserPLIEpoch()
+	fmt.Printf("[%s] 🔄 Restarting periodic PLI sender epoch=%d reason=bridged-peer-answered\n", sess.ID, epoch)
+	go s.startPeriodicPLIForSession(sess)
 }
 
 // startKeyframeWatchdogForSession requests keyframes when video stalls (SIP → WebRTC)
