@@ -1,0 +1,123 @@
+# Publish the unified stack image with docker-ci.ps1.
+# Same tags, Dockerfile, platforms, and Vite build-args as a local
+# `pwsh -File docker-ci.ps1` run.
+#
+# Required GitHub secrets:
+#   REGISTRY_USERNAME
+#   REGISTRY_PASSWORD
+# Optional (only if Run migrations is enabled):
+#   DB_DSN
+# Optional repository variables:
+#   REGISTRY                 default registry.kasemsan.com
+#   VITE_GATEWAY_URL
+#   VITE_CONFIG_AUTORECORD
+#   VITE_BASE_PATH           default /admin/
+#   LEGACY_IMAGE_NAMES       e.g. k2-stack
+
+name: Deploy registry image
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch_tag:
+        description: Image tag (BRANCH in docker-ci.ps1). Empty = current git ref name.
+        required: false
+        type: string
+      platforms:
+        description: docker buildx platforms
+        required: false
+        default: linux/amd64
+        type: string
+      tag_latest:
+        description: Also push webrtc-sip-gateway-stack:latest
+        required: false
+        default: true
+        type: boolean
+      run_migrations:
+        description: Run goose migrations (apps/gateway/scripts/migrate.ps1 up) before the image push
+        required: false
+        default: false
+        type: boolean
+  push:
+    branches: ["1.*", "main"]
+    tags: ["v*"]
+
+concurrency:
+  group: deploy-registry-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ${{ vars.REGISTRY || 'registry.kasemsan.com' }}
+
+jobs:
+  publish:
+    name: docker-ci.ps1
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve docker-ci.ps1 inputs
+        id: params
+        env:
+          INPUT_BRANCH_TAG: ${{ github.event.inputs.branch_tag }}
+          INPUT_PLATFORMS: ${{ github.event.inputs.platforms }}
+          INPUT_TAG_LATEST: ${{ github.event.inputs.tag_latest }}
+          INPUT_RUN_MIGRATIONS: ${{ github.event.inputs.run_migrations }}
+        run: |
+          set -euo pipefail
+          branch_tag="${INPUT_BRANCH_TAG:-}"
+          if [ -z "$branch_tag" ]; then
+            branch_tag="${GITHUB_REF_NAME}"
+          fi
+          platforms="${INPUT_PLATFORMS:-linux/amd64}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            tag_latest="${INPUT_TAG_LATEST:-true}"
+            run_migrations="${INPUT_RUN_MIGRATIONS:-false}"
+          else
+            tag_latest="true"
+            run_migrations="false"
+          fi
+          echo "branch_tag=${branch_tag}" >> "$GITHUB_OUTPUT"
+          echo "platforms=${platforms}" >> "$GITHUB_OUTPUT"
+          echo "tag_latest=${tag_latest}" >> "$GITHUB_OUTPUT"
+          echo "run_migrations=${run_migrations}" >> "$GITHUB_OUTPUT"
+          echo "Image: ${REGISTRY}/webrtc-sip-gateway-stack:${branch_tag}"
+          echo "Platforms: ${platforms}"
+          echo "Tag latest: ${tag_latest}"
+          echo "Migrations: ${run_migrations}"
+
+      - name: Set up QEMU
+        if: contains(steps.params.outputs.platforms, 'arm')
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: image=moby/buildkit:latest
+
+      - name: Log in to container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      - name: Publish stack image
+        shell: pwsh
+        env:
+          BRANCH: ${{ steps.params.outputs.branch_tag }}
+          REGISTRY: ${{ env.REGISTRY }}
+          PLATFORMS: ${{ steps.params.outputs.platforms }}
+          TAG_LATEST: ${{ steps.params.outputs.tag_latest }}
+          RUN_MIGRATIONS: ${{ steps.params.outputs.run_migrations }}
+          DB_DSN: ${{ secrets.DB_DSN }}
+          VITE_GATEWAY_URL: ${{ vars.VITE_GATEWAY_URL }}
+          VITE_CONFIG_AUTORECORD: ${{ vars.VITE_CONFIG_AUTORECORD }}
+          VITE_BASE_PATH: ${{ vars.VITE_BASE_PATH }}
+          LEGACY_IMAGE_NAMES: ${{ vars.LEGACY_IMAGE_NAMES }}
+        run: ./docker-ci.ps1

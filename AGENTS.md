@@ -68,5 +68,5 @@ audience are enforced when configured for that realm.
 - Dual-flow architecture: `docs/dual-flow.md`
 - Call resume behavior: `docs/call-resume.md`
 - Client integration guides: `docs/web.md`, `docs/react-native.md`, `docs/ios.md`, `docs/android.md`
-- Docker CI build script: `docker-ci.ps1`
+- Docker CI build script: `docker-ci.ps1` (GitHub Actions: `.github/workflows/docker-ci.yml`)
 - Workspace layout: `pnpm-workspace.yaml`
