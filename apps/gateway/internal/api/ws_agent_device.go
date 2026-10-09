@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"strconv"
 	"strings"
@@ -144,36 +145,45 @@ func (s *Server) handleWSDevicePushToken(client *WSClient, msg WSMessage) {
 }
 
 func (s *Server) handleWSDeviceUnregister(client *WSClient, msg WSMessage) {
-	if client == nil || !client.agentDeviceOnly {
-		s.sendWSError(client, msg.SessionID, "unregister requires /ws-agent-device")
+	if client == nil {
+		return
+	}
+	if !client.agentDeviceOnly {
+		s.unregisterError(client, msg, fmt.Errorf("unregister requires /ws-agent-device"))
 		return
 	}
 	if s.trunkManager == nil {
-		s.sendWSError(client, msg.SessionID, "Trunk manager not available")
+		s.unregisterError(client, msg, fmt.Errorf("Trunk manager not available"))
 		return
 	}
-
-	sessionIDs := s.ownedClientSessionIDs(client)
-	for _, sessionID := range sessionIDs {
-		s.unbindClientSession(client, sessionID)
+	s.mu.RLock()
+	trunkID := client.resolvedTrunkID
+	s.mu.RUnlock()
+	if trunkID <= 0 {
+		s.sendWSMessage(client, WSMessage{Type: "unregistered", RequestID: msg.RequestID})
+		return
 	}
-	for _, sessionID := range sessionIDs {
+	unlock := s.lockAgentTrunkOperation(trunkID)
+	defer unlock()
+	if s.agentTrunkRefCount(trunkID) > 1 {
+		s.unregisterError(client, msg, fmt.Errorf("registration is in use by another connected device"))
+		return
+	}
+	if err := s.releaseRegisteredTrunk(context.Background(), trunkID); err != nil {
+		s.unregisterError(client, msg, err)
+		return
+	}
+	for _, id := range s.ownedClientSessionIDs(client) {
+		s.unbindClientSession(client, id)
 		if s.sessionMgr != nil {
-			if sess, ok := s.sessionMgr.GetSession(sessionID); ok && sess != nil {
+			if sess, ok := s.sessionMgr.GetSession(id); ok && sess != nil {
 				s.forceEndSession(sess, "agent_device_unregister")
 			}
 		}
 	}
-
-	trunkID, _, wasBound := s.unbindAgentClient(client, true)
-	if !wasBound || trunkID <= 0 {
-		s.sendWSMessage(client, WSMessage{Type: "unregistered"})
-		return
-	}
-	s.releaseAgentDeviceTrunk(context.Background(), trunkID, "agent_device_logout")
-	s.sendWSMessage(client, WSMessage{Type: "unregistered"})
+	s.unbindAgentClient(client, true)
+	s.sendWSMessage(client, WSMessage{Type: "unregistered", RequestID: msg.RequestID})
 }
-
 func (s *Server) cleanupAgentDevicePresence(client *WSClient) {
 	if client == nil || !client.agentDeviceOnly {
 		return

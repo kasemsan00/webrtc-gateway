@@ -1999,6 +1999,12 @@ func (tm *TrunkManager) UnregisterTrunk(trunkID int64, force bool) error {
 	if err != nil {
 		return err
 	}
+	// Persist logout intent before releasing SIP so a refresh/restart cannot
+	// register the trunk again if later cleanup fails.
+	if err := tm.setSipAutoRegister(trunkID, false); err != nil {
+		return fmt.Errorf("disable automatic registration: %w", err)
+	}
+	trunk.SipAutoRegister = false
 
 	// Stop refresh worker and clear registration cache
 	tm.mu.Lock()
@@ -2031,9 +2037,7 @@ func (tm *TrunkManager) UnregisterTrunk(trunkID int64, force bool) error {
 		tm.updateRegistrationError(trunkID, unregisterErr.Error())
 		return unregisterErr
 	}
-	tm.updateUnregisteredStatus(trunkID)
-
-	return nil
+	return tm.updateUnregisteredStatus(trunkID)
 }
 
 func (tm *TrunkManager) releaseLeaseForce(trunkID int64) {
@@ -2063,7 +2067,7 @@ func (tm *TrunkManager) releaseLeaseForce(trunkID int64) {
 	tm.emitTrunkListChange("lease_updated", trunkID)
 }
 
-func (tm *TrunkManager) updateUnregisteredStatus(trunkID int64) {
+func (tm *TrunkManager) updateUnregisteredStatus(trunkID int64) error {
 	ctx, cancel := tm.dbContext()
 	defer cancel()
 
@@ -2075,6 +2079,7 @@ func (tm *TrunkManager) updateUnregisteredStatus(trunkID int64) {
 	`, now, trunkID)
 	if err != nil {
 		fmt.Printf("⚠️ [TrunkManager] Failed to clear registration status for trunk %d: %v\n", trunkID, err)
+		return fmt.Errorf("persist unregistered status: %w", err)
 	}
 
 	tm.mu.Lock()
@@ -2085,6 +2090,7 @@ func (tm *TrunkManager) updateUnregisteredStatus(trunkID int64) {
 		trunk.SipAutoRegister = false
 	}
 	tm.mu.Unlock()
+	return nil
 }
 
 func (tm *TrunkManager) setSipAutoRegister(trunkID int64, enabled bool) error {

@@ -89,7 +89,7 @@ func (s *Server) handleWSMessage(client *WSClient, message []byte) {
 	case "device_push_token":
 		s.handleWSDevicePushToken(client, msg)
 	case "unregister":
-		s.handleWSDeviceUnregister(client, msg)
+		s.handleWSUnregister(client, msg)
 	case "client_state":
 		s.handleWSClientState(client, msg)
 	case "translate":

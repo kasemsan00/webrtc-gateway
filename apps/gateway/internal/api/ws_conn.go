@@ -50,6 +50,12 @@ func (s *Server) handleAgentDeviceWebSocket(w http.ResponseWriter, r *http.Reque
 func (s *Server) handleWebSocketConn(w http.ResponseWriter, r *http.Request, publicOnly, agentOnly, agentDeviceOnly bool) {
 	req := r
 	var provisioned *MobileSIPProvisionResult
+	var releaseMobileAccount func()
+	defer func() {
+		if releaseMobileAccount != nil {
+			releaseMobileAccount()
+		}
+	}()
 	devicePlatform := ""
 	if agentDeviceOnly {
 		if !s.config.EnableAgentDeviceWS {
@@ -97,6 +103,12 @@ func (s *Server) handleWebSocketConn(w http.ResponseWriter, r *http.Request, pub
 		}
 		log.Printf("WebSocket auth accepted: hint=%s realm=%s sub=%s", realmHint, claims.Realm, claims.Subject)
 		if s.mobileProvisioner != nil && claims.Realm == auth.TokenRealmUser {
+			release, reserved := s.reserveMobileAccount(claims.Subject)
+			if !reserved {
+				http.Error(w, "Account operation in progress; retry connection", http.StatusConflict)
+				return
+			}
+			releaseMobileAccount = release
 			devicePlatform, ok := normalizeDevicePlatform(r.URL.Query().Get("devicePlatform"))
 			if !ok || devicePlatform == "" {
 				log.Printf("WebSocket mobile SIP provisioning rejected: sub=%s stage=device_platform", claims.Subject)
@@ -149,10 +161,15 @@ func (s *Server) handleWebSocketConn(w http.ResponseWriter, r *http.Request, pub
 	if provisioned != nil && provisioned.TrunkID > 0 {
 		client.trunkResolved = true
 		client.resolvedTrunkID = provisioned.TrunkID
+		client.mobileTrunkID = provisioned.TrunkID
 	}
 	s.mu.Lock()
 	s.wsConnections[client] = struct{}{}
 	s.mu.Unlock()
+	if releaseMobileAccount != nil {
+		releaseMobileAccount()
+		releaseMobileAccount = nil
+	}
 	s.notifyWSClientChanged("connected", client)
 	telemetry.RecordWebSocketConnection(req.Context(), true)
 	_ = telemetry.Log(req.Context(), telemetry.LogEvent{Severity: telemetry.SeverityInfo, Component: "websocket", Name: "websocket.connected", Outcome: "success", Reason: "none"})

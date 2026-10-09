@@ -6,6 +6,9 @@ export interface WSClient {
   trunkResolved: boolean
   resolvedTrunkId?: number
   resolvedTrunkPublicId?: string
+  sipUsername?: string
+  sipDomain?: string
+  sipPort?: number
   availability?: string
   callState?: string
   authSubject?: string

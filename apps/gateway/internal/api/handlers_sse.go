@@ -118,9 +118,22 @@ func (s *Server) buildWSClientResponse(client *WSClient) WSClientResponse {
 	}
 	if s.trunkManager != nil && client.resolvedTrunkID > 0 {
 		if trunkRaw, ok := s.trunkManager.GetTrunkByID(client.resolvedTrunkID); ok {
-			if trunk, ok := trunkRaw.(*sip.Trunk); ok && trunk.PublicID != "" {
+			if trunk, ok := trunkRaw.(*sip.Trunk); ok && trunk != nil {
+				// Account identity fields are immutable on cached trunks; refreshes
+				// replace the cache entry. Avoid reading mutable registration state.
 				resp.ResolvedTrunkPublicID = trunk.PublicID
+				resp.SIPUsername = trunk.Username
+				resp.SIPDomain = trunk.Domain
+				resp.SIPPort = trunk.Port
 			}
+		}
+	}
+	if resp.SIPUsername == "" && s.sessionMgr != nil && client.sessionID != "" {
+		if sess, ok := s.sessionMgr.GetSession(client.sessionID); ok {
+			_, _, _, domain, username, _, port := sess.GetSIPAuthContext()
+			resp.SIPUsername = username
+			resp.SIPDomain = domain
+			resp.SIPPort = port
 		}
 	}
 	return resp
