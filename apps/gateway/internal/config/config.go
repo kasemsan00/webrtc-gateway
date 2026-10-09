@@ -172,6 +172,9 @@ type SIPConfig struct {
 	VideoRTPDisorderContainmentEnabled   bool   // Enable bounded session-scoped disorder containment diagnostics (default: false)
 	VideoRTPDisorderContainmentMS        int    // Bounded containment duration in ms (default: 10000)
 	VideoAUNormalizeEnabled              bool   // Normalize SIP->WebRTC H.264 into complete access units (default: true)
+	SwitchVideoGateMinIDRPackets         int    // Min packets in a post-switch IDR before stall timeout (default: 1)
+	VideoReorderPacingMS                 int    // Sleep between consecutive reorder-burst packet writes (default: 1; 0 disables)
+	VideoTimestampJumpPLI                bool   // Request a SIP keyframe when SIP video RTP timestamps jump (default: true)
 	AudioUseAVPF                         bool   // Use RTP/AVPF profile for audio with RTCP feedback (default: false)
 	VideoUseAVPF                         bool   // Use RTP/AVPF profile for video with RTCP feedback (PLI/FIR/NACK) (default: true)
 	// SIP-side transport target for outbound video feedback packets (PLI/FIR/NACK): auto|rtp|rtcp|dual
@@ -337,6 +340,9 @@ func Load() (*Config, error) {
 			VideoRTPDisorderContainmentEnabled:   getEnvAsBool("SIP_VIDEO_RTP_DISORDER_CONTAINMENT_ENABLED", false),
 			VideoRTPDisorderContainmentMS:        getEnvAsInt("SIP_VIDEO_RTP_DISORDER_CONTAINMENT_MS", 10000),
 			VideoAUNormalizeEnabled:              getEnvAsBool("SIP_VIDEO_AU_NORMALIZE_ENABLE", true),
+			SwitchVideoGateMinIDRPackets:         clampInt(getEnvAsInt("SIP_SWITCH_VIDEO_GATE_MIN_IDR_PACKETS", 1), 1, 64),
+			VideoReorderPacingMS:                 clampInt(getEnvAsInt("SIP_VIDEO_REORDER_PACING_MS", 1), 0, 10),
+			VideoTimestampJumpPLI:                getEnvAsBool("SIP_VIDEO_TIMESTAMP_JUMP_PLI", true),
 			AudioUseAVPF:                         getEnvAsBool("SIP_AUDIO_USE_AVPF", false),
 			VideoUseAVPF:                         getEnvAsBool("SIP_VIDEO_USE_AVPF", true),
 			VideoFeedbackTransport:               getSIPVideoFeedbackTransport(),
@@ -660,6 +666,9 @@ func (c *Config) Display() {
 		c.SIP.VideoRTPDisorderContainmentMS,
 	)
 	fmt.Printf("  SIP Video H264 AU Normalization: %v\n", c.SIP.VideoAUNormalizeEnabled)
+	fmt.Printf("  @switch Video Gate Min IDR Packets: %d\n", c.SIP.SwitchVideoGateMinIDRPackets)
+	fmt.Printf("  SIP Video Reorder Pacing: %dms\n", c.SIP.VideoReorderPacingMS)
+	fmt.Printf("  SIP Video Timestamp-Jump PLI: %v\n", c.SIP.VideoTimestampJumpPLI)
 
 	// Display API Configuration
 	fmt.Println("\nAPI Configuration:")
@@ -872,6 +881,16 @@ func getEnvAsInt(key string, defaultValue int) int {
 	if err != nil {
 		fmt.Printf("Warning: Invalid value for %s: %s, using default: %d\n", key, valueStr, defaultValue)
 		return defaultValue
+	}
+	return value
+}
+
+func clampInt(value, min, max int) int {
+	if value < min {
+		return min
+	}
+	if value > max {
+		return max
 	}
 	return value
 }

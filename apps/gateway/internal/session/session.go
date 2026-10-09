@@ -172,6 +172,9 @@ type Session struct {
 	VideoRTPDisorderContainmentEnabled    bool                 `json:"-"`
 	VideoRTPDisorderContainmentDuration   time.Duration        `json:"-"`
 	VideoAUNormalizeEnabled               bool                 `json:"-"`
+	SwitchVideoGateMinIDRPackets          int                  `json:"-"`
+	VideoReorderPacing                    time.Duration        `json:"-"`
+	VideoTimestampJumpPLI                 bool                 `json:"-"`
 	SwitchVideoGateActive                 bool                 `json:"-"`
 	SwitchVideoGateReleasing              bool                 `json:"-"`
 	SwitchVideoGateGeneration             int                  `json:"-"`
@@ -593,6 +596,9 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 		VideoRTPDisorderContainmentEnabled:   cfg.SIP.VideoRTPDisorderContainmentEnabled,
 		VideoRTPDisorderContainmentDuration:  time.Duration(cfg.SIP.VideoRTPDisorderContainmentMS) * time.Millisecond,
 		VideoAUNormalizeEnabled:              cfg.SIP.VideoAUNormalizeEnabled,
+		SwitchVideoGateMinIDRPackets:         cfg.SIP.SwitchVideoGateMinIDRPackets,
+		VideoReorderPacing:                   time.Duration(cfg.SIP.VideoReorderPacingMS) * time.Millisecond,
+		VideoTimestampJumpPLI:                cfg.SIP.VideoTimestampJumpPLI,
 		sipVideoIDRReplayNotify:              make(chan struct{}, 1),
 	}
 	session.initVideoRTPHistory()
