@@ -27,6 +27,12 @@ const (
 	// mid-GOP. Keep asking the browser for an IDR until one is forwarded
 	// after the switch, even if the late-join window already elapsed.
 	postSwitchUplinkPLIWindow = 8 * time.Second
+	// Periodic browser PLI stops on the first uplink IDR. This is only the
+	// safety net for a call that never produces one.
+	PeriodicBrowserPLISafetyNet = 15 * time.Second
+	// SIP PLI/FIR toward the phone. A fresh uplink IDR or a recent request
+	// suppresses the next one. Switch and decoder kicks use force and bypass this.
+	sipOriginatedBrowserKeyframeMinInterval = 2 * time.Second
 )
 
 // shouldSendPLIToAsterisk gates PLI forwarding to avoid flooding.
@@ -370,27 +376,48 @@ func (s *Session) ShouldStopStartupBrowserPLI() bool {
 	return s.HasCachedSPSPPS() && s.HasUplinkKeyframe()
 }
 
-// ShouldStopPeriodicBrowserPLI is true only after an uplink IDR has been
-// forwarded and the late-join window since SIP video dest-ready has elapsed.
-// Queue auto-answer IDRs must not stop periodic PLI before Linphone or a
-// queue-bridged agent answers.
+// ShouldStopPeriodicBrowserPLI is true once any WebRTC→SIP IDR has been
+// forwarded. Later SIP decoder joins use KickUplinkKeyframeForSIPDecoder
+// and rate-limited SIP PLI/FIR, not this loop.
 func (s *Session) ShouldStopPeriodicBrowserPLI() bool {
-	if !s.ShouldStopStartupBrowserPLI() {
-		return false
+	return s.HasUplinkKeyframe()
+}
+
+// DecidePeriodicBrowserPLI reports whether the periodic phone-keyframe sender
+// should stop. An uplink IDR already forwarded to SIP ends it. The deadline
+// is the safety net when none arrives.
+func DecidePeriodicBrowserPLI(hasUplinkIDR bool, now, deadline time.Time) (bool, string) {
+	if hasUplinkIDR {
+		return true, "uplink-idr-forwarded"
 	}
-	now := time.Now()
+	if !deadline.IsZero() && !now.Before(deadline) {
+		return true, "no-uplink-idr"
+	}
+	return false, ""
+}
+
+// AllowSIPOriginatedBrowserKeyframe gates a SIP PLI or FIR before it is
+// forwarded to the phone. Returns false with reason uplink-idr-fresh or
+// rate-limit. Must not be used for forced switch or decoder kicks.
+func (s *Session) AllowSIPOriginatedBrowserKeyframe(string) (bool, string) {
 	s.mu.RLock()
-	readyAt := s.sipVideoDestReadyAt
-	needPostSwitch := s.needsPostSwitchUplinkKeyframeLocked(now)
-	needBridgedAnswer := s.needsBridgedPeerAnswerUplinkKeyframeLocked(now)
+	lastIDR := s.LastUplinkKeyframe
+	lastPLI := s.LastWebRTCPLISent
+	lastFIR := s.LastWebRTCFIRSent
 	s.mu.RUnlock()
-	if needPostSwitch || needBridgedAnswer {
-		return false
+
+	now := time.Now()
+	if !lastIDR.IsZero() && now.Sub(lastIDR) < sipOriginatedBrowserKeyframeMinInterval {
+		return false, "uplink-idr-fresh"
 	}
-	if readyAt.IsZero() {
-		return false
+	lastRequest := lastPLI
+	if lastFIR.After(lastRequest) {
+		lastRequest = lastFIR
 	}
-	return now.Sub(readyAt) >= lateJoinBrowserPLIWindow
+	if !lastRequest.IsZero() && now.Sub(lastRequest) < sipOriginatedBrowserKeyframeMinInterval {
+		return false, "rate-limit"
+	}
+	return true, ""
 }
 
 // NeedsPostSwitchUplinkKeyframe is true until a WebRTC→SIP IDR is forwarded

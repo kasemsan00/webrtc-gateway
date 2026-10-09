@@ -43,11 +43,11 @@ func (s *Session) createReplacementPeerConnection(
 	}
 
 	iceServers := pkg_webrtc.BuildICEServers(turnConfig)
-	mediaEngine, err := createCustomMediaEngine()
+	api, err := newGatewayWebRTCAPI(s.WebRTCTWCCEnabled)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create media engine: %w", err)
+		return nil, fmt.Errorf("failed to create WebRTC API: %w", err)
 	}
-	api := webrtc.NewAPI(webrtc.WithMediaEngine(mediaEngine))
+	fmt.Printf("[%s] webrtc_api twcc=%v replaced=true\n", s.ID, s.WebRTCTWCCEnabled)
 	newPC, err := api.NewPeerConnection(webrtc.Configuration{ICEServers: iceServers})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create new PeerConnection: %w", err)

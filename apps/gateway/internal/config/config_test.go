@@ -207,6 +207,27 @@ func TestVideoForwardEarlyMediaDefaultsOn(t *testing.T) {
 	}
 }
 
+func TestWebRTCTWCCDefaultsOn(t *testing.T) {
+	t.Setenv("WEBRTC_TWCC_ENABLE", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.SIP.WebRTCTWCCEnabled {
+		t.Fatal("expected WebRTC TWCC enabled by default")
+	}
+
+	t.Setenv("WEBRTC_TWCC_ENABLE", "false")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.SIP.WebRTCTWCCEnabled {
+		t.Fatal("expected WEBRTC_TWCC_ENABLE=false to disable TWCC")
+	}
+}
+
 func TestVideoAUNormalizationConfigCanBeDisabled(t *testing.T) {
 	t.Setenv("SIP_VIDEO_AU_NORMALIZE_ENABLE", "false")
 

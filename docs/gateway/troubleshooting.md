@@ -56,6 +56,7 @@ Correlate browser inbound RTP diagnostics with Gateway logs by `sessionId`:
   `switch_video_gate_reject reason=blackout-hold` means the minimum blackout
   window has not elapsed yet. `switch_transition_hold_end reason=gate-released`
   means the gate committed the first safe Linphone IDR.
+- Phone→SIP keyframe requests stop once an uplink IDR is forwarded. Look for `periodic_pli_stop reason=uplink-idr-forwarded`. `reason=no-uplink-idr` is the 15s safety net. `sip_keyframe_request_suppressed reason=uplink-idr-fresh|rate-limit` means a SIP PLI/FIR was not forwarded to the phone. Startup `webrtc_api twcc=true` means transport-cc feedback is installed.
 - After queue→agent, `sip_video_ts_discontinuity` logs each outbound timestamp
   repair: `reason`, `in_prev`/`in` (SIP timestamps), `out_prev`/`out` (WebRTC
   timestamps), and `wall_ms` (real time since the previous forwarded frame).
