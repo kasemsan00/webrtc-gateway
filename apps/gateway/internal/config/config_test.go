@@ -186,6 +186,27 @@ func TestSwitchVideoGateMinIDRPacketsConfig(t *testing.T) {
 	}
 }
 
+func TestVideoForwardEarlyMediaDefaultsOn(t *testing.T) {
+	t.Setenv("SIP_VIDEO_FORWARD_EARLY_MEDIA", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.SIP.VideoSuppressEarlyMedia {
+		t.Fatal("expected pre-answer video to be forwarded by default")
+	}
+
+	t.Setenv("SIP_VIDEO_FORWARD_EARLY_MEDIA", "false")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.SIP.VideoSuppressEarlyMedia {
+		t.Fatal("expected SIP_VIDEO_FORWARD_EARLY_MEDIA=false to suppress pre-answer video")
+	}
+}
+
 func TestVideoAUNormalizationConfigCanBeDisabled(t *testing.T) {
 	t.Setenv("SIP_VIDEO_AU_NORMALIZE_ENABLE", "false")
 

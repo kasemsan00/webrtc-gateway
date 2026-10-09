@@ -54,6 +54,7 @@ func writeNormalizedVideoAccessUnit(
 	}
 
 	sess.NumberSIPVideoAccessUnit(&au)
+	logVideoTimestampDiscontinuity(sess.ID, au.Discontinuity)
 
 	for _, packet := range au.Packets {
 		data, err := packet.Marshal()
@@ -78,6 +79,11 @@ func writeNormalizedVideoAccessUnit(
 	if au.IsIDR {
 		sess.RememberSIPVideoIDR(au, true)
 	}
+	noteDiscontinuityIDR := func() {
+		if au.IsIDR && au.Discontinuity != nil {
+			sess.NoteVideoDiscontinuityIDR(now)
+		}
+	}
 
 	if decision.Reservation != 0 {
 		if !sess.CommitSwitchVideoGateRelease(
@@ -89,13 +95,23 @@ func writeNormalizedVideoAccessUnit(
 				sess.ID, au.Generation, decision.Reservation)
 			return normalizedVideoWriteResult{}
 		}
+		noteDiscontinuityIDR()
 		return normalizedVideoWriteResult{
 			emitted:      true,
 			gateReleased: true,
 			generation:   au.Generation,
 		}
 	}
+	noteDiscontinuityIDR()
 	return normalizedVideoWriteResult{emitted: true}
+}
+
+func logVideoTimestampDiscontinuity(sessionID string, d *session.H264TimestampDiscontinuity) {
+	if d == nil {
+		return
+	}
+	fmt.Printf("[%s] sip_video_ts_discontinuity reason=%s in_prev=%d in=%d out_prev=%d out=%d wall_ms=%d\n",
+		sessionID, d.Reason, d.PreviousIncoming, d.Incoming, d.PreviousOutgoing, d.Outgoing, d.Wall.Milliseconds())
 }
 
 // startRTPListener starts an RTP listener and returns the port
@@ -468,6 +484,7 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 	var lastGapRecoveryNano atomic.Int64
 	var lastVideoTS uint32
 	haveLastVideoTS := false
+	loggedEarlyVideoSuppress := false
 
 	const (
 		startupPLIAttempts     = 4
@@ -698,6 +715,13 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 			}
 			continue
 		}
+		if sess.SuppressEarlyVideo() {
+			if !loggedEarlyVideoSuppress {
+				loggedEarlyVideoSuppress = true
+				fmt.Printf("[%s] sip_video_early_media_suppressed state=%s\n", sess.ID, sess.GetState())
+			}
+			continue
+		}
 		sess.NoteSIPVideoRTP(time.Now())
 
 		// A switch generation is authoritative even when RTPengine preserves the
@@ -742,7 +766,10 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 					haveLastSeq = false
 					haveLastVideoTS = false
 					if auNormalizer != nil {
-						auNormalizer.ResetSource()
+						auNormalizer.ResetForStreamSwitch(currentGeneration, "ssrc")
+						if !sess.IsSwitchVideoGateActive() {
+							sess.StartSwitchVideoGate(currentGeneration, time.Now(), "ssrc")
+						}
 					}
 					fmt.Printf("[%s] h264_au_source_reset reason=ssrc-change previous_ssrc=%d ssrc=%d\n", sess.ID, previousSSRC, ssrc)
 				}
@@ -832,10 +859,22 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 			}
 
 			if forwardSeq {
-				if sess.VideoTimestampJumpPLI && sipVideoTimestampJumped(haveLastVideoTS, lastVideoTS, packet.Timestamp) {
-					fmt.Printf("[%s] sip_video_timestamp_jump prev=%d next=%d - requesting keyframe\n",
+				if sipVideoTimestampJumped(haveLastVideoTS, lastVideoTS, packet.Timestamp) {
+					fmt.Printf("[%s] sip_video_timestamp_jump prev=%d next=%d - stream switch\n",
 						sess.ID, lastVideoTS, packet.Timestamp)
-					sess.SendPLIToAsteriskForced("sip-ts-jump")
+					if sess.VideoTimestampJumpPLI {
+						sess.SendPLIToAsteriskForced("sip-ts-jump")
+					}
+					// Same-SSRC queue→agent handoff. Arm the keyframe gate before
+					// this packet is forwarded so the agent's first IDR, not a
+					// P-frame on the early-media timeline, starts the segment.
+					reorderBuf.Reset()
+					if auNormalizer != nil {
+						auNormalizer.ResetForStreamSwitch(currentGeneration, "timestamp-jump")
+						if !sess.IsSwitchVideoGateActive() {
+							sess.StartSwitchVideoGate(currentGeneration, time.Now(), "timestamp-jump")
+						}
+					}
 				}
 				lastVideoTS = packet.Timestamp
 				haveLastVideoTS = true

@@ -56,6 +56,13 @@ Correlate browser inbound RTP diagnostics with Gateway logs by `sessionId`:
   `switch_video_gate_reject reason=blackout-hold` means the minimum blackout
   window has not elapsed yet. `switch_transition_hold_end reason=gate-released`
   means the gate committed the first safe Linphone IDR.
+- After queue→agent, `sip_video_ts_discontinuity` logs each outbound timestamp
+  repair: `reason`, `in_prev`/`in` (SIP timestamps), `out_prev`/`out` (WebRTC
+  timestamps), and `wall_ms` (real time since the previous forwarded frame).
+  `out - out_prev` should match `wall_ms` at 90 kHz (90 ticks per millisecond).
+  A later `switch_video_gate_activation outcome=satisfied-by-discontinuity-idr`
+  means the agent IDR arrived before the `@switch` notice and already started
+  the segment. Audio is not rewritten; Opus stays on the SIP timestamp.
 - If normalization itself is suspected, temporarily set `SIP_VIDEO_AU_NORMALIZE_ENABLE=false` and restart the gateway. This restores the legacy raw reordered path and should be used only as a bounded comparison because incomplete frames can poison strict mobile decoders.
 
 ## Queue-to-agent video is blocky or has incorrect colors

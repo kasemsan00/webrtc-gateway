@@ -100,20 +100,102 @@ func TestH264AccessUnitNormalizerResetSourcePreservesParameterSetsAndGeneration(
 	}
 }
 
-func TestH264AccessUnitNormalizerUsesDefaultTimestampStepForFirstAUAfterSwitch(t *testing.T) {
-	n, emitted := numberingH264Normalizer(H264AccessUnitNormalizerConfig{})
+func TestH264AccessUnitNormalizerSwitchBeforeMediaUsesWallClock(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	n, emitted := clockedH264Normalizer(&now)
 
-	n.Push(h264Packet(100, 10000, true, []byte{0x41, 0x01}))
+	n.Push(h264Packet(100, 99000, true, []byte{0x41, 0x01}))
 	n.ResetForSwitch(18)
-	n.Push(h264Packet(7, 500000, true, []byte{0x41, 0x02}))
+	now = now.Add(44 * time.Millisecond)
+	n.Push(h264Packet(7, 1_000_188_990, true, []byte{0x65, 0xaa}))
 
-	if len(*emitted) != 2 {
-		t.Fatalf("expected two access units, got %d", len(*emitted))
+	if len(*emitted) != 2 || !(*emitted)[1].IsIDR {
+		t.Fatalf("expected early frame then post-switch IDR, got %+v", *emitted)
 	}
-	firstTimestamp := (*emitted)[0].Packets[0].Timestamp
-	secondTimestamp := (*emitted)[1].Packets[0].Timestamp
-	if got := secondTimestamp - firstTimestamp; got != switchH264TimestampStep {
-		t.Fatalf("expected first post-switch timestamp step %d, got %d", switchH264TimestampStep, got)
+	got := (*emitted)[1].Packets[0].Timestamp - (*emitted)[0].Packets[0].Timestamp
+	assertWallClockTimestampStep(t, got, 44*time.Millisecond)
+	if d := (*emitted)[1].Discontinuity; d == nil || d.PreviousIncoming != 99000 || d.Incoming != 1_000_188_990 {
+		t.Fatalf("discontinuity = %+v", d)
+	}
+
+	now = now.Add(33 * time.Millisecond)
+	n.Push(h264Packet(8, 1_000_188_990+3000, true, []byte{0x41, 0x02}))
+	if len(*emitted) != 3 {
+		t.Fatalf("expected continuous frame after lock-on, got %d", len(*emitted))
+	}
+	if step := (*emitted)[2].Packets[0].Timestamp - (*emitted)[1].Packets[0].Timestamp; step != 3000 {
+		t.Fatalf("locked source step = %d, want 3000", step)
+	}
+	if (*emitted)[2].Discontinuity != nil {
+		t.Fatalf("continuous frame marked as discontinuity: %+v", (*emitted)[2].Discontinuity)
+	}
+}
+
+func TestH264AccessUnitNormalizerMediaBeforeSwitchUsesWallClock(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	n, emitted := clockedH264Normalizer(&now)
+	const agentTS = uint32(1_000_555_300)
+
+	n.Push(h264Packet(100, 99000, true, []byte{0x41, 0x01}))
+	now = now.Add(2900 * time.Millisecond)
+	// Agent media wins the race: the timestamp jump is the stream switch.
+	n.ResetForStreamSwitch(0, "timestamp-jump")
+	n.Push(h264Packet(200, agentTS, true, []byte{0x65, 0xaa}))
+
+	if len(*emitted) != 2 || !(*emitted)[1].IsIDR {
+		t.Fatalf("expected jump frame to be the IDR that starts the segment, got %+v", *emitted)
+	}
+	got := (*emitted)[1].Packets[0].Timestamp - (*emitted)[0].Packets[0].Timestamp
+	assertWallClockTimestampStep(t, got, 2900*time.Millisecond)
+	if d := (*emitted)[1].Discontinuity; d == nil || d.Reason != "timestamp-jump+source-gap" {
+		t.Fatalf("discontinuity = %+v", d)
+	}
+
+	now = now.Add(16 * time.Millisecond)
+	n.ResetForSwitch(1)
+	now = now.Add(114 * time.Millisecond)
+	// Source only moved one frame, but 130ms of real time passed after the IDR.
+	n.Push(h264Packet(201, agentTS+3000, true, []byte{0x41, 0x02}))
+	if len(*emitted) != 3 {
+		t.Fatalf("expected post-notice frame, got %d", len(*emitted))
+	}
+	step := (*emitted)[2].Packets[0].Timestamp - (*emitted)[1].Packets[0].Timestamp
+	assertWallClockTimestampStep(t, step, 130*time.Millisecond)
+
+	// Once the new source clock is locked, a later frame follows that clock
+	// even if wall time jitters.
+	now = now.Add(50 * time.Millisecond)
+	n.Push(h264Packet(202, agentTS+6000, true, []byte{0x41, 0x03}))
+	if step := (*emitted)[3].Packets[0].Timestamp - (*emitted)[2].Packets[0].Timestamp; step != 3000 {
+		t.Fatalf("source step after lock-on = %d, want 3000", step)
+	}
+}
+
+func clockedH264Normalizer(now *time.Time) (*H264AccessUnitNormalizer, *[]NormalizedH264AccessUnit) {
+	var emitted []NormalizedH264AccessUnit
+	var n *H264AccessUnitNormalizer
+	n = NewH264AccessUnitNormalizer(H264AccessUnitNormalizerConfig{}, func(au NormalizedH264AccessUnit) {
+		n.NumberAccessUnit(&au)
+		emitted = append(emitted, au)
+	})
+	n.SetNow(func() time.Time { return *now })
+	return n, &emitted
+}
+
+func assertWallClockTimestampStep(t *testing.T, got uint32, elapsed time.Duration) {
+	t.Helper()
+	want := uint32(elapsed.Nanoseconds() * h264ClockRate / int64(time.Second))
+	if want == 0 {
+		want = 1
+	}
+	var diff uint32
+	if got > want {
+		diff = got - want
+	} else {
+		diff = want - got
+	}
+	if diff > 90*3 {
+		t.Fatalf("outbound timestamp step %d, want %d (±3ms) for %s", got, want, elapsed)
 	}
 }
 

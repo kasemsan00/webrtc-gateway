@@ -601,6 +601,34 @@ func TestSwitchVideoGateDoesNotHoldForSIPReinvite(t *testing.T) {
 	}
 }
 
+func TestAgentSwitchSkipsGateAfterRecentDiscontinuityIDR(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	sess := &Session{ID: "credit", VideoAUNormalizeEnabled: true}
+	sess.NoteVideoDiscontinuityIDR(now)
+
+	decision, activation := sess.PrepareAndActivateSwitchVideoTarget("14131", "00025", now.Add(16*time.Millisecond), time.Minute, true)
+	if activation.Outcome != SwitchVideoGateActivationSatisfied || activation.Active {
+		t.Fatalf("activation = %+v", activation)
+	}
+	if sess.IsSwitchVideoGateActive() {
+		t.Fatal("recent discontinuity IDR should not hold for another keyframe")
+	}
+	if sess.SwitchVideoGateAcceptedGeneration != decision.Generation {
+		t.Fatalf("accepted generation = %d, want %d", sess.SwitchVideoGateAcceptedGeneration, decision.Generation)
+	}
+}
+
+func TestAgentSwitchStillGatesWhenDiscontinuityIDRIsStale(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	sess := &Session{ID: "stale-credit", VideoAUNormalizeEnabled: true}
+	sess.NoteVideoDiscontinuityIDR(now)
+
+	_, activation := sess.PrepareAndActivateSwitchVideoTarget("14131", "00025", now.Add(200*time.Millisecond), time.Minute, true)
+	if activation.Outcome != SwitchVideoGateActivationActive || !activation.Active {
+		t.Fatalf("stale discontinuity IDR should still gate, got %+v", activation)
+	}
+}
+
 func gateTestAUWithPackets(generation int, idr, parameterSetsReady bool, ssrc uint32, n int) NormalizedH264AccessUnit {
 	packets := make([]*rtp.Packet, n)
 	for i := range packets {

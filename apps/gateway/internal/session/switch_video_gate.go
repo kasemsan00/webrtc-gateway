@@ -30,7 +30,16 @@ const (
 	SwitchVideoGateActivationDisabled  = "disabled"
 	SwitchVideoGateActivationRejected  = "rejected"
 	SwitchVideoGateActivationUnchanged = "unchanged"
+	// SwitchVideoGateActivationSatisfied means a discontinuity IDR already
+	// started this segment, so the later @switch notice must not hold for
+	// another keyframe.
+	SwitchVideoGateActivationSatisfied = "satisfied-by-discontinuity-idr"
 )
+
+// videoDiscontinuityIDRCredit is how long a just-forwarded stream-switch IDR
+// satisfies the @switch gate. Agent media beats the notice by a few tens of
+// milliseconds; a later switch must still hold for its own IDR.
+const videoDiscontinuityIDRCredit = 150 * time.Millisecond
 
 // SwitchVideoGateActivation is a lock-consistent snapshot of a gate-start
 // attempt. Callers may safely log it after the session lock is released.
@@ -255,6 +264,16 @@ func (s *Session) startSwitchVideoGateLocked(generation int, now time.Time, reas
 			StartedAt: s.SwitchVideoGateStartedAt, FeedbackBaseline: s.SwitchVideoGateFeedbackBaseline,
 		}
 	}
+	if reason == "agent-switch" && s.videoDiscontinuityIDRFreshLocked(now) {
+		if generation > s.SwitchVideoGateAcceptedGeneration {
+			s.SwitchVideoGateAcceptedGeneration = generation
+		}
+		s.videoDiscontinuityIDRAt = time.Time{}
+		s.clearSwitchVideoGateLocked()
+		return SwitchVideoGateActivation{
+			Outcome: SwitchVideoGateActivationSatisfied, Generation: generation,
+		}
+	}
 
 	s.clearSwitchVideoGateLocked()
 	s.clearSIPVideoIDRCacheLocked()
@@ -410,6 +429,23 @@ func (s *Session) minSwitchVideoGateIDRPacketsLocked() int {
 		return s.SwitchVideoGateMinIDRPackets
 	}
 	return MinSwitchVideoGateIDRPackets
+}
+
+// NoteVideoDiscontinuityIDR records that an IDR was written on a repaired
+// timestamp. A following @switch within videoDiscontinuityIDRCredit does not
+// wait for a second keyframe.
+func (s *Session) NoteVideoDiscontinuityIDR(now time.Time) {
+	s.mu.Lock()
+	s.videoDiscontinuityIDRAt = now
+	s.mu.Unlock()
+}
+
+func (s *Session) videoDiscontinuityIDRFreshLocked(now time.Time) bool {
+	if s.videoDiscontinuityIDRAt.IsZero() {
+		return false
+	}
+	age := now.Sub(s.videoDiscontinuityIDRAt)
+	return age >= 0 && age <= videoDiscontinuityIDRCredit
 }
 
 func switchVideoGateElapsed(start, now time.Time) time.Duration {

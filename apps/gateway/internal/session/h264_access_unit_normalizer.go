@@ -12,11 +12,13 @@ const (
 	defaultH264AUMaxBytes    = 4 * 1024 * 1024
 	defaultH264AUMaxAge      = 500 * time.Millisecond
 	defaultH264TimestampStep = uint32(3000)
-	// First AU after @switch must not look like the next queue frame.
-	// 3000 (~33ms) kept n1669 on the queue decoder state, so Linphone SPS
-	// never reconfigured and the picture stayed black (28C0e8PMWgRx).
-	switchH264TimestampStep       = uint32(90000)
+	// 10s at 90 kHz. Larger source gaps are a new stream (Asterisk stills
+	// near ts 2700, then the agent clock near 1e9), not a frame interval.
 	maxReasonableH264TimestampGap = uint32(900000)
+	// Keep a discontinuity step inside the positive int32 range so a later
+	// signed delta check cannot treat a wrapped step as going backwards.
+	maxH264TimestampStep = uint32(0x7fffffff)
+	h264ClockRate        = int64(90000)
 	// Reassembled parameter sets are reinjected as one RTP payload, so keep
 	// them below the common WebRTC path-MTU-safe payload size.
 	maxCachedFUAParameterSetPayload = 1200
@@ -43,6 +45,21 @@ type NormalizedH264AccessUnit struct {
 	ParameterSetsReady    bool
 	Generation            int
 	SourceTimestamp       uint32
+	// Discontinuity is set when this access unit's outbound timestamp did not
+	// follow the previous source delta. Nil on a continuous frame.
+	Discontinuity *H264TimestampDiscontinuity
+}
+
+// H264TimestampDiscontinuity is one outbound RTP timestamp repair. Wall is the
+// real time since the previous forwarded access unit; the outbound step is
+// that duration on the 90 kHz clock.
+type H264TimestampDiscontinuity struct {
+	Reason           string
+	Incoming         uint32
+	PreviousIncoming uint32
+	Outgoing         uint32
+	PreviousOutgoing uint32
+	Wall             time.Duration
 }
 
 // H264AccessUnitNormalizer converts a reordered SIP H.264 RTP stream into
@@ -69,7 +86,9 @@ type H264AccessUnitNormalizer struct {
 	nextSeq                  uint16
 	outputTS                 uint32
 	lastSourceTS             uint32
+	lastOutputAt             time.Time
 	stepTimestampAfterSwitch bool
+	pendingSwitchReason      string
 
 	cachedSPS                        []byte
 	cachedPPS                        []byte
@@ -99,6 +118,17 @@ func NewH264AccessUnitNormalizer(config H264AccessUnitNormalizerConfig, emit fun
 		config.MaxAge = defaultH264AUMaxAge
 	}
 	return &H264AccessUnitNormalizer{config: config, emit: emit, now: time.Now}
+}
+
+// SetNow replaces the clock used for discontinuity steps. Tests use it to
+// place access units on a chosen timeline.
+func (n *H264AccessUnitNormalizer) SetNow(now func() time.Time) {
+	if now == nil {
+		return
+	}
+	n.mu.Lock()
+	n.now = now
+	n.mu.Unlock()
 }
 
 // SetParameterSets seeds the normalizer with the most recent complete SIP-side
@@ -262,36 +292,81 @@ func (n *H264AccessUnitNormalizer) NumberAccessUnit(au *NormalizedH264AccessUnit
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	ts := n.mapTimestampLocked(au.SourceTimestamp, au.Packets[0].SequenceNumber)
+	ts, disc := n.mapTimestampLocked(au.SourceTimestamp, au.Packets[0].SequenceNumber, n.now())
 	n.applyOutboundRTPLocked(au.Packets, ts)
+	au.Discontinuity = disc
 	if au.InjectedParameterSets && n.forceParameterSetPrefixRemaining > 0 {
 		n.forceParameterSetPrefixRemaining--
 	}
 	n.emitted++
 }
 
-func (n *H264AccessUnitNormalizer) mapTimestampLocked(source uint32, firstSeq uint16) uint32 {
+func (n *H264AccessUnitNormalizer) mapTimestampLocked(source uint32, firstSeq uint16, now time.Time) (uint32, *H264TimestampDiscontinuity) {
 	if !n.haveOutput {
 		n.haveOutput = true
 		n.nextSeq = firstSeq
 		n.outputTS = source
 		n.lastSourceTS = source
+		n.lastOutputAt = now
 		n.stepTimestampAfterSwitch = false
-		return n.outputTS
+		n.pendingSwitchReason = ""
+		return n.outputTS, nil
 	}
-	if n.stepTimestampAfterSwitch {
-		n.outputTS += switchH264TimestampStep
+
+	sourceDelta := source - n.lastSourceTS
+	sourceBroken := int32(sourceDelta) <= 0 || sourceDelta > maxReasonableH264TimestampGap
+	switched := n.stepTimestampAfterSwitch
+	if !switched && !sourceBroken {
+		n.outputTS += sourceDelta
 		n.lastSourceTS = source
-		n.stepTimestampAfterSwitch = false
-		return n.outputTS
+		n.lastOutputAt = now
+		return n.outputTS, nil
 	}
-	delta := source - n.lastSourceTS
-	if int32(delta) <= 0 || delta > maxReasonableH264TimestampGap {
-		delta = defaultH264TimestampStep
+
+	prevOut := n.outputTS
+	prevIn := n.lastSourceTS
+	ticks, wall := wallClockH264TimestampStep(n.lastOutputAt, now)
+	n.outputTS += ticks
+	reason := "source-gap"
+	if switched {
+		reason = n.pendingSwitchReason
+		if reason == "" {
+			reason = "switch"
+		}
+		if sourceBroken {
+			reason += "+source-gap"
+		}
 	}
-	n.outputTS += delta
+	n.stepTimestampAfterSwitch = false
+	n.pendingSwitchReason = ""
 	n.lastSourceTS = source
-	return n.outputTS
+	n.lastOutputAt = now
+	return n.outputTS, &H264TimestampDiscontinuity{
+		Reason:           reason,
+		Incoming:         source,
+		PreviousIncoming: prevIn,
+		Outgoing:         n.outputTS,
+		PreviousOutgoing: prevOut,
+		Wall:             wall,
+	}
+}
+
+// wallClockH264TimestampStep converts elapsed real time into a positive 90 kHz
+// RTP step. A non-positive interval still advances one tick so the outbound
+// timeline never repeats or runs backwards.
+func wallClockH264TimestampStep(last, now time.Time) (uint32, time.Duration) {
+	if last.IsZero() || !now.After(last) {
+		return 1, 0
+	}
+	elapsed := now.Sub(last)
+	ticks := elapsed.Nanoseconds() * h264ClockRate / int64(time.Second)
+	if ticks < 1 {
+		return 1, elapsed
+	}
+	if ticks > int64(maxH264TimestampStep) {
+		return maxH264TimestampStep, elapsed
+	}
+	return uint32(ticks), elapsed
 }
 
 func (n *H264AccessUnitNormalizer) applyOutboundRTPLocked(packets []*rtp.Packet, ts uint32) {
@@ -362,10 +437,10 @@ func (n *H264AccessUnitNormalizer) RewriteForReplay(packets []*rtp.Packet) []*rt
 	defer n.mu.Unlock()
 
 	if !n.haveOutput {
-		n.outputTS = n.mapTimestampLocked(packets[0].Timestamp, packets[0].SequenceNumber)
+		n.outputTS, _ = n.mapTimestampLocked(packets[0].Timestamp, packets[0].SequenceNumber, n.now())
 	} else {
 		n.outputTS += defaultH264TimestampStep
-		n.stepTimestampAfterSwitch = false
+		n.lastOutputAt = n.now()
 	}
 
 	out := make([]*rtp.Packet, 0, len(packets))
@@ -388,8 +463,15 @@ func (n *H264AccessUnitNormalizer) RewriteForReplay(packets []*rtp.Packet) []*rt
 }
 
 // ResetForSwitch drops source-specific state while preserving the continuous
-// outbound sequence/timestamp timeline.
+// outbound sequence timeline. The next forwarded access unit steps the
+// outbound timestamp by wall time since the previous frame.
 func (n *H264AccessUnitNormalizer) ResetForSwitch(generation int) {
+	n.ResetForStreamSwitch(generation, "switch")
+}
+
+// ResetForStreamSwitch is ResetForSwitch with the reason carried on the
+// discontinuity log (switch, ssrc, timestamp-jump).
+func (n *H264AccessUnitNormalizer) ResetForStreamSwitch(generation int, reason string) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.dropCurrentLocked(false)
@@ -397,6 +479,10 @@ func (n *H264AccessUnitNormalizer) ResetForSwitch(generation int) {
 	n.cachedPPS = nil
 	n.generation = generation
 	n.stepTimestampAfterSwitch = true
+	if reason == "" {
+		reason = "switch"
+	}
+	n.pendingSwitchReason = reason
 	n.forceParameterSetPrefixRemaining = defaultSwitchParameterSetPrefixCount
 }
 

@@ -92,7 +92,13 @@ func terminalTelemetryOutcome(action, terminalReason string) (string, string) {
 	return "success", "none"
 }
 
-// GetState returns the current state of the session
+// SuppressEarlyVideo reports whether pre-answer SIP video should be dropped.
+// The zero value forwards early video, matching the historical default.
+func (s *Session) SuppressEarlyVideo() bool {
+	return s.VideoSuppressEarlyMedia && s.GetState() != StateActive
+}
+
+// GetState returns the current state of the session.
 func (s *Session) GetState() SessionState {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

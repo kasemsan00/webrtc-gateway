@@ -175,6 +175,8 @@ type Session struct {
 	SwitchVideoGateMinIDRPackets          int                  `json:"-"`
 	VideoReorderPacing                    time.Duration        `json:"-"`
 	VideoTimestampJumpPLI                 bool                 `json:"-"`
+	VideoSuppressEarlyMedia               bool                 `json:"-"`
+	videoDiscontinuityIDRAt               time.Time            `json:"-"`
 	SwitchVideoGateActive                 bool                 `json:"-"`
 	SwitchVideoGateReleasing              bool                 `json:"-"`
 	SwitchVideoGateGeneration             int                  `json:"-"`
@@ -599,6 +601,7 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 		SwitchVideoGateMinIDRPackets:         cfg.SIP.SwitchVideoGateMinIDRPackets,
 		VideoReorderPacing:                   time.Duration(cfg.SIP.VideoReorderPacingMS) * time.Millisecond,
 		VideoTimestampJumpPLI:                cfg.SIP.VideoTimestampJumpPLI,
+		VideoSuppressEarlyMedia:              cfg.SIP.VideoSuppressEarlyMedia,
 		sipVideoIDRReplayNotify:              make(chan struct{}, 1),
 	}
 	session.initVideoRTPHistory()
