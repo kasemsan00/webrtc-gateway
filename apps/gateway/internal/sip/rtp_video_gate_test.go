@@ -64,7 +64,7 @@ func TestWriteNormalizedVideoAccessUnitAbortsReservationOnWriteFailure(t *testin
 	sess.StartSwitchVideoGate(4, now, "test")
 
 	writes := 0
-	result := writeNormalizedVideoAccessUnit(sess, normalizedVideoAU(4, true, true, session.MinSwitchVideoGateIDRPackets), now.Add(time.Second), func([]byte) (int, error) {
+	result := writeNormalizedVideoAccessUnit(sess, normalizedVideoAU(4, true, true, 6), now.Add(time.Second), func([]byte) (int, error) {
 		writes++
 		if writes == 2 {
 			return 0, errors.New("track failed")
@@ -190,9 +190,26 @@ func TestWriteNormalizedVideoAccessUnitDoesNotBurnSeqOnGateReject(t *testing.T) 
 	}
 }
 
+func TestWriteNormalizedVideoAccessUnitAcceptsSmallCompleteIDR(t *testing.T) {
+	now := time.Unix(500, 0)
+	sess := &session.Session{ID: "gate-small-idr", VideoAUNormalizeEnabled: true, SwitchGeneration: 1}
+	if !sess.StartSwitchVideoGate(1, now, "test") {
+		t.Fatal("expected gate start")
+	}
+
+	writes := 0
+	result := writeNormalizedVideoAccessUnit(sess, normalizedVideoAU(1, true, true, 6), now.Add(7*time.Millisecond), func([]byte) (int, error) {
+		writes++
+		return 1, nil
+	})
+	if !result.emitted || !result.gateReleased || writes != 6 {
+		t.Fatalf("small complete IDR: emitted=%v released=%v writes=%d", result.emitted, result.gateReleased, writes)
+	}
+}
+
 func TestWriteNormalizedVideoAccessUnitHoldsUndersizedIDR(t *testing.T) {
 	now := time.Unix(500, 0)
-	sess := &session.Session{ID: "gate-tiny-idr", VideoAUNormalizeEnabled: true, SwitchGeneration: 1}
+	sess := &session.Session{ID: "gate-tiny-idr", VideoAUNormalizeEnabled: true, SwitchGeneration: 1, SwitchVideoGateMinIDRPackets: 24}
 	if !sess.StartSwitchVideoGate(1, now, "test") {
 		t.Fatal("expected gate start")
 	}
@@ -220,7 +237,7 @@ func TestWriteNormalizedVideoAccessUnitHoldsUndersizedIDR(t *testing.T) {
 		t.Fatalf("P-frame passed while holding: emitted=%v writes=%d", pframe.emitted, pWrites)
 	}
 
-	full := writeNormalizedVideoAccessUnit(sess, normalizedVideoAU(1, true, true, session.MinSwitchVideoGateIDRPackets), now.Add(400*time.Millisecond), func([]byte) (int, error) {
+	full := writeNormalizedVideoAccessUnit(sess, normalizedVideoAU(1, true, true, 24), now.Add(400*time.Millisecond), func([]byte) (int, error) {
 		return 1, nil
 	})
 	if !full.emitted || !full.gateReleased {

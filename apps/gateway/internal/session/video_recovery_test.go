@@ -714,7 +714,7 @@ func TestNoteSIPVideoRTPClearedOnResetMediaState(t *testing.T) {
 }
 
 func TestHasHealthySIPVideoIDRAfterSwitchRequiresFullGOP(t *testing.T) {
-	sess := &Session{ID: "healthy-idr", VideoAUNormalizeEnabled: true, SwitchGeneration: 1}
+	sess := &Session{ID: "healthy-idr", VideoAUNormalizeEnabled: true, SwitchGeneration: 1, SwitchVideoGateMinIDRPackets: 24}
 	if !sess.HasHealthySIPVideoIDR() {
 		t.Fatal("expected healthy before first switch")
 	}
@@ -724,12 +724,26 @@ func TestHasHealthySIPVideoIDRAfterSwitchRequiresFullGOP(t *testing.T) {
 	if sess.HasHealthySIPVideoIDR() {
 		t.Fatal("expected unhealthy until a full GOP after switch")
 	}
-	sess.MarkSIPVideoIDRSize(MinSwitchVideoGateIDRPackets - 1)
+	sess.MarkSIPVideoIDRSize(23)
 	if sess.HasHealthySIPVideoIDR() {
 		t.Fatal("undersized IDR should not count as healthy")
 	}
-	sess.MarkSIPVideoIDRSize(MinSwitchVideoGateIDRPackets)
+	sess.MarkSIPVideoIDRSize(24)
 	if !sess.HasHealthySIPVideoIDR() {
 		t.Fatal("expected healthy after full GOP")
+	}
+}
+
+func TestHasHealthySIPVideoIDRAfterSwitchAcceptsSmallCompleteIDR(t *testing.T) {
+	sess := &Session{ID: "healthy-small-idr", VideoAUNormalizeEnabled: true, SwitchGeneration: 1}
+	if !sess.StartSwitchVideoGate(1, time.Unix(1, 0), "switch") {
+		t.Fatal("gate start")
+	}
+	if sess.HasHealthySIPVideoIDR() {
+		t.Fatal("expected unhealthy until the first complete IDR")
+	}
+	sess.MarkSIPVideoIDRSize(6)
+	if !sess.HasHealthySIPVideoIDR() {
+		t.Fatal("expected healthy after a small complete IDR")
 	}
 }

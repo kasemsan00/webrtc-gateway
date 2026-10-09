@@ -3,6 +3,7 @@ package sip
 import (
 	"fmt"
 	"net"
+	"sync/atomic"
 	"time"
 
 	"github.com/pion/rtcp"
@@ -464,11 +465,11 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 	seqGapPackets := 0
 	seqOutOfOrder := 0
 	seqDuplicates := 0
-	lastGapRecovery := time.Time{}
+	var lastGapRecoveryNano atomic.Int64
+	var lastVideoTS uint32
+	haveLastVideoTS := false
 
 	const (
-		burstGapTrigger        = 8
-		gapRecoveryMinInterval = 1200 * time.Millisecond
 		startupPLIAttempts     = 4
 		startupPLIInterval     = 300 * time.Millisecond
 		startupKeyframeFresh   = 800 * time.Millisecond
@@ -573,6 +574,23 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 			_, _ = sess.WriteVideoToWebRTC(data)
 		}
 	})
+	if sess.VideoReorderPacing > 0 {
+		reorderBuf.SetPacing(sess.VideoReorderPacing)
+	}
+	reorderBuf.SetSkipHandler(func(skipped int, fromSeq, toSeq uint16) {
+		now := time.Now()
+		var lastRecovery time.Time
+		if nano := lastGapRecoveryNano.Load(); nano != 0 {
+			lastRecovery = time.Unix(0, nano)
+		}
+		if !sipVideoShouldRecoverGap(skipped, lastRecovery, now) {
+			return
+		}
+		fmt.Printf("[%s] ⚠️ SIP→WebRTC burst loss detected: missing=%d (seq %d→%d) - requesting keyframe\n",
+			sess.ID, skipped, fromSeq, uint16(toSeq+1))
+		sess.SendBrowserRecoveryToAsterisk("sip-gap")
+		lastGapRecoveryNano.Store(now.UnixNano())
+	})
 	lastSwitchGeneration := sess.GetSwitchGeneration()
 	idrReplayNotify := sess.SIPVideoIDRReplayNotify()
 	idrReplayTicker := time.NewTicker(250 * time.Millisecond)
@@ -593,11 +611,14 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 	}()
 	buildVideoSummary := func(keyframeAge time.Duration) session.VideoRecoverySummary {
 		rBuf, rRel, rDrop, rTO := reorderBuf.GetStats()
+		// Gaps/Missing/OOO used by @switch recovery and disorder monitors must
+		// reflect post-reorder loss. Arrival-order holes that the buffer later
+		// fills are still logged on the sampled stats line.
 		return session.VideoRecoverySummary{
 			Packets:         packetCount,
-			Gaps:            seqGapEvents,
-			Missing:         seqGapPackets,
-			OutOfOrder:      seqOutOfOrder,
+			Gaps:            int(reorderBuf.SkipEventCount()),
+			Missing:         int(rTO),
+			OutOfOrder:      0,
 			Duplicates:      seqDuplicates,
 			ReorderBuffered: rBuf,
 			ReorderReleased: rRel,
@@ -686,6 +707,7 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 		if currentGeneration != lastSwitchGeneration {
 			reorderBuf.Reset()
 			haveLastSeq = false
+			haveLastVideoTS = false
 			if auNormalizer != nil {
 				auNormalizer.ResetForSwitch(currentGeneration)
 			}
@@ -717,6 +739,8 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 			if previousSSRC == 0 || previousSSRC != ssrc {
 				if previousSSRC != 0 {
 					reorderBuf.Reset()
+					haveLastSeq = false
+					haveLastVideoTS = false
 					if auNormalizer != nil {
 						auNormalizer.ResetSource()
 					}
@@ -781,9 +805,11 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 			seq := packet.Header.SequenceNumber
 			isKeyframe := false
 
+			forwardSeq := false
 			if !haveLastSeq {
 				lastSeq = seq
 				haveLastSeq = true
+				forwardSeq = true
 			} else {
 				delta := uint16(seq - lastSeq)
 				switch {
@@ -791,21 +817,28 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 					seqDuplicates++
 				case delta < 0x8000:
 					if delta > 1 {
-						missing := int(delta - 1)
+						// Arrival-order holes are diagnostic only. Recovery PLI/FIR
+						// fires from the reorder skip handler after the buffer fails
+						// to fill the gap (S5CDifyVuoul: 27-32% reorder was not loss).
 						seqGapEvents++
-						seqGapPackets += missing
-						if missing >= burstGapTrigger && (lastGapRecovery.IsZero() || time.Since(lastGapRecovery) >= gapRecoveryMinInterval) {
-							fmt.Printf("[%s] ⚠️ SIP→WebRTC burst loss detected: missing=%d (seq %d→%d) - requesting keyframe\n",
-								sess.ID, missing, lastSeq, seq)
-							sess.SendBrowserRecoveryToAsterisk("sip-gap")
-							lastGapRecovery = time.Now()
-						}
+						seqGapPackets += int(delta - 1)
 					}
 					lastSeq = seq
+					forwardSeq = true
 				default:
 					// Old/reordered packet (or wrap edge mis-order): keep baseline for normal progression.
 					seqOutOfOrder++
 				}
+			}
+
+			if forwardSeq {
+				if sess.VideoTimestampJumpPLI && sipVideoTimestampJumped(haveLastVideoTS, lastVideoTS, packet.Timestamp) {
+					fmt.Printf("[%s] sip_video_timestamp_jump prev=%d next=%d - requesting keyframe\n",
+						sess.ID, lastVideoTS, packet.Timestamp)
+					sess.SendPLIToAsteriskForced("sip-ts-jump")
+				}
+				lastVideoTS = packet.Timestamp
+				haveLastVideoTS = true
 			}
 
 			if packetCount%300 == 0 {
@@ -818,9 +851,9 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 				}
 				rBuf, rRel, rDrop, rTO := reorderBuf.GetStats()
 				rPend := reorderBuf.Pending()
-				fmt.Printf("[%s] 📊 SIP→WebRTC video stats: packets=%d gaps=%d missing=%d ooo=%d dup=%d reorder(buf=%d rel=%d drop=%d to=%d pend=%d) keyframeAge=%s\n",
+				fmt.Printf("[%s] 📊 SIP→WebRTC video stats: packets=%d gaps=%d missing=%d ooo=%d dup=%d reorder(buf=%d rel=%d drop=%d to=%d pend=%d skip=%d) keyframeAge=%s\n",
 					sess.ID, packetCount, seqGapEvents, seqGapPackets, seqOutOfOrder, seqDuplicates,
-					rBuf, rRel, rDrop, rTO, rPend, keyframeAge)
+					rBuf, rRel, rDrop, rTO, rPend, reorderBuf.SkipEventCount(), keyframeAge)
 				summary := updateSwitchSummary(keyframeAgeDuration)
 				sess.ObserveSIPVideoRTPDisorder(summary, time.Now())
 				if stall, ok := sess.ObserveSwitchVideoGateStall(time.Now(), summary); ok {

@@ -565,7 +565,11 @@ func (s *Session) LastSIPVideoRTPAt() time.Time {
 // full GOP. After @switch the watchdog must keep requesting keyframes until one
 // of these lands; RTP flowing alone is not enough (Al8uLPjnbirH still-IDR).
 func (s *Session) MarkSIPVideoIDRSize(packets int) {
-	if packets >= MinSwitchVideoGateIDRPackets {
+	minPackets := MinSwitchVideoGateIDRPackets
+	if s.SwitchVideoGateMinIDRPackets > 0 {
+		minPackets = s.SwitchVideoGateMinIDRPackets
+	}
+	if packets >= minPackets {
 		s.sipVideoHealthyIDR.Store(true)
 	}
 }

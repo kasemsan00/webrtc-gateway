@@ -11,6 +11,7 @@ import (
 const (
 	reorderWindowSize       = 64
 	defaultReorderTimeoutMS = 60
+	maxReorderPacing        = 10 * time.Millisecond
 )
 
 var reorderTimeout = loadReorderTimeout()
@@ -39,6 +40,18 @@ type reorderEntry struct {
 	isKeyframe bool
 }
 
+type reorderWrite struct {
+	data       []byte
+	isKeyframe bool
+	paced      bool
+}
+
+type reorderSkip struct {
+	count int
+	from  uint16
+	to    uint16
+}
+
 // VideoReorderBuffer provides a small bounded reorder window for SIP->WebRTC video RTP.
 // Out-of-order packets are held briefly and flushed in sequence order, reducing
 // H.264 decoder poisoning from network jitter without adding significant latency.
@@ -48,13 +61,17 @@ type reorderEntry struct {
 //   - 25ms timeout to flush when a gap isn't filled
 //   - Packets behind nextSeq are dropped (old/duplicate)
 //   - Packets too far ahead force-flush the gap
+//   - Skip callbacks fire only for unrecovered gaps (after timeout/force-flush)
 type VideoReorderBuffer struct {
 	mu      sync.Mutex
+	emitMu  sync.Mutex
 	packets map[uint16]*reorderEntry
 	nextSeq uint16
 	hasBase bool
 	sessID  string
 	writeFn func(data []byte, isKeyframe bool)
+	onSkip  func(skipped int, fromSeq, toSeq uint16)
+	pace    time.Duration
 	timer   *time.Timer
 	closed  bool
 
@@ -63,6 +80,7 @@ type VideoReorderBuffer struct {
 	Released   int64 // packets flushed in-order (immediate or consecutive)
 	DroppedOld int64 // packets dropped (behind nextSeq)
 	TimedOut   int64 // gap-skipped slots (timeout or force-flush)
+	SkipEvents int64 // unrecovered gap events (timeout or force-flush)
 }
 
 // NewVideoReorderBuffer creates a reorder buffer for SIP->WebRTC video.
@@ -75,13 +93,66 @@ func NewVideoReorderBuffer(sessID string, writeFn func(data []byte, isKeyframe b
 	}
 }
 
+// SetSkipHandler registers a callback for unrecovered sequence gaps. It is
+// invoked without the buffer lock held, after the skip has been applied.
+func (b *VideoReorderBuffer) SetSkipHandler(fn func(skipped int, fromSeq, toSeq uint16)) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.onSkip = fn
+}
+
+// SetPacing spaces consecutive packets released from a filled gap. 0 disables.
+func (b *VideoReorderBuffer) SetPacing(d time.Duration) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if d < 0 {
+		d = 0
+	}
+	if d > maxReorderPacing {
+		d = maxReorderPacing
+	}
+	b.pace = d
+}
+
+func (b *VideoReorderBuffer) emit(writes []reorderWrite, skips []reorderSkip) {
+	if len(writes) > 0 {
+		burst := false
+		for _, w := range writes {
+			if w.paced {
+				burst = true
+				break
+			}
+		}
+		b.emitMu.Lock()
+		for i, w := range writes {
+			if i > 0 && burst && b.pace > 0 {
+				time.Sleep(b.pace)
+			}
+			if b.writeFn != nil {
+				b.writeFn(w.data, w.isKeyframe)
+			}
+		}
+		b.emitMu.Unlock()
+	}
+	if b.onSkip == nil {
+		return
+	}
+	for _, s := range skips {
+		if s.count > 0 {
+			b.onSkip(s.count, s.from, s.to)
+		}
+	}
+}
+
 // Push adds a packet to the reorder buffer. It may trigger immediate or
 // deferred flushes depending on sequence position relative to nextSeq.
 func (b *VideoReorderBuffer) Push(seq uint16, data []byte, isKeyframe bool) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	var writes []reorderWrite
+	var skips []reorderSkip
 
+	b.mu.Lock()
 	if b.closed {
+		b.mu.Unlock()
 		return
 	}
 
@@ -91,11 +162,12 @@ func (b *VideoReorderBuffer) Push(seq uint16, data []byte, isKeyframe bool) {
 
 	if !b.hasBase {
 		// First packet: establish baseline and flush immediately.
-		b.nextSeq = seq
-		b.hasBase = true
-		b.writeFn(pkt, isKeyframe)
-		b.Released++
 		b.nextSeq = seq + 1
+		b.hasBase = true
+		b.Released++
+		writes = append(writes, reorderWrite{data: pkt, isKeyframe: isKeyframe})
+		b.mu.Unlock()
+		b.emit(writes, nil)
 		return
 	}
 
@@ -103,11 +175,11 @@ func (b *VideoReorderBuffer) Push(seq uint16, data []byte, isKeyframe bool) {
 
 	switch {
 	case offset == 0:
-		// Exactly the next expected packet: flush immediately.
-		b.writeFn(pkt, isKeyframe)
+		// Exactly the next expected packet: flush immediately, then any that were waiting.
+		writes = append(writes, reorderWrite{data: pkt, isKeyframe: isKeyframe})
 		b.Released++
 		b.nextSeq++
-		b.flushConsecutiveLocked()
+		b.flushConsecutiveLocked(&writes)
 
 	case offset < 0x8000 && offset < reorderWindowSize:
 		// Ahead of nextSeq but within window: buffer it.
@@ -120,12 +192,12 @@ func (b *VideoReorderBuffer) Push(seq uint16, data []byte, isKeyframe bool) {
 	case offset < 0x8000 && offset >= reorderWindowSize:
 		// Too far ahead: force-flush the gap so the buffer stays bounded.
 		newBase := seq - reorderWindowSize/2
-		b.forceFlushToLocked(newBase)
+		b.forceFlushToLocked(newBase, &writes, &skips)
 		if _, exists := b.packets[seq]; !exists {
 			b.packets[seq] = &reorderEntry{data: pkt, isKeyframe: isKeyframe}
 			b.Buffered++
 		}
-		b.flushConsecutiveLocked()
+		b.flushConsecutiveLocked(&writes)
 		if len(b.packets) > 0 {
 			b.resetTimerLocked()
 		}
@@ -134,18 +206,20 @@ func (b *VideoReorderBuffer) Push(seq uint16, data []byte, isKeyframe bool) {
 		// Behind nextSeq (old/duplicate): drop.
 		b.DroppedOld++
 	}
+	b.mu.Unlock()
+	b.emit(writes, skips)
 }
 
-// flushConsecutiveLocked writes all consecutive buffered packets starting from nextSeq.
+// flushConsecutiveLocked appends all consecutive buffered packets starting from nextSeq.
 // Must be called with mu held.
-func (b *VideoReorderBuffer) flushConsecutiveLocked() {
+func (b *VideoReorderBuffer) flushConsecutiveLocked(writes *[]reorderWrite) {
 	for {
 		entry, ok := b.packets[b.nextSeq]
 		if !ok {
 			break
 		}
 		delete(b.packets, b.nextSeq)
-		b.writeFn(entry.data, entry.isKeyframe)
+		*writes = append(*writes, reorderWrite{data: entry.data, isKeyframe: entry.isKeyframe, paced: true})
 		b.Released++
 		b.nextSeq++
 	}
@@ -158,17 +232,24 @@ func (b *VideoReorderBuffer) flushConsecutiveLocked() {
 
 // forceFlushToLocked advances nextSeq to target, flushing any buffered packets
 // in between and counting gaps as timed-out.
-func (b *VideoReorderBuffer) forceFlushToLocked(target uint16) {
+func (b *VideoReorderBuffer) forceFlushToLocked(target uint16, writes *[]reorderWrite, skips *[]reorderSkip) {
+	start := b.nextSeq
+	skipped := 0
 	for b.nextSeq != target {
 		entry, ok := b.packets[b.nextSeq]
 		if ok {
 			delete(b.packets, b.nextSeq)
-			b.writeFn(entry.data, entry.isKeyframe)
+			*writes = append(*writes, reorderWrite{data: entry.data, isKeyframe: entry.isKeyframe, paced: true})
 			b.Released++
 		} else {
+			skipped++
 			b.TimedOut++
 		}
 		b.nextSeq++
+	}
+	if skipped > 0 {
+		b.SkipEvents++
+		*skips = append(*skips, reorderSkip{count: skipped, from: start, to: target - 1})
 	}
 }
 
@@ -184,10 +265,12 @@ func (b *VideoReorderBuffer) resetTimerLocked() {
 // timeoutFlush is called when the reorder timer fires.
 // It skips the gap to the lowest buffered packet and flushes consecutive from there.
 func (b *VideoReorderBuffer) timeoutFlush() {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	var writes []reorderWrite
+	var skips []reorderSkip
 
+	b.mu.Lock()
 	if b.closed || len(b.packets) == 0 {
+		b.mu.Unlock()
 		return
 	}
 
@@ -210,6 +293,7 @@ func (b *VideoReorderBuffer) timeoutFlush() {
 			delete(b.packets, seq)
 			b.DroppedOld++
 		}
+		b.mu.Unlock()
 		return
 	}
 
@@ -218,17 +302,21 @@ func (b *VideoReorderBuffer) timeoutFlush() {
 	if skipped > 0 {
 		fmt.Printf("[%s] reorder: timeout-skip gap=%d (seq %d..%d)\n",
 			b.sessID, skipped, b.nextSeq, lowestSeq-1)
+		skips = append(skips, reorderSkip{count: int(skipped), from: b.nextSeq, to: lowestSeq - 1})
+		b.SkipEvents++
 	}
 	b.nextSeq = lowestSeq
 	b.TimedOut += int64(skipped)
 
 	// Flush consecutive from lowestSeq.
-	b.flushConsecutiveLocked()
+	b.flushConsecutiveLocked(&writes)
 
 	// If still have buffered packets, restart timer.
 	if len(b.packets) > 0 {
 		b.resetTimerLocked()
 	}
+	b.mu.Unlock()
+	b.emit(writes, skips)
 }
 
 // GetStats returns current reorder buffer statistics.
@@ -236,6 +324,13 @@ func (b *VideoReorderBuffer) GetStats() (buffered, released, droppedOld, timedOu
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.Buffered, b.Released, b.DroppedOld, b.TimedOut
+}
+
+// SkipEventCount returns unrecovered gap events after reordering.
+func (b *VideoReorderBuffer) SkipEventCount() int64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.SkipEvents
 }
 
 // Pending returns the number of packets currently buffered (waiting for flush).
@@ -263,22 +358,22 @@ func (b *VideoReorderBuffer) Reset() {
 // Drain flushes all remaining buffered packets and stops the timer.
 // Called on session teardown.
 func (b *VideoReorderBuffer) Drain() {
+	var writes []reorderWrite
+
 	b.mu.Lock()
-	defer b.mu.Unlock()
-
 	b.closed = true
-
 	if b.timer != nil {
 		b.timer.Stop()
 		b.timer = nil
 	}
 
-	// Flush remaining packets in order, skipping gaps.
+	// Collect remaining packets in order, skipping gaps. Teardown does not
+	// pace or emit skip callbacks — the session is going away.
 	for len(b.packets) > 0 {
 		entry, ok := b.packets[b.nextSeq]
 		if ok {
 			delete(b.packets, b.nextSeq)
-			b.writeFn(entry.data, entry.isKeyframe)
+			writes = append(writes, reorderWrite{data: entry.data, isKeyframe: entry.isKeyframe})
 			b.Released++
 		}
 		b.nextSeq++
@@ -303,6 +398,8 @@ func (b *VideoReorderBuffer) Drain() {
 			}
 		}
 	}
+	b.mu.Unlock()
+	b.emit(writes, nil)
 }
 
 // seqBeforeU16 returns true if a comes before b in 16-bit sequence space.

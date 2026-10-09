@@ -451,9 +451,22 @@ func TestSwitchVideoGateCommitStopsTransitionHold(t *testing.T) {
 	}
 }
 
-func TestSwitchVideoGateHoldsUndersizedIDRUntilFullGOP(t *testing.T) {
+func TestSwitchVideoGateAcceptsSmallCompleteIDR(t *testing.T) {
 	start := time.Unix(1_700_000_000, 0)
 	sess := &Session{VideoAUNormalizeEnabled: true, SwitchGeneration: 3}
+	sess.StartSwitchVideoGate(3, start, "switch")
+
+	// S5CDifyVuoul: TTRS-VRS 640x480 IDRs are complete in 6-20 packets.
+	small := gateTestAUWithPackets(3, true, true, 99, 6)
+	reserved := sess.EvaluateSwitchVideoAccessUnit(small, start.Add(7*time.Millisecond))
+	if !reserved.Emit || reserved.Reason != "complete-idr-reserved" || reserved.Reservation == 0 {
+		t.Fatalf("small complete IDR should reserve, got %+v", reserved)
+	}
+}
+
+func TestSwitchVideoGateHoldsUndersizedIDRUntilFullGOP(t *testing.T) {
+	start := time.Unix(1_700_000_000, 0)
+	sess := &Session{VideoAUNormalizeEnabled: true, SwitchGeneration: 3, SwitchVideoGateMinIDRPackets: 24}
 	sess.StartSwitchVideoGate(3, start, "switch")
 
 	tiny := gateTestAUWithPackets(3, true, true, 99, 5)
@@ -470,35 +483,28 @@ func TestSwitchVideoGateHoldsUndersizedIDRUntilFullGOP(t *testing.T) {
 		t.Fatalf("P-frame passed while holding: %+v", pframe)
 	}
 
-	full := gateTestAUWithPackets(3, true, true, 99, MinSwitchVideoGateIDRPackets)
+	full := gateTestAUWithPackets(3, true, true, 99, 24)
 	reserved := sess.EvaluateSwitchVideoAccessUnit(full, start.Add(400*time.Millisecond))
 	if !reserved.Emit || reserved.Reason != "complete-idr-reserved" || reserved.Reservation == 0 {
 		t.Fatalf("full IDR did not reserve: %+v", reserved)
 	}
 }
 
-func TestSwitchVideoGateHolds22PacketPLIFlushIDR(t *testing.T) {
+func TestSwitchVideoGateAcceptsCompleteFlushSizedIDR(t *testing.T) {
 	start := time.Unix(1_700_000_000, 0)
 	sess := &Session{VideoAUNormalizeEnabled: true, SwitchGeneration: 3}
 	sess.StartSwitchVideoGate(3, start, "switch")
 
-	// CAoRE65fuUZG: 800ms PLI produced a 22-packet IDR that blacked n1669.
 	flush := gateTestAUWithPackets(3, true, true, 99, 22)
-	held := sess.EvaluateSwitchVideoAccessUnit(flush, start.Add(882*time.Millisecond))
-	if held.Emit || held.Reason != "undersized-idr" {
-		t.Fatalf("22-packet PLI flush should be held, got %+v", held)
-	}
-
-	next := gateTestAUWithPackets(3, true, true, 99, 27)
-	reserved := sess.EvaluateSwitchVideoAccessUnit(next, start.Add(1900*time.Millisecond))
+	reserved := sess.EvaluateSwitchVideoAccessUnit(flush, start.Add(882*time.Millisecond))
 	if !reserved.Emit || reserved.Reason != "complete-idr-reserved" {
-		t.Fatalf("27-packet GOP should reserve: %+v", reserved)
+		t.Fatalf("complete 22-packet IDR should reserve, got %+v", reserved)
 	}
 }
 
 func TestSwitchVideoGateAcceptsUndersizedIDRAfterStall(t *testing.T) {
 	start := time.Unix(1_700_000_000, 0)
-	sess := &Session{VideoAUNormalizeEnabled: true, SwitchGeneration: 3}
+	sess := &Session{VideoAUNormalizeEnabled: true, SwitchGeneration: 3, SwitchVideoGateMinIDRPackets: 24}
 	sess.StartSwitchVideoGate(3, start, "switch")
 
 	tiny := gateTestAUWithPackets(3, true, true, 99, 5)

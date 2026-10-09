@@ -3,6 +3,7 @@ package session
 import (
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestVideoReorderBuffer_InOrder(t *testing.T) {
@@ -49,6 +50,59 @@ func TestVideoReorderBuffer_InOrder(t *testing.T) {
 	}
 	if timedOut != 0 {
 		t.Errorf("timedOut = %d, want 0", timedOut)
+	}
+}
+
+func TestVideoReorderBuffer_ReorderedPacketsDoNotSkip(t *testing.T) {
+	var skips []int
+	buf := NewVideoReorderBuffer("test", func([]byte, bool) {})
+	buf.SetSkipHandler(func(skipped int, _, _ uint16) {
+		skips = append(skips, skipped)
+	})
+
+	// Sender emitted 100..110 in order; arrival is shuffled but complete.
+	order := []uint16{100, 102, 103, 101, 107, 104, 105, 106, 110, 108, 109}
+	for _, seq := range order {
+		buf.Push(seq, makeMinimalRTP(seq), false)
+	}
+
+	if len(skips) != 0 {
+		t.Fatalf("reordered-but-complete packets triggered skip %v", skips)
+	}
+	if _, _, _, timedOut := buf.GetStats(); timedOut != 0 {
+		t.Fatalf("timedOut=%d, want 0", timedOut)
+	}
+	if buf.SkipEventCount() != 0 {
+		t.Fatalf("SkipEventCount=%d, want 0", buf.SkipEventCount())
+	}
+}
+
+func TestVideoReorderBuffer_UnrecoveredGapNotifiesSkip(t *testing.T) {
+	skippedCh := make(chan int, 1)
+	buf := NewVideoReorderBuffer("test", func([]byte, bool) {})
+	buf.SetSkipHandler(func(skipped int, fromSeq, toSeq uint16) {
+		if fromSeq != 101 || toSeq != 109 {
+			t.Errorf("skip range %d..%d, want 101..109", fromSeq, toSeq)
+		}
+		select {
+		case skippedCh <- skipped:
+		default:
+		}
+	})
+
+	buf.Push(100, makeMinimalRTP(100), false)
+	buf.Push(110, makeMinimalRTP(110), false)
+
+	select {
+	case skipped := <-skippedCh:
+		if skipped != 9 {
+			t.Fatalf("skipped=%d, want 9", skipped)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for unrecovered gap skip")
+	}
+	if buf.SkipEventCount() != 1 {
+		t.Fatalf("SkipEventCount=%d, want 1", buf.SkipEventCount())
 	}
 }
 
