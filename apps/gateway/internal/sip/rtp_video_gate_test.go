@@ -64,7 +64,7 @@ func TestWriteNormalizedVideoAccessUnitAbortsReservationOnWriteFailure(t *testin
 	sess.StartSwitchVideoGate(4, now, "test")
 
 	writes := 0
-	result := writeNormalizedVideoAccessUnit(sess, normalizedVideoAU(4, true, true, session.MinSwitchVideoGateIDRPackets), now.Add(time.Second), func([]byte) (int, error) {
+	result := writeNormalizedVideoAccessUnit(sess, normalizedVideoAU(4, true, true, 6), now.Add(time.Second), func([]byte) (int, error) {
 		writes++
 		if writes == 2 {
 			return 0, errors.New("track failed")
