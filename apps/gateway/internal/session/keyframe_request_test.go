@@ -65,3 +65,56 @@ func TestAllowSIPOriginatedBrowserKeyframe(t *testing.T) {
 		t.Fatalf("stale request and IDR = (%v, %q), want allow", allow, reason)
 	}
 }
+
+func TestImplicitSwitchKicksOnceWithoutSwitchMessage(t *testing.T) {
+	sess := newBurstTestSession("implicit-switch-once")
+	now := time.Now()
+	if !sess.TryKickUplinkKeyframeForSwitch("implicit-switch", now) {
+		t.Fatal("expected one implicit-switch kick")
+	}
+	if sess.TryKickUplinkKeyframeForSwitch("implicit-switch", now.Add(10*time.Millisecond)) {
+		t.Fatal("expected a second implicit-switch inside the window to be skipped")
+	}
+}
+
+func TestDiscontinuityAndSwitchKickOnce(t *testing.T) {
+	now := time.Now()
+	orders := [][2]string{
+		{"implicit-switch", "switch"},
+		{"switch", "implicit-switch"},
+	}
+	for _, order := range orders {
+		sess := newBurstTestSession(order[0] + "-then-" + order[1])
+		if !sess.TryKickUplinkKeyframeForSwitch(order[0], now) {
+			t.Fatalf("%s: expected the first kick", order[0])
+		}
+		if sess.TryKickUplinkKeyframeForSwitch(order[1], now.Add(videoDiscontinuityIDRCredit)) {
+			t.Fatalf("%s then %s at 150ms: expected a single kick", order[0], order[1])
+		}
+		if !sess.TryKickUplinkKeyframeForSwitch(order[1], now.Add(videoDiscontinuityIDRCredit+time.Millisecond)) {
+			t.Fatalf("%s: expected a kick after the dedupe window", order[1])
+		}
+	}
+}
+
+func TestFirstPostSwitchSIPPLIIsForwarded(t *testing.T) {
+	sess := newBurstTestSession("post-switch-sip-pli")
+	sess.RecordUplinkKeyframe()
+	sess.LastWebRTCPLISent = time.Now()
+	now := time.Now()
+	if !sess.TryKickUplinkKeyframeForSwitch("implicit-switch", now) {
+		t.Fatal("expected implicit-switch kick")
+	}
+	if sess.TryKickUplinkKeyframeForSwitch("switch", now.Add(20*time.Millisecond)) {
+		t.Fatal("expected @switch inside the window to be skipped")
+	}
+
+	allow, reason := sess.AllowSIPOriginatedBrowserKeyframe("pli")
+	if !allow || reason != "" {
+		t.Fatalf("first post-switch SIP PLI = (%v, %q), want forward", allow, reason)
+	}
+	allow, reason = sess.AllowSIPOriginatedBrowserKeyframe("fir")
+	if allow || reason != "uplink-idr-fresh" {
+		t.Fatalf("second post-switch SIP FIR = (%v, %q), want uplink-idr-fresh", allow, reason)
+	}
+}

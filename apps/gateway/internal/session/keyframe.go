@@ -348,6 +348,29 @@ func (s *Session) HasUplinkKeyframeSince(t time.Time) bool {
 	return !s.LastUplinkKeyframe.IsZero() && !s.LastUplinkKeyframe.Before(t)
 }
 
+// TryKickUplinkKeyframeForSwitch sends the forced phone IDR burst used by an
+// explicit @switch. An implicit stream switch (timestamp jump or SSRC change)
+// uses the same burst with reason implicit-switch. A second switch event
+// inside videoDiscontinuityIDRCredit does not send another burst. The kick
+// uses forced WebRTC feedback, so uplink-idr-fresh and the SIP rate limit
+// do not apply to it. The next SIP PLI/FIR after the claim is forwarded.
+func (s *Session) TryKickUplinkKeyframeForSwitch(reason string, now time.Time) bool {
+	s.mu.Lock()
+	if !s.switchUplinkKeyframeKickAt.IsZero() {
+		age := now.Sub(s.switchUplinkKeyframeKickAt)
+		if age >= 0 && age <= videoDiscontinuityIDRCredit {
+			s.mu.Unlock()
+			fmt.Printf("[%s] uplink_keyframe_kick_skipped reason=%s\n", s.ID, reason)
+			return false
+		}
+	}
+	s.switchUplinkKeyframeKickAt = now
+	s.postSwitchSIPKeyframePending = true
+	s.mu.Unlock()
+	s.KickUplinkKeyframeForSIPDecoder(reason)
+	return true
+}
+
 // KickUplinkKeyframeForSIPDecoder requests a fresh browser IDR so a SIP decoder
 // that just became reachable (200 OK / first RTP dest) is not stuck on P-frames.
 func (s *Session) KickUplinkKeyframeForSIPDecoder(reason string) {
@@ -397,14 +420,21 @@ func DecidePeriodicBrowserPLI(hasUplinkIDR bool, now, deadline time.Time) (bool,
 }
 
 // AllowSIPOriginatedBrowserKeyframe gates a SIP PLI or FIR before it is
-// forwarded to the phone. Returns false with reason uplink-idr-fresh or
-// rate-limit. Must not be used for forced switch or decoder kicks.
+// forwarded to the phone. The first request after an explicit or implicit
+// switch is always allowed. Later requests return false with reason
+// uplink-idr-fresh or rate-limit. Must not be used for forced switch or
+// decoder kicks.
 func (s *Session) AllowSIPOriginatedBrowserKeyframe(string) (bool, string) {
-	s.mu.RLock()
+	s.mu.Lock()
+	if s.postSwitchSIPKeyframePending {
+		s.postSwitchSIPKeyframePending = false
+		s.mu.Unlock()
+		return true, ""
+	}
 	lastIDR := s.LastUplinkKeyframe
 	lastPLI := s.LastWebRTCPLISent
 	lastFIR := s.LastWebRTCFIRSent
-	s.mu.RUnlock()
+	s.mu.Unlock()
 
 	now := time.Now()
 	if !lastIDR.IsZero() && now.Sub(lastIDR) < sipOriginatedBrowserKeyframeMinInterval {

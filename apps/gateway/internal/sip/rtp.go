@@ -771,6 +771,7 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 							sess.StartSwitchVideoGate(currentGeneration, time.Now(), "ssrc")
 						}
 					}
+					sess.TryKickUplinkKeyframeForSwitch("implicit-switch", time.Now())
 					fmt.Printf("[%s] h264_au_source_reset reason=ssrc-change previous_ssrc=%d ssrc=%d\n", sess.ID, previousSSRC, ssrc)
 				}
 				sess.SetRemoteVideoSSRC(ssrc)
@@ -875,6 +876,7 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 							sess.StartSwitchVideoGate(currentGeneration, time.Now(), "timestamp-jump")
 						}
 					}
+					sess.TryKickUplinkKeyframeForSwitch("implicit-switch", time.Now())
 				}
 				lastVideoTS = packet.Timestamp
 				haveLastVideoTS = true

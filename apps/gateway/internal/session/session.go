@@ -178,6 +178,8 @@ type Session struct {
 	VideoSuppressEarlyMedia               bool                 `json:"-"`
 	WebRTCTWCCEnabled                     bool                 `json:"-"`
 	videoDiscontinuityIDRAt               time.Time            `json:"-"`
+	switchUplinkKeyframeKickAt            time.Time            `json:"-"`
+	postSwitchSIPKeyframePending          bool                 `json:"-"`
 	SwitchVideoGateActive                 bool                 `json:"-"`
 	SwitchVideoGateReleasing              bool                 `json:"-"`
 	SwitchVideoGateGeneration             int                  `json:"-"`
