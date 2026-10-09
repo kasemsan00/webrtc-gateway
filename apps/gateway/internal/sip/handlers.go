@@ -714,21 +714,31 @@ func (s *Server) handleBYE(req *sip.Request, tx sip.ServerTransaction) {
 	var callIDValue string
 	if callID := req.CallID(); callID != nil {
 		callIDValue = callID.Value()
-		if s.config.DebugSIPInvite { fmt.Printf("Call-ID: %s\n", callIDValue) }
+		if s.config.DebugSIPInvite {
+			fmt.Printf("Call-ID: %s\n", callIDValue)
+		}
 	}
 
 	if cseq := req.CSeq(); cseq != nil {
 		fmt.Printf("CSeq: %s\n", cseq.Value())
 	}
 	fmt.Printf("Method: %s\n", req.Method)
-	if s.config.DebugSIPInvite { fmt.Printf("Request-URI: %s\n", req.Recipient.String()) }
+	if s.config.DebugSIPInvite {
+		fmt.Printf("Request-URI: %s\n", req.Recipient.String())
+	}
 
 	// Log Via headers (critical for response routing)
 	if s.config.DebugSIPInvite {
 		fmt.Printf("\nVia Headers:\n")
-		for i, via := range req.GetHeaders("Via") { fmt.Printf("  Via[%d]: %s\n", i, via.Value()) }
-		if req.Source() != "" { fmt.Printf("Request Source: %s\n", req.Source()) }
-		if req.Destination() != "" { fmt.Printf("Request Destination: %s\n", req.Destination()) }
+		for i, via := range req.GetHeaders("Via") {
+			fmt.Printf("  Via[%d]: %s\n", i, via.Value())
+		}
+		if req.Source() != "" {
+			fmt.Printf("Request Source: %s\n", req.Source())
+		}
+		if req.Destination() != "" {
+			fmt.Printf("Request Destination: %s\n", req.Destination())
+		}
 	}
 
 	// Find session by Call-ID
@@ -1263,11 +1273,20 @@ func (s *Server) handleKeyframeMessage(body string, callerURI string) {
 	fmt.Printf("📍 Found session %s for caller %s, sending %s requests...\n", sess.ID, callerUsername, keyframeType)
 
 	for i := 0; i < sipMessageKeyframeAttempts; i++ {
+		kind := "pli"
 		if isFIR {
+			kind = "fir"
+		}
+		if allow, reason := sess.AllowSIPOriginatedBrowserKeyframe(kind); !allow {
+			fmt.Printf("[%s] sip_keyframe_request_suppressed kind=%s reason=%s source=sip-message\n", sess.ID, kind, reason)
+		} else if isFIR {
 			sess.SendFIRToWebRTC()
-			sess.SendFIRToAsterisk()
 		} else {
 			sess.SendPLItoWebRTC()
+		}
+		if isFIR {
+			sess.SendFIRToAsterisk()
+		} else {
 			sess.SendPLIToAsteriskForced("sip-message")
 		}
 
@@ -1378,7 +1397,7 @@ func (s *Server) handleSwitchMessage(body string, callerURI string) {
 	// SIP dest/SSRC often stay the same across queue→agent, so Linphone
 	// joins mid-GOP. Keep requesting a browser IDR until one is forwarded
 	// after this switch — independent of SIP→WebRTC gate recovery.
-	sess.KickUplinkKeyframeForSIPDecoder("switch")
+	sess.TryKickUplinkKeyframeForSwitch("switch", time.Now())
 
 	// 3.1 Enable temporary @switch transition hold on SIP->WebRTC video path (if enabled).
 	// Preserve mode avoids forcing a black screen by gating only unsafe packets

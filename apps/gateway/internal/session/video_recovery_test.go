@@ -488,27 +488,18 @@ func TestShouldStopStartupBrowserPLI(t *testing.T) {
 	if !sess.ShouldStopStartupBrowserPLI() {
 		t.Fatal("expected first-packet PLI to stop after SPS/PPS and uplink IDR")
 	}
-	if sess.ShouldStopPeriodicBrowserPLI() {
-		t.Fatal("expected periodic PLI to continue until the late-join window elapses")
-	}
-	sess.sipVideoDestReadyAt = time.Now()
-	if sess.ShouldStopPeriodicBrowserPLI() {
-		t.Fatal("expected periodic PLI to continue while dest-ready window is still open")
-	}
-	sess.sipVideoDestReadyAt = time.Now().Add(-lateJoinBrowserPLIWindow - time.Millisecond)
 	if !sess.ShouldStopPeriodicBrowserPLI() {
-		t.Fatal("expected periodic PLI to stop after dest-ready late-join window")
+		t.Fatal("expected periodic PLI to stop once an uplink IDR was forwarded")
 	}
 }
 
-func TestShouldStopPeriodicBrowserPLIKeepsGoingUntilBridgedPeerAnswerIDR(t *testing.T) {
+func TestPeriodicBrowserPLIStaysStoppedAcrossBridgedPeerAnswer(t *testing.T) {
 	sess := newBurstTestSession("bridged-peer-answer-pli")
 	sess.CachedSPS = []byte{0x67}
 	sess.CachedPPS = []byte{0x68}
 	sess.RecordUplinkKeyframe()
-	sess.sipVideoDestReadyAt = time.Now().Add(-lateJoinBrowserPLIWindow - time.Second)
 	if !sess.ShouldStopPeriodicBrowserPLI() {
-		t.Fatal("expected periodic PLI to stop after late-join window before the agent answers")
+		t.Fatal("expected periodic PLI to stop on the first uplink IDR")
 	}
 
 	time.Sleep(2 * time.Millisecond)
@@ -518,8 +509,8 @@ func TestShouldStopPeriodicBrowserPLIKeepsGoingUntilBridgedPeerAnswerIDR(t *test
 	if sess.MarkBridgedPeerAnswered() {
 		t.Fatal("second bridged-peer-answered mark must be ignored")
 	}
-	if sess.ShouldStopPeriodicBrowserPLI() {
-		t.Fatal("expected periodic PLI to continue until a post-answer uplink IDR")
+	if !sess.ShouldStopPeriodicBrowserPLI() {
+		t.Fatal("expected periodic PLI to stay stopped after the agent answers")
 	}
 	if !sess.NeedsBridgedPeerAnswerUplinkKeyframe() {
 		t.Fatal("expected NeedsBridgedPeerAnswerUplinkKeyframe before the post-answer IDR")
@@ -529,9 +520,6 @@ func TestShouldStopPeriodicBrowserPLIKeepsGoingUntilBridgedPeerAnswerIDR(t *test
 	sess.RecordUplinkKeyframe()
 	if sess.NeedsBridgedPeerAnswerUplinkKeyframe() {
 		t.Fatal("expected post-answer uplink IDR to satisfy the late joiner")
-	}
-	if !sess.ShouldStopPeriodicBrowserPLI() {
-		t.Fatal("expected periodic PLI to stop after post-answer uplink IDR and late-join window")
 	}
 }
 
@@ -558,20 +546,19 @@ func TestBeginPeriodicBrowserPLIEpochSupersedesPriorSender(t *testing.T) {
 	}
 }
 
-func TestShouldStopPeriodicBrowserPLIKeepsGoingUntilPostSwitchUplinkIDR(t *testing.T) {
+func TestPeriodicBrowserPLIStaysStoppedAcrossSwitch(t *testing.T) {
 	sess := newBurstTestSession("post-switch-browser-pli")
 	sess.CachedSPS = []byte{0x67}
 	sess.CachedPPS = []byte{0x68}
 	sess.RecordUplinkKeyframe()
-	sess.sipVideoDestReadyAt = time.Now().Add(-lateJoinBrowserPLIWindow - time.Second)
 	if !sess.ShouldStopPeriodicBrowserPLI() {
-		t.Fatal("expected periodic PLI to stop after late-join window before @switch")
+		t.Fatal("expected periodic PLI to stop on the first uplink IDR")
 	}
 
 	time.Sleep(2 * time.Millisecond)
 	sess.SwitchTargetReceivedAt = time.Now()
-	if sess.ShouldStopPeriodicBrowserPLI() {
-		t.Fatal("expected periodic PLI to continue until a post-@switch uplink IDR")
+	if !sess.ShouldStopPeriodicBrowserPLI() {
+		t.Fatal("expected periodic PLI to stay stopped across @switch")
 	}
 	if !sess.NeedsPostSwitchUplinkKeyframe() {
 		t.Fatal("expected NeedsPostSwitchUplinkKeyframe before the post-switch IDR")
@@ -580,9 +567,6 @@ func TestShouldStopPeriodicBrowserPLIKeepsGoingUntilPostSwitchUplinkIDR(t *testi
 	sess.RecordUplinkKeyframe()
 	if sess.NeedsPostSwitchUplinkKeyframe() {
 		t.Fatal("expected post-switch uplink IDR to satisfy Linphone decoder join")
-	}
-	if !sess.ShouldStopPeriodicBrowserPLI() {
-		t.Fatal("expected periodic PLI to stop after post-switch uplink IDR and late-join window")
 	}
 }
 

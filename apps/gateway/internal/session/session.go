@@ -176,7 +176,10 @@ type Session struct {
 	VideoReorderPacing                    time.Duration        `json:"-"`
 	VideoTimestampJumpPLI                 bool                 `json:"-"`
 	VideoSuppressEarlyMedia               bool                 `json:"-"`
+	WebRTCTWCCEnabled                     bool                 `json:"-"`
 	videoDiscontinuityIDRAt               time.Time            `json:"-"`
+	switchUplinkKeyframeKickAt            time.Time            `json:"-"`
+	postSwitchSIPKeyframePending          bool                 `json:"-"`
 	SwitchVideoGateActive                 bool                 `json:"-"`
 	SwitchVideoGateReleasing              bool                 `json:"-"`
 	SwitchVideoGateGeneration             int                  `json:"-"`
@@ -479,14 +482,11 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 	// Build ICE servers configuration
 	iceServers := pkg_webrtc.BuildICEServers(turnConfig)
 
-	// Create custom MediaEngine with RTCPFeedback
-	mediaEngine, err := createCustomMediaEngine()
+	api, err := newGatewayWebRTCAPI(cfg.SIP.WebRTCTWCCEnabled)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create media engine: %w", err)
+		return nil, fmt.Errorf("failed to create WebRTC API: %w", err)
 	}
-
-	// Create API with custom MediaEngine
-	api := webrtc.NewAPI(webrtc.WithMediaEngine(mediaEngine))
+	fmt.Printf("[%s] webrtc_api twcc=%v\n", id, cfg.SIP.WebRTCTWCCEnabled)
 
 	// Create WebRTC peer connection using custom API
 	webrtcConfig := webrtc.Configuration{
@@ -602,6 +602,7 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 		VideoReorderPacing:                   time.Duration(cfg.SIP.VideoReorderPacingMS) * time.Millisecond,
 		VideoTimestampJumpPLI:                cfg.SIP.VideoTimestampJumpPLI,
 		VideoSuppressEarlyMedia:              cfg.SIP.VideoSuppressEarlyMedia,
+		WebRTCTWCCEnabled:                    cfg.SIP.WebRTCTWCCEnabled,
 		sipVideoIDRReplayNotify:              make(chan struct{}, 1),
 	}
 	session.initVideoRTPHistory()

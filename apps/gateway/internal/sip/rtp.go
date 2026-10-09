@@ -771,6 +771,7 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 							sess.StartSwitchVideoGate(currentGeneration, time.Now(), "ssrc")
 						}
 					}
+					sess.TryKickUplinkKeyframeForSwitch("implicit-switch", time.Now())
 					fmt.Printf("[%s] h264_au_source_reset reason=ssrc-change previous_ssrc=%d ssrc=%d\n", sess.ID, previousSSRC, ssrc)
 				}
 				sess.SetRemoteVideoSSRC(ssrc)
@@ -875,6 +876,7 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 							sess.StartSwitchVideoGate(currentGeneration, time.Now(), "timestamp-jump")
 						}
 					}
+					sess.TryKickUplinkKeyframeForSwitch("implicit-switch", time.Now())
 				}
 				lastVideoTS = packet.Timestamp
 				haveLastVideoTS = true
@@ -1057,10 +1059,18 @@ func (s *Server) handleRTCPFromSIP(data []byte, sess *session.Session, rtcpCount
 	for _, pkt := range packets {
 		switch p := pkt.(type) {
 		case *rtcp.PictureLossIndication:
+			if allow, reason := sess.AllowSIPOriginatedBrowserKeyframe("pli"); !allow {
+				fmt.Printf("[%s] sip_keyframe_request_suppressed kind=pli reason=%s\n", sess.ID, reason)
+				continue
+			}
 			fmt.Printf("[%s] 📸 Received PLI from Linphone/SIP - Forwarding to WebRTC browser (Media SSRC=%d)\n", sess.ID, p.MediaSSRC)
 			sess.SendPLItoWebRTC()
 
 		case *rtcp.FullIntraRequest:
+			if allow, reason := sess.AllowSIPOriginatedBrowserKeyframe("fir"); !allow {
+				fmt.Printf("[%s] sip_keyframe_request_suppressed kind=fir reason=%s\n", sess.ID, reason)
+				continue
+			}
 			fmt.Printf("[%s] 📸 Received FIR from Linphone/SIP - Forwarding to WebRTC browser\n", sess.ID)
 			sess.SendPLItoWebRTC()
 
@@ -1095,21 +1105,16 @@ func (s *Server) handleRTCPFromSIP(data []byte, sess *session.Session, rtcpCount
 	}
 }
 
-// startPeriodicPLIForSession sends PLI requests to the browser at regular intervals
+// startPeriodicPLIForSession requests phone keyframes until one uplink IDR
+// has been forwarded to SIP. If none arrives, it stops at the safety-net
+// deadline instead of continuing through the SIP switch.
 func (s *Server) startPeriodicPLIForSession(sess *session.Session) {
 	epoch := sess.PeriodicBrowserPLIEpoch()
-	fmt.Printf("[%s] 🔄 Starting periodic PLI sender for fast video start epoch=%d\n", sess.ID, epoch)
+	fmt.Printf("[%s] periodic_pli_start epoch=%d\n", sess.ID, epoch)
 
-	// Wait a bit for the connection to establish
 	time.Sleep(500 * time.Millisecond)
 
-	// Keep requesting browser IDRs through the late-join window so a SIP
-	// decoder that answers after queue auto-200 (Linphone after 5–10s ring,
-	// or a queue-bridged agent that answers even later) is not stuck on
-	// P-frames. Stop once dest-ready + 12s has elapsed, no bridged-peer
-	// answer / @switch IDR is still owed, and an uplink IDR was forwarded.
-	pliDeadline := time.Now().Add(15 * time.Second)
-
+	pliDeadline := time.Now().Add(session.PeriodicBrowserPLISafetyNet)
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 
@@ -1118,14 +1123,15 @@ func (s *Server) startPeriodicPLIForSession(sess *session.Session) {
 		if sess.PeriodicBrowserPLIEpoch() == epoch {
 			return false
 		}
-		fmt.Printf("[%s] Stopping periodic PLI sender - superseded epoch=%d\n", sess.ID, epoch)
+		fmt.Printf("[%s] periodic_pli_stop reason=superseded epoch=%d sent=%d\n", sess.ID, epoch, pliCount)
 		return true
 	}
-	stopIfReady := func(reason string) bool {
-		if !sess.ShouldStopPeriodicBrowserPLI() {
+	stopIfReady := func() bool {
+		stop, reason := session.DecidePeriodicBrowserPLI(sess.HasUplinkKeyframe(), time.Now(), pliDeadline)
+		if !stop {
 			return false
 		}
-		fmt.Printf("[%s] Stopping periodic PLI sender - %s\n", sess.ID, reason)
+		fmt.Printf("[%s] periodic_pli_stop reason=%s epoch=%d sent=%d\n", sess.ID, reason, epoch, pliCount)
 		return true
 	}
 
@@ -1134,10 +1140,7 @@ func (s *Server) startPeriodicPLIForSession(sess *session.Session) {
 		if state == session.StateEnded || state == session.StateReconnecting {
 			return
 		}
-		if superseded() {
-			return
-		}
-		if stopIfReady("late-join window elapsed") {
+		if superseded() || stopIfReady() {
 			return
 		}
 		sess.SendPLItoWebRTC()
@@ -1148,21 +1151,14 @@ func (s *Server) startPeriodicPLIForSession(sess *session.Session) {
 	for range ticker.C {
 		state := sess.GetState()
 		if state == session.StateEnded {
-			fmt.Printf("[%s] Stopping periodic PLI sender - session ended\n", sess.ID)
+			fmt.Printf("[%s] periodic_pli_stop reason=session-ended epoch=%d sent=%d\n", sess.ID, epoch, pliCount)
 			return
 		}
 		if state == session.StateReconnecting {
-			fmt.Printf("[%s] Stopping periodic PLI sender - session reconnecting\n", sess.ID)
+			fmt.Printf("[%s] periodic_pli_stop reason=reconnecting epoch=%d sent=%d\n", sess.ID, epoch, pliCount)
 			return
 		}
-		if superseded() {
-			return
-		}
-		if stopIfReady("late-join window elapsed") {
-			return
-		}
-		if time.Now().After(pliDeadline) && !sess.NeedsPostSwitchUplinkKeyframe() && !sess.NeedsBridgedPeerAnswerUplinkKeyframe() {
-			fmt.Printf("[%s] Stopping periodic PLI sender - startup window ended\n", sess.ID)
+		if superseded() || stopIfReady() {
 			return
 		}
 		pliCount++
@@ -1173,15 +1169,19 @@ func (s *Server) startPeriodicPLIForSession(sess *session.Session) {
 	}
 }
 
-// RestartPeriodicPLI supersedes any in-flight sender and starts a new late-join
-// browser PLI window. Used when a queue-bridged agent answers after the
-// caller's dest-ready window already elapsed.
+// RestartPeriodicPLI starts another safety-net sender only when no uplink
+// IDR has been forwarded yet. A bridged-peer answer that already has one
+// does not restart the loop; decoder need uses KickUplinkKeyframeForSIPDecoder.
 func (s *Server) RestartPeriodicPLI(sess *session.Session) {
 	if sess == nil || sess.GetState() == session.StateEnded {
 		return
 	}
+	if sess.HasUplinkKeyframe() {
+		fmt.Printf("[%s] periodic_pli_restart_skipped reason=uplink-idr-forwarded\n", sess.ID)
+		return
+	}
 	epoch := sess.BeginPeriodicBrowserPLIEpoch()
-	fmt.Printf("[%s] 🔄 Restarting periodic PLI sender epoch=%d reason=bridged-peer-answered\n", sess.ID, epoch)
+	fmt.Printf("[%s] periodic_pli_restart epoch=%d reason=no-uplink-idr\n", sess.ID, epoch)
 	go s.startPeriodicPLIForSession(sess)
 }
 

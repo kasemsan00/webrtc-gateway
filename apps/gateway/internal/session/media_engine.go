@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/pion/interceptor"
 	"github.com/pion/webrtc/v4"
 )
 
@@ -25,27 +26,41 @@ func h264CodecParameters(payloadType webrtc.PayloadType, profile string, packeti
 	}
 }
 
-// createCustomMediaEngine creates a MediaEngine with custom RTCPFeedback support
+// videoRTCPFeedback is the H.264 feedback set advertised to the phone.
+// goog-remb is omitted: this gateway does not generate REMB. transport-cc is
+// advertised only when the TWCC sender interceptor is installed with it.
+func videoRTCPFeedback(twccEnabled bool) []webrtc.RTCPFeedback {
+	feedback := []webrtc.RTCPFeedback{
+		{Type: "nack"},
+		{Type: "nack", Parameter: "pli"},
+		{Type: "ccm", Parameter: "fir"},
+	}
+	if twccEnabled {
+		feedback = append(feedback, webrtc.RTCPFeedback{Type: "transport-cc"})
+	}
+	return feedback
+}
+
+// createCustomMediaEngine creates a MediaEngine with custom RTCPFeedback support.
+// TWCC feedback is included. Pair it with newGatewayWebRTCAPI so the header
+// extension and sender interceptor exist.
 func createCustomMediaEngine() (*webrtc.MediaEngine, error) {
+	return createCustomMediaEngineWithTWCC(true)
+}
+
+func createCustomMediaEngineWithTWCC(twccEnabled bool) (*webrtc.MediaEngine, error) {
 	m := &webrtc.MediaEngine{}
 
-	// Video codecs with custom RTCPFeedback
-	videoRTCPFeedback := []webrtc.RTCPFeedback{
-		{Type: "nack"},                   // Negative ACK for lost packets
-		{Type: "nack", Parameter: "pli"}, // Picture Loss Indication
-		{Type: "ccm", Parameter: "fir"},  // Full Intra Request
-		{Type: "goog-remb"},              // Receiver Estimated Max Bitrate
-		{Type: "transport-cc"},           // Transport-Wide Congestion Control
-	}
+	feedback := videoRTCPFeedback(twccEnabled)
 
 	// Register mode 1 first to preserve the outbound-call default. Incoming SIP
 	// calls override the transceiver preference before CreateAnswer based on the
 	// mode negotiated with the SIP peer.
 	videoCodecs := []webrtc.RTPCodecParameters{
-		h264CodecParameters(96, h264ConstrainedBaselineProfile, 1, videoRTCPFeedback),
-		h264CodecParameters(97, h264BaselineProfile, 1, videoRTCPFeedback),
-		h264CodecParameters(98, h264ConstrainedBaselineProfile, 0, videoRTCPFeedback),
-		h264CodecParameters(99, h264BaselineProfile, 0, videoRTCPFeedback),
+		h264CodecParameters(96, h264ConstrainedBaselineProfile, 1, feedback),
+		h264CodecParameters(97, h264BaselineProfile, 1, feedback),
+		h264CodecParameters(98, h264ConstrainedBaselineProfile, 0, feedback),
+		h264CodecParameters(99, h264BaselineProfile, 0, feedback),
 	}
 	for _, codec := range videoCodecs {
 		if err := m.RegisterCodec(codec, webrtc.RTPCodecTypeVideo); err != nil {
@@ -76,6 +91,30 @@ func createCustomMediaEngine() (*webrtc.MediaEngine, error) {
 	}
 
 	return m, nil
+}
+
+// newGatewayWebRTCAPI builds the PeerConnection API used for a new call and for
+// a replacement PeerConnection. NACK retransmission stays on the gateway's
+// own cache. RTCP SR/RR come from ConfigureRTCPReports. TWCC sender feedback
+// is what lets the phone's availableOutgoingBitrate move.
+func newGatewayWebRTCAPI(twccEnabled bool) (*webrtc.API, error) {
+	mediaEngine, err := createCustomMediaEngineWithTWCC(twccEnabled)
+	if err != nil {
+		return nil, err
+	}
+	registry := &interceptor.Registry{}
+	if err := webrtc.ConfigureRTCPReports(registry); err != nil {
+		return nil, err
+	}
+	if twccEnabled {
+		if err := webrtc.ConfigureTWCCSender(mediaEngine, registry); err != nil {
+			return nil, err
+		}
+	}
+	return webrtc.NewAPI(
+		webrtc.WithMediaEngine(mediaEngine),
+		webrtc.WithInterceptorRegistry(registry),
+	), nil
 }
 
 func offeredH264CodecForPacketizationMode(offerSDP string, mode uint8) (webrtc.RTPCodecParameters, error) {
@@ -115,13 +154,7 @@ func offeredH264CodecForPacketizationMode(offerSDP string, mode uint8) (webrtc.R
 		}
 	}
 
-	feedback := []webrtc.RTCPFeedback{
-		{Type: "nack"},
-		{Type: "nack", Parameter: "pli"},
-		{Type: "ccm", Parameter: "fir"},
-		{Type: "goog-remb"},
-		{Type: "transport-cc"},
-	}
+	feedback := videoRTCPFeedback(true)
 	for _, payloadType := range videoPayloads {
 		rtpMap := strings.Fields(rtpMaps[payloadType])
 		if len(rtpMap) == 0 || !strings.EqualFold(rtpMap[0], "H264/90000") {
@@ -200,13 +233,7 @@ func localH264CodecsForPacketizationMode(mode uint8) []webrtc.RTPCodecParameters
 	if mode != 0 {
 		mode = 1
 	}
-	feedback := []webrtc.RTCPFeedback{
-		{Type: "nack"},
-		{Type: "nack", Parameter: "pli"},
-		{Type: "ccm", Parameter: "fir"},
-		{Type: "goog-remb"},
-		{Type: "transport-cc"},
-	}
+	feedback := videoRTCPFeedback(true)
 	if mode == 0 {
 		return []webrtc.RTPCodecParameters{
 			h264CodecParameters(98, h264ConstrainedBaselineProfile, 0, feedback),

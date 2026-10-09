@@ -176,6 +176,7 @@ type SIPConfig struct {
 	VideoReorderPacingMS                 int    // Sleep between consecutive reorder-burst packet writes (default: 1; 0 disables)
 	VideoTimestampJumpPLI                bool   // Request a SIP keyframe when SIP video RTP timestamps jump (default: true)
 	VideoSuppressEarlyMedia              bool   // Drop SIP video until the call is answered (default: false; SIP_VIDEO_FORWARD_EARLY_MEDIA=true)
+	WebRTCTWCCEnabled                    bool   // Send transport-cc feedback to the phone (default: true; WEBRTC_TWCC_ENABLE)
 	AudioUseAVPF                         bool   // Use RTP/AVPF profile for audio with RTCP feedback (default: false)
 	VideoUseAVPF                         bool   // Use RTP/AVPF profile for video with RTCP feedback (PLI/FIR/NACK) (default: true)
 	// SIP-side transport target for outbound video feedback packets (PLI/FIR/NACK): auto|rtp|rtcp|dual
@@ -345,6 +346,7 @@ func Load() (*Config, error) {
 			VideoReorderPacingMS:                 clampInt(getEnvAsInt("SIP_VIDEO_REORDER_PACING_MS", 1), 0, 10),
 			VideoTimestampJumpPLI:                getEnvAsBool("SIP_VIDEO_TIMESTAMP_JUMP_PLI", true),
 			VideoSuppressEarlyMedia:              !getEnvAsBool("SIP_VIDEO_FORWARD_EARLY_MEDIA", true),
+			WebRTCTWCCEnabled:                    getEnvAsBool("WEBRTC_TWCC_ENABLE", true),
 			AudioUseAVPF:                         getEnvAsBool("SIP_AUDIO_USE_AVPF", false),
 			VideoUseAVPF:                         getEnvAsBool("SIP_VIDEO_USE_AVPF", true),
 			VideoFeedbackTransport:               getSIPVideoFeedbackTransport(),
@@ -672,6 +674,7 @@ func (c *Config) Display() {
 	fmt.Printf("  SIP Video Reorder Pacing: %dms\n", c.SIP.VideoReorderPacingMS)
 	fmt.Printf("  SIP Video Timestamp-Jump PLI: %v\n", c.SIP.VideoTimestampJumpPLI)
 	fmt.Printf("  SIP Video Forward Early Media: %v\n", !c.SIP.VideoSuppressEarlyMedia)
+	fmt.Printf("  WebRTC TWCC: %v\n", c.SIP.WebRTCTWCCEnabled)
 
 	// Display API Configuration
 	fmt.Println("\nAPI Configuration:")
