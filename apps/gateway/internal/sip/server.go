@@ -61,6 +61,7 @@ type SessionCreator interface {
 type SessionManager interface {
 	GetSessionBySIPCallID(callID string) (*session.Session, bool)
 	GetSessionByFromUsername(username string) (*session.Session, bool) // For @switch message handling
+	ListSessions() []*session.Session
 	DeleteSession(id string)
 }
 

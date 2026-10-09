@@ -1350,6 +1350,11 @@ func (s *Server) handleSwitchMessage(body string, callerURI string) {
 		if gateActivation.Outcome == session.SwitchVideoGateActivationRejected {
 			return
 		}
+		if gateActivation.Outcome == session.SwitchVideoGateActivationSameStream {
+			s.relayBridgedKeyframe(sess, "switch")
+			s.maybeSendSwitchVideoInfoFIR(sess, "switch")
+			return
+		}
 		s.runSwitchHandlerTestHook("accepted", switchDecision)
 		if !sess.IsSwitchVideoAuthority(switchDecision.Generation, switchDecision.MediaEpoch) {
 			fmt.Printf("[%s] switch_workflow_stale generation=%d mediaEpoch=%d stage=before-recovery\n",
@@ -1398,6 +1403,8 @@ func (s *Server) handleSwitchMessage(body string, callerURI string) {
 	// joins mid-GOP. Keep requesting a browser IDR until one is forwarded
 	// after this switch — independent of SIP→WebRTC gate recovery.
 	sess.TryKickUplinkKeyframeForSwitch("switch", time.Now())
+	s.relayBridgedKeyframe(sess, "switch")
+	s.maybeSendSwitchVideoInfoFIR(sess, "switch")
 
 	// 3.1 Enable temporary @switch transition hold on SIP->WebRTC video path (if enabled).
 	// Preserve mode avoids forcing a black screen by gating only unsafe packets

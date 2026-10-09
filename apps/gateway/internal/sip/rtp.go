@@ -775,6 +775,9 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 					fmt.Printf("[%s] h264_au_source_reset reason=ssrc-change previous_ssrc=%d ssrc=%d\n", sess.ID, previousSSRC, ssrc)
 				}
 				sess.SetRemoteVideoSSRC(ssrc)
+				if previousSSRC != 0 {
+					sess.NoteOpenedVideoStream(ssrc, time.Now())
+				}
 				fmt.Printf("[%s] Learned Remote Video SSRC: %d (previous: %d)\n", sess.ID, ssrc, previousSSRC)
 				fmt.Printf("[%s] 📈 sip_video_ssrc_learned ssrc=%d previous=%d\n", sess.ID, ssrc, previousSSRC)
 				sess.StartVideoRTCPFallbackWindow(4*time.Second, "ssrc-learn")
@@ -876,6 +879,7 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 							sess.StartSwitchVideoGate(currentGeneration, time.Now(), "timestamp-jump")
 						}
 					}
+					sess.NoteOpenedVideoStream(packet.SSRC, time.Now())
 					sess.TryKickUplinkKeyframeForSwitch("implicit-switch", time.Now())
 				}
 				lastVideoTS = packet.Timestamp
@@ -897,12 +901,18 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 					rBuf, rRel, rDrop, rTO, rPend, reorderBuf.SkipEventCount(), keyframeAge)
 				summary := updateSwitchSummary(keyframeAgeDuration)
 				sess.ObserveSIPVideoRTPDisorder(summary, time.Now())
+				if released, _ := sess.MaybeFailOpenSwitchVideoGate(time.Now(), summary); released {
+					s.relayBridgedKeyframe(sess, "gate-stall")
+					s.maybeSendSwitchVideoInfoFIR(sess, "gate-stall")
+				}
 				if stall, ok := sess.ObserveSwitchVideoGateStall(time.Now(), summary); ok {
 					fmt.Printf("[%s] switch_video_gate_stalled generation=%d elapsed_ms=%d rejected_aus=%d packets=%d gaps=%d missing=%d ooo=%d reorder_timeout=%d pending=%d feedback=%s\n",
 						sess.ID, stall.Generation, stall.Elapsed.Milliseconds(), stall.RejectedAUs,
 						stall.Summary.Packets, stall.Summary.Gaps, stall.Summary.Missing,
 						stall.Summary.OutOfOrder, stall.Summary.ReorderTimedOut,
 						stall.Summary.ReorderPending, sess.GetVideoFeedbackTransport())
+					s.relayBridgedKeyframe(sess, "gate-stall")
+					s.maybeSendSwitchVideoInfoFIR(sess, "gate-stall")
 				}
 				if auNormalizer != nil {
 					auStats := auNormalizer.Stats()
@@ -1255,6 +1265,8 @@ func (s *Server) startKeyframeWatchdogForSession(sess *session.Session) {
 			fmt.Printf("[%s] ⚠️ Keyframe stale for %v (>= %v) - sending FIR to SIP\n",
 				sess.ID, keyframeAge, firStale)
 			sess.SendFIRToAsterisk()
+			s.relayBridgedKeyframe(sess, "keyframe-stale")
+			s.maybeSendSwitchVideoInfoFIR(sess, "keyframe-stale")
 		default:
 			if burstActive {
 				fmt.Printf("[%s] ⚠️ (burst) Keyframe stale for %v (>= %v) - sending PLI to SIP\n",
@@ -1264,6 +1276,8 @@ func (s *Server) startKeyframeWatchdogForSession(sess *session.Session) {
 					sess.ID, keyframeAge, stale)
 			}
 			sess.SendPLIToAsterisk()
+			s.relayBridgedKeyframe(sess, "keyframe-stale")
+			s.maybeSendSwitchVideoInfoFIR(sess, "keyframe-stale")
 		}
 	}
 }

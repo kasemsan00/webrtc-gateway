@@ -228,6 +228,29 @@ func TestWebRTCTWCCDefaultsOn(t *testing.T) {
 	}
 }
 
+func TestSwitchVideoGateFailOpenDefaults(t *testing.T) {
+	t.Setenv("SIP_SWITCH_VIDEO_GATE_FAIL_OPEN_MS", "")
+	t.Setenv("SIP_SWITCH_VIDEO_GATE_FAIL_OPEN_CAP_MS", "")
+	t.Setenv("SIP_SWITCH_VIDEO_INFO_FIR_ENABLE", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.SIP.SwitchVideoGateFailOpenMS != 3000 || cfg.SIP.SwitchVideoGateFailOpenCapMS != 5000 || cfg.SIP.SwitchVideoInfoFIREnable {
+		t.Fatalf("unexpected fail-open defaults: %+v", cfg.SIP)
+	}
+
+	t.Setenv("SIP_SWITCH_VIDEO_INFO_FIR_ENABLE", "true")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.SIP.SwitchVideoInfoFIREnable {
+		t.Fatal("expected SIP_SWITCH_VIDEO_INFO_FIR_ENABLE=true")
+	}
+}
+
 func TestVideoAUNormalizationConfigCanBeDisabled(t *testing.T) {
 	t.Setenv("SIP_VIDEO_AU_NORMALIZE_ENABLE", "false")
 

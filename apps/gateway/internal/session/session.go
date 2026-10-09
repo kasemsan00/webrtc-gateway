@@ -180,6 +180,12 @@ type Session struct {
 	videoDiscontinuityIDRAt               time.Time            `json:"-"`
 	switchUplinkKeyframeKickAt            time.Time            `json:"-"`
 	postSwitchSIPKeyframePending          bool                 `json:"-"`
+	openedVideoSSRC                       uint32               `json:"-"`
+	openedVideoSource                     string               `json:"-"`
+	bridgedKeyframeAt                     time.Time            `json:"-"`
+	switchVideoInfoFIRAt                  time.Time            `json:"-"`
+	SwitchVideoGateFailOpen               time.Duration        `json:"-"`
+	SwitchVideoGateFailOpenCap            time.Duration        `json:"-"`
 	SwitchVideoGateActive                 bool                 `json:"-"`
 	SwitchVideoGateReleasing              bool                 `json:"-"`
 	SwitchVideoGateGeneration             int                  `json:"-"`
@@ -603,6 +609,8 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 		VideoTimestampJumpPLI:                cfg.SIP.VideoTimestampJumpPLI,
 		VideoSuppressEarlyMedia:              cfg.SIP.VideoSuppressEarlyMedia,
 		WebRTCTWCCEnabled:                    cfg.SIP.WebRTCTWCCEnabled,
+		SwitchVideoGateFailOpen:              time.Duration(cfg.SIP.SwitchVideoGateFailOpenMS) * time.Millisecond,
+		SwitchVideoGateFailOpenCap:           time.Duration(cfg.SIP.SwitchVideoGateFailOpenCapMS) * time.Millisecond,
 		sipVideoIDRReplayNotify:              make(chan struct{}, 1),
 	}
 	session.initVideoRTPHistory()

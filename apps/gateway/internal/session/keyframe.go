@@ -450,6 +450,20 @@ func (s *Session) AllowSIPOriginatedBrowserKeyframe(string) (bool, string) {
 	return true, ""
 }
 
+// AllowSwitchVideoInfoFIR rate-limits in-dialog picture_fast_update INFO.
+func (s *Session) AllowSwitchVideoInfoFIR(now time.Time) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.switchVideoInfoFIRAt.IsZero() {
+		age := now.Sub(s.switchVideoInfoFIRAt)
+		if age >= 0 && age < sipOriginatedBrowserKeyframeMinInterval {
+			return false
+		}
+	}
+	s.switchVideoInfoFIRAt = now
+	return true
+}
+
 // NeedsPostSwitchUplinkKeyframe is true until a WebRTC→SIP IDR is forwarded
 // after @switch, or the post-switch request window elapses.
 func (s *Session) NeedsPostSwitchUplinkKeyframe() bool {
