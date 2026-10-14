@@ -177,6 +177,9 @@ type SIPConfig struct {
 	VideoTimestampJumpPLI                bool   // Request a SIP keyframe when SIP video RTP timestamps jump (default: true)
 	VideoSuppressEarlyMedia              bool   // Drop SIP video until the call is answered (default: false; SIP_VIDEO_FORWARD_EARLY_MEDIA=true)
 	WebRTCTWCCEnabled                    bool   // Send transport-cc feedback to the phone (default: true; WEBRTC_TWCC_ENABLE)
+	SwitchVideoGateFailOpenMS            int    // Fail open a stalled same-stream gate after this many ms (default: 3000)
+	SwitchVideoGateFailOpenCapMS         int    // Fail open any stalled gate after this many ms (default: 5000)
+	SwitchVideoInfoFIREnable             bool   // Send in-dialog SIP INFO picture_fast_update on switch/stall (default: false)
 	AudioUseAVPF                         bool   // Use RTP/AVPF profile for audio with RTCP feedback (default: false)
 	VideoUseAVPF                         bool   // Use RTP/AVPF profile for video with RTCP feedback (PLI/FIR/NACK) (default: true)
 	// SIP-side transport target for outbound video feedback packets (PLI/FIR/NACK): auto|rtp|rtcp|dual
@@ -347,6 +350,9 @@ func Load() (*Config, error) {
 			VideoTimestampJumpPLI:                getEnvAsBool("SIP_VIDEO_TIMESTAMP_JUMP_PLI", true),
 			VideoSuppressEarlyMedia:              !getEnvAsBool("SIP_VIDEO_FORWARD_EARLY_MEDIA", true),
 			WebRTCTWCCEnabled:                    getEnvAsBool("WEBRTC_TWCC_ENABLE", true),
+			SwitchVideoGateFailOpenMS:            getEnvAsInt("SIP_SWITCH_VIDEO_GATE_FAIL_OPEN_MS", 3000),
+			SwitchVideoGateFailOpenCapMS:         getEnvAsInt("SIP_SWITCH_VIDEO_GATE_FAIL_OPEN_CAP_MS", 5000),
+			SwitchVideoInfoFIREnable:             getEnvAsBool("SIP_SWITCH_VIDEO_INFO_FIR_ENABLE", false),
 			AudioUseAVPF:                         getEnvAsBool("SIP_AUDIO_USE_AVPF", false),
 			VideoUseAVPF:                         getEnvAsBool("SIP_VIDEO_USE_AVPF", true),
 			VideoFeedbackTransport:               getSIPVideoFeedbackTransport(),
@@ -675,6 +681,8 @@ func (c *Config) Display() {
 	fmt.Printf("  SIP Video Timestamp-Jump PLI: %v\n", c.SIP.VideoTimestampJumpPLI)
 	fmt.Printf("  SIP Video Forward Early Media: %v\n", !c.SIP.VideoSuppressEarlyMedia)
 	fmt.Printf("  WebRTC TWCC: %v\n", c.SIP.WebRTCTWCCEnabled)
+	fmt.Printf("  @switch Gate Fail-Open: sameStream=%dms cap=%dms infoFIR=%v\n",
+		c.SIP.SwitchVideoGateFailOpenMS, c.SIP.SwitchVideoGateFailOpenCapMS, c.SIP.SwitchVideoInfoFIREnable)
 
 	// Display API Configuration
 	fmt.Println("\nAPI Configuration:")

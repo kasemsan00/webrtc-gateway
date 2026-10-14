@@ -417,6 +417,10 @@ func (s *Session) ResetMediaState() {
 	s.LastWebRTCFIRSent = time.Time{}
 	s.switchUplinkKeyframeKickAt = time.Time{}
 	s.postSwitchSIPKeyframePending = false
+	s.openedVideoSSRC = 0
+	s.openedVideoSource = ""
+	s.bridgedKeyframeAt = time.Time{}
+	s.switchVideoInfoFIRAt = time.Time{}
 	s.SwitchFeedbackBurstSatisfied = false
 
 	// Reset learned RTCP routing info

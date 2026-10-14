@@ -34,6 +34,15 @@ const (
 	// started this segment, so the later @switch notice must not hold for
 	// another keyframe.
 	SwitchVideoGateActivationSatisfied = "satisfied-by-discontinuity-idr"
+	// SwitchVideoGateActivationSameStream means @switch names media that is
+	// already the opened SIP video stream. The cached IDR stays, and the gate
+	// is not armed again.
+	SwitchVideoGateActivationSameStream = "already-satisfied-same-stream"
+)
+
+const (
+	defaultSwitchVideoGateFailOpen    = 3 * time.Second
+	defaultSwitchVideoGateFailOpenCap = 5 * time.Second
 )
 
 // videoDiscontinuityIDRCredit is how long a just-forwarded stream-switch IDR
@@ -197,6 +206,7 @@ func (s *Session) CommitSwitchVideoGateRelease(generation int, reservation uint6
 	if generation > s.SwitchVideoGateAcceptedGeneration {
 		s.SwitchVideoGateAcceptedGeneration = generation
 	}
+	s.noteOpenedVideoStreamLocked(s.RemoteVideoSSRC, now)
 	s.applyPostGateRecoverySofteningLocked(now)
 	s.clearSwitchVideoGateLocked()
 	s.mu.Unlock()
@@ -262,6 +272,11 @@ func (s *Session) startSwitchVideoGateLocked(generation int, now time.Time, reas
 		return SwitchVideoGateActivation{
 			Active: true, Outcome: SwitchVideoGateActivationActive, Generation: generation,
 			StartedAt: s.SwitchVideoGateStartedAt, FeedbackBaseline: s.SwitchVideoGateFeedbackBaseline,
+		}
+	}
+	if reason == "agent-switch" && s.openedVideoMatchesLocked(s.RemoteVideoSSRC, s.currentSIPVideoSourceLocked()) {
+		return SwitchVideoGateActivation{
+			Outcome: SwitchVideoGateActivationSameStream, Generation: generation,
 		}
 	}
 	if reason == "agent-switch" && s.videoDiscontinuityIDRFreshLocked(now) {
@@ -446,6 +461,97 @@ func (s *Session) videoDiscontinuityIDRFreshLocked(now time.Time) bool {
 	}
 	age := now.Sub(s.videoDiscontinuityIDRAt)
 	return age >= 0 && age <= videoDiscontinuityIDRCredit
+}
+
+func (s *Session) currentSIPVideoSourceLocked() string {
+	if s.SIPVideoRTPSource != "" {
+		return s.SIPVideoRTPSource
+	}
+	if s.AsteriskVideoAddr != nil {
+		return s.AsteriskVideoAddr.String()
+	}
+	return ""
+}
+
+// NoteOpenedVideoStream records the SIP video SSRC and source that a gate
+// opened, including an implicit timestamp-jump or SSRC change. A later @switch
+// for that same stream does not arm another gate, and the media identity is
+// what duplicate-target debounce compares.
+func (s *Session) NoteOpenedVideoStream(ssrc uint32, now time.Time) {
+	s.mu.Lock()
+	s.noteOpenedVideoStreamLocked(ssrc, now)
+	s.mu.Unlock()
+}
+
+func (s *Session) noteOpenedVideoStreamLocked(ssrc uint32, now time.Time) {
+	if ssrc == 0 {
+		return
+	}
+	source := s.currentSIPVideoSourceLocked()
+	if source == "" {
+		return
+	}
+	s.openedVideoSSRC = ssrc
+	s.openedVideoSource = source
+	s.SwitchMediaSSRC = ssrc
+	s.SwitchMediaSource = source
+	if s.SwitchTargetReceivedAt.IsZero() {
+		s.SwitchTargetReceivedAt = now
+	}
+}
+
+func (s *Session) openedVideoMatchesLocked(ssrc uint32, source string) bool {
+	return s.openedVideoSSRC != 0 && s.openedVideoSource != "" &&
+		ssrc == s.openedVideoSSRC && source == s.openedVideoSource
+}
+
+func switchVideoGateRTPHealthy(summary VideoRecoverySummary) bool {
+	return summary.Packets > 0 && summary.ReorderPending <= 8
+}
+
+// MaybeFailOpenSwitchVideoGate releases a gate that has held non-IDR frames
+// too long. A previously decoded same SSRC and source with healthy RTP opens
+// at the configured same-stream limit. Any remaining stall opens at the cap.
+func (s *Session) MaybeFailOpenSwitchVideoGate(now time.Time, summary VideoRecoverySummary) (bool, string) {
+	s.mu.Lock()
+	if !s.SwitchVideoGateActive {
+		s.mu.Unlock()
+		return false, ""
+	}
+	elapsed := switchVideoGateElapsed(s.SwitchVideoGateStartedAt, now)
+	sameLimit := s.SwitchVideoGateFailOpen
+	if sameLimit <= 0 {
+		sameLimit = defaultSwitchVideoGateFailOpen
+	}
+	capLimit := s.SwitchVideoGateFailOpenCap
+	if capLimit <= 0 {
+		capLimit = defaultSwitchVideoGateFailOpenCap
+	}
+	if capLimit < sameLimit {
+		capLimit = sameLimit
+	}
+	same := s.openedVideoMatchesLocked(s.RemoteVideoSSRC, s.currentSIPVideoSourceLocked())
+	reason := ""
+	switch {
+	case same && switchVideoGateRTPHealthy(summary) && elapsed >= sameLimit:
+		reason = "same-stream-rtp-healthy"
+	case elapsed >= capLimit:
+		reason = "stall-cap"
+	default:
+		s.mu.Unlock()
+		return false, ""
+	}
+	generation := s.SwitchVideoGateGeneration
+	if generation > s.SwitchVideoGateAcceptedGeneration {
+		s.SwitchVideoGateAcceptedGeneration = generation
+	}
+	id := s.ID
+	s.clearSwitchVideoGateLocked()
+	s.mu.Unlock()
+	s.stopSwitchVideoBlackoutAfterGateRelease(reason)
+	fmt.Printf("[%s] switch_video_gate_fail_open generation=%d reason=%s elapsed_ms=%d\n",
+		id, generation, reason, elapsed.Milliseconds())
+	return true, reason
 }
 
 func switchVideoGateElapsed(start, now time.Time) time.Duration {

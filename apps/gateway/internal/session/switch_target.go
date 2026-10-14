@@ -75,6 +75,25 @@ func (s *Session) PrepareAndActivateSwitchVideoTarget(queue, agent string, now t
 		return decision, activation
 	}
 
+	if s.openedVideoMatchesLocked(currentSSRC, currentSource) {
+		s.SwitchTargetQueue = queue
+		s.SwitchTargetAgent = agent
+		s.SwitchTargetReceivedAt = now
+		s.SwitchMediaSSRC = currentSSRC
+		s.SwitchMediaSource = currentSource
+		s.SwitchDuplicateCount = 0
+		decision.Ignore = false
+		decision.Reason = SwitchVideoGateActivationSameStream
+		decision.Generation = s.SwitchGeneration
+		decision.DuplicateCount = 0
+		decision.MediaGeneration = fmt.Sprintf("ssrc=%d source=%s", currentSSRC, currentSource)
+		activation := SwitchVideoGateActivation{
+			Outcome: SwitchVideoGateActivationSameStream, Generation: s.SwitchGeneration,
+		}
+		s.mu.Unlock()
+		return decision, activation
+	}
+
 	reason := "new-target"
 	if sameTarget && withinDebounce && !sameMediaGeneration {
 		reason = "media-generation-changed"

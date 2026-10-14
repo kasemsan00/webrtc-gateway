@@ -75,6 +75,45 @@ func TestCreateInDialogMessageRequestPreservesOutboundDialogIdentityAndNextHop(t
 	}
 }
 
+func TestCreateInDialogInfoRequestCarriesPictureFastUpdate(t *testing.T) {
+	srv := &Server{
+		config:        config.SIPConfig{},
+		publicAddress: "10.10.10.10",
+		sipPort:       5090,
+	}
+	sess := &session.Session{ID: "info-outbound"}
+	sess.SetCallInfo(
+		"outbound",
+		"sip:agent-1001@sip.example.com",
+		"sip:linphone-2002@sip.example.com",
+		"dialog-call-id",
+	)
+	sess.SetSIPAuthContext("trunk", "", 42, "", "", "", 0)
+	sess.SetSIPDialogState(
+		"local-tag",
+		"remote-tag",
+		"<sip:device-contact@192.0.2.55:5070;transport=tcp>",
+		"198.51.100.20",
+		5060,
+		7,
+		[]string{"<sip:198.51.100.20:5060;lr>"},
+	)
+
+	req, err := srv.createInDialogInfoRequest(sess, switchVideoPictureFastUpdate, "application/media_control+xml")
+	if err != nil {
+		t.Fatalf("createInDialogInfoRequest: %v", err)
+	}
+	if req.Method != sip.INFO {
+		t.Fatalf("expected INFO, got %s", req.Method)
+	}
+	if cseq := req.CSeq(); cseq == nil || cseq.MethodName != sip.INFO {
+		t.Fatalf("unexpected INFO CSeq: %#v", cseq)
+	}
+	if !strings.Contains(string(req.Body()), "picture_fast_update") {
+		t.Fatalf("INFO body missing picture_fast_update: %s", req.Body())
+	}
+}
+
 func TestCreateInDialogMessageRequestSwapsInboundDialogParties(t *testing.T) {
 	srv := &Server{
 		config:        config.SIPConfig{},
