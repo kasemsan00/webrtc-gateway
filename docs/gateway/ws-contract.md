@@ -52,7 +52,9 @@ Payload format: JSON
 
 Auth behavior:
 
-- `access_token` is optional (`/ws-agent?access_token=<jwt>`, optional `auth_type`). When present, the JWT is verified and attached to the connection; a missing verifier, a failed verification, or an otherwise invalid token is rejected with `401` before upgrade. When absent, the connection is accepted without JWT. The mobile SIP provisioner is not invoked. An extension call on the SIP account from `agent_register` does not require `access_token`, including when JWT auth is enabled.
+- `access_token` is optional (`/ws-agent?access_token=<jwt>`, optional `auth_type`). When present, the JWT is verified and attached to the connection; a missing verifier, a failed verification, or an otherwise invalid token is rejected with `401` before upgrade. When absent, the connection is accepted without JWT. The mobile SIP provisioner is not invoked. With `AUTH_ENABLE=true`, `/ws-agent` has two call modes:
+  - Token + trunk: connect with `access_token`, send `agent_register`, then `call` using the resolved trunk (trunk fields may be omitted). `/ws` and `/ws-agent-device` trunk calls still require claims. A trunk call without claims is rejected with `Token authentication required to use trunk`.
+  - No token + SIP user/pass: connect with no `access_token`. Either send `agent_register` with `sipDomain`, `sipUsername`, and `sipPassword` and then `call` with only `sessionId` and `destination` (Electron local SIP), or put those SIP fields on `call` itself (public mode) and omit trunk fields. Neither form requires a JWT.
 - Client MUST send `agent_register` with `sipDomain` (host or IP), `sipUsername`, `sipPassword`, optional `sipPort` before placing/receiving calls. Browser/KMP clients that support multiple simultaneous call legs also send `multiCall: true`.
 - Gateway upserts a deterministic agent trunk (`sipclient-agent-<username>@<domain>:<port>`) distinct from mobile trunks, SIP REGISTERs when the first agent WebSocket binds that trunk, and replies with `trunk_resolved`.
 - Multiple `/ws-agent` clients may share the same SIP identity (refcount). REGISTER stays while refcount ≥ 1.
@@ -98,8 +100,8 @@ Auth behavior:
 - `offer` -> requires `sdp` (`sessionId` optional for existing session)
 - `ice` -> requires `candidate` and the owning `sessionId` once an offer has been answered
 - `call` -> requires `sessionId`, `destination` (`from` optional)
-  - Public mode: include `sipDomain`, `sipUsername`, `sipPassword`, optional `sipPort`
-  - Trunk mode: include `trunkId` or `trunkPublicId`
+  - Public mode: include `sipDomain`, `sipUsername`, `sipPassword`, optional `sipPort`. On `/ws-agent` this works with no `access_token` even when JWT auth is enabled.
+  - Trunk mode: include `trunkId` or `trunkPublicId`. Without verified claims this is rejected with `Token authentication required to use trunk`, except a `/ws-agent` socket whose trunk was bound by `agent_register`.
   - Auto-provisioned mobile connections and resolved `/ws-agent` connections may omit trunk fields and public SIP credentials; the gateway uses the connection's resolved trunk.
 - `hangup` -> requires `sessionId`
 - `accept` -> requires `sessionId`

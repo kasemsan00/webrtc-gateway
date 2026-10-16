@@ -35,7 +35,7 @@ Browser / Mobile / Agent
 
 - **`/ws`** เมื่อตั้ง `SIPCLIENT_AUTH_REGISTER_URL` จะ provision trunk มือถือจาก JWT ก่อน upgrade สำเร็จ ต้องมี `devicePlatform=android|ios` ใน URL แล้ว gateway ส่ง `trunk_resolved` กลับ
 - **`/ws-public`** รับเฉพาะสายของ connection นั้น `call` ต้องมี `sipDomain`, `sipUsername`, `sipPassword`
-- **`/ws-agent`** trunk คงที่รูปแบบ `sipclient-agent-<username>@<domain>:<port>` หลาย client ใช้ SIP identity เดียวกันได้ สายเข้าถูกยื่นให้ทุก client ที่ว่าง คนแรกที่ `offer` หรือ `accept` ได้สาย
+- **`/ws-agent`** trunk คงที่รูปแบบ `sipclient-agent-<username>@<domain>:<port>` หลาย client ใช้ SIP identity เดียวกันได้ สายเข้าถูกยื่นให้ทุก client ที่ว่าง คนแรกที่ `offer` หรือ `accept` ได้สาย เมื่อ `AUTH_ENABLE=true` ใช้ได้สองแบบ: (A) เชื่อมด้วย `access_token` แล้วโทรผ่าน trunk ที่ `agent_register` ผูกไว้ (B) ไม่ส่ง token แล้วส่ง `sipDomain`/`sipUsername`/`sipPassword` ใน `agent_register` (แบบ Electron SIP local) หรือในข้อความ `call` (public mode) การเลือก trunk โดยไม่มี claims บน `/ws` และ `/ws-agent-device` ยังถูกปฏิเสธด้วย `Token authentication required to use trunk`
 - **`/ws-agent-device`** trunk คนละชุดกับ agent PC (`sipclient-agent-device-...`) ไม่เรียก mobile provisioner เก็บ FCM ผ่าน `device_push_token` สายเข้า username/domain/port เดียวกันถูกยื่นให้ client ที่ออนไลน์ทั้ง `/ws-agent` และ `/ws-agent-device` ถ้าไม่มีใครออนไลน์จึงใช้ FCM ของ device
 
 ถ้าแฟล็กของเส้นทางนั้นปิดอยู่ route จะไม่ถูกลงทะเบียน
@@ -134,7 +134,7 @@ pnpm --filter frontend run test -- src/features/trunk/types.test.ts
 | `API_ENABLE_PUBLIC_WS` | เปิด `/ws-public` |
 | `API_ENABLE_AGENT_WS` | เปิด `/ws-agent` |
 | `API_ENABLE_AGENT_DEVICE_WS` | เปิด `/ws-agent-device` |
-| `AUTH_ENABLE` | บังคับ JWT สำหรับ `/ws`, `/ws-agent-device` และ REST ที่ป้องกันไว้; `/ws-agent` ตรวจ `access_token` เมื่อมี |
+| `AUTH_ENABLE` | บังคับ JWT สำหรับ `/ws`, `/ws-agent-device` และ REST ที่ป้องกันไว้; `/ws-agent` ใช้ได้ทั้ง `access_token`+trunk และ SIP user/pass โดยไม่ส่ง token |
 | `SIPCLIENT_AUTH_REGISTER_URL` | provision trunk มือถือตอนเชื่อม `/ws` |
 | `SIP_PORT` | พอร์ต SIP (ค่าเริ่มต้น `5060`) |
 | `DB_ENABLE` / `DB_DSN` | PostgreSQL สำหรับ trunk และบันทึกสาย |

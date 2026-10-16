@@ -358,11 +358,13 @@ func (s *Server) handleWSCall(client *WSClient, msg WSMessage) {
 		// Set trunk auth context in session
 		sess.SetSIPAuthContext("trunk", "", trunkID, "", "", "", 0)
 
-		// /ws trunk selection requires a verified JWT when auth is enabled.
-		// /ws-agent and /ws-agent-device dial through the trunk bound by
-		// agent_register or device_register. Those SIP credentials are the
-		// account, so an extension call does not also require a JWT.
-		if s.tokenVerifier != nil && client.authClaims == nil && !client.isAgentPresence() {
+		// Trunk selection requires a verified JWT when auth is enabled.
+		// /ws-agent may omit the token when the call uses the SIP account
+		// bound by agent_register (Electron local user/pass). That account
+		// is already limited to the trunk this socket registered. Explicit
+		// trunk use on /ws and /ws-agent-device still requires claims.
+		// Public sipDomain/sipUsername/sipPassword calls do not enter here.
+		if s.tokenVerifier != nil && client.authClaims == nil && !(client != nil && client.agentOnly) {
 			s.sendWSError(client, msg.SessionID, "Token authentication required to use trunk")
 			return
 		}
