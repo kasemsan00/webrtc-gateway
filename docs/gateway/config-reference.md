@@ -46,7 +46,7 @@ When `AUTH_ENABLE=true`:
   `POST /api/chat-images`, and `GET /api/chat-images/{id}` are intentionally
   public. Chat-image POST still requires a live call `sessionId`.
 - `/ws` requires `?access_token=<jwt>`. The admin password is not accepted on `/ws`.
-- `/ws-agent` still accepts a connection with no token. When `access_token` is present it is verified and stored on the connection. Trunk calls reject the socket when this verifier is enabled and those claims are missing.
+- `/ws-agent` still accepts a connection with no token. When `access_token` is present it is verified and stored on the connection. Dialing an extension through the SIP account from `agent_register` does not require that token. Other `/ws` trunk calls still require claims while this verifier is enabled.
 
 When `FRONTEND_PASSWORD` is set and `AUTH_ENABLE=false`, authenticated `/api/*` routes still require the matching bearer. Set the same `FRONTEND_PASSWORD` on the frontend process. Do not use a `VITE_` prefix; the frontend server reads it from process env and never injects it into the browser bundle.
 

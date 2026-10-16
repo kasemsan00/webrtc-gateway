@@ -358,8 +358,11 @@ func (s *Server) handleWSCall(client *WSClient, msg WSMessage) {
 		// Set trunk auth context in session
 		sess.SetSIPAuthContext("trunk", "", trunkID, "", "", "", 0)
 
-		// Require authenticated user to use a trunk.
-		if s.tokenVerifier != nil && client.authClaims == nil {
+		// /ws trunk selection requires a verified JWT when auth is enabled.
+		// /ws-agent and /ws-agent-device dial through the trunk bound by
+		// agent_register or device_register. Those SIP credentials are the
+		// account, so an extension call does not also require a JWT.
+		if s.tokenVerifier != nil && client.authClaims == nil && !client.isAgentPresence() {
 			s.sendWSError(client, msg.SessionID, "Token authentication required to use trunk")
 			return
 		}

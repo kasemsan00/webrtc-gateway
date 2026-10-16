@@ -1,10 +1,12 @@
 package api
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
 
+	"webrtc-sip-gateway/internal/auth"
 	"webrtc-sip-gateway/internal/config"
 	"webrtc-sip-gateway/internal/session"
 	"webrtc-sip-gateway/internal/sip"
@@ -213,6 +215,91 @@ func TestHandleWSCall_PublicOnlyRejectsTrunkFields(t *testing.T) {
 	msgs := readWSMessages(t, client.send)
 	if len(msgs) != 1 || msgs[0].Type != "error" || !strings.Contains(msgs[0].Error, "Trunk calls require authenticated WebSocket") {
 		t.Fatalf("expected trunk auth error, got %+v", msgs)
+	}
+}
+
+func readyAgentTrunk(id int64) *sip.Trunk {
+	owner := "gw-1"
+	until := time.Now().Add(time.Minute)
+	return &sip.Trunk{
+		ID:         id,
+		PublicID:   "agent-170",
+		LeaseOwner: &owner,
+		LeaseUntil: &until,
+	}
+}
+
+func TestHandleWSCall_AgentSIPLocalDoesNotRequireJWT(t *testing.T) {
+	mgr := newTestSessionManager()
+	sess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+
+	sipMaker := &stubSIPCallMaker{}
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{InstanceID: "gw-1"}, config.TranslatorConfig{}, mgr, sipMaker, nil, &agentTrunkManagerStub{trunk: readyAgentTrunk(170)}, nil)
+	srv.SetTokenVerifier(tokenVerifierStub{
+		verify: func(context.Context, string, auth.TokenRealm) (*auth.VerifiedClaims, error) {
+			return nil, context.DeadlineExceeded
+		},
+	})
+	client := &WSClient{
+		send:            make(chan []byte, 8),
+		agentOnly:       true,
+		trunkResolved:   true,
+		resolvedTrunkID: 170,
+		sessionID:       sess.ID,
+	}
+
+	srv.handleWSCall(client, WSMessage{
+		Type:        "call",
+		SessionID:   sess.ID,
+		Destination: "1001",
+	})
+
+	waitForMakeCallCount(t, sipMaker, 1)
+	if sipMaker.lastDest != "1001" {
+		t.Fatalf("expected destination 1001, got %q", sipMaker.lastDest)
+	}
+	mode, _, trunkID, _, _, _, _ := sess.GetSIPAuthContext()
+	if mode != "trunk" || trunkID != 170 {
+		t.Fatalf("expected trunk 170, got mode=%q trunkID=%d", mode, trunkID)
+	}
+}
+
+func TestHandleWSCall_ResolvedTrunkStillRequiresJWT(t *testing.T) {
+	mgr := newTestSessionManager()
+	sess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+
+	sipMaker := &stubSIPCallMaker{}
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{InstanceID: "gw-1"}, config.TranslatorConfig{}, mgr, sipMaker, nil, &agentTrunkManagerStub{trunk: readyAgentTrunk(170)}, nil)
+	srv.SetTokenVerifier(tokenVerifierStub{
+		verify: func(context.Context, string, auth.TokenRealm) (*auth.VerifiedClaims, error) {
+			return nil, context.DeadlineExceeded
+		},
+	})
+	client := &WSClient{
+		send:            make(chan []byte, 8),
+		trunkResolved:   true,
+		resolvedTrunkID: 170,
+		sessionID:       sess.ID,
+	}
+
+	srv.handleWSCall(client, WSMessage{
+		Type:        "call",
+		SessionID:   sess.ID,
+		Destination: "1001",
+	})
+
+	if sipMaker.makeCallCount != 0 {
+		t.Fatalf("expected MakeCall not to be called, got %d", sipMaker.makeCallCount)
+	}
+	msgs := readWSMessages(t, client.send)
+	if len(msgs) != 1 || msgs[0].Type != "error" || !strings.Contains(msgs[0].Error, "Token authentication required to use trunk") {
+		t.Fatalf("expected token error, got %+v", msgs)
 	}
 }
 

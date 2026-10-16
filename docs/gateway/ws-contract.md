@@ -52,7 +52,7 @@ Payload format: JSON
 
 Auth behavior:
 
-- `access_token` is optional (`/ws-agent?access_token=<jwt>`, optional `auth_type`). When present, the JWT is verified and attached to the connection; a missing verifier, a failed verification, or an otherwise invalid token is rejected with `401` before upgrade. When absent, the connection is accepted without JWT. The mobile SIP provisioner is not invoked.
+- `access_token` is optional (`/ws-agent?access_token=<jwt>`, optional `auth_type`). When present, the JWT is verified and attached to the connection; a missing verifier, a failed verification, or an otherwise invalid token is rejected with `401` before upgrade. When absent, the connection is accepted without JWT. The mobile SIP provisioner is not invoked. An extension call on the SIP account from `agent_register` does not require `access_token`, including when JWT auth is enabled.
 - Client MUST send `agent_register` with `sipDomain` (host or IP), `sipUsername`, `sipPassword`, optional `sipPort` before placing/receiving calls. Browser/KMP clients that support multiple simultaneous call legs also send `multiCall: true`.
 - Gateway upserts a deterministic agent trunk (`sipclient-agent-<username>@<domain>:<port>`) distinct from mobile trunks, SIP REGISTERs when the first agent WebSocket binds that trunk, and replies with `trunk_resolved`.
 - Multiple `/ws-agent` clients may share the same SIP identity (refcount). REGISTER stays while refcount ≥ 1.
