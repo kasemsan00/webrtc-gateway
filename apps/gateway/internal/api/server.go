@@ -135,7 +135,7 @@ type WSClient struct {
 	ConnectedAt     time.Time
 	authClaims      *auth.VerifiedClaims // populated when tokenVerifier is set
 	publicOnly      bool                 // true for unauthenticated /ws-public clients
-	agentOnly       bool                 // true for unauthenticated /ws-agent clients
+	agentOnly       bool                 // true for /ws-agent clients; JWT is optional
 	agentDeviceOnly bool                 // true for JWT /ws-agent-device clients
 	devicePlatform  string               // android|ios from upgrade query when present
 }

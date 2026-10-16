@@ -87,7 +87,24 @@ func (s *Server) handleWebSocketConn(w http.ResponseWriter, r *http.Request, pub
 			log.Printf("Agent-device WebSocket accepted without JWT: remote=%s platform=%s", r.RemoteAddr, platform)
 		}
 	} else if agentOnly {
-		log.Printf("Agent WebSocket connection accepted: remote=%s", r.RemoteAddr)
+		rawToken := strings.TrimSpace(r.URL.Query().Get("access_token"))
+		if rawToken != "" {
+			if s.tokenVerifier == nil {
+				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				return
+			}
+			realmHint := extractAuthRealmHint(r)
+			claims, err := s.tokenVerifier.VerifyToken(r.Context(), rawToken, realmHint)
+			if err != nil {
+				log.Printf("Agent WebSocket auth rejected: hint=%s err=%v", realmHint, err)
+				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				return
+			}
+			log.Printf("Agent WebSocket auth accepted: hint=%s realm=%s sub=%s", realmHint, claims.Realm, claims.Subject)
+			req = withAuthClaims(r, claims)
+		} else {
+			log.Printf("Agent WebSocket connection accepted: remote=%s", r.RemoteAddr)
+		}
 	} else if s.tokenVerifier != nil && !publicOnly {
 		rawToken := strings.TrimSpace(r.URL.Query().Get("access_token"))
 		if rawToken == "" {

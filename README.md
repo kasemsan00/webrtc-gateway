@@ -28,7 +28,7 @@ Browser / Mobile / Agent
 | --- | --- | --- | --- | --- | --- |
 | `/ws` | `API_ENABLE_WS` | เปิด | มือถือ Android/iOS | `access_token` เมื่อ `AUTH_ENABLE=true` | sticky: หลุดแล้วไม่ SIP UNREGISTER เพื่อให้ปลุกด้วย push ได้ |
 | `/ws-public` | `API_ENABLE_PUBLIC_WS` | ปิด | สายสาธารณะครั้งเดียว | ไม่ใช้ token | credential ส่งในข้อความ `call` ของ connection นั้น |
-| `/ws-agent` | `API_ENABLE_AGENT_WS` | ปิด | เอเจนต์บน PC | ไม่ใช้ token | client ส่ง `agent_register` พร้อม SIP credential; REGISTER อยู่ขณะมี client; client สุดท้ายหลุดแล้ว hangup แล้ว UNREGISTER |
+| `/ws-agent` | `API_ENABLE_AGENT_WS` | ปิด | เอเจนต์บน PC | `access_token` ไม่บังคับ ถ้ามีจะตรวจ JWT | client ส่ง `agent_register` พร้อม SIP credential; REGISTER อยู่ขณะมี client; client สุดท้ายหลุดแล้ว hangup แล้ว UNREGISTER |
 | `/ws-agent-device` | `API_ENABLE_AGENT_DEVICE_WS` | ปิด | เอเจนต์บนมือถือ | `access_token` และ `devicePlatform=android\|ios` | client ส่ง `device_register`; หลุดแล้วไม่ UNREGISTER และเก็บ FCM; ปลดด้วยข้อความ `unregister` |
 
 พฤติกรรมเฉพาะเส้นทาง:
@@ -134,7 +134,7 @@ pnpm --filter frontend run test -- src/features/trunk/types.test.ts
 | `API_ENABLE_PUBLIC_WS` | เปิด `/ws-public` |
 | `API_ENABLE_AGENT_WS` | เปิด `/ws-agent` |
 | `API_ENABLE_AGENT_DEVICE_WS` | เปิด `/ws-agent-device` |
-| `AUTH_ENABLE` | บังคับ JWT สำหรับ `/ws`, `/ws-agent-device` และ REST ที่ป้องกันไว้ |
+| `AUTH_ENABLE` | บังคับ JWT สำหรับ `/ws`, `/ws-agent-device` และ REST ที่ป้องกันไว้; `/ws-agent` ตรวจ `access_token` เมื่อมี |
 | `SIPCLIENT_AUTH_REGISTER_URL` | provision trunk มือถือตอนเชื่อม `/ws` |
 | `SIP_PORT` | พอร์ต SIP (ค่าเริ่มต้น `5060`) |
 | `DB_ENABLE` / `DB_DSN` | PostgreSQL สำหรับ trunk และบันทึกสาย |

@@ -15,7 +15,7 @@ From `internal/config/config.go`.
 - `API_PORT` (default `8080`)
 - `API_ENABLE_WS` (default `true`)
 - `API_ENABLE_PUBLIC_WS` (default `false`; enables unauthenticated `/ws-public` for public SIP per-call credentials only)
-- `API_ENABLE_AGENT_WS` (default `false`; enables unauthenticated `/ws-agent` for PC agent SIP REGISTER presence with client-provided credentials)
+- `API_ENABLE_AGENT_WS` (default `false`; enables `/ws-agent` for PC agent SIP REGISTER presence with client-provided credentials; `access_token` is optional and verified when present)
 - `API_ENABLE_AGENT_DEVICE_WS` (default `false`; enables JWT `/ws-agent-device` for sticky agent-device SIP REGISTER, stored FCM, and logout unregister)
 - `API_ENABLE_REST` (default `true`)
 - `API_CORS_ORIGINS` (default `*`; for single-domain deploy use e.g. `https://gateway.example.com` — see [`deploy/README.md`](../../deploy/README.md))
@@ -46,6 +46,7 @@ When `AUTH_ENABLE=true`:
   `POST /api/chat-images`, and `GET /api/chat-images/{id}` are intentionally
   public. Chat-image POST still requires a live call `sessionId`.
 - `/ws` requires `?access_token=<jwt>`. The admin password is not accepted on `/ws`.
+- `/ws-agent` still accepts a connection with no token. When `access_token` is present it is verified and stored on the connection. Trunk calls reject the socket when this verifier is enabled and those claims are missing.
 
 When `FRONTEND_PASSWORD` is set and `AUTH_ENABLE=false`, authenticated `/api/*` routes still require the matching bearer. Set the same `FRONTEND_PASSWORD` on the frontend process. Do not use a `VITE_` prefix; the frontend server reads it from process env and never injects it into the browser bundle.
 
