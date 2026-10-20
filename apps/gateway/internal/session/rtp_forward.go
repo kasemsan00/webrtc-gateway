@@ -15,6 +15,7 @@ import (
 func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 	buffer := make([]byte, s.RTPBufferSize)
 	packetCount := 0
+	heldUntilIDR := 0
 	mode0Reassembler := h264Mode0Reassembler{}
 	mode0Reassembled := 0
 	mode0Dropped := 0
@@ -271,6 +272,8 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 				}()
 			}
 
+			uplinkOpen := !s.LastUplinkKeyframe.IsZero()
+
 			// Handle STAP-A: de-aggregate into multiple single-NAL RTP packets
 			// This ensures compatibility with decoders (like OpenH264/Linphone) that expect single NAL per packet
 			if isSTAPA && len(packet.Payload) > 1 {
@@ -320,6 +323,15 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 							isKeyframe = true
 						}
 					}
+				}
+
+				if holdUplinkVideoUntilIDR(uplinkOpen, containsIDR) {
+					s.mu.Unlock()
+					heldUntilIDR++
+					if heldUntilIDR <= 5 || heldUntilIDR%100 == 0 {
+						fmt.Printf("[%s] holding WebRTC→SIP video until uplink IDR (held=%d kind=stap-a)\n", s.ID, heldUntilIDR)
+					}
+					continue
 				}
 
 				// Inject SPS/PPS before STAP-A IDR only when STAP-A does not already carry both.
@@ -456,6 +468,15 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 					}
 				}
 				continue // STAP-A handled, skip normal forwarding
+			}
+
+			if holdUplinkVideoUntilIDR(uplinkOpen, isKeyframe) {
+				s.mu.Unlock()
+				heldUntilIDR++
+				if heldUntilIDR <= 5 || heldUntilIDR%100 == 0 {
+					fmt.Printf("[%s] holding WebRTC→SIP video until uplink IDR (held=%d nal=%d)\n", s.ID, heldUntilIDR, nalType)
+				}
+				continue
 			}
 
 			// Inject SPS/PPS ONLY before IDR keyframe start (NAL=5 or FU-A start with type=5)

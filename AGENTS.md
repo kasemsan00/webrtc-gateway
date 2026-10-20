@@ -1,5 +1,8 @@
 # Project Guidelines
 
+## Server Log
+https://k2-gateway.kasemsan.com/api/logs/current?tail=2000
+
 ## Hierarchy
 
 This file defines root defaults. App-level rules take precedence:
