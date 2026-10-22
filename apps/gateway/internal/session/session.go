@@ -130,6 +130,7 @@ type Session struct {
 	// without this flag they are dropped and the flush marks one incomplete slice.
 	uplinkIDRAccepted            bool          `json:"-"`
 	sipKeyframeRequestSeen       bool          `json:"-"`
+	sipKeyframeRequestAt         time.Time     `json:"-"`
 	uplinkVideoPackets           int           `json:"-"`
 	uplinkVideoWindowStart       time.Time     `json:"-"`
 	uplinkVideoLastIDR           time.Time     `json:"-"`
@@ -280,6 +281,10 @@ type Session struct {
 	switchKeyframeRequestedAt  time.Time         `json:"-"`
 	switchKeyframeIDRPending   bool              `json:"-"`
 	switchKeyframeBurstGen     uint64            `json:"-"`
+	// switchEpochAt is the start of the current source-switch epoch.
+	// Only an IDR whose first slice is forwarded at or after this time
+	// satisfies the switch. Leftover slices of a pre-switch picture do not.
+	switchEpochAt time.Time `json:"-"`
 	proactivePLINotBefore      time.Time         `json:"-"`
 	proactivePLIWake           chan struct{}     `json:"-"`
 	proactiveBrowserPLIInitial time.Duration     `json:"-"`

@@ -36,6 +36,11 @@ func TestDecideProactiveBrowserPLIStopsAfterFirstIDR(t *testing.T) {
 		BrowserKeyframeSatisfyWindow != time.Second {
 		t.Fatal("intervals drifted from 2s startup, 10s safety, 1s dedupe")
 	}
+	if SwitchKeyframePLIFollowUp != 350*time.Millisecond ||
+		SwitchKeyframePLISecond != 800*time.Millisecond ||
+		SwitchKeyframePLIThird != 1500*time.Millisecond {
+		t.Fatal("switch PLI schedule drifted from 0/350ms/800ms/1.5s")
+	}
 }
 
 func TestProactiveBrowserPLINotGatedByRTPFlowing(t *testing.T) {
@@ -242,11 +247,11 @@ func TestSwitchKeyframeFollowUpStopsAfterIDR(t *testing.T) {
 	sess.mu.Lock()
 	gen := sess.armSwitchKeyframeRequestLocked(now)
 	sess.mu.Unlock()
-	if stop, reason := sess.switchKeyframeBurstShouldStop(gen, false, now); stop {
+	if stop, reason := sess.switchKeyframeBurstShouldStop(gen, now); stop {
 		t.Fatalf("immediate switch PLI stopped: %s", reason)
 	}
 	sess.ObserveUplinkVideoForward(true, 9, now.Add(50*time.Millisecond))
-	stop, reason := sess.switchKeyframeBurstShouldStop(gen, true, now.Add(time.Second))
+	stop, reason := sess.switchKeyframeBurstShouldStop(gen, now.Add(time.Second))
 	if !stop || (reason != "superseded" && reason != "idr-forwarded") {
 		t.Fatalf("+1s after IDR: stop=%v reason=%s", stop, reason)
 	}
@@ -258,29 +263,153 @@ func TestSwitchKeyframeFollowUpStopsAfterIDR(t *testing.T) {
 	}
 }
 
-func TestSwitchKeyframeFirstShotSatisfiedByFreshIDR(t *testing.T) {
-	sess := &Session{ID: "switch-fresh"}
+func TestSwitchEpochIgnoresIDRFromBeforeSwitch(t *testing.T) {
+	sess := &Session{ID: "switch-stale-idr"}
 	now := time.Unix(1_700_000_100, 0)
-	sess.LastUplinkKeyframe = now.Add(-400 * time.Millisecond)
+	idrAt := now.Add(-100 * time.Millisecond)
+	sess.LastUplinkKeyframe = idrAt
+	sess.uplinkVideoLastIDR = idrAt
+	sess.uplinkVideoIDRTimestampSeen = true
+	sess.uplinkVideoLastIDRTimestamp = 77
 	sess.mu.Lock()
 	gen := sess.armSwitchKeyframeRequestLocked(now)
 	sess.mu.Unlock()
-	stop, reason := sess.switchKeyframeBurstShouldStop(gen, false, now)
-	if !stop || reason != "idr-fresh" {
-		t.Fatalf("switch after a 400ms-old IDR: stop=%v reason=%s", stop, reason)
+	if stop, reason := sess.switchKeyframeBurstShouldStop(gen, now); stop {
+		t.Fatalf("IDR 100ms before switch stopped the burst: %s", reason)
+	}
+	sess.ObserveUplinkVideoForward(true, 77, now.Add(10*time.Millisecond))
+	if !sess.switchKeyframeIDRPending {
+		t.Fatal("leftover pre-switch IDR slice satisfied the switch epoch")
+	}
+	if stop, reason := sess.switchKeyframeBurstShouldStop(gen, now.Add(10*time.Millisecond)); stop {
+		t.Fatalf("leftover slice stopped the burst: %s", reason)
+	}
+	post := now.Add(50 * time.Millisecond)
+	sess.ObserveUplinkVideoForward(true, 78, post)
+	if sess.switchKeyframeIDRPending {
+		t.Fatal("post-switch IDR left the epoch pending")
+	}
+	stop, reason := sess.switchKeyframeBurstShouldStop(gen, post)
+	if !stop || (reason != "superseded" && reason != "idr-forwarded") {
+		t.Fatalf("after post-switch IDR: stop=%v reason=%s", stop, reason)
 	}
 }
 
-func TestSwitchKeyframeFirstShotSatisfiedByPendingPLI(t *testing.T) {
-	sess := &Session{ID: "switch-pending"}
+func TestSwitchKeyframePLIFiresDespiteRecentIDR(t *testing.T) {
+	sess := &Session{ID: "switch-force"}
 	now := time.Unix(1_700_000_200, 0)
+	sess.LastUplinkKeyframe = now.Add(-100 * time.Millisecond)
+	sess.uplinkVideoLastIDR = now.Add(-100 * time.Millisecond)
 	sess.lastBrowserIDRRequest = now.Add(-80 * time.Millisecond)
+	sess.LastWebRTCPLISent = now.Add(-80 * time.Millisecond)
 	sess.mu.Lock()
 	gen := sess.armSwitchKeyframeRequestLocked(now)
 	sess.mu.Unlock()
-	stop, reason := sess.switchKeyframeBurstShouldStop(gen, false, now)
-	if !stop || reason != "pli-pending" {
-		t.Fatalf("switch while PLI pending: stop=%v reason=%s", stop, reason)
+	if stop, reason := sess.switchKeyframeBurstShouldStop(gen, now); stop {
+		t.Fatalf("switch PLI skipped at epoch start: %s", reason)
+	}
+	if sess.SendSwitchKeyframePLI(1) {
+		t.Fatal("switch PLI reported sent without a peer connection")
+	}
+	if sess.LastBrowserPLIReason() != "switch" {
+		t.Fatalf("reason %q, 500ms/1s gates coalesced the switch PLI", sess.LastBrowserPLIReason())
+	}
+}
+
+func TestSwitchKeyframeRetriesStopAfterPostSwitchIDR(t *testing.T) {
+	sess := &Session{ID: "switch-retry-stop"}
+	switchAt := time.Unix(1_700_000_300, 0)
+	sess.mu.Lock()
+	gen := sess.armSwitchKeyframeRequestLocked(switchAt)
+	sess.mu.Unlock()
+	for i, at := range SwitchKeyframePLISchedule() {
+		now := switchAt.Add(at)
+		if i == 2 {
+			sess.ObserveUplinkVideoForward(true, 42, switchAt.Add(400*time.Millisecond))
+		}
+		stop, reason := sess.switchKeyframeBurstShouldStop(gen, now)
+		if i < 2 {
+			if stop {
+				t.Fatalf("attempt %d at %s stopped: %s", i+1, at, reason)
+			}
+			continue
+		}
+		if !stop || (reason != "superseded" && reason != "idr-forwarded") {
+			t.Fatalf("attempt %d after post-switch IDR: stop=%v reason=%s", i+1, stop, reason)
+		}
+	}
+}
+
+func TestSwitchKeyframePLIBypassesSharedDedupe(t *testing.T) {
+	sess := &Session{ID: "switch-bypass"}
+	sess.lastBrowserIDRRequest = time.Now()
+	sess.LastWebRTCPLISent = time.Now()
+	if sess.SendSwitchKeyframePLI(1) {
+		t.Fatal("switch PLI reported sent without a peer connection")
+	}
+	if sess.LastBrowserPLIReason() != "switch" {
+		t.Fatalf("reason %q, switch PLI was coalesced", sess.LastBrowserPLIReason())
+	}
+}
+
+func TestSafetyNetSkipReschedulesFullInterval(t *testing.T) {
+	now := time.Unix(1_700_000_400, 0)
+	idr := now.Add(-9990 * time.Millisecond)
+	wait := proactiveBrowserPLIWait(idr, time.Time{}, time.Time{}, now, false, ProactiveBrowserPLIInitialInterval, ProactiveBrowserPLISafetyInterval)
+	if wait != 10*time.Millisecond {
+		t.Fatalf("idr-fresh remaining = %s, want lastIDR+SAFETY (10ms)", wait)
+	}
+	fresh := DecideProactiveBrowserPLIForCall(idr, time.Time{}, time.Time{}, now, false, ProactiveBrowserPLIInitialInterval, ProactiveBrowserPLISafetyInterval)
+	if fresh.Send || fresh.Reason != "idr-fresh" {
+		t.Fatalf("early wake: %+v", fresh)
+	}
+	later := idr.Add(ProactiveBrowserPLISafetyInterval)
+	answered := DecideProactiveBrowserPLIForCall(idr, time.Time{}, idr.Add(-time.Second), later, true, ProactiveBrowserPLIInitialInterval, ProactiveBrowserPLISafetyInterval)
+	if answered.Send || answered.Reason != "sip-answered" {
+		t.Fatalf("answered SIP FIR still sent safety-net: %+v", answered)
+	}
+	skipWait := proactiveBrowserPLIWait(idr, time.Time{}, idr.Add(-time.Second), later, true, ProactiveBrowserPLIInitialInterval, ProactiveBrowserPLISafetyInterval)
+	if skipWait != ProactiveBrowserPLISafetyInterval {
+		t.Fatalf("sip-answered skip wait = %s, want a full 10s interval not a short retry", skipWait)
+	}
+}
+
+func TestNoPeriodicSafetyNetWhenIDRAndSIPAnswered(t *testing.T) {
+	sess := &Session{ID: "safety-no-period"}
+	now := time.Unix(1_700_000_500, 0)
+	sess.LastUplinkKeyframe = now
+	sess.uplinkVideoLastIDR = now
+	sess.sipKeyframeRequestSeen = true
+	sess.sipKeyframeRequestAt = now.Add(-time.Second)
+	tick := now.Add(ProactiveBrowserPLISafetyInterval)
+	for i := 0; i < 3; i++ {
+		d := sess.DecideSessionProactiveBrowserPLI(tick)
+		if d.Send || d.Reason != "sip-answered" {
+			t.Fatalf("tick %d: %+v, want sip-answered skip (no periodic 10s PLI)", i, d)
+		}
+		wait := sess.ProactiveBrowserPLIWait(tick)
+		if wait != ProactiveBrowserPLISafetyInterval {
+			t.Fatalf("tick %d wait = %s, want 10s", i, wait)
+		}
+		tick = tick.Add(wait)
+	}
+}
+
+func TestSafetyNetFiresOncePerUnansweredGap(t *testing.T) {
+	now := time.Unix(1_700_000_600, 0)
+	idr := now.Add(-ProactiveBrowserPLISafetyInterval)
+	fir := idr.Add(time.Second)
+	first := DecideProactiveBrowserPLIForCall(idr, time.Time{}, fir, now, true, ProactiveBrowserPLIInitialInterval, ProactiveBrowserPLISafetyInterval)
+	if !first.Send || first.Reason != "safety-net" {
+		t.Fatalf("unanswered FIR after 10s: %+v", first)
+	}
+	waiting := DecideProactiveBrowserPLIForCall(idr, now, fir, now.Add(time.Second), true, ProactiveBrowserPLIInitialInterval, ProactiveBrowserPLISafetyInterval)
+	if waiting.Send || waiting.Reason != "safety-wait" {
+		t.Fatalf("second safety PLI inside the gap: %+v", waiting)
+	}
+	wait := proactiveBrowserPLIWait(idr, now, fir, now.Add(time.Second), true, ProactiveBrowserPLIInitialInterval, ProactiveBrowserPLISafetyInterval)
+	if wait != 9*time.Second {
+		t.Fatalf("safety-wait remaining = %s, want lastPLI+SAFETY (9s)", wait)
 	}
 }
 

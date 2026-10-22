@@ -497,6 +497,7 @@ func (s *Session) ResetMediaState() {
 	s.switchKeyframeRequestedAt = time.Time{}
 	s.switchKeyframeIDRPending = false
 	s.switchKeyframeBurstGen++
+	s.switchEpochAt = time.Time{}
 	s.proactivePLINotBefore = time.Time{}
 	s.sipInfoFIRAt = time.Time{}
 	s.sipAnswerSDP = nil

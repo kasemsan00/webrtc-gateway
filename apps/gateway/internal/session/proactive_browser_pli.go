@@ -19,7 +19,7 @@ const (
 	// PLI that is still waiting for one, is already satisfied.
 	BrowserKeyframeSatisfyWindow = time.Second
 	// SwitchKeyframePLIFollowUp is the first retry after a switch request.
-	SwitchKeyframePLIFollowUp = 300 * time.Millisecond
+	SwitchKeyframePLIFollowUp = 350 * time.Millisecond
 	// SIPInfoFIRDebounce collapses Linphone's repeated picture_fast_update
 	// INFOs. The SDK sends another VFU while the decoder is still broken.
 	SIPInfoFIRDebounce = 250 * time.Millisecond
@@ -27,7 +27,9 @@ const (
 	// while the gateway is still waiting for the IDR from the first one.
 	Mode0DropPLIRetry = 2 * time.Second
 	// SwitchKeyframePLISecond is the second retry after a switch request.
-	SwitchKeyframePLISecond = time.Second
+	SwitchKeyframePLISecond = 800 * time.Millisecond
+	// SwitchKeyframePLIThird is the last retry after a switch request.
+	SwitchKeyframePLIThird = 1500 * time.Millisecond
 	// BrowserIDRRequestMinGap is the closest two browser IDR requests may be,
 	// whatever asked: SIP INFO, its retry, mode0 recovery, a switch, or the
 	// proactive schedule. Chrome ignores a PLI inside this window after an IDR.
@@ -46,8 +48,16 @@ type ProactiveBrowserPLIDecision struct {
 // DecideProactiveBrowserPLI is the fake-clock decision for the proactive
 // browser-PLI loop. Startup PLIs stop once any IDR has been forwarded.
 // After that only the safety net remains, and it fires only when no IDR
-// (and no unanswered safety PLI) has been seen for safety.
+// has been forwarded for safety AND either SIP never asked for a keyframe
+// or the last SIP FIR/PLI is still unanswered. An answered SIP request
+// means the phone is recovering on its own; do not poke a 10s IDR cadence.
 func DecideProactiveBrowserPLI(lastIDR, lastPLI, now time.Time, initial, safety time.Duration) ProactiveBrowserPLIDecision {
+	return DecideProactiveBrowserPLIForCall(lastIDR, lastPLI, time.Time{}, now, false, initial, safety)
+}
+
+// DecideProactiveBrowserPLIForCall is DecideProactiveBrowserPLI with SIP
+// keyframe state. sipSeen is true after any SIP INFO VFU or RTCP PLI/FIR.
+func DecideProactiveBrowserPLIForCall(lastIDR, lastPLI, lastSIP, now time.Time, sipSeen bool, initial, safety time.Duration) ProactiveBrowserPLIDecision {
 	if initial <= 0 {
 		initial = ProactiveBrowserPLIInitialInterval
 	}
@@ -63,10 +73,29 @@ func DecideProactiveBrowserPLI(lastIDR, lastPLI, now time.Time, initial, safety 
 	if now.Sub(lastIDR) < safety {
 		return ProactiveBrowserPLIDecision{Reason: "idr-fresh"}
 	}
-	if !lastPLI.IsZero() && now.Sub(lastPLI) < safety {
+	if !lastPLI.IsZero() && lastPLI.After(lastIDR) && now.Sub(lastPLI) < safety {
 		return ProactiveBrowserPLIDecision{Reason: "safety-wait"}
 	}
+	if sipSeen && (lastSIP.IsZero() || !lastSIP.After(lastIDR)) {
+		return ProactiveBrowserPLIDecision{Reason: "sip-answered"}
+	}
 	return ProactiveBrowserPLIDecision{Send: true, Reason: "safety-net"}
+}
+
+// SwitchKeyframePLISchedule is the post-switch PLI burst: immediate, then
+// +350ms, +800ms, and +1.5s until a first slice after the switch is forwarded.
+func SwitchKeyframePLISchedule() []time.Duration {
+	return []time.Duration{0, SwitchKeyframePLIFollowUp, SwitchKeyframePLISecond, SwitchKeyframePLIThird}
+}
+
+// SwitchEpochIDRSatisfied is true when the first slice of an IDR was
+// forwarded at or after the switch. Leftover slices of a picture that
+// started before the switch keep the first-slice clock in the past.
+func SwitchEpochIDRSatisfied(firstSliceIDR, switchAt time.Time) bool {
+	if switchAt.IsZero() || firstSliceIDR.IsZero() {
+		return false
+	}
+	return !firstSliceIDR.Before(switchAt)
 }
 
 // BrowserKeyframeRequestSatisfied reports that another browser IDR request
@@ -101,6 +130,7 @@ func (s *Session) NoteSIPKeyframeRequest(kind string) {
 	s.mu.Lock()
 	already := s.sipKeyframeRequestSeen
 	s.sipKeyframeRequestSeen = true
+	s.sipKeyframeRequestAt = time.Now()
 	s.mu.Unlock()
 	if !already {
 		fmt.Printf("[%s] sip_keyframe_request_seen kind=%s\n", s.ID, kind)
@@ -121,6 +151,8 @@ func (s *Session) SendProactivePLIToWebRTC() bool {
 	}
 	snapshot := s.prepareWebRTCFeedbackLocked("pli", true, nil)
 	if snapshot.ready && !snapshot.throttled {
+		s.lastBrowserIDRRequest = now
+	} else if snapshot.throttled {
 		s.lastBrowserIDRRequest = now
 	}
 	id := s.ID
@@ -153,6 +185,14 @@ func (s *Session) lastForwardedIDRTimeLocked() time.Time {
 	return t
 }
 
+func (s *Session) sipKeyframeStateLocked() (bool, time.Time) {
+	t := s.sipKeyframeRequestAt
+	if s.sipInfoFIRAt.After(t) {
+		t = s.sipInfoFIRAt
+	}
+	return s.sipKeyframeRequestSeen || !s.sipInfoFIRAt.IsZero(), t
+}
+
 // ProactiveBrowserPLIInitial is the configured startup interval, or the default.
 func (s *Session) ProactiveBrowserPLIInitial() time.Duration {
 	return s.proactiveInitialInterval()
@@ -168,44 +208,57 @@ func (s *Session) DecideSessionProactiveBrowserPLI(now time.Time) ProactiveBrows
 	s.mu.RLock()
 	lastIDR := s.lastForwardedIDRTimeLocked()
 	lastPLI := s.lastBrowserIDRRequest
+	sipSeen, lastSIP := s.sipKeyframeStateLocked()
 	initial := s.proactiveInitialInterval()
 	safety := s.proactiveSafetyInterval()
 	s.mu.RUnlock()
-	return DecideProactiveBrowserPLI(lastIDR, lastPLI, now, initial, safety)
+	return DecideProactiveBrowserPLIForCall(lastIDR, lastPLI, lastSIP, now, sipSeen, initial, safety)
 }
 
 // ProactiveBrowserPLIWait is how long the proactive loop should sleep.
 // After the first forwarded IDR this is the remaining safety-net time,
-// not a 4s cadence. FIR and switch no longer reset it to 2s.
+// not a 4s cadence. FIR and switch no longer reset it to 2s. A skip
+// always reschedules to lastIDR+safety (or a full safety interval when
+// that deadline is already past), never a 1ms spin.
 func (s *Session) ProactiveBrowserPLIWait(now time.Time) time.Duration {
 	s.mu.RLock()
 	lastIDR := s.lastForwardedIDRTimeLocked()
 	lastPLI := s.lastBrowserIDRRequest
+	sipSeen, lastSIP := s.sipKeyframeStateLocked()
 	initial := s.proactiveInitialInterval()
 	safety := s.proactiveSafetyInterval()
 	s.mu.RUnlock()
-	if lastIDR.IsZero() {
-		if !lastPLI.IsZero() {
-			next := lastPLI.Add(initial)
-			if next.After(now) {
-				return next.Sub(now)
-			}
-		}
-		if initial < time.Millisecond {
-			return time.Millisecond
-		}
-		return initial
+	return proactiveBrowserPLIWait(lastIDR, lastPLI, lastSIP, now, sipSeen, initial, safety)
+}
+
+func proactiveBrowserPLIWait(lastIDR, lastPLI, lastSIP, now time.Time, sipSeen bool, initial, safety time.Duration) time.Duration {
+	if initial <= 0 {
+		initial = ProactiveBrowserPLIInitialInterval
 	}
-	next := lastIDR.Add(safety)
-	if lastPLI.After(lastIDR) {
-		if pliNext := lastPLI.Add(safety); pliNext.After(next) {
-			next = pliNext
-		}
+	if safety <= 0 {
+		safety = ProactiveBrowserPLISafetyInterval
+	}
+	d := DecideProactiveBrowserPLIForCall(lastIDR, lastPLI, lastSIP, now, sipSeen, initial, safety)
+	if d.Send {
+		return time.Millisecond
+	}
+	var next time.Time
+	switch d.Reason {
+	case "startup-wait":
+		next = lastPLI.Add(initial)
+	case "idr-fresh":
+		next = lastIDR.Add(safety)
+	case "safety-wait":
+		next = lastPLI.Add(safety)
+	default:
+		// sip-answered, or any other skip: lastIDR+safety is in the past,
+		// so wait a full safety interval from now instead of 1ms.
+		next = now.Add(safety)
 	}
 	if next.After(now) {
 		return next.Sub(now)
 	}
-	return time.Millisecond
+	return safety
 }
 
 func (s *Session) proactivePLIWakeChan() chan struct{} {
@@ -235,6 +288,7 @@ func (s *Session) ProactivePLIWakeChan() <-chan struct{} {
 func (s *Session) armSwitchKeyframeRequestLocked(now time.Time) uint64 {
 	s.switchKeyframeBurstGen++
 	s.switchKeyframeRequestedAt = now
+	s.switchEpochAt = now
 	s.switchKeyframeIDRPending = true
 	s.allowNextUplinkPictureSize = true
 	s.uplinkSPSDimensionBlocked = false
@@ -259,7 +313,7 @@ func (s *Session) runSwitchKeyframeBurst(gen uint64) {
 		ctx = context.Background()
 	}
 	start := time.Now()
-	for i, at := range []time.Duration{0, SwitchKeyframePLIFollowUp, SwitchKeyframePLISecond} {
+	for i, at := range SwitchKeyframePLISchedule() {
 		if at > 0 {
 			timer := time.NewTimer(time.Until(start.Add(at)))
 			select {
@@ -270,33 +324,27 @@ func (s *Session) runSwitchKeyframeBurst(gen uint64) {
 			}
 		}
 		now := time.Now()
-		if stop, reason := s.switchKeyframeBurstShouldStop(gen, i > 0, now); stop {
+		if stop, reason := s.switchKeyframeBurstShouldStop(gen, now); stop {
 			fmt.Printf("[%s] switch_keyframe_burst_stop reason=%s\n", s.ID, reason)
 			return
 		}
-		s.SendBrowserPLI("switch")
+		s.SendSwitchKeyframePLI(i + 1)
 	}
 }
 
 // switchKeyframeBurstShouldStop is the fake-clock gate for one shot of the
-// post-switch PLI burst. followUp is false for the immediate shot.
-func (s *Session) switchKeyframeBurstShouldStop(gen uint64, followUp bool, now time.Time) (bool, string) {
+// post-switch PLI burst. A pre-switch IDR and a PLI pending from before
+// the switch must not stop it; only a first slice at or after the epoch.
+func (s *Session) switchKeyframeBurstShouldStop(gen uint64, now time.Time) (bool, string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.switchKeyframeBurstGen != gen {
 		return true, "superseded"
 	}
-	lastIDR := s.lastForwardedIDRTimeLocked()
-	requestedAt := s.switchKeyframeRequestedAt
-	if IDRSatisfiesKeyframeRequest(lastIDR, requestedAt) || !s.switchKeyframeIDRPending {
+	if SwitchEpochIDRSatisfied(s.uplinkVideoLastIDR, s.switchEpochAt) || !s.switchKeyframeIDRPending {
 		return true, "idr-forwarded"
 	}
-	if followUp {
-		return false, ""
-	}
-	if skip, reason := BrowserKeyframeRequestSatisfied(lastIDR, s.lastBrowserIDRRequest, now); skip {
-		return true, reason
-	}
+	_ = now
 	return false, ""
 }
 
@@ -313,6 +361,8 @@ func (s *Session) HandleSIPInfoPictureFastUpdate(now time.Time) bool {
 		return false
 	}
 	s.sipInfoFIRAt = now
+	s.sipKeyframeRequestSeen = true
+	s.sipKeyframeRequestAt = now
 	s.armBrowserIDRLocked(now)
 	s.firIDRSliceLog = true
 	s.firIDRSliceTS = 0
@@ -443,6 +493,38 @@ func (s *Session) SIPInfoKeyframePending() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.switchKeyframeIDRPending
+}
+
+// SendSwitchKeyframePLI writes one browser PLI for a source-switch epoch.
+// It bypasses the shared 1s dedupe and the 500ms IDR-request gate so the
+// camera is asked even when a queue IDR or startup PLI landed just before
+// the switch. Non-switch requesters still coalesce against lastBrowserIDRRequest.
+func (s *Session) SendSwitchKeyframePLI(attempt int) bool {
+	s.mu.Lock()
+	now := time.Now()
+	s.lastBrowserPLIReason = "switch"
+	saved := s.LastWebRTCPLISent
+	s.LastWebRTCPLISent = time.Time{}
+	snapshot := s.prepareWebRTCFeedbackLocked("pli", true, nil)
+	if snapshot.ready && !snapshot.throttled {
+		s.lastBrowserIDRRequest = now
+	}
+	if !snapshot.ready {
+		s.LastWebRTCPLISent = saved
+	}
+	id := s.ID
+	throttled := snapshot.throttled
+	ready := snapshot.ready
+	s.mu.Unlock()
+	if throttled {
+		fmt.Printf("[%s] switch_keyframe_pli throttled attempt=%d\n", id, attempt)
+		return false
+	}
+	if !ready || !sendPreparedWebRTCFeedback(id, snapshot) {
+		return false
+	}
+	fmt.Printf("[%s] switch_keyframe_pli sent attempt=%d\n", id, attempt)
+	return true
 }
 
 // SendBrowserPLIImmediate writes one browser PLI even when one was sent in
@@ -660,6 +742,7 @@ func (s *Session) ObserveUplinkVideoForward(isIDR bool, rtpTimestamp uint32, now
 	logIDR := false
 	var idrGap time.Duration
 	logAfterSwitch := false
+	logSwitchSatisfied := false
 	var switchLatency time.Duration
 	if isIDR {
 		if s.LastUplinkKeyframe.Before(now) {
@@ -667,11 +750,21 @@ func (s *Session) ObserveUplinkVideoForward(isIDR bool, rtpTimestamp uint32, now
 		}
 	}
 	if isIDR && s.switchKeyframeIDRPending {
-		logAfterSwitch = true
-		switchLatency = now.Sub(s.switchKeyframeRequestedAt)
-		s.switchKeyframeIDRPending = false
-		s.allowNextUplinkPictureSize = false
-		s.switchKeyframeBurstGen++
+		newPicture := !s.uplinkVideoIDRTimestampSeen || rtpTimestamp != s.uplinkVideoLastIDRTimestamp
+		epoch := s.switchEpochAt
+		satisfySwitch := !epoch.IsZero() && newPicture && !now.Before(epoch)
+		satisfyOther := epoch.IsZero()
+		if satisfySwitch || satisfyOther {
+			logAfterSwitch = true
+			switchLatency = now.Sub(s.switchKeyframeRequestedAt)
+			s.switchKeyframeIDRPending = false
+			if satisfySwitch {
+				logSwitchSatisfied = true
+				s.allowNextUplinkPictureSize = false
+				s.switchEpochAt = time.Time{}
+				s.switchKeyframeBurstGen++
+			}
+		}
 	}
 	if isIDR && (!s.uplinkVideoIDRTimestampSeen || rtpTimestamp != s.uplinkVideoLastIDRTimestamp) {
 		if !s.uplinkVideoLastIDR.IsZero() {
@@ -695,6 +788,9 @@ func (s *Session) ObserveUplinkVideoForward(isIDR bool, rtpTimestamp uint32, now
 	id := s.ID
 	s.mu.Unlock()
 
+	if logSwitchSatisfied {
+		fmt.Printf("[%s] switch_keyframe_satisfied latency_ms=%d\n", id, switchLatency.Milliseconds())
+	}
 	if logAfterSwitch {
 		fmt.Printf("[%s] uplink_idr_after_switch forwarded latency_ms=%d\n", id, switchLatency.Milliseconds())
 	}

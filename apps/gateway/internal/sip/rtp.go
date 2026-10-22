@@ -1122,8 +1122,10 @@ func (s *Server) handleRTCPFromSIP(data []byte, sess *session.Session, rtcpCount
 
 // startProactiveBrowserPLIForSession asks the browser for an IDR until the
 // first one is forwarded to SIP, then only if none has been forwarded for
-// the safety-net interval. SIP INFO FIR and RTCP FIR/PLI handle recovery
-// in between. RTP already flowing does not cancel it.
+// the safety-net interval and SIP has never asked, or the last SIP FIR/PLI
+// is still unanswered. SIP INFO FIR and RTCP FIR/PLI handle recovery in
+// between. RTP already flowing does not cancel it. After a skip the wait
+// is lastIDR+safety, not a short retry.
 func (s *Server) startProactiveBrowserPLIForSession(sess *session.Session) {
 	fmt.Printf("[%s] proactive_browser_pli_start initial=%s safety=%s\n",
 		sess.ID,
