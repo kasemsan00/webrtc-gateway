@@ -38,6 +38,20 @@ func (s *Session) NoteSIPKeyframeRequest(kind string) {
 	}
 }
 
+// SendProactivePLIToWebRTC writes one PLI to the browser. It bypasses the
+// 400ms generic throttle and still refuses to send when any browser PLI was
+// written in the last second. The bool is true only after WriteRTCP succeeds.
+func (s *Session) SendProactivePLIToWebRTC() bool {
+	s.mu.Lock()
+	snapshot := s.prepareWebRTCFeedbackLocked("pli", true, nil)
+	id := s.ID
+	s.mu.Unlock()
+	if snapshot.throttled || !snapshot.ready {
+		return false
+	}
+	return sendPreparedWebRTCFeedback(id, snapshot)
+}
+
 // HasSIPKeyframeRequest reports whether SIP RTCP has ever carried PLI or FIR.
 func (s *Session) HasSIPKeyframeRequest() bool {
 	s.mu.RLock()

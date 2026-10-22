@@ -1142,9 +1142,14 @@ func (s *Server) startProactiveBrowserPLIForSession(sess *session.Session) {
 			fmt.Printf("[%s] proactive_browser_pli_stop reason=sip-keyframe-request\n", sess.ID)
 			return
 		}
-		sess.SendPLItoWebRTC()
-		fmt.Printf("[%s] proactive_browser_pli sent interval=%s call_age=%s\n",
-			sess.ID, interval, time.Since(started).Round(time.Millisecond))
+		callAge := time.Since(started).Round(time.Millisecond)
+		if sess.SendProactivePLIToWebRTC() {
+			fmt.Printf("[%s] proactive_browser_pli sent interval=%s call_age=%s\n",
+				sess.ID, interval, callAge)
+		} else {
+			fmt.Printf("[%s] proactive_browser_pli throttled interval=%s call_age=%s\n",
+				sess.ID, interval, callAge)
+		}
 	}
 }
 

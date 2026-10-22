@@ -44,6 +44,42 @@ func TestProactiveBrowserPLINotGatedByRTPFlowing(t *testing.T) {
 	}
 }
 
+func TestWebRTCPLIThrottle(t *testing.T) {
+	now := time.Now()
+	last := now.Add(-200 * time.Millisecond)
+	if !webrtcPLIThrottled(false, last, now) {
+		t.Fatal("unforced PLI inside 400ms must stay throttled")
+	}
+	if !webrtcPLIThrottled(true, last, now) {
+		t.Fatal("forced PLI inside 1s must stay throttled")
+	}
+	last = now.Add(-500 * time.Millisecond)
+	if webrtcPLIThrottled(false, last, now) {
+		t.Fatal("unforced PLI after 400ms is a real SIP forward and must be allowed")
+	}
+	if !webrtcPLIThrottled(true, last, now) {
+		t.Fatal("forced PLI at 500ms is still inside the 1s overall cap")
+	}
+	last = now.Add(-webrtcPLIOverallMinInterval)
+	if webrtcPLIThrottled(true, last, now) {
+		t.Fatal("forced PLI at 1s is the proactive slot and must be allowed")
+	}
+	if webrtcPLIThrottled(true, time.Time{}, now) {
+		t.Fatal("first PLI must be allowed")
+	}
+}
+
+func TestSendProactivePLIWithoutPeerConnection(t *testing.T) {
+	sess := &Session{ID: "call"}
+	if sess.SendProactivePLIToWebRTC() {
+		t.Fatal("proactive PLI reported sent without a peer connection")
+	}
+	sess.LastWebRTCPLISent = time.Now()
+	if sess.SendProactivePLIToWebRTC() {
+		t.Fatal("proactive PLI reported sent inside the 1s cap")
+	}
+}
+
 func TestNoteSIPKeyframeRequest(t *testing.T) {
 	sess := &Session{ID: "call"}
 	if sess.HasSIPKeyframeRequest() {

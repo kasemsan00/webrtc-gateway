@@ -14,10 +14,13 @@ const (
 	pliForceMinInterval  = 300 * time.Millisecond
 	sipFIRMinInterval    = 1000 * time.Millisecond
 	webrtcPLIMinInterval = 400 * time.Millisecond
-	webrtcFIRMinInterval = 1000 * time.Millisecond
-	browserFIRInterval   = 1000 * time.Millisecond
-	browserPLIStale      = 600 * time.Millisecond
-	browserFIRStale      = 1500 * time.Millisecond
+	// webrtcPLIOverallMinInterval caps every forced browser PLI, including the
+	// proactive schedule, so sources cannot stack more than one PLI per second.
+	webrtcPLIOverallMinInterval = time.Second
+	webrtcFIRMinInterval        = 1000 * time.Millisecond
+	browserFIRInterval          = 1000 * time.Millisecond
+	browserPLIStale             = 600 * time.Millisecond
+	browserFIRStale             = 1500 * time.Millisecond
 	// Keep requesting browser IDRs after the queue/auto-200 IDR so a SIP
 	// decoder that answers several seconds later (Linphone after ring, or a
 	// queue-bridged agent that answers after dest-ready) is not stuck on
