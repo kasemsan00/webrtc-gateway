@@ -465,6 +465,12 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 				s.mu.Unlock()
 				// Flush buffered writes outside lock. Never record an uplink
 				// IDR while holding s.mu — RecordUplinkKeyframe takes the same lock.
+				if stapaForwarded && s.paceUplinkVideo() {
+					for _, w := range pendingWrites {
+						s.enqueueUplinkVideo(conn, destAddr, w, containsIDR, packet.Header.Timestamp, packetCount)
+					}
+					continue
+				}
 				for _, w := range pendingWrites {
 					_, _ = conn.WriteToUDP(w, destAddr)
 				}
@@ -567,9 +573,17 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 		}
 		s.mu.Unlock()
 
-		// Flush any buffered SPS/PPS injection writes outside lock
-		for _, w := range pendingWrites {
-			conn.WriteToUDP(w, destAddr)
+		pacedVideo := kind == "video" && s.paceUplinkVideo() && destAddr != nil && conn != nil
+		// Flush any buffered SPS/PPS injection writes outside lock.
+		// Video datagrams go through the pacer; audio stays on this loop.
+		if pacedVideo {
+			for _, w := range pendingWrites {
+				s.enqueueUplinkVideo(conn, destAddr, w, false, packet.Header.Timestamp, packetCount)
+			}
+		} else {
+			for _, w := range pendingWrites {
+				conn.WriteToUDP(w, destAddr)
+			}
 		}
 
 		if destAddr != nil && conn != nil {
@@ -586,17 +600,21 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 					s.ID, kind, packetCount, packet.Header.SequenceNumber, packet.Header.SSRC, len(outBuf), destAddr)
 			}
 
-			_, err = conn.WriteToUDP(outBuf, destAddr)
-			if err != nil {
-				if packetCount <= 5 {
-					fmt.Printf("[%s] Error forwarding %s to Asterisk: %v\n", s.ID, kind, err)
+			if pacedVideo {
+				s.enqueueUplinkVideo(conn, destAddr, outBuf, isKeyframe, packet.Header.Timestamp, packetCount)
+			} else {
+				_, err = conn.WriteToUDP(outBuf, destAddr)
+				if err != nil {
+					if packetCount <= 5 {
+						fmt.Printf("[%s] Error forwarding %s to Asterisk: %v\n", s.ID, kind, err)
+					}
+				} else if kind == "video" {
+					if isKeyframe {
+						s.RecordUplinkKeyframe()
+						fmt.Printf("[%s] 🔑 KEYFRAME (Forwarded) detected in video packet #%d → Asterisk\n", s.ID, packetCount)
+					}
+					s.ObserveUplinkVideoForward(isKeyframe, packet.Header.Timestamp, time.Now())
 				}
-			} else if kind == "video" {
-				if isKeyframe {
-					s.RecordUplinkKeyframe()
-					fmt.Printf("[%s] 🔑 KEYFRAME (Forwarded) detected in video packet #%d → Asterisk\n", s.ID, packetCount)
-				}
-				s.ObserveUplinkVideoForward(isKeyframe, packet.Header.Timestamp, time.Now())
 			}
 		} else if packetCount == 1 {
 			fmt.Printf("[%s] ⚠️ Cannot forward %s: Asterisk endpoint not set yet\n", s.ID, kind)

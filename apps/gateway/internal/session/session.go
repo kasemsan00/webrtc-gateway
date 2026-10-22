@@ -181,6 +181,12 @@ type Session struct {
 	VideoAUNormalizeEnabled               bool                 `json:"-"`
 	SwitchVideoGateMinIDRPackets          int                  `json:"-"`
 	VideoReorderPacing                    time.Duration        `json:"-"`
+	UplinkVideoPacerEnabled               bool                 `json:"-"`
+	uplinkVideoPacerBPS                   int                  `json:"-"`
+	uplinkVideoPacerBurstPackets          int                  `json:"-"`
+	uplinkVideoPacerMaxQueue              time.Duration        `json:"-"`
+	uplinkVideoPacer                      *uplinkVideoPacer    `json:"-"`
+	uplinkVideoPacerOnce                  sync.Once            `json:"-"`
 	VideoTimestampJumpPLI                 bool                 `json:"-"`
 	VideoSuppressEarlyMedia               bool                 `json:"-"`
 	WebRTCTWCCEnabled                     bool                 `json:"-"`
@@ -628,6 +634,10 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 		VideoAUNormalizeEnabled:              cfg.SIP.VideoAUNormalizeEnabled,
 		SwitchVideoGateMinIDRPackets:         cfg.SIP.SwitchVideoGateMinIDRPackets,
 		VideoReorderPacing:                   time.Duration(cfg.SIP.VideoReorderPacingMS) * time.Millisecond,
+		UplinkVideoPacerEnabled:              cfg.SIP.UplinkVideoPacerEnabled,
+		uplinkVideoPacerBPS:                  cfg.SIP.UplinkVideoPacerBitsPerSec,
+		uplinkVideoPacerBurstPackets:         cfg.SIP.UplinkVideoPacerBurstPackets,
+		uplinkVideoPacerMaxQueue:             time.Duration(cfg.SIP.UplinkVideoPacerMaxQueueMS) * time.Millisecond,
 		VideoTimestampJumpPLI:                cfg.SIP.VideoTimestampJumpPLI,
 		VideoSuppressEarlyMedia:              cfg.SIP.VideoSuppressEarlyMedia,
 		WebRTCTWCCEnabled:                    cfg.SIP.WebRTCTWCCEnabled,

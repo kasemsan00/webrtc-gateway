@@ -174,6 +174,10 @@ type SIPConfig struct {
 	VideoAUNormalizeEnabled              bool   // Normalize SIP->WebRTC H.264 into complete access units (default: true)
 	SwitchVideoGateMinIDRPackets         int    // Min packets in a post-switch IDR before stall timeout (default: 1)
 	VideoReorderPacingMS                 int    // Sleep between consecutive reorder-burst packet writes (default: 1; 0 disables)
+	UplinkVideoPacerEnabled              bool   // Pace WebRTC→SIP video so an IDR cannot leave as one burst (default: true)
+	UplinkVideoPacerBitsPerSec           int    // Token-bucket rate for uplink video (default: 3500000)
+	UplinkVideoPacerBurstPackets         int    // Packets that may leave together before the rate limit (default: 4)
+	UplinkVideoPacerMaxQueueMS           int    // Flush queued uplink video after this delay instead of growing (default: 500)
 	VideoTimestampJumpPLI                bool   // Request a SIP keyframe when SIP video RTP timestamps jump (default: true)
 	VideoSuppressEarlyMedia              bool   // Drop SIP video until the call is answered (default: false; SIP_VIDEO_FORWARD_EARLY_MEDIA=true)
 	WebRTCTWCCEnabled                    bool   // Send transport-cc feedback to the phone (default: true; WEBRTC_TWCC_ENABLE)
@@ -347,6 +351,10 @@ func Load() (*Config, error) {
 			VideoAUNormalizeEnabled:              getEnvAsBool("SIP_VIDEO_AU_NORMALIZE_ENABLE", true),
 			SwitchVideoGateMinIDRPackets:         clampInt(getEnvAsInt("SIP_SWITCH_VIDEO_GATE_MIN_IDR_PACKETS", 1), 1, 64),
 			VideoReorderPacingMS:                 clampInt(getEnvAsInt("SIP_VIDEO_REORDER_PACING_MS", 1), 0, 10),
+			UplinkVideoPacerEnabled:              getEnvAsBool("SIP_UPLINK_VIDEO_PACER_ENABLE", true),
+			UplinkVideoPacerBitsPerSec:           clampInt(getEnvAsInt("SIP_UPLINK_VIDEO_PACER_BPS", 3_500_000), 100_000, 50_000_000),
+			UplinkVideoPacerBurstPackets:         clampInt(getEnvAsInt("SIP_UPLINK_VIDEO_PACER_BURST_PACKETS", 4), 1, 16),
+			UplinkVideoPacerMaxQueueMS:           clampInt(getEnvAsInt("SIP_UPLINK_VIDEO_PACER_MAX_QUEUE_MS", 500), 50, 5000),
 			VideoTimestampJumpPLI:                getEnvAsBool("SIP_VIDEO_TIMESTAMP_JUMP_PLI", true),
 			VideoSuppressEarlyMedia:              !getEnvAsBool("SIP_VIDEO_FORWARD_EARLY_MEDIA", true),
 			WebRTCTWCCEnabled:                    getEnvAsBool("WEBRTC_TWCC_ENABLE", true),
@@ -678,6 +686,12 @@ func (c *Config) Display() {
 	fmt.Printf("  SIP Video H264 AU Normalization: %v\n", c.SIP.VideoAUNormalizeEnabled)
 	fmt.Printf("  @switch Video Gate Min IDR Packets: %d\n", c.SIP.SwitchVideoGateMinIDRPackets)
 	fmt.Printf("  SIP Video Reorder Pacing: %dms\n", c.SIP.VideoReorderPacingMS)
+	fmt.Printf("  SIP Uplink Video Pacer: %v (rate=%d bps, burst=%d packets, maxQueue=%dms)\n",
+		c.SIP.UplinkVideoPacerEnabled,
+		c.SIP.UplinkVideoPacerBitsPerSec,
+		c.SIP.UplinkVideoPacerBurstPackets,
+		c.SIP.UplinkVideoPacerMaxQueueMS,
+	)
 	fmt.Printf("  SIP Video Timestamp-Jump PLI: %v\n", c.SIP.VideoTimestampJumpPLI)
 	fmt.Printf("  SIP Video Forward Early Media: %v\n", !c.SIP.VideoSuppressEarlyMedia)
 	fmt.Printf("  WebRTC TWCC: %v\n", c.SIP.WebRTCTWCCEnabled)
