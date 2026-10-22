@@ -43,7 +43,7 @@ func (s *Session) createReplacementPeerConnection(
 	}
 
 	iceServers := pkg_webrtc.BuildICEServers(turnConfig)
-	api, err := newGatewayWebRTCAPI(s.WebRTCTWCCEnabled)
+	api, err := newGatewayWebRTCAPI(s.WebRTCTWCCEnabled, s.ID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create WebRTC API: %w", err)
 	}

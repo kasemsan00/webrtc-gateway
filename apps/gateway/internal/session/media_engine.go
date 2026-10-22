@@ -97,17 +97,20 @@ func createCustomMediaEngineWithTWCC(twccEnabled bool) (*webrtc.MediaEngine, err
 // a replacement PeerConnection. NACK retransmission stays on the gateway's
 // own cache. RTCP SR/RR come from ConfigureRTCPReports. TWCC sender feedback
 // is what lets the phone's availableOutgoingBitrate move.
-func newGatewayWebRTCAPI(twccEnabled bool) (*webrtc.API, error) {
+func newGatewayWebRTCAPI(twccEnabled bool, sessionID string) (*webrtc.API, error) {
 	mediaEngine, err := createCustomMediaEngineWithTWCC(twccEnabled)
 	if err != nil {
 		return nil, err
 	}
 	registry := &interceptor.Registry{}
+	// Registered first so receiver reports and our TWCC sender both pass
+	// through the accounting writer, and RTP reads never block on feedback.
+	registry.Add(&browserFeedbackFactory{sessionID: sessionID, twcc: twccEnabled})
 	if err := webrtc.ConfigureRTCPReports(registry); err != nil {
 		return nil, err
 	}
 	if twccEnabled {
-		if err := webrtc.ConfigureTWCCSender(mediaEngine, registry); err != nil {
+		if err := registerTransportCC(mediaEngine); err != nil {
 			return nil, err
 		}
 	}
@@ -115,6 +118,19 @@ func newGatewayWebRTCAPI(twccEnabled bool) (*webrtc.API, error) {
 		webrtc.WithMediaEngine(mediaEngine),
 		webrtc.WithInterceptorRegistry(registry),
 	), nil
+}
+
+func registerTransportCC(mediaEngine *webrtc.MediaEngine) error {
+	mediaEngine.RegisterFeedback(webrtc.RTCPFeedback{Type: webrtc.TypeRTCPFBTransportCC}, webrtc.RTPCodecTypeVideo)
+	if err := mediaEngine.RegisterHeaderExtension(
+		webrtc.RTPHeaderExtensionCapability{URI: transportCCURI}, webrtc.RTPCodecTypeVideo,
+	); err != nil {
+		return err
+	}
+	mediaEngine.RegisterFeedback(webrtc.RTCPFeedback{Type: webrtc.TypeRTCPFBTransportCC}, webrtc.RTPCodecTypeAudio)
+	return mediaEngine.RegisterHeaderExtension(
+		webrtc.RTPHeaderExtensionCapability{URI: transportCCURI}, webrtc.RTPCodecTypeAudio,
+	)
 }
 
 func offeredH264CodecForPacketizationMode(offerSDP string, mode uint8) (webrtc.RTPCodecParameters, error) {

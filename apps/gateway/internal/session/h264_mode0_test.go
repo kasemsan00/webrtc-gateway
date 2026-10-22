@@ -31,15 +31,16 @@ func mode0FUAPacket(seq uint16, timestamp uint32, start, end bool, nalType byte,
 func TestH264Mode0ReassemblerReassemblesFUA(t *testing.T) {
 	r := h264Mode0Reassembler{}
 
-	if packet, result := r.push(mode0FUAPacket(10, 9000, true, false, 5, []byte{0x01, 0x02})); packet != nil || result != h264Mode0Buffered {
-		t.Fatalf("start result = (%v, %v), want buffered", packet, result)
+	if decision := r.push(mode0FUAPacket(10, 9000, true, false, 5, []byte{0x01, 0x02})); decision.packet != nil || decision.result != h264Mode0Buffered {
+		t.Fatalf("start result = (%v, %v), want buffered", decision.packet, decision.result)
 	}
-	if packet, result := r.push(mode0FUAPacket(11, 9000, false, false, 5, []byte{0x03})); packet != nil || result != h264Mode0Buffered {
-		t.Fatalf("middle result = (%v, %v), want buffered", packet, result)
+	if decision := r.push(mode0FUAPacket(11, 9000, false, false, 5, []byte{0x03})); decision.packet != nil || decision.result != h264Mode0Buffered {
+		t.Fatalf("middle result = (%v, %v), want buffered", decision.packet, decision.result)
 	}
-	packet, result := r.push(mode0FUAPacket(12, 9000, false, true, 5, []byte{0x04, 0x05}))
-	if result != h264Mode0Reassembled || packet == nil {
-		t.Fatalf("end result = (%v, %v), want reassembled", packet, result)
+	decision := r.push(mode0FUAPacket(12, 9000, false, true, 5, []byte{0x04, 0x05}))
+	packet := decision.packet
+	if decision.result != h264Mode0Reassembled || packet == nil {
+		t.Fatalf("end result = (%v, %v), want reassembled", packet, decision.result)
 	}
 	if want := []byte{0x65, 0x01, 0x02, 0x03, 0x04, 0x05}; !bytes.Equal(packet.Payload, want) {
 		t.Fatalf("payload = %x, want %x", packet.Payload, want)
@@ -53,32 +54,56 @@ func TestH264Mode0ReassemblerDropsSequenceGap(t *testing.T) {
 	r := h264Mode0Reassembler{}
 	r.push(mode0FUAPacket(10, 9000, true, false, 1, []byte{0x01}))
 
-	if packet, result := r.push(mode0FUAPacket(12, 9000, false, true, 1, []byte{0x02})); packet != nil || result != h264Mode0Dropped {
-		t.Fatalf("gap result = (%v, %v), want dropped", packet, result)
+	decision := r.push(mode0FUAPacket(12, 9000, false, true, 1, []byte{0x02}))
+	if decision.packet != nil || decision.result != h264Mode0Dropped || decision.reason != "discontinuous-fua" {
+		t.Fatalf("gap result = (%v, %v, %s), want dropped discontinuous-fua", decision.packet, decision.result, decision.reason)
+	}
+}
+
+func TestH264Mode0ReassemblerResumesAfterDiscontinuousFrame(t *testing.T) {
+	r := h264Mode0Reassembler{}
+	r.push(mode0FUAPacket(10, 9000, true, false, 1, []byte{0x01}))
+	if decision := r.push(mode0FUAPacket(12, 9000, false, true, 1, []byte{0x02})); decision.reason != "discontinuous-fua" {
+		t.Fatalf("gap reason = %s", decision.reason)
+	}
+
+	if decision := r.push(mode0FUAPacket(13, 18000, true, false, 5, []byte{0x09})); decision.result != h264Mode0Buffered {
+		t.Fatalf("next start result = %v, reassembler stayed latched", decision.result)
+	}
+	decision := r.push(mode0FUAPacket(14, 18000, false, true, 5, []byte{0x08}))
+	if decision.result != h264Mode0Reassembled || decision.packet == nil {
+		t.Fatalf("next frame result = %v, want reassembled", decision.result)
+	}
+	if want := []byte{0x65, 0x09, 0x08}; !bytes.Equal(decision.packet.Payload, want) {
+		t.Fatalf("payload = %x, want %x", decision.packet.Payload, want)
 	}
 }
 
 func TestH264Mode0ReassemblerPassesSingleNAL(t *testing.T) {
 	r := h264Mode0Reassembler{}
 	want := &rtp.Packet{Payload: []byte{0x65, 0x01}}
-	got, result := r.push(want)
-	if result != h264Mode0Passthrough || got != want {
-		t.Fatalf("single NAL result = (%v, %v), want original passthrough", got, result)
+	decision := r.push(want)
+	if decision.result != h264Mode0Passthrough || decision.packet != want {
+		t.Fatalf("single NAL result = (%v, %v), want original passthrough", decision.packet, decision.result)
 	}
 }
 
 func TestH264Mode0ReassemblerDropsOversizedFUA(t *testing.T) {
 	r := h264Mode0Reassembler{}
 	fragment := make([]byte, maxH264Mode0NALPayload)
-	if packet, result := r.push(mode0FUAPacket(10, 9000, true, true, 5, fragment)); packet != nil || result != h264Mode0Dropped {
-		t.Fatalf("oversized result = (%v, %v), want dropped", packet, result)
+	decision := r.push(mode0FUAPacket(10, 9000, true, true, 5, fragment))
+	if decision.packet != nil || decision.result != h264Mode0Dropped || decision.reason != "oversized-fua" || decision.nalBytes <= maxH264Mode0NALPayload {
+		t.Fatalf("oversized result = (%v, %v, %s, %d), want dropped oversized", decision.packet, decision.result, decision.reason, decision.nalBytes)
+	}
+	if next := r.push(&rtp.Packet{Payload: []byte{0x65, 0x01}}); next.result != h264Mode0Passthrough {
+		t.Fatalf("single NAL after oversized = %v, reassembler stayed latched", next.result)
 	}
 }
 
 func TestH264Mode0ReassemblerDropsUnsupportedAggregationPacket(t *testing.T) {
 	r := h264Mode0Reassembler{}
 	packet := &rtp.Packet{Payload: []byte{0x79, 0x01}} // STAP-B (NAL type 25)
-	if got, result := r.push(packet); got != nil || result != h264Mode0Dropped {
-		t.Fatalf("STAP-B result = (%v, %v), want dropped", got, result)
+	if decision := r.push(packet); decision.packet != nil || decision.result != h264Mode0Dropped || decision.reason != "malformed-fua" {
+		t.Fatalf("STAP-B result = (%v, %v, %s), want dropped malformed", decision.packet, decision.result, decision.reason)
 	}
 }

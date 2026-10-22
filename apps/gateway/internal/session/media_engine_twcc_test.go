@@ -7,11 +7,9 @@ import (
 	"github.com/pion/webrtc/v4"
 )
 
-const transportCCURI = "http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01"
-
 func offerSDP(t *testing.T, twccEnabled bool) string {
 	t.Helper()
-	api, err := newGatewayWebRTCAPI(twccEnabled)
+	api, err := newGatewayWebRTCAPI(twccEnabled, "")
 	if err != nil {
 		t.Fatal(err)
 	}

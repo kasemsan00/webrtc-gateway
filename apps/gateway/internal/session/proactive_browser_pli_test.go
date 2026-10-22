@@ -191,3 +191,36 @@ func TestObserveUplinkVideoForward(t *testing.T) {
 		t.Fatalf("second IDR at %s, clock %s", second, sess.uplinkVideoLastIDR)
 	}
 }
+
+func TestMode0DropDebounceHoldsUntilIDR(t *testing.T) {
+	sess := &Session{ID: "mode0"}
+	now := time.Unix(1_700_000_100, 0)
+	if !sess.NoteMode0Drop(now, "discontinuous-fua", 0) {
+		t.Fatal("first discontinuous FU-A did not request a PLI")
+	}
+	if sess.NoteMode0Drop(now.Add(100*time.Millisecond), "discontinuous-fua", 0) {
+		t.Fatal("repeat inside 250ms requested another PLI")
+	}
+	if sess.LastBrowserPLIReason() != "mode0_drop" {
+		t.Fatalf("PLI reason %q", sess.LastBrowserPLIReason())
+	}
+	if !sess.UplinkHeldForMode0Recovery(false) {
+		t.Fatal("P-frame was forwarded while the broken frame was outstanding")
+	}
+	if sess.UplinkHeldForMode0Recovery(true) {
+		t.Fatal("IDR was held after mode-0 recovery")
+	}
+	if sess.UplinkHeldForMode0Recovery(false) {
+		t.Fatal("P-frame stayed held after the IDR")
+	}
+	if !sess.NoteMode0Drop(now.Add(Mode0DropPLIDebounce), "oversized-fua", 90000) {
+		t.Fatal("drop after the debounce window was ignored")
+	}
+}
+
+func TestUplinkVideoStalledLine(t *testing.T) {
+	line := formatUplinkVideoStalled(1400*time.Millisecond, 270, "discontinuous-fua")
+	if line != "uplink_video_stalled since=1.4s browser_rtp_per_s=270 reason=discontinuous-fua" {
+		t.Fatalf("stall line %q", line)
+	}
+}

@@ -500,6 +500,11 @@ func (s *Session) ResetMediaState() {
 	s.sipInfoFIRAt = time.Time{}
 	s.sipAnswerSDP = nil
 	s.lastBrowserPLIReason = ""
+	s.mode0NeedsIDR = false
+	s.mode0PLIAt = time.Time{}
+	s.uplinkStallSince = time.Time{}
+	s.uplinkStallReason = ""
+	s.uplinkStallLogAt = time.Time{}
 
 	s.mediaForwardReady = false
 	s.UpdatedAt = time.Now()

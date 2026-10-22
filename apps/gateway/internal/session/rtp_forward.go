@@ -2,8 +2,11 @@ package session
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/pion/rtp"
@@ -19,18 +22,38 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 	mode0Reassembler := h264Mode0Reassembler{}
 	mode0Reassembled := 0
 	mode0Dropped := 0
+	browserRTP := 0
+	browserRTPWindow := time.Time{}
+	browserRTPPerSec := 0
 
 	for {
 		n, _, err := track.Read(buffer)
 		if err != nil {
-			if s.GetState() == StateEnded {
+			if videoReadShouldStop(err, s.GetState() == StateEnded) {
+				if s.GetState() != StateEnded {
+					fmt.Printf("[%s] stopped reading %s from WebRTC: %v\n", s.ID, kind, err)
+				}
 				return
 			}
-			fmt.Printf("[%s] Error reading %s from WebRTC: %v\n", s.ID, kind, err)
-			return
+			fmt.Printf("[%s] Error reading %s from WebRTC (reader stays up): %v\n", s.ID, kind, err)
+			time.Sleep(20 * time.Millisecond)
+			continue
 		}
 
 		packetCount++
+		if kind == "video" {
+			now := time.Now()
+			browserRTP++
+			if browserRTPWindow.IsZero() {
+				browserRTPWindow = now
+			}
+			if elapsed := now.Sub(browserRTPWindow); elapsed >= time.Second {
+				browserRTPPerSec = int(float64(browserRTP) / elapsed.Seconds())
+				browserRTP = 0
+				browserRTPWindow = now
+				s.MaybeLogUplinkVideoStall(now, browserRTPPerSec)
+			}
+		}
 
 		// Parse RTP packet
 		packet := &rtp.Packet{}
@@ -39,16 +62,20 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 		}
 
 		if kind == "video" && s.GetSIPVideoPacketizationMode() == 0 {
-			var result h264Mode0Result
-			packet, result = mode0Reassembler.push(packet)
-			switch result {
+			decision := mode0Reassembler.push(packet)
+			packet = decision.packet
+			switch decision.result {
 			case h264Mode0Buffered:
 				continue
 			case h264Mode0Dropped:
 				mode0Dropped++
-				if mode0Dropped <= 5 || mode0Dropped%100 == 0 {
-					fmt.Printf("[%s] h264_mode0_drop count=%d reason=invalid-discontinuous-or-oversized-fua\n", s.ID, mode0Dropped)
+				if mode0Dropped <= 5 || mode0Dropped%100 == 0 || decision.reason == "oversized-fua" {
+					fmt.Printf("[%s] h264_mode0_drop count=%d reason=%s nal_bytes=%d\n", s.ID, mode0Dropped, decision.reason, decision.nalBytes)
 				}
+				if s.NoteMode0Drop(time.Now(), decision.reason, decision.nalBytes) {
+					go s.SendBrowserPLIImmediate("mode0_drop")
+				}
+				s.MaybeLogUplinkVideoStall(time.Now(), browserRTPPerSec)
 				continue
 			case h264Mode0Reassembled:
 				mode0Reassembled++
@@ -210,6 +237,7 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 		} else {
 			if s.rejectUplinkPictureSizeChangeLocked(packet.Payload) {
 				s.mu.Unlock()
+				s.MaybeLogUplinkVideoStall(time.Now(), browserRTPPerSec)
 				continue
 			}
 			destAddr = s.AsteriskVideoAddr
@@ -334,7 +362,7 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 					}
 				}
 
-				if holdUplinkVideoUntilIDR(uplinkOpen, containsIDR) {
+				if s.holdUplinkForMode0Locked(containsIDR) || holdUplinkVideoUntilIDR(uplinkOpen, containsIDR) {
 					s.mu.Unlock()
 					heldUntilIDR++
 					if heldUntilIDR <= 5 || heldUntilIDR%100 == 0 {
@@ -488,7 +516,7 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 				continue // STAP-A handled, skip normal forwarding
 			}
 
-			if holdUplinkVideoUntilIDR(uplinkOpen, isKeyframe) {
+			if s.holdUplinkForMode0Locked(isKeyframe) || holdUplinkVideoUntilIDR(uplinkOpen, isKeyframe) {
 				s.mu.Unlock()
 				heldUntilIDR++
 				if heldUntilIDR <= 5 || heldUntilIDR%100 == 0 {
@@ -620,6 +648,20 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 			fmt.Printf("[%s] ⚠️ Cannot forward %s: Asterisk endpoint not set yet\n", s.ID, kind)
 		}
 	}
+}
+
+// videoReadShouldStop is true when the track is gone. A short buffer or a
+// transient read error must not end the loop: pion records TWCC only while
+// Read keeps being called, and stopping it collapses the browser estimate.
+func videoReadShouldStop(err error, ended bool) bool {
+	if err == nil {
+		return false
+	}
+	if ended || errors.Is(err, io.EOF) || errors.Is(err, io.ErrClosedPipe) {
+		return true
+	}
+	text := strings.ToLower(err.Error())
+	return strings.Contains(text, "closed") || strings.Contains(text, "eof")
 }
 
 // rejectUplinkPictureSizeChangeLocked keeps the first SPS picture size for

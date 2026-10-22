@@ -280,6 +280,11 @@ type Session struct {
 	sipInfoFIRAt               time.Time     `json:"-"`
 	sipAnswerSDP               []byte        `json:"-"`
 	lastBrowserPLIReason       string        `json:"-"`
+	mode0NeedsIDR              bool          `json:"-"`
+	mode0PLIAt                 time.Time     `json:"-"`
+	uplinkStallSince           time.Time     `json:"-"`
+	uplinkStallReason          string        `json:"-"`
+	uplinkStallLogAt           time.Time     `json:"-"`
 	// SIP-side cached SPS/PPS (SIP→WebRTC direction, from SIP endpoint's encoder)
 	// Used to inject parameter sets before keyframes forwarded to browser for decoder recovery.
 	SIPCachedSPS             []byte                `json:"-"`
@@ -527,7 +532,7 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 	// Build ICE servers configuration
 	iceServers := pkg_webrtc.BuildICEServers(turnConfig)
 
-	api, err := newGatewayWebRTCAPI(cfg.SIP.WebRTCTWCCEnabled)
+	api, err := newGatewayWebRTCAPI(cfg.SIP.WebRTCTWCCEnabled, id)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create WebRTC API: %w", err)
 	}

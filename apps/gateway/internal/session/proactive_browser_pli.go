@@ -20,6 +20,8 @@ const (
 	// SIPInfoFIRDebounce collapses Linphone's repeated picture_fast_update
 	// INFOs. The SDK sends another VFU while the decoder is still broken.
 	SIPInfoFIRDebounce = 250 * time.Millisecond
+	// Mode0DropPLIDebounce collapses PLIs while one broken FU-A frame is dropped.
+	Mode0DropPLIDebounce = 250 * time.Millisecond
 	// SwitchKeyframePLISecond is the second retry after a switch request.
 	SwitchKeyframePLISecond = time.Second
 )
@@ -251,6 +253,97 @@ func (s *Session) SendBrowserPLI(reason string) bool {
 	}
 	fmt.Printf("[%s] browser_pli sent reason=%s\n", id, reason)
 	return true
+}
+
+// NoteMode0Drop records one bad mode-0 frame. Repeats inside Mode0DropPLIDebounce
+// do not send another PLI. The caller sends the PLI off the RTP read goroutine.
+// Forwarding stays held until the next IDR, then resumes.
+func (s *Session) NoteMode0Drop(now time.Time, reason string, nalBytes int) bool {
+	if s == nil {
+		return false
+	}
+	if reason == "" {
+		reason = "discontinuous-fua"
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.uplinkStallSince.IsZero() {
+		s.uplinkStallSince = now
+	}
+	s.uplinkStallReason = reason
+	s.mode0NeedsIDR = true
+	if reason == "oversized-fua" {
+		fmt.Printf("[%s] h264_mode0_oversized nal_bytes=%d\n", s.ID, nalBytes)
+	}
+	if !s.mode0PLIAt.IsZero() && now.Sub(s.mode0PLIAt) < Mode0DropPLIDebounce {
+		return false
+	}
+	s.mode0PLIAt = now
+	s.lastBrowserPLIReason = "mode0_drop"
+	return true
+}
+
+// UplinkHeldForMode0Recovery reports whether this video packet must wait for
+// the next IDR after a mode-0 drop. An IDR clears the hold.
+func (s *Session) UplinkHeldForMode0Recovery(isIDR bool) bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.holdUplinkForMode0Locked(isIDR)
+}
+
+func (s *Session) holdUplinkForMode0Locked(isIDR bool) bool {
+	if !s.mode0NeedsIDR {
+		return false
+	}
+	if !isIDR {
+		return true
+	}
+	s.mode0NeedsIDR = false
+	s.uplinkStallSince = time.Time{}
+	s.uplinkStallReason = ""
+	s.uplinkStallLogAt = time.Time{}
+	return false
+}
+
+// MaybeLogUplinkVideoStall prints one stall line per second while mode-0
+// recovery or the SPS size lock is dropping uplink video.
+func (s *Session) MaybeLogUplinkVideoStall(now time.Time, browserRTPPerSec int) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	reason := s.uplinkStallReason
+	since := s.uplinkStallSince
+	if s.uplinkSPSDimensionBlocked {
+		reason = "sps-dimension"
+		if since.IsZero() {
+			since = now
+			s.uplinkStallSince = now
+		}
+	}
+	if reason == "" || since.IsZero() {
+		s.mu.Unlock()
+		return
+	}
+	if !s.uplinkStallLogAt.IsZero() && now.Sub(s.uplinkStallLogAt) < time.Second {
+		s.mu.Unlock()
+		return
+	}
+	s.uplinkStallLogAt = now
+	id := s.ID
+	line := formatUplinkVideoStalled(now.Sub(since), browserRTPPerSec, reason)
+	s.mu.Unlock()
+	fmt.Printf("[%s] %s\n", id, line)
+}
+
+func formatUplinkVideoStalled(since time.Duration, browserRTPPerSec int, reason string) string {
+	if since < 0 {
+		since = 0
+	}
+	return fmt.Sprintf("uplink_video_stalled since=%s browser_rtp_per_s=%d reason=%s", since.Round(100*time.Millisecond), browserRTPPerSec, reason)
 }
 
 // LastBrowserPLIReason is the most recent browser-PLI reason this session attempted.

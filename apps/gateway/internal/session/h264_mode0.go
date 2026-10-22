@@ -16,6 +16,13 @@ const (
 	h264Mode0Dropped
 )
 
+type h264Mode0Decision struct {
+	packet   *rtp.Packet
+	result   h264Mode0Result
+	reason   string
+	nalBytes int
+}
+
 type h264Mode0Reassembler struct {
 	active      bool
 	ssrc        uint32
@@ -32,12 +39,12 @@ func (r *h264Mode0Reassembler) reset() {
 
 // push converts an FU-A sequence to one Single NAL Unit RTP packet. Single NAL
 // and aggregation packets pass through; STAP-A is de-aggregated by the existing
-// forwarding path. Malformed, discontinuous, or oversized FU-A sequences are
-// dropped instead of sending mode-1 packets to a mode-0 SIP peer.
-func (r *h264Mode0Reassembler) push(packet *rtp.Packet) (*rtp.Packet, h264Mode0Result) {
+// forwarding path. A malformed, discontinuous, or oversized FU-A drops that
+// frame and resets, so the next start bit or single NAL is forwarded again.
+func (r *h264Mode0Reassembler) push(packet *rtp.Packet) h264Mode0Decision {
 	if packet == nil || len(packet.Payload) == 0 {
 		r.reset()
-		return nil, h264Mode0Dropped
+		return h264Mode0Decision{result: h264Mode0Dropped, reason: "malformed-fua"}
 	}
 
 	nalType := packet.Payload[0] & 0x1f
@@ -46,13 +53,16 @@ func (r *h264Mode0Reassembler) push(packet *rtp.Packet) (*rtp.Packet, h264Mode0R
 		// STAP-A is intentionally passed to the existing de-aggregation path.
 		// All other aggregation and fragmentation packet types violate mode 0.
 		if nalType >= 24 && nalType != 24 {
-			return nil, h264Mode0Dropped
+			return h264Mode0Decision{result: h264Mode0Dropped, reason: "malformed-fua"}
 		}
-		return packet, h264Mode0Passthrough
+		if len(packet.Payload) > maxH264Mode0NALPayload {
+			return h264Mode0Decision{result: h264Mode0Dropped, reason: "oversized-fua", nalBytes: len(packet.Payload)}
+		}
+		return h264Mode0Decision{packet: packet, result: h264Mode0Passthrough}
 	}
 	if len(packet.Payload) < 3 {
 		r.reset()
-		return nil, h264Mode0Dropped
+		return h264Mode0Decision{result: h264Mode0Dropped, reason: "malformed-fua"}
 	}
 
 	fuIndicator := packet.Payload[0]
@@ -74,18 +84,19 @@ func (r *h264Mode0Reassembler) push(packet *rtp.Packet) (*rtp.Packet, h264Mode0R
 	} else {
 		if !r.active || packet.SSRC != r.ssrc || packet.Timestamp != r.timestamp || packet.SequenceNumber != r.nextSeq {
 			r.reset()
-			return nil, h264Mode0Dropped
+			return h264Mode0Decision{result: h264Mode0Dropped, reason: "discontinuous-fua"}
 		}
 		r.nextSeq++
 		r.nal = append(r.nal, packet.Payload[2:]...)
 	}
 
 	if len(r.nal) > maxH264Mode0NALPayload {
+		nalBytes := len(r.nal)
 		r.reset()
-		return nil, h264Mode0Dropped
+		return h264Mode0Decision{result: h264Mode0Dropped, reason: "oversized-fua", nalBytes: nalBytes}
 	}
 	if !end {
-		return nil, h264Mode0Buffered
+		return h264Mode0Decision{result: h264Mode0Buffered}
 	}
 
 	payload := append([]byte(nil), r.nal...)
@@ -95,5 +106,5 @@ func (r *h264Mode0Reassembler) push(packet *rtp.Packet) (*rtp.Packet, h264Mode0R
 	}
 	out.PayloadType = r.payloadType
 	r.reset()
-	return out, h264Mode0Reassembled
+	return h264Mode0Decision{packet: out, result: h264Mode0Reassembled}
 }
