@@ -73,15 +73,7 @@ func (s *Session) enqueueUplinkVideo(conn *net.UDPConn, addr *net.UDPAddr, data 
 
 func (s *Session) deliverUplinkVideo(pkt heldUplinkVideo) {
 	payload := rtpPayload(pkt.data)
-	keyframe := pkt.keyframe
-	if len(payload) > 0 {
-		switch payload[0] & 0x1f {
-		case 5:
-			keyframe = true
-		case 7, 8:
-			keyframe = false
-		}
-	}
+	keyframe := uplinkHeldKeyframe(payload, pkt.keyframe)
 	if keyframe {
 		s.maybeLogFIRIDRSlice(payload, pkt.rtpTS, pkt.marker)
 	}

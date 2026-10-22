@@ -110,20 +110,25 @@ type Session struct {
 	ICEUfrag string `json:"-"`
 	ICEPwd   string `json:"-"`
 	// Asterisk RTP endpoints for forwarding WebRTC → Asterisk
-	AsteriskAudioAddr            *net.UDPAddr  `json:"-"`
-	AsteriskVideoAddr            *net.UDPAddr  `json:"-"`
-	AsteriskVideoRTCPAddr        *net.UDPAddr  `json:"-"`
-	VideoRTCPLearnedAt           time.Time     `json:"-"`
-	VideoRTCPSource              string        `json:"-"`
-	VideoFeedbackTransport       string        `json:"-"`
-	VideoRTCPFallbackUntil       time.Time     `json:"-"`
-	SymmetricRTPTrustUntil       time.Time     `json:"-"`
-	PLIBurstUntil                time.Time     `json:"-"`
-	LastSipPLISent               time.Time     `json:"-"`
-	LastSipFIRSent               time.Time     `json:"-"`
-	LastWebRTCPLISent            time.Time     `json:"-"`
-	LastWebRTCFIRSent            time.Time     `json:"-"`
-	LastUplinkKeyframe           time.Time     `json:"-"`
+	AsteriskAudioAddr      *net.UDPAddr `json:"-"`
+	AsteriskVideoAddr      *net.UDPAddr `json:"-"`
+	AsteriskVideoRTCPAddr  *net.UDPAddr `json:"-"`
+	VideoRTCPLearnedAt     time.Time    `json:"-"`
+	VideoRTCPSource        string       `json:"-"`
+	VideoFeedbackTransport string       `json:"-"`
+	VideoRTCPFallbackUntil time.Time    `json:"-"`
+	SymmetricRTPTrustUntil time.Time    `json:"-"`
+	PLIBurstUntil          time.Time    `json:"-"`
+	LastSipPLISent         time.Time    `json:"-"`
+	LastSipFIRSent         time.Time    `json:"-"`
+	LastWebRTCPLISent      time.Time    `json:"-"`
+	LastWebRTCFIRSent      time.Time    `json:"-"`
+	LastUplinkKeyframe     time.Time    `json:"-"`
+	// uplinkIDRAccepted is set when an IDR is handed to the picture hold,
+	// before that packet is written. The hold delays RecordUplinkKeyframe,
+	// and FU-A continuations plus the following P-frames are not keyframes;
+	// without this flag they are dropped and the flush marks one incomplete slice.
+	uplinkIDRAccepted            bool          `json:"-"`
 	sipKeyframeRequestSeen       bool          `json:"-"`
 	uplinkVideoPackets           int           `json:"-"`
 	uplinkVideoWindowStart       time.Time     `json:"-"`

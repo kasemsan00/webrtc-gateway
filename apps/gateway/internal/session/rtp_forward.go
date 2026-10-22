@@ -13,9 +13,28 @@ import (
 	"github.com/pion/webrtc/v4"
 )
 
+// rtpByteReader is the WebRTC track read used by the uplink forwarder.
+// TrackRemote.Read returns interceptor attributes this loop does not use.
+type rtpByteReader interface {
+	Read(b []byte) (int, error)
+}
+
+type trackRTPReader struct {
+	track *webrtc.TrackRemote
+}
+
+func (r trackRTPReader) Read(b []byte) (int, error) {
+	n, _, err := r.track.Read(b)
+	return n, err
+}
+
 // forwardRTPToAsterisk forwards RTP packets from WebRTC track to Asterisk
 // This is extracted to be reusable for both initial connection and renegotiation
 func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
+	s.forwardRTPToAsteriskFrom(trackRTPReader{track: track}, kind)
+}
+
+func (s *Session) forwardRTPToAsteriskFrom(track rtpByteReader, kind string) {
 	buffer := make([]byte, s.RTPBufferSize)
 	packetCount := 0
 	heldUntilIDR := 0
@@ -27,7 +46,7 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 	browserRTPPerSec := 0
 
 	for {
-		n, _, err := track.Read(buffer)
+		n, err := track.Read(buffer)
 		if err != nil {
 			if videoReadShouldStop(err, s.GetState() == StateEnded) {
 				if s.GetState() != StateEnded {
@@ -306,13 +325,14 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 				}()
 			}
 
-			uplinkOpen := !s.LastUplinkKeyframe.IsZero()
+			uplinkOpen := s.uplinkVideoOpenLocked()
 			// STAP-A learns whether it contains an IDR only after the inner scan.
 			// Probing the hold here would drop that IDR or clear mode-0 recovery
-			// before the scan runs.
+			// before the scan runs. SPS/PPS ride with the IDR they precede so a
+			// cold start does not drop them and then inject a second pair.
 			held := false
 			if !isSTAPA {
-				held = s.holdUplinkForMode0Locked(isKeyframe) || holdUplinkVideoUntilIDR(uplinkOpen, isKeyframe)
+				held = s.holdUplinkForMode0Locked(isKeyframe) || holdUplinkVideoUntilIDR(uplinkOpen, isKeyframe || isSPS || isPPS)
 			}
 			if isSPS || isPPS {
 				s.recordUplinkParameterSetIfForwarded(held, packet.Header.Timestamp, isSPS, isPPS)
@@ -369,13 +389,16 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 					}
 				}
 
-				if s.holdUplinkForMode0Locked(containsIDR) || holdUplinkVideoUntilIDR(uplinkOpen, containsIDR) {
+				if s.holdUplinkForMode0Locked(containsIDR) || holdUplinkVideoUntilIDR(uplinkOpen, containsIDR || containsSPS || containsPPS) {
 					s.mu.Unlock()
 					heldUntilIDR++
 					if heldUntilIDR <= 5 || heldUntilIDR%100 == 0 {
 						fmt.Printf("[%s] holding WebRTC→SIP video until uplink IDR (held=%d kind=stap-a)\n", s.ID, heldUntilIDR)
 					}
 					continue
+				}
+				if containsIDR {
+					s.noteUplinkIDRAcceptedLocked()
 				}
 
 				// Inject SPS/PPS before STAP-A IDR only when STAP-A does not already carry both.
@@ -518,6 +541,12 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 					fmt.Printf("[%s] holding WebRTC→SIP video until uplink IDR (held=%d nal=%d)\n", s.ID, heldUntilIDR, nalType)
 				}
 				continue
+			}
+			if isKeyframe {
+				// Accept before the picture hold releases this packet. The next
+				// FU-A fragment or P-slice is already in the read loop, and
+				// RecordUplinkKeyframe does not run until the write.
+				s.noteUplinkIDRAcceptedLocked()
 			}
 
 			// Inject SPS/PPS once per IDR access unit. Packetization-mode 0 puts

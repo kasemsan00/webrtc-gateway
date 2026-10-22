@@ -413,6 +413,7 @@ func (s *Session) ResetMediaState() {
 	s.PendingBrowserKeyframeRequestAt = time.Time{}
 	s.PendingBrowserKeyframeRequestEpoch = 0
 	s.LastUplinkKeyframe = time.Time{}
+	s.uplinkIDRAccepted = false
 	s.uplinkVideoPackets = 0
 	s.uplinkVideoWindowStart = time.Time{}
 	s.uplinkVideoLastIDR = time.Time{}

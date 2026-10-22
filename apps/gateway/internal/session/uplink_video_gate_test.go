@@ -13,6 +13,7 @@ func TestHoldUplinkVideoUntilIDR(t *testing.T) {
 	}{
 		{name: "p-frame before first idr", open: false, idr: false, wantHold: true},
 		{name: "idr opens uplink", open: false, idr: true, wantHold: false},
+		{name: "sps before first idr", open: false, idr: true, wantHold: false},
 		{name: "p-frame after idr", open: true, idr: false, wantHold: false},
 		{name: "later idr", open: true, idr: true, wantHold: false},
 	}
@@ -23,5 +24,17 @@ func TestHoldUplinkVideoUntilIDR(t *testing.T) {
 				t.Fatalf("holdUplinkVideoUntilIDR(%v, %v) = %v, want %v", tc.open, tc.idr, got, tc.wantHold)
 			}
 		})
+	}
+}
+
+func TestUplinkVideoOpensWhenIDRAccepted(t *testing.T) {
+	t.Parallel()
+	sess := &Session{}
+	if sess.uplinkVideoOpenLocked() {
+		t.Fatal("cold session was already open")
+	}
+	sess.noteUplinkIDRAcceptedLocked()
+	if !sess.uplinkVideoOpenLocked() {
+		t.Fatal("accepted IDR left FU-A tails and P-frames gated")
 	}
 }

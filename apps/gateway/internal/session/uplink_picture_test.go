@@ -1,6 +1,12 @@
 package session
 
-import "testing"
+import (
+	"bytes"
+	"context"
+	"net"
+	"testing"
+	"time"
+)
 
 func testRTP(ts uint32, marker bool, payload []byte) []byte {
 	p := make([]byte, 12+len(payload))
@@ -68,6 +74,68 @@ func TestUplinkPictureHoldKeepsOneTimestampAndMarksTheLastSlice(t *testing.T) {
 	last, ok := hold.flush()
 	if !ok || !last.marker || rtpTimestamp(last.data) != 180000 || !rtpMarker(last.data) {
 		t.Fatalf("following picture flush marker=%v ts=%d ok=%v", last.marker, rtpTimestamp(last.data), ok)
+	}
+}
+
+func TestEnqueueUplinkVideoCopiesHeldPayload(t *testing.T) {
+	recv, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { recv.Close() })
+	send, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { send.Close() })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	sess := &Session{
+		ID:                "hold-copy",
+		VideoRTPConn:      send,
+		AsteriskVideoAddr: recv.LocalAddr().(*net.UDPAddr),
+		ctx:               ctx,
+		cancel:            cancel,
+	}
+	first := testRTP(90000, false, []byte{0x65, 0x80, 0x11, 0x22, 0x33})
+	want := append([]byte(nil), first...)
+	sess.enqueueUplinkVideo(send, recv.LocalAddr().(*net.UDPAddr), first, true, 90000, 1)
+	for i := range first {
+		first[i] = 0xff
+	}
+	second := testRTP(180000, true, []byte{0x41, 0x80})
+	sess.enqueueUplinkVideo(send, recv.LocalAddr().(*net.UDPAddr), second, false, 180000, 2)
+
+	_ = recv.SetReadDeadline(time.Now().Add(time.Second))
+	buf := make([]byte, 64)
+	n, _, err := recv.ReadFromUDP(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := buf[:n]
+	if !rtpMarker(got) {
+		t.Fatal("first picture was emitted without the marker")
+	}
+	payload := rtpPayload(got)
+	wantPayload := rtpPayload(want)
+	if !bytes.Equal(payload, wantPayload) {
+		t.Fatalf("held IDR payload corrupted: got %x want %x", payload, wantPayload)
+	}
+}
+
+func TestUplinkHeldKeyframe(t *testing.T) {
+	if !uplinkHeldKeyframe([]byte{0x65, 0x80}, false) {
+		t.Fatal("NAL 5 was not a keyframe")
+	}
+	if uplinkHeldKeyframe([]byte{0x67, 0x42}, true) {
+		t.Fatal("SPS counted as a keyframe")
+	}
+	if !uplinkHeldKeyframe([]byte{0x7c, 0x85, 0x01}, false) {
+		t.Fatal("FU-A IDR start was not a keyframe")
+	}
+	if !uplinkHeldKeyframe([]byte{0x7c, 0x05, 0x02}, false) {
+		t.Fatal("FU-A IDR tail was not a keyframe")
 	}
 }
 

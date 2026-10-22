@@ -27,6 +27,7 @@ type heldUplinkVideo struct {
 // uplinkPictureHold keeps one packet. A later packet with the same timestamp
 // emits the held one with the marker cleared. A later timestamp, or a flush,
 // emits it with the marker set. Release order is the enqueue order.
+// next.data must be an owned copy: the WebRTC read buffer is reused.
 type uplinkPictureHold struct {
 	set bool
 	pkt heldUplinkVideo
@@ -92,6 +93,25 @@ func rtpPayload(p []byte) []byte {
 		return nil
 	}
 	return p[off:]
+}
+
+// uplinkHeldKeyframe is true for an IDR NAL or FU-A IDR fragment. SPS/PPS
+// ride in front of that IDR and must not start a new pacer account.
+func uplinkHeldKeyframe(payload []byte, flagged bool) bool {
+	if len(payload) == 0 {
+		return flagged
+	}
+	switch payload[0] & 0x1f {
+	case 5:
+		return true
+	case 7, 8:
+		return false
+	case 28:
+		if len(payload) > 1 && payload[1]&0x1f == 5 {
+			return true
+		}
+	}
+	return flagged
 }
 
 // h264FirstMBInSlice reads first_mb_in_slice from a single-NAL or starting
