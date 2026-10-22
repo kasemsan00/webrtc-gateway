@@ -482,6 +482,10 @@ func (s *Session) ResetMediaState() {
 	s.uplinkInBandTimestampSet = false
 	s.uplinkInBandSPS = false
 	s.uplinkInBandPPS = false
+	s.uplinkSPSWidth = 0
+	s.uplinkSPSHeight = 0
+	s.uplinkSPSDimensionBlocked = false
+	s.uplinkSPSDimensionLogged = false
 
 	s.mediaForwardReady = false
 	s.UpdatedAt = time.Now()

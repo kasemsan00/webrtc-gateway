@@ -75,12 +75,14 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 				// SPS - Cache it from the stream (browser may not include in SDP)
 				isSPS = true
 				s.mu.Lock()
-				curLen := len(s.CachedSPS)
-				shouldUpdate := len(packet.Payload) > 1 && (curLen == 0 || !bytes.Equal(s.CachedSPS, packet.Payload))
-				if shouldUpdate {
-					s.CachedSPS = make([]byte, len(packet.Payload))
-					copy(s.CachedSPS, packet.Payload)
-					fmt.Printf("[%s] 💾 Cached SPS from RTP stream (packet #%d, %d bytes)\\n", s.ID, packetCount, len(packet.Payload))
+				if !s.rejectUplinkPictureSizeChangeLocked(packet.Payload) {
+					curLen := len(s.CachedSPS)
+					shouldUpdate := len(packet.Payload) > 1 && (curLen == 0 || !bytes.Equal(s.CachedSPS, packet.Payload))
+					if shouldUpdate {
+						s.CachedSPS = make([]byte, len(packet.Payload))
+						copy(s.CachedSPS, packet.Payload)
+						fmt.Printf("[%s] 💾 Cached SPS from RTP stream (packet #%d, %d bytes)\\n", s.ID, packetCount, len(packet.Payload))
+					}
 				}
 				s.mu.Unlock()
 			} else if nalType == 8 {
@@ -206,6 +208,10 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 			packet.Header.CSRC = nil
 			packet.Header.Padding = false
 		} else {
+			if s.rejectUplinkPictureSizeChangeLocked(packet.Payload) {
+				s.mu.Unlock()
+				continue
+			}
 			destAddr = s.AsteriskVideoAddr
 			conn = s.VideoRTPConn
 			// s.mu is already held here. Do not call the public getter because it
@@ -590,6 +596,41 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 			fmt.Printf("[%s] ⚠️ Cannot forward %s: Asterisk endpoint not set yet\n", s.ID, kind)
 		}
 	}
+}
+
+// rejectUplinkPictureSizeChangeLocked keeps the first SPS picture size for
+// the call. A later SPS with different cropped dimensions is how Chrome tells
+// the phone to reallocate its YUV buffer; TTRS then overflows in
+// glTexSubImage2D. The caller holds s.mu. True means this packet must not be
+// forwarded. After a change, every later uplink video packet is dropped too,
+// because those slices belong to the new picture size.
+func (s *Session) rejectUplinkPictureSizeChangeLocked(payload []byte) bool {
+	if s.uplinkSPSDimensionBlocked {
+		return true
+	}
+	for _, sps := range h264SPSUnits(payload) {
+		width, height, ok := h264SPSPictureSize(sps)
+		if !ok {
+			continue
+		}
+		if s.uplinkSPSWidth == 0 {
+			s.uplinkSPSWidth = width
+			s.uplinkSPSHeight = height
+			fmt.Printf("[%s] uplink_sps picture=%dx%d bytes=%d\n", s.ID, width, height, len(sps))
+			continue
+		}
+		if width == s.uplinkSPSWidth && height == s.uplinkSPSHeight {
+			continue
+		}
+		s.uplinkSPSDimensionBlocked = true
+		if !s.uplinkSPSDimensionLogged {
+			s.uplinkSPSDimensionLogged = true
+			fmt.Printf("[%s] uplink_sps_dimension_change dropped %dx%d kept %dx%d\n",
+				s.ID, width, height, s.uplinkSPSWidth, s.uplinkSPSHeight)
+		}
+		return true
+	}
+	return false
 }
 
 // noteUplinkInBandParameterSetLocked records SPS/PPS already forwarded in this
