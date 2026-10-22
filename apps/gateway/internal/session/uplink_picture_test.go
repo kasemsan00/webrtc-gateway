@@ -24,7 +24,7 @@ func testRTP(ts uint32, marker bool, payload []byte) []byte {
 }
 
 func rtpMarker(p []byte) bool {
-	return len(p) > 1 && p[1]&0x80 != 0
+	return rtpHasMarker(p)
 }
 
 func rtpTimestamp(p []byte) uint32 {
@@ -77,6 +77,28 @@ func TestUplinkPictureHoldKeepsOneTimestampAndMarksTheLastSlice(t *testing.T) {
 	}
 }
 
+func TestUplinkPictureHoldDoesNotInventAMarkerUntilFlushOrNewTimestamp(t *testing.T) {
+	var hold uplinkPictureHold
+	for i := 0; i < 5; i++ {
+		prev, ok := hold.push(heldUplinkVideo{data: testRTP(90000, false, []byte{0x65, 0x80, byte(i)}), rtpTS: 90000})
+		if i == 0 {
+			if ok {
+				t.Fatal("first slice was emitted before the picture ended")
+			}
+			continue
+		}
+		if !ok {
+			t.Fatalf("slice %d was not emitted", i-1)
+		}
+		if prev.marker || rtpHasMarker(prev.data) {
+			t.Fatalf("slice %d was marked before the picture ended", i-1)
+		}
+	}
+	if !hold.set || hold.pkt.rtpTS != 90000 {
+		t.Fatal("picture was flushed without a timestamp change")
+	}
+}
+
 func TestEnqueueUplinkVideoCopiesHeldPayload(t *testing.T) {
 	recv, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
 	if err != nil {
@@ -121,6 +143,100 @@ func TestEnqueueUplinkVideoCopiesHeldPayload(t *testing.T) {
 	wantPayload := rtpPayload(want)
 	if !bytes.Equal(payload, wantPayload) {
 		t.Fatalf("held IDR payload corrupted: got %x want %x", payload, wantPayload)
+	}
+}
+
+func uplinkHoldUDP(t *testing.T) (*Session, *net.UDPConn, *net.UDPAddr) {
+	t.Helper()
+	recv, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { recv.Close() })
+	send, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { send.Close() })
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	dest := recv.LocalAddr().(*net.UDPAddr)
+	sess := &Session{
+		ID:                t.Name(),
+		VideoRTPConn:      send,
+		AsteriskVideoAddr: dest,
+		ctx:               ctx,
+		cancel:            cancel,
+	}
+	return sess, recv, dest
+}
+
+func readUplinkHoldPackets(t *testing.T, recv *net.UDPConn, deadline time.Duration) [][]byte {
+	t.Helper()
+	_ = recv.SetReadDeadline(time.Now().Add(deadline))
+	var got [][]byte
+	buf := make([]byte, 256)
+	for {
+		n, _, err := recv.ReadFromUDP(buf)
+		if err != nil {
+			if ne, ok := err.(net.Error); ok && ne.Timeout() {
+				return got
+			}
+			t.Fatal(err)
+		}
+		got = append(got, append([]byte(nil), buf[:n]...))
+		_ = recv.SetReadDeadline(time.Now().Add(5 * time.Millisecond))
+	}
+}
+
+func TestEnqueueUplinkVideoKeepsPictureAcross40msGap(t *testing.T) {
+	sess, recv, dest := uplinkHoldUDP(t)
+	send := sess.VideoRTPConn
+	const ts = uint32(90000)
+	for i := 0; i < 5; i++ {
+		sess.enqueueUplinkVideo(send, dest, testRTP(ts, false, []byte{0x65, 0x80, byte(i)}), true, ts, i+1)
+	}
+	time.Sleep(80 * time.Millisecond)
+	first := readUplinkHoldPackets(t, recv, 20*time.Millisecond)
+	if len(first) != 4 {
+		t.Fatalf("after 80ms gap forwarded %d packets, want 4 held-one (timer must not flush)", len(first))
+	}
+	for i, pkt := range first {
+		if rtpHasMarker(pkt) {
+			t.Fatalf("packet %d had marker after a 80ms gap inside the picture", i)
+		}
+	}
+	for i := 5; i < 8; i++ {
+		sess.enqueueUplinkVideo(send, dest, testRTP(ts, false, []byte{0x65, 0x80, byte(i)}), true, ts, i+1)
+	}
+	mid := readUplinkHoldPackets(t, recv, 20*time.Millisecond)
+	if len(mid) != 3 {
+		t.Fatalf("second burst forwarded %d, want 3", len(mid))
+	}
+	for i, pkt := range mid {
+		if rtpHasMarker(pkt) {
+			t.Fatalf("second-burst packet %d had marker before the browser marker", i)
+		}
+	}
+	sess.enqueueUplinkVideo(send, dest, testRTP(ts, true, []byte{0x65, 0x80, 8}), true, ts, 9)
+	last := readUplinkHoldPackets(t, recv, 20*time.Millisecond)
+	if len(last) != 2 {
+		t.Fatalf("browser marker released %d packets, want held slice + last slice", len(last))
+	}
+	if rtpHasMarker(last[0]) || !rtpHasMarker(last[1]) {
+		t.Fatalf("marker bits %v %v, want only the last slice", rtpHasMarker(last[0]), rtpHasMarker(last[1]))
+	}
+}
+
+func TestEnqueueUplinkVideoReleasesOnBrowserMarker(t *testing.T) {
+	sess, recv, dest := uplinkHoldUDP(t)
+	sess.enqueueUplinkVideo(sess.VideoRTPConn, dest, testRTP(90000, true, []byte{0x65, 0x80}), true, 90000, 1)
+	got := readUplinkHoldPackets(t, recv, 20*time.Millisecond)
+	if len(got) != 1 {
+		t.Fatalf("forwarded %d packets, want the marked slice without a 40ms wait", len(got))
+	}
+	if !rtpHasMarker(got[0]) {
+		t.Fatal("browser marker slice was forwarded without the marker bit")
 	}
 }
 

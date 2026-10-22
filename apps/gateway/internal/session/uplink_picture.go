@@ -4,13 +4,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
-	"time"
 )
-
-// uplinkPictureMarkerHold is how long the last packet of a picture waits
-// before it is sent with the marker bit. The next packet usually arrives
-// first and decides the marker; this only flushes a picture that has ended.
-const uplinkPictureMarkerHold = 40 * time.Millisecond
 
 // heldUplinkVideo is one WebRTC→SIP packet waiting to learn whether it is
 // the last slice of its RTP timestamp.
@@ -25,8 +19,11 @@ type heldUplinkVideo struct {
 }
 
 // uplinkPictureHold keeps one packet. A later packet with the same timestamp
-// emits the held one with the marker cleared. A later timestamp, or a flush,
-// emits it with the marker set. Release order is the enqueue order.
+// emits the held one with the marker cleared. A later timestamp, a browser
+// marker, or an explicit flush (end of the video track) emits it with the
+// marker set. A timer must not end a picture: OpenH264 sends one IDR in
+// bursts more than 40ms apart, and a mid-picture marker makes Linphone drop
+// the access unit. Release order is the enqueue order.
 // next.data must be an owned copy: the WebRTC read buffer is reused.
 type uplinkPictureHold struct {
 	set bool
@@ -67,6 +64,10 @@ func setRTPMarker(p []byte, marker bool) {
 	} else {
 		p[1] &^= 0x80
 	}
+}
+
+func rtpHasMarker(p []byte) bool {
+	return len(p) > 1 && p[1]&0x80 != 0
 }
 
 func rtpHeaderLen(p []byte) int {
@@ -182,23 +183,17 @@ func (s *Session) maybeLogFIRIDRSlice(payload []byte, ts uint32, marker bool) {
 		id, ts, mbText, len(payload), markerBit)
 }
 
-// armUplinkPictureFlush sends the held packet if nothing newer arrives.
-// gen is the picture generation captured when that packet was held.
-func (s *Session) armUplinkPictureFlush(gen uint64) {
-	time.AfterFunc(uplinkPictureMarkerHold, func() {
-		if s == nil {
-			return
-		}
-		s.uplinkPictureMu.Lock()
-		if s.uplinkPictureGen != gen || !s.uplinkPicture.set {
-			s.uplinkPictureMu.Unlock()
-			return
-		}
-		pkt, ok := s.uplinkPicture.flush()
-		s.uplinkPictureGen++
-		s.uplinkPictureMu.Unlock()
-		if ok {
-			s.deliverUplinkVideo(pkt)
-		}
-	})
+// flushUplinkPicture emits the held packet as the last slice of its picture.
+// The video read loop calls this when the track ends so a final unmarked
+// packet is not dropped. A live picture must not be flushed on a timer.
+func (s *Session) flushUplinkPicture() {
+	if s == nil {
+		return
+	}
+	s.uplinkPictureMu.Lock()
+	pkt, ok := s.uplinkPicture.flush()
+	s.uplinkPictureMu.Unlock()
+	if ok {
+		s.deliverUplinkVideo(pkt)
+	}
 }

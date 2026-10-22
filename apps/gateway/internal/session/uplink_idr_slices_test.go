@@ -49,12 +49,16 @@ func paddedNAL(header byte, body int) []byte {
 
 type sliceReader struct {
 	packets [][]byte
+	delays  []time.Duration
 	idx     int
 }
 
 func (r *sliceReader) Read(b []byte) (int, error) {
 	if r.idx >= len(r.packets) {
 		return 0, io.EOF
+	}
+	if r.idx < len(r.delays) && r.delays[r.idx] > 0 {
+		time.Sleep(r.delays[r.idx])
 	}
 	raw := r.packets[r.idx]
 	r.idx++
@@ -104,6 +108,24 @@ func openH264Mode0Picture(t *testing.T) [][]byte {
 }
 
 func forwardPictureToAsterisk(t *testing.T, uplinkOpen bool, mode uint8, packets [][]byte) []rtp.Packet {
+	t.Helper()
+	return forwardPictureToAsteriskDelayed(t, uplinkOpen, mode, packets, nil)
+}
+
+func openH264Mode0SpreadDelays(packets [][]byte) []time.Duration {
+	delays := make([]time.Duration, len(packets))
+	// SPS + PPS + first 4 IDR slices, then a gap longer than the old 40ms
+	// marker hold, then more slices, then another gap before the tail.
+	if len(packets) > 6 {
+		delays[6] = 50 * time.Millisecond
+	}
+	if len(packets) > 22 {
+		delays[22] = 50 * time.Millisecond
+	}
+	return delays
+}
+
+func forwardPictureToAsteriskDelayed(t *testing.T, uplinkOpen bool, mode uint8, packets [][]byte, delays []time.Duration) []rtp.Packet {
 	t.Helper()
 	recv, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
 	if err != nil {
@@ -166,14 +188,14 @@ func forwardPictureToAsterisk(t *testing.T, uplinkOpen bool, mode uint8, packets
 		}
 	}()
 	go func() {
-		sess.forwardRTPToAsteriskFrom(&sliceReader{packets: packets}, "video")
-		// Last slice is held 40ms and the pacer then drains the IDR.
+		sess.forwardRTPToAsteriskFrom(&sliceReader{packets: packets, delays: delays}, "video")
+		// Browser marker releases the last slice; wait for the pacer to drain.
 		time.Sleep(500 * time.Millisecond)
 		close(done)
 	}()
 	select {
 	case <-done:
-	case <-time.After(3 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("uplink forwarder did not return")
 	}
 	<-readDone
@@ -196,6 +218,12 @@ func TestMode0MultiSliceIDRReachesAsteriskAndEcho(t *testing.T) {
 			assertDecodableMode0Picture(t, got)
 		})
 	}
+}
+
+func TestMode0MultiSliceIDRSpreadOverHoldWindow(t *testing.T) {
+	packets := openH264Mode0Picture(t)
+	got := forwardPictureToAsteriskDelayed(t, false, 0, packets, openH264Mode0SpreadDelays(packets))
+	assertDecodableMode0Picture(t, got)
 }
 
 func assertDecodableMode0Picture(t *testing.T, got []rtp.Packet) {
@@ -260,6 +288,11 @@ func assertDecodableMode0Picture(t *testing.T, got []rtp.Packet) {
 	}
 	if len(idr) != 37 {
 		t.Fatalf("IDR slices=%d, want 37", len(idr))
+	}
+	for i := 1; i < len(got); i++ {
+		if got[i].SequenceNumber != got[i-1].SequenceNumber+1 {
+			t.Fatalf("seq gap at packet %d: %d -> %d", i, got[i-1].SequenceNumber, got[i].SequenceNumber)
+		}
 	}
 	for i, pkt := range idr {
 		if pkt.Timestamp != idrTS {
@@ -372,6 +405,16 @@ func TestFUAIDRContinuationsReachAsteriskAndEcho(t *testing.T) {
 	}
 }
 
+func TestFUAIDRSpreadOverHoldWindow(t *testing.T) {
+	packets := openH264FUAPicture(t)
+	delays := make([]time.Duration, len(packets))
+	if len(packets) > 6 {
+		delays[6] = 50 * time.Millisecond
+	}
+	got := forwardPictureToAsteriskDelayed(t, false, 1, packets, delays)
+	assertDecodableFUAPicture(t, got)
+}
+
 func assertDecodableFUAPicture(t *testing.T, got []rtp.Packet) {
 	t.Helper()
 	const frags = 8
@@ -412,6 +455,11 @@ func assertDecodableFUAPicture(t *testing.T, got []rtp.Packet) {
 	}
 	if len(fua) != frags {
 		t.Fatalf("FU-A fragments=%d, want %d (a dropped tail is the packets=1 failure)", len(fua), frags)
+	}
+	for i := 1; i < len(got); i++ {
+		if got[i].SequenceNumber != got[i-1].SequenceNumber+1 {
+			t.Fatalf("seq gap at packet %d: %d -> %d", i, got[i-1].SequenceNumber, got[i].SequenceNumber)
+		}
 	}
 	ts := fua[0].Timestamp
 	for i, pkt := range fua {

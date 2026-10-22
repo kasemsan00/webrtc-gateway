@@ -514,7 +514,6 @@ func (s *Session) ResetMediaState() {
 	s.firIDRSliceTSSet = false
 	s.uplinkPictureMu.Lock()
 	s.uplinkPicture = uplinkPictureHold{}
-	s.uplinkPictureGen++
 	s.uplinkPictureMu.Unlock()
 
 	s.mediaForwardReady = false

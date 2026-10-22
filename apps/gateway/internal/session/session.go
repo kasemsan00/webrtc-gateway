@@ -298,7 +298,6 @@ type Session struct {
 	firIDRSliceTSSet           bool              `json:"-"`
 	uplinkPictureMu            sync.Mutex        `json:"-"`
 	uplinkPicture              uplinkPictureHold `json:"-"`
-	uplinkPictureGen           uint64            `json:"-"`
 	// SIP-side cached SPS/PPS (SIP→WebRTC direction, from SIP endpoint's encoder)
 	// Used to inject parameter sets before keyframes forwarded to browser for decoder recovery.
 	SIPCachedSPS             []byte                `json:"-"`

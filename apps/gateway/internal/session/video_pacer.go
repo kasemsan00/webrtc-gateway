@@ -206,12 +206,13 @@ func (p *videoPacer) noteRelease(pkt pacedVideoPacket, now time.Time) {
 	delete(p.idrs, pkt.rtpTS)
 }
 
-// finishIdleIDR closes a picture whose packets have all been released once a
-// later timestamp starts. Slices of the timestamp being enqueued stay open
-// until their marker packet is released.
+// finishIdleIDR logs a picture that already saw its marker and has drained,
+// once a later timestamp starts. An unclosed account is a picture whose last
+// slice is still in the hold; logging it would split one IDR into several
+// uplink_idr_size lines.
 func (p *videoPacer) finishIdleIDR(except uint32) {
 	for ts, acc := range p.idrs {
-		if ts == except || acc == nil || acc.pending > 0 {
+		if ts == except || acc == nil || acc.pending > 0 || !acc.closed {
 			continue
 		}
 		p.logIDR(acc)

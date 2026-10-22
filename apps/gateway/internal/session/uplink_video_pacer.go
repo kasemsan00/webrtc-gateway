@@ -60,15 +60,21 @@ func (s *Session) enqueueUplinkVideo(conn *net.UDPConn, addr *net.UDPAddr, data 
 		rtpTS:       rtpTS,
 		packetCount: packetCount,
 	}
+	browserEnded := rtpHasMarker(next.data)
 	s.uplinkPictureMu.Lock()
 	prev, ok := s.uplinkPicture.push(next)
-	s.uplinkPictureGen++
-	gen := s.uplinkPictureGen
+	var last heldUplinkVideo
+	lastOK := false
+	if browserEnded {
+		last, lastOK = s.uplinkPicture.flush()
+	}
 	s.uplinkPictureMu.Unlock()
 	if ok {
 		s.deliverUplinkVideo(prev)
 	}
-	s.armUplinkPictureFlush(gen)
+	if lastOK {
+		s.deliverUplinkVideo(last)
+	}
 }
 
 func (s *Session) deliverUplinkVideo(pkt heldUplinkVideo) {

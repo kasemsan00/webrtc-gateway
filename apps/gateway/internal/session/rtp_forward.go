@@ -35,6 +35,9 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 }
 
 func (s *Session) forwardRTPToAsteriskFrom(track rtpByteReader, kind string) {
+	if kind == "video" {
+		defer s.flushUplinkPicture()
+	}
 	buffer := make([]byte, s.RTPBufferSize)
 	packetCount := 0
 	heldUntilIDR := 0
@@ -523,7 +526,8 @@ func (s *Session) forwardRTPToAsteriskFrom(track rtpByteReader, kind string) {
 				s.mu.Unlock()
 				// Flush buffered writes outside lock. Never record an uplink
 				// IDR while holding s.mu — RecordUplinkKeyframe takes the same lock.
-				// The picture hold assigns the marker and logs one IDR per picture.
+				// The picture hold assigns the marker from the browser bit or
+				// the next timestamp, so one IDR stays one access unit.
 				if stapaForwarded {
 					for _, w := range pendingWrites {
 						s.enqueueUplinkVideo(conn, destAddr, w, false, packet.Header.Timestamp, packetCount)
@@ -628,8 +632,8 @@ func (s *Session) forwardRTPToAsteriskFrom(track rtpByteReader, kind string) {
 		videoForward := kind == "video" && destAddr != nil && conn != nil
 		// Flush any buffered SPS/PPS injection writes outside lock.
 		// Video datagrams share one picture hold so slices keep their timestamp
-		// and only the last slice of that timestamp gets the marker. Audio stays
-		// on this loop.
+		// and only the browser's last slice (or the slice before a new
+		// timestamp) gets the marker. Audio stays on this loop.
 		if videoForward {
 			for _, w := range pendingWrites {
 				s.enqueueUplinkVideo(conn, destAddr, w, false, packet.Header.Timestamp, packetCount)

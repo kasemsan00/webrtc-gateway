@@ -225,9 +225,9 @@ func TestVideoPacerKeepsOnePictureAcrossDrainBursts(t *testing.T) {
 		t.Fatalf("picture logged before its marker slice: %+v", logs)
 	}
 	for i := 3; i < 9; i++ {
-		enqueueMarked(p, i, size, start.Add(20*time.Millisecond), true, 90000, i == 8)
+		enqueueMarked(p, i, size, start.Add(50*time.Millisecond), true, 90000, i == 8)
 	}
-	_, released, logs = drainPacer(t, p, start.Add(20*time.Millisecond))
+	_, released, logs = drainPacer(t, p, start.Add(50*time.Millisecond))
 	if len(released) != 6 {
 		t.Fatalf("second burst released %d, want 6", len(released))
 	}
@@ -241,6 +241,9 @@ func TestVideoPacerKeepsOnePictureAcrossDrainBursts(t *testing.T) {
 	}
 	if logs[0].Timestamp != 90000 || logs[0].Packets != 9 || logs[0].Bytes != 9*size {
 		t.Fatalf("IDR log %+v, want ts=90000 packets=9", logs[0])
+	}
+	if logs[0].Burst != 50*time.Millisecond {
+		t.Fatalf("burst_ms %s, want 50ms across the hold-window gap", logs[0].Burst)
 	}
 }
 
