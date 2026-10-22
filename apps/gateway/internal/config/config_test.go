@@ -71,6 +71,38 @@ func TestTrunkPNAppIDConfigCanBeCustomizedAndTrimmed(t *testing.T) {
 	}
 }
 
+func TestProactiveBrowserPLIConfigDefaults(t *testing.T) {
+	t.Setenv("SIP_PROACTIVE_BROWSER_PLI_INITIAL_MS", "")
+	t.Setenv("SIP_PROACTIVE_BROWSER_PLI_SAFETY_MS", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.SIP.ProactiveBrowserPLIInitialMS != 2000 {
+		t.Fatalf("initial = %d, want 2000", cfg.SIP.ProactiveBrowserPLIInitialMS)
+	}
+	if cfg.SIP.ProactiveBrowserPLISafetyMS != 10000 {
+		t.Fatalf("safety = %d, want 10000", cfg.SIP.ProactiveBrowserPLISafetyMS)
+	}
+}
+
+func TestProactiveBrowserPLIConfigCanBeCustomized(t *testing.T) {
+	t.Setenv("SIP_PROACTIVE_BROWSER_PLI_INITIAL_MS", "1500")
+	t.Setenv("SIP_PROACTIVE_BROWSER_PLI_SAFETY_MS", "15000")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.SIP.ProactiveBrowserPLIInitialMS != 1500 {
+		t.Fatalf("initial = %d, want 1500", cfg.SIP.ProactiveBrowserPLIInitialMS)
+	}
+	if cfg.SIP.ProactiveBrowserPLISafetyMS != 15000 {
+		t.Fatalf("safety = %d, want 15000", cfg.SIP.ProactiveBrowserPLISafetyMS)
+	}
+}
+
 func TestPublicWebSocketConfigDefaultDisabled(t *testing.T) {
 	t.Setenv("API_ENABLE_PUBLIC_WS", "")
 

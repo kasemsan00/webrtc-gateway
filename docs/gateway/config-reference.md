@@ -107,6 +107,8 @@ When `FRONTEND_PASSWORD` is set and `AUTH_ENABLE=false`, authenticated `/api/*` 
   connected. No switch renegotiation is attempted, and no `switch_renegotiate_*`
   log is emitted, while this flag is `false`. Configuration changes require a
   gateway process restart.)
+- `SIP_PROACTIVE_BROWSER_PLI_INITIAL_MS` (default `2000`; browser PLI interval until the first WebRTC→SIP IDR is forwarded)
+- `SIP_PROACTIVE_BROWSER_PLI_SAFETY_MS` (default `10000`; after the first IDR, send a browser PLI only if none has been forwarded in this window. SIP INFO FIR and RTCP FIR/PLI handle recovery in between.)
 - `SIP_VIDEO_KEYFRAME_WATCHDOG` (default `true`)
 - `SIP_VIDEO_KEYFRAME_WATCHDOG_INTERVAL_MS` (default `2000`)
 - `SIP_VIDEO_KEYFRAME_STALE_MS` (default `4000`; must stay above a healthy SIP GOP or watchdog PLI never stops)

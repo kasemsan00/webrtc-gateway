@@ -77,13 +77,15 @@ func TestHandleINFOPictureFastUpdateResetsPLI(t *testing.T) {
 	req.AppendHeader(sip.NewHeader("User-Agent", "FPBX-15.0.37.4"))
 	tx := &midCallServerTxStub{}
 
+	idrAt := time.Now().Add(-3 * time.Second)
+	sess.LastUplinkKeyframe = idrAt
 	before := time.Now()
 	srv.handleINFO(req, tx)
 
 	assertResponseCodes(t, tx, []int{200})
-	wait := sess.ProactiveBrowserPLIWait(30*time.Second, before)
-	if wait < 1500*time.Millisecond || wait > 2500*time.Millisecond {
-		t.Fatalf("proactive wait after INFO = %s, want about 2s", wait)
+	wait := sess.ProactiveBrowserPLIWait(before)
+	if wait < 6*time.Second || wait > 8*time.Second {
+		t.Fatalf("proactive wait after INFO = %s, want remaining safety net (~7s), not a 2s restart", wait)
 	}
 	if !sess.SIPInfoKeyframePending() {
 		t.Fatal("INFO picture_fast_update did not arm the next uplink IDR")

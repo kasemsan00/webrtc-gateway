@@ -249,8 +249,8 @@ func (s *Server) startRTPListenerForSession(sess *session.Session) (int, error) 
 
 		// Start periodic PLI sender for fast video start
 		go s.startPeriodicPLIForSession(sess)
-		// iOS never sends PLI/FIR. Keep asking the browser for an IDR until it does.
-		// This loop calls SendPLItoWebRTC directly and is not the rtp-flowing watchdog.
+		// Ask the browser for an IDR until one is forwarded, then only as a
+		// long safety net. Linphone recovery is SIP INFO FIR / RTCP FIR/PLI.
 		go s.startProactiveBrowserPLIForSession(sess)
 		// Start keyframe watchdog to recover from stalled decoders (iOS VideoToolbox)
 		go s.startKeyframeWatchdogForSession(sess)
@@ -1120,15 +1120,15 @@ func (s *Server) handleRTCPFromSIP(data []byte, sess *session.Session, rtcpCount
 	}
 }
 
-// startProactiveBrowserPLIForSession asks the browser for an IDR on a fixed
-// schedule when the SIP leg has never sent PLI or FIR. RTP that is already
-// flowing does not cancel it; only a real SIP PLI/FIR or the end of the call does.
+// startProactiveBrowserPLIForSession asks the browser for an IDR until the
+// first one is forwarded to SIP, then only if none has been forwarded for
+// the safety-net interval. SIP INFO FIR and RTCP FIR/PLI handle recovery
+// in between. RTP already flowing does not cancel it.
 func (s *Server) startProactiveBrowserPLIForSession(sess *session.Session) {
-	fmt.Printf("[%s] proactive_browser_pli_start initial=%s window=%s steady=%s\n",
+	fmt.Printf("[%s] proactive_browser_pli_start initial=%s safety=%s\n",
 		sess.ID,
-		session.ProactiveBrowserPLIInitialInterval,
-		session.ProactiveBrowserPLIInitialWindow,
-		session.ProactiveBrowserPLISteadyInterval)
+		sess.ProactiveBrowserPLIInitial(),
+		sess.ProactiveBrowserPLISafety())
 	started := time.Now()
 	wake := sess.ProactivePLIWakeChan()
 	timer := time.NewTimer(time.Hour)
@@ -1139,7 +1139,8 @@ func (s *Server) startProactiveBrowserPLIForSession(sess *session.Session) {
 		}
 	}
 	for {
-		wait := sess.ProactiveBrowserPLIWait(time.Since(started), time.Now())
+		now := time.Now()
+		wait := sess.ProactiveBrowserPLIWait(now)
 		if wait < time.Millisecond {
 			wait = time.Millisecond
 		}
@@ -1159,18 +1160,20 @@ func (s *Server) startProactiveBrowserPLIForSession(sess *session.Session) {
 			fmt.Printf("[%s] proactive_browser_pli_stop reason=session-ended\n", sess.ID)
 			return
 		}
-		if sess.HasSIPKeyframeRequest() {
-			fmt.Printf("[%s] proactive_browser_pli_stop reason=sip-keyframe-request\n", sess.ID)
-			return
-		}
-		sess.ConsumeProactivePLIHold(time.Now())
+		now = time.Now()
+		decision := sess.DecideSessionProactiveBrowserPLI(now)
 		callAge := time.Since(started).Round(time.Millisecond)
+		if !decision.Send {
+			fmt.Printf("[%s] proactive_browser_pli skipped reason=%s interval=%s call_age=%s\n",
+				sess.ID, decision.Reason, wait, callAge)
+			continue
+		}
 		if sess.SendProactivePLIToWebRTC() {
-			fmt.Printf("[%s] proactive_browser_pli sent interval=%s call_age=%s\n",
-				sess.ID, wait, callAge)
+			fmt.Printf("[%s] proactive_browser_pli sent reason=%s interval=%s call_age=%s\n",
+				sess.ID, decision.Reason, wait, callAge)
 		} else {
-			fmt.Printf("[%s] proactive_browser_pli throttled interval=%s call_age=%s\n",
-				sess.ID, wait, callAge)
+			fmt.Printf("[%s] proactive_browser_pli throttled reason=%s interval=%s call_age=%s\n",
+				sess.ID, decision.Reason, wait, callAge)
 		}
 	}
 }

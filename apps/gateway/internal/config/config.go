@@ -178,6 +178,8 @@ type SIPConfig struct {
 	UplinkVideoPacerBitsPerSec           int    // Token-bucket rate for uplink video (default: 3500000)
 	UplinkVideoPacerBurstPackets         int    // Packets that may leave together before the rate limit (default: 4)
 	UplinkVideoPacerMaxQueueMS           int    // Flush queued uplink video after this delay instead of growing (default: 500)
+	ProactiveBrowserPLIInitialMS         int    // Browser PLI interval until the first uplink IDR (default: 2000)
+	ProactiveBrowserPLISafetyMS          int    // Browser PLI only if no uplink IDR in this window (default: 10000)
 	VideoTimestampJumpPLI                bool   // Request a SIP keyframe when SIP video RTP timestamps jump (default: true)
 	VideoSuppressEarlyMedia              bool   // Drop SIP video until the call is answered (default: false; SIP_VIDEO_FORWARD_EARLY_MEDIA=true)
 	WebRTCTWCCEnabled                    bool   // Send transport-cc feedback to the phone (default: true; WEBRTC_TWCC_ENABLE)
@@ -355,6 +357,8 @@ func Load() (*Config, error) {
 			UplinkVideoPacerBitsPerSec:           clampInt(getEnvAsInt("SIP_UPLINK_VIDEO_PACER_BPS", 3_500_000), 100_000, 50_000_000),
 			UplinkVideoPacerBurstPackets:         clampInt(getEnvAsInt("SIP_UPLINK_VIDEO_PACER_BURST_PACKETS", 4), 1, 16),
 			UplinkVideoPacerMaxQueueMS:           clampInt(getEnvAsInt("SIP_UPLINK_VIDEO_PACER_MAX_QUEUE_MS", 500), 50, 5000),
+			ProactiveBrowserPLIInitialMS:         clampInt(getEnvAsInt("SIP_PROACTIVE_BROWSER_PLI_INITIAL_MS", 2000), 500, 10000),
+			ProactiveBrowserPLISafetyMS:          clampInt(getEnvAsInt("SIP_PROACTIVE_BROWSER_PLI_SAFETY_MS", 10000), 2000, 60000),
 			VideoTimestampJumpPLI:                getEnvAsBool("SIP_VIDEO_TIMESTAMP_JUMP_PLI", true),
 			VideoSuppressEarlyMedia:              !getEnvAsBool("SIP_VIDEO_FORWARD_EARLY_MEDIA", true),
 			WebRTCTWCCEnabled:                    getEnvAsBool("WEBRTC_TWCC_ENABLE", true),
@@ -691,6 +695,10 @@ func (c *Config) Display() {
 		c.SIP.UplinkVideoPacerBitsPerSec,
 		c.SIP.UplinkVideoPacerBurstPackets,
 		c.SIP.UplinkVideoPacerMaxQueueMS,
+	)
+	fmt.Printf("  Proactive Browser PLI: initial=%dms safety=%dms\n",
+		c.SIP.ProactiveBrowserPLIInitialMS,
+		c.SIP.ProactiveBrowserPLISafetyMS,
 	)
 	fmt.Printf("  SIP Video Timestamp-Jump PLI: %v\n", c.SIP.VideoTimestampJumpPLI)
 	fmt.Printf("  SIP Video Forward Early Media: %v\n", !c.SIP.VideoSuppressEarlyMedia)

@@ -282,6 +282,8 @@ type Session struct {
 	switchKeyframeBurstGen     uint64            `json:"-"`
 	proactivePLINotBefore      time.Time         `json:"-"`
 	proactivePLIWake           chan struct{}     `json:"-"`
+	proactiveBrowserPLIInitial time.Duration     `json:"-"`
+	proactiveBrowserPLISafety  time.Duration     `json:"-"`
 	sipInfoFIRAt               time.Time         `json:"-"`
 	sipAnswerSDP               []byte            `json:"-"`
 	lastBrowserPLIReason       string            `json:"-"`
@@ -667,6 +669,8 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 		uplinkVideoPacerBPS:                  cfg.SIP.UplinkVideoPacerBitsPerSec,
 		uplinkVideoPacerBurstPackets:         cfg.SIP.UplinkVideoPacerBurstPackets,
 		uplinkVideoPacerMaxQueue:             time.Duration(cfg.SIP.UplinkVideoPacerMaxQueueMS) * time.Millisecond,
+		proactiveBrowserPLIInitial:           time.Duration(cfg.SIP.ProactiveBrowserPLIInitialMS) * time.Millisecond,
+		proactiveBrowserPLISafety:            time.Duration(cfg.SIP.ProactiveBrowserPLISafetyMS) * time.Millisecond,
 		VideoTimestampJumpPLI:                cfg.SIP.VideoTimestampJumpPLI,
 		VideoSuppressEarlyMedia:              cfg.SIP.VideoSuppressEarlyMedia,
 		WebRTCTWCCEnabled:                    cfg.SIP.WebRTCTWCCEnabled,

@@ -8,13 +8,16 @@ import (
 
 const (
 	// ProactiveBrowserPLIInitialInterval is how often the gateway asks the
-	// browser for an IDR during the opening window of a call whose SIP leg
-	// has never sent PLI or FIR.
+	// browser for an IDR until the first one is forwarded to SIP.
 	ProactiveBrowserPLIInitialInterval = 2 * time.Second
-	// ProactiveBrowserPLIInitialWindow is how long the faster interval lasts.
-	ProactiveBrowserPLIInitialWindow = 10 * time.Second
-	// ProactiveBrowserPLISteadyInterval is the 3–4s pace used after the opening window.
-	ProactiveBrowserPLISteadyInterval = 4 * time.Second
+	// ProactiveBrowserPLISafetyInterval is the steady-state floor: a
+	// proactive PLI is sent only if no IDR has been forwarded in this long.
+	// SIP INFO FIR and RTCP FIR/PLI handle recovery in between.
+	ProactiveBrowserPLISafetyInterval = 10 * time.Second
+	// BrowserKeyframeSatisfyWindow is the shared keyframe-request dedupe.
+	// A new PLI that lands within this window of a forwarded IDR, or of a
+	// PLI that is still waiting for one, is already satisfied.
+	BrowserKeyframeSatisfyWindow = time.Second
 	// SwitchKeyframePLIFollowUp is the first retry after a switch request.
 	SwitchKeyframePLIFollowUp = 300 * time.Millisecond
 	// SIPInfoFIRDebounce collapses Linphone's repeated picture_fast_update
@@ -34,18 +37,66 @@ const (
 	SIPInfoFIRRetryCap = 6
 )
 
-// ProactiveBrowserPLIInterval is the wait before the next browser PLI.
-// callAge is how long the schedule has already been running. The rtp-flowing
-// watchdog does not change this interval.
-func ProactiveBrowserPLIInterval(callAge time.Duration) time.Duration {
-	if callAge < ProactiveBrowserPLIInitialWindow {
-		return ProactiveBrowserPLIInitialInterval
+// ProactiveBrowserPLIDecision is whether the proactive loop should send.
+type ProactiveBrowserPLIDecision struct {
+	Send   bool
+	Reason string
+}
+
+// DecideProactiveBrowserPLI is the fake-clock decision for the proactive
+// browser-PLI loop. Startup PLIs stop once any IDR has been forwarded.
+// After that only the safety net remains, and it fires only when no IDR
+// (and no unanswered safety PLI) has been seen for safety.
+func DecideProactiveBrowserPLI(lastIDR, lastPLI, now time.Time, initial, safety time.Duration) ProactiveBrowserPLIDecision {
+	if initial <= 0 {
+		initial = ProactiveBrowserPLIInitialInterval
 	}
-	return ProactiveBrowserPLISteadyInterval
+	if safety <= 0 {
+		safety = ProactiveBrowserPLISafetyInterval
+	}
+	if lastIDR.IsZero() {
+		if !lastPLI.IsZero() && now.Sub(lastPLI) < initial {
+			return ProactiveBrowserPLIDecision{Reason: "startup-wait"}
+		}
+		return ProactiveBrowserPLIDecision{Send: true, Reason: "startup"}
+	}
+	if now.Sub(lastIDR) < safety {
+		return ProactiveBrowserPLIDecision{Reason: "idr-fresh"}
+	}
+	if !lastPLI.IsZero() && now.Sub(lastPLI) < safety {
+		return ProactiveBrowserPLIDecision{Reason: "safety-wait"}
+	}
+	return ProactiveBrowserPLIDecision{Send: true, Reason: "safety-net"}
+}
+
+// BrowserKeyframeRequestSatisfied reports that another browser IDR request
+// would not help: one was forwarded within BrowserKeyframeSatisfyWindow, or
+// a PLI is still outstanding and waiting for that IDR.
+func BrowserKeyframeRequestSatisfied(lastIDR, lastPLI, now time.Time) (bool, string) {
+	if !lastIDR.IsZero() {
+		age := now.Sub(lastIDR)
+		if age >= 0 && age < BrowserKeyframeSatisfyWindow {
+			return true, "idr-fresh"
+		}
+	}
+	if !lastPLI.IsZero() && (lastIDR.IsZero() || lastIDR.Before(lastPLI)) {
+		age := now.Sub(lastPLI)
+		if age >= 0 && age < BrowserKeyframeSatisfyWindow {
+			return true, "pli-pending"
+		}
+	}
+	return false, ""
+}
+
+// IDRSatisfiesKeyframeRequest is true when an IDR was forwarded at or after
+// the request. Leftover slices of a picture still in flight count.
+func IDRSatisfiesKeyframeRequest(lastIDR, requestedAt time.Time) bool {
+	return !lastIDR.IsZero() && !lastIDR.Before(requestedAt)
 }
 
 // NoteSIPKeyframeRequest records that the SIP leg itself sent PLI or FIR.
-// The proactive browser-PLI schedule stops after the first one.
+// Proactive PLI no longer exits on this; SIP INFO FIR and the safety net
+// keep asking when the phone is silent.
 func (s *Session) NoteSIPKeyframeRequest(kind string) {
 	s.mu.Lock()
 	already := s.sipKeyframeRequestSeen
@@ -80,27 +131,81 @@ func (s *Session) SendProactivePLIToWebRTC() bool {
 	return sendPreparedWebRTCFeedback(id, snapshot)
 }
 
-// ProactiveBrowserPLIWait is how long the proactive loop should sleep.
-// A switch request holds the next proactive PLI until 2s after that request,
-// including when the call is already on the 4s steady interval.
-func (s *Session) ProactiveBrowserPLIWait(callAge time.Duration, now time.Time) time.Duration {
-	s.mu.Lock()
-	notBefore := s.proactivePLINotBefore
-	s.mu.Unlock()
-	if notBefore.After(now) {
-		return notBefore.Sub(now)
+func (s *Session) proactiveInitialInterval() time.Duration {
+	if s != nil && s.proactiveBrowserPLIInitial > 0 {
+		return s.proactiveBrowserPLIInitial
 	}
-	return ProactiveBrowserPLIInterval(callAge)
+	return ProactiveBrowserPLIInitialInterval
 }
 
-// ConsumeProactivePLIHold clears a switch reset once its 2s point has passed
-// so the following wait uses the call-age interval again.
-func (s *Session) ConsumeProactivePLIHold(now time.Time) {
-	s.mu.Lock()
-	if !s.proactivePLINotBefore.IsZero() && !now.Before(s.proactivePLINotBefore) {
-		s.proactivePLINotBefore = time.Time{}
+func (s *Session) proactiveSafetyInterval() time.Duration {
+	if s != nil && s.proactiveBrowserPLISafety > 0 {
+		return s.proactiveBrowserPLISafety
 	}
-	s.mu.Unlock()
+	return ProactiveBrowserPLISafetyInterval
+}
+
+func (s *Session) lastForwardedIDRTimeLocked() time.Time {
+	t := s.LastUplinkKeyframe
+	if s.uplinkVideoLastIDR.After(t) {
+		t = s.uplinkVideoLastIDR
+	}
+	return t
+}
+
+// ProactiveBrowserPLIInitial is the configured startup interval, or the default.
+func (s *Session) ProactiveBrowserPLIInitial() time.Duration {
+	return s.proactiveInitialInterval()
+}
+
+// ProactiveBrowserPLISafety is the configured safety-net interval, or the default.
+func (s *Session) ProactiveBrowserPLISafety() time.Duration {
+	return s.proactiveSafetyInterval()
+}
+
+// DecideSessionProactiveBrowserPLI is DecideProactiveBrowserPLI using session clocks.
+func (s *Session) DecideSessionProactiveBrowserPLI(now time.Time) ProactiveBrowserPLIDecision {
+	s.mu.RLock()
+	lastIDR := s.lastForwardedIDRTimeLocked()
+	lastPLI := s.lastBrowserIDRRequest
+	initial := s.proactiveInitialInterval()
+	safety := s.proactiveSafetyInterval()
+	s.mu.RUnlock()
+	return DecideProactiveBrowserPLI(lastIDR, lastPLI, now, initial, safety)
+}
+
+// ProactiveBrowserPLIWait is how long the proactive loop should sleep.
+// After the first forwarded IDR this is the remaining safety-net time,
+// not a 4s cadence. FIR and switch no longer reset it to 2s.
+func (s *Session) ProactiveBrowserPLIWait(now time.Time) time.Duration {
+	s.mu.RLock()
+	lastIDR := s.lastForwardedIDRTimeLocked()
+	lastPLI := s.lastBrowserIDRRequest
+	initial := s.proactiveInitialInterval()
+	safety := s.proactiveSafetyInterval()
+	s.mu.RUnlock()
+	if lastIDR.IsZero() {
+		if !lastPLI.IsZero() {
+			next := lastPLI.Add(initial)
+			if next.After(now) {
+				return next.Sub(now)
+			}
+		}
+		if initial < time.Millisecond {
+			return time.Millisecond
+		}
+		return initial
+	}
+	next := lastIDR.Add(safety)
+	if lastPLI.After(lastIDR) {
+		if pliNext := lastPLI.Add(safety); pliNext.After(next) {
+			next = pliNext
+		}
+	}
+	if next.After(now) {
+		return next.Sub(now)
+	}
+	return time.Millisecond
 }
 
 func (s *Session) proactivePLIWakeChan() chan struct{} {
@@ -133,7 +238,6 @@ func (s *Session) armSwitchKeyframeRequestLocked(now time.Time) uint64 {
 	s.switchKeyframeIDRPending = true
 	s.allowNextUplinkPictureSize = true
 	s.uplinkSPSDimensionBlocked = false
-	s.proactivePLINotBefore = now.Add(ProactiveBrowserPLIInitialInterval)
 	return s.switchKeyframeBurstGen
 }
 
@@ -155,7 +259,7 @@ func (s *Session) runSwitchKeyframeBurst(gen uint64) {
 		ctx = context.Background()
 	}
 	start := time.Now()
-	for _, at := range []time.Duration{0, SwitchKeyframePLIFollowUp, SwitchKeyframePLISecond} {
+	for i, at := range []time.Duration{0, SwitchKeyframePLIFollowUp, SwitchKeyframePLISecond} {
 		if at > 0 {
 			timer := time.NewTimer(time.Until(start.Add(at)))
 			select {
@@ -165,14 +269,35 @@ func (s *Session) runSwitchKeyframeBurst(gen uint64) {
 			case <-timer.C:
 			}
 		}
-		s.mu.Lock()
-		current := s.switchKeyframeBurstGen
-		s.mu.Unlock()
-		if current != gen {
+		now := time.Now()
+		if stop, reason := s.switchKeyframeBurstShouldStop(gen, i > 0, now); stop {
+			fmt.Printf("[%s] switch_keyframe_burst_stop reason=%s\n", s.ID, reason)
 			return
 		}
 		s.SendBrowserPLI("switch")
 	}
+}
+
+// switchKeyframeBurstShouldStop is the fake-clock gate for one shot of the
+// post-switch PLI burst. followUp is false for the immediate shot.
+func (s *Session) switchKeyframeBurstShouldStop(gen uint64, followUp bool, now time.Time) (bool, string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.switchKeyframeBurstGen != gen {
+		return true, "superseded"
+	}
+	lastIDR := s.lastForwardedIDRTimeLocked()
+	requestedAt := s.switchKeyframeRequestedAt
+	if IDRSatisfiesKeyframeRequest(lastIDR, requestedAt) || !s.switchKeyframeIDRPending {
+		return true, "idr-forwarded"
+	}
+	if followUp {
+		return false, ""
+	}
+	if skip, reason := BrowserKeyframeRequestSatisfied(lastIDR, s.lastBrowserIDRRequest, now); skip {
+		return true, reason
+	}
+	return false, ""
 }
 
 // HandleSIPInfoPictureFastUpdate is one Linphone VFU. Repeats inside
@@ -254,16 +379,33 @@ func (s *Session) runSIPInfoFIRRetry(gen uint64, firAt time.Time, firstWait time
 			return
 		case <-timer.C:
 		}
-		s.mu.Lock()
-		stale := s.sipInfoFIRRetryGen != gen
-		satisfied := s.uplinkVideoIDRTimestampSeen && s.uplinkVideoLastIDR.After(firAt)
-		s.mu.Unlock()
-		if stale || satisfied {
+		send, reason := s.sipInfoFIRRetryShouldSend(gen, firAt, time.Now())
+		if !send {
+			if reason == "idr-forwarded" {
+				fmt.Printf("[%s] sip_info_fir_retry cancelled reason=%s\n", s.ID, reason)
+			}
 			return
 		}
 		s.SendBrowserPLIImmediate("sip_info_fir_retry")
 		timer.Reset(SIPInfoFIRRetryGap())
 	}
+}
+
+// sipInfoFIRRetryShouldSend is the fake-clock gate for one VFU retry. An IDR
+// forwarded after firAt, including leftover slices of the picture that was
+// already in flight, cancels the retry.
+func (s *Session) sipInfoFIRRetryShouldSend(gen uint64, firAt, now time.Time) (bool, string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.sipInfoFIRRetryGen != gen {
+		return false, "stale"
+	}
+	lastIDR := s.lastForwardedIDRTimeLocked()
+	if IDRSatisfiesKeyframeRequest(lastIDR, firAt) || !s.switchKeyframeIDRPending {
+		return false, "idr-forwarded"
+	}
+	_ = now
+	return true, ""
 }
 
 // SIPInfoFIRRetryGap is the spacing between retry PLIs after the first one
@@ -285,7 +427,6 @@ func (s *Session) HandleSIPReinviteKeyframe(now time.Time) {
 func (s *Session) armBrowserIDRLocked(now time.Time) {
 	s.switchKeyframeRequestedAt = now
 	s.switchKeyframeIDRPending = true
-	s.proactivePLINotBefore = now.Add(ProactiveBrowserPLIInitialInterval)
 }
 
 // SIPInfoFIRDebounced reports whether this VFU is a repeat inside the window.
@@ -520,11 +661,17 @@ func (s *Session) ObserveUplinkVideoForward(isIDR bool, rtpTimestamp uint32, now
 	var idrGap time.Duration
 	logAfterSwitch := false
 	var switchLatency time.Duration
+	if isIDR {
+		if s.LastUplinkKeyframe.Before(now) {
+			s.LastUplinkKeyframe = now
+		}
+	}
 	if isIDR && s.switchKeyframeIDRPending {
 		logAfterSwitch = true
 		switchLatency = now.Sub(s.switchKeyframeRequestedAt)
 		s.switchKeyframeIDRPending = false
 		s.allowNextUplinkPictureSize = false
+		s.switchKeyframeBurstGen++
 	}
 	if isIDR && (!s.uplinkVideoIDRTimestampSeen || rtpTimestamp != s.uplinkVideoLastIDRTimestamp) {
 		if !s.uplinkVideoLastIDR.IsZero() {
