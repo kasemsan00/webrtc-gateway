@@ -1130,10 +1130,31 @@ func (s *Server) startProactiveBrowserPLIForSession(sess *session.Session) {
 		session.ProactiveBrowserPLIInitialWindow,
 		session.ProactiveBrowserPLISteadyInterval)
 	started := time.Now()
+	wake := sess.ProactivePLIWakeChan()
+	timer := time.NewTimer(time.Hour)
+	if !timer.Stop() {
+		select {
+		case <-timer.C:
+		default:
+		}
+	}
 	for {
-		age := time.Since(started)
-		interval := session.ProactiveBrowserPLIInterval(age)
-		time.Sleep(interval)
+		wait := sess.ProactiveBrowserPLIWait(time.Since(started), time.Now())
+		if wait < time.Millisecond {
+			wait = time.Millisecond
+		}
+		timer.Reset(wait)
+		select {
+		case <-timer.C:
+		case <-wake:
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			continue
+		}
 		if sess.GetState() == session.StateEnded {
 			fmt.Printf("[%s] proactive_browser_pli_stop reason=session-ended\n", sess.ID)
 			return
@@ -1142,13 +1163,14 @@ func (s *Server) startProactiveBrowserPLIForSession(sess *session.Session) {
 			fmt.Printf("[%s] proactive_browser_pli_stop reason=sip-keyframe-request\n", sess.ID)
 			return
 		}
+		sess.ConsumeProactivePLIHold(time.Now())
 		callAge := time.Since(started).Round(time.Millisecond)
 		if sess.SendProactivePLIToWebRTC() {
 			fmt.Printf("[%s] proactive_browser_pli sent interval=%s call_age=%s\n",
-				sess.ID, interval, callAge)
+				sess.ID, wait, callAge)
 		} else {
 			fmt.Printf("[%s] proactive_browser_pli throttled interval=%s call_age=%s\n",
-				sess.ID, interval, callAge)
+				sess.ID, wait, callAge)
 		}
 	}
 }

@@ -69,6 +69,48 @@ func TestWebRTCPLIThrottle(t *testing.T) {
 	}
 }
 
+func TestSwitchKeyframeResetsProactiveWaitToTwoSeconds(t *testing.T) {
+	sess := &Session{ID: "switch-pli"}
+	now := time.Unix(1_700_000_000, 0)
+	sess.mu.Lock()
+	sess.armSwitchKeyframeRequestLocked(now)
+	sess.mu.Unlock()
+	if !sess.switchKeyframeIDRPending || !sess.allowNextUplinkPictureSize {
+		t.Fatal("switch request did not arm the next uplink IDR")
+	}
+	if got := sess.ProactiveBrowserPLIWait(30*time.Second, now); got != ProactiveBrowserPLIInitialInterval {
+		t.Fatalf("wait after switch = %s, want 2s even on the steady interval", got)
+	}
+	if got := ProactiveBrowserPLIInterval(30 * time.Second); got != ProactiveBrowserPLISteadyInterval {
+		t.Fatalf("steady interval changed: %s", got)
+	}
+	sess.ConsumeProactivePLIHold(now.Add(2 * time.Second))
+	if got := sess.ProactiveBrowserPLIWait(30*time.Second, now.Add(2*time.Second)); got != ProactiveBrowserPLISteadyInterval {
+		t.Fatalf("wait after the reset PLI = %s, want 4s", got)
+	}
+	later := now.Add(180 * time.Millisecond)
+	sess.ObserveUplinkVideoForward(true, 55, later)
+	if sess.switchKeyframeIDRPending || sess.allowNextUplinkPictureSize {
+		t.Fatal("forwarded IDR left the switch arm set")
+	}
+}
+
+func TestSwitchBrowserPLIRespectsOneSecondCap(t *testing.T) {
+	sess := &Session{ID: "switch-cap"}
+	sess.LastWebRTCPLISent = time.Now()
+	if sess.SendBrowserPLI("switch") {
+		t.Fatal("switch PLI inside the 1s cap was reported sent")
+	}
+	sess.LastWebRTCPLISent = time.Now().Add(-500 * time.Millisecond)
+	if sess.SendBrowserPLI("switch") {
+		t.Fatal("switch PLI at 500ms still has to honor the 1s cap")
+	}
+	sess.LastWebRTCPLISent = time.Time{}
+	if sess.SendBrowserPLI("switch") {
+		t.Fatal("switch PLI without a peer connection was reported sent")
+	}
+}
+
 func TestSendProactivePLIWithoutPeerConnection(t *testing.T) {
 	sess := &Session{ID: "call"}
 	if sess.SendProactivePLIToWebRTC() {

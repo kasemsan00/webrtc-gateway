@@ -269,6 +269,14 @@ type Session struct {
 	uplinkSPSHeight           int    `json:"-"`
 	uplinkSPSDimensionBlocked bool   `json:"-"`
 	uplinkSPSDimensionLogged  bool   `json:"-"`
+	// allowNextUplinkPictureSize accepts one SPS size change after an explicit
+	// switch/source replacement, then locks that size again.
+	allowNextUplinkPictureSize bool          `json:"-"`
+	switchKeyframeRequestedAt  time.Time     `json:"-"`
+	switchKeyframeIDRPending   bool          `json:"-"`
+	switchKeyframeBurstGen     uint64        `json:"-"`
+	proactivePLINotBefore      time.Time     `json:"-"`
+	proactivePLIWake           chan struct{} `json:"-"`
 	// SIP-side cached SPS/PPS (SIP→WebRTC direction, from SIP endpoint's encoder)
 	// Used to inject parameter sets before keyframes forwarded to browser for decoder recovery.
 	SIPCachedSPS             []byte                `json:"-"`

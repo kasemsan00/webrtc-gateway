@@ -241,3 +241,23 @@ func (s *Server) handleWSRequestKeyframe(client *WSClient, msg WSMessage) {
 	action := sess.SendBrowserRecoveryToAsterisk("ws-request_keyframe")
 	log.Printf("📈 request_keyframe_handled session=%s action=%s", sessionID, action)
 }
+
+// handleWSSwitchKeyframeRequest asks the browser encoder for an IDR after the
+// agent replaces its outbound picture. This is the opposite direction from
+// request_keyframe, which recovers the SIP-to-browser leg.
+func (s *Server) handleWSSwitchKeyframeRequest(client *WSClient, msg WSMessage) {
+	sessionID := msg.SessionID
+	if sessionID == "" {
+		sessionID = client.sessionID
+	}
+	if sessionID == "" {
+		s.sendWSError(client, "", "Session ID required for keyframe request")
+		return
+	}
+	sess, ok := s.sessionMgr.GetSession(sessionID)
+	if !ok {
+		s.sendWSError(client, sessionID, "Session not found")
+		return
+	}
+	sess.HandleSwitchKeyframeRequest(time.Now())
+}

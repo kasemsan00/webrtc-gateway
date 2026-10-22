@@ -1,6 +1,9 @@
 package session
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestH264SPSPictureSizeBaseline720p(t *testing.T) {
 	nal := buildBaselineSPS(66, 0xe0, 31, 1280, 720, 0)
@@ -40,6 +43,20 @@ func TestUplinkDropsVideoAfterSPSPictureSizeChange(t *testing.T) {
 	}
 	if sess.uplinkSPSWidth != 1280 || sess.uplinkSPSHeight != 720 {
 		t.Fatalf("lock moved to %dx%d", sess.uplinkSPSWidth, sess.uplinkSPSHeight)
+	}
+
+	sess.mu.Lock()
+	sess.armSwitchKeyframeRequestLocked(time.Now())
+	sess.mu.Unlock()
+	if sess.rejectUplinkPictureSizeChangeLocked(changed) {
+		t.Fatal("armed switch dropped the post-switch picture size")
+	}
+	if sess.uplinkSPSWidth != 640 || sess.uplinkSPSHeight != 480 {
+		t.Fatalf("switch lock %dx%d", sess.uplinkSPSWidth, sess.uplinkSPSHeight)
+	}
+	other := buildBaselineSPS(66, 0xe0, 31, 320, 240, 0)
+	if !sess.rejectUplinkPictureSizeChangeLocked(other) {
+		t.Fatal("a second picture-size change after the switch was forwarded")
 	}
 
 	sess.ResetMediaState()

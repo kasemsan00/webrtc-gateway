@@ -178,6 +178,33 @@ func TestVideoPacerReportsArrivalBurstSeparately(t *testing.T) {
 	}
 }
 
+func TestVideoPacerDoesNotDelayAnIDRByTheFlushWindow(t *testing.T) {
+	p := testPacer()
+	start := time.Unix(0, 0)
+	const size = 1060
+	for i := 0; i < 8; i++ {
+		enqueueAt(p, i, size, start, false, 1)
+	}
+	for i := 8; i < 48; i++ {
+		enqueueAt(p, i, size, start, true, 2)
+	}
+	finished, released, logs := drainPacer(t, p, start)
+	if len(released) != 48 {
+		t.Fatalf("released %d, want 48", len(released))
+	}
+	for i, pkt := range released {
+		if pkt.seq != i {
+			t.Fatalf("packet %d has seq %d", i, pkt.seq)
+		}
+	}
+	if finished.Sub(start) >= 500*time.Millisecond {
+		t.Fatalf("IDR was held until %s", finished.Sub(start))
+	}
+	if len(logs) != 1 || logs[0].Packets != 40 {
+		t.Fatalf("IDR log %+v", logs)
+	}
+}
+
 func TestUplinkVideoPacerDisabledByDefaultOnBareSession(t *testing.T) {
 	s := &Session{}
 	if s.paceUplinkVideo() {

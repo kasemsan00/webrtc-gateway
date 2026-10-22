@@ -608,6 +608,20 @@ func TestAgentLastDisconnectHangsUpActiveCall(t *testing.T) {
 	}
 }
 
+func TestAgentAllowlistAcceptsSwitchKeyframeRequest(t *testing.T) {
+	srv := newAgentTestServer(t, &agentTrunkManagerStub{})
+	client := newAgentWSClient()
+	client.ownedSessionIDs = map[string]struct{}{"sess-1": {}}
+	ok, reason := srv.allowAgentWSMessage(client, WSMessage{Type: "request-keyframe", SessionID: "sess-1"})
+	if !ok {
+		t.Fatalf("request-keyframe rejected: %s", reason)
+	}
+	ok, reason = srv.allowAgentWSMessage(client, WSMessage{Type: "request-keyframe"})
+	if ok {
+		t.Fatal("request-keyframe without a session was allowed")
+	}
+}
+
 func TestAgentAllowlistRejectsTrunkPushToken(t *testing.T) {
 	srv := newAgentTestServer(t, &agentTrunkManagerStub{})
 	client := newAgentWSClient()

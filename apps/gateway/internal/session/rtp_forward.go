@@ -646,6 +646,16 @@ func (s *Session) rejectUplinkPictureSizeChangeLocked(payload []byte) bool {
 		if width == s.uplinkSPSWidth && height == s.uplinkSPSHeight {
 			continue
 		}
+		if s.allowNextUplinkPictureSize {
+			fmt.Printf("[%s] uplink_sps_dimension_switch accepted %dx%d was %dx%d\n",
+				s.ID, width, height, s.uplinkSPSWidth, s.uplinkSPSHeight)
+			s.uplinkSPSWidth = width
+			s.uplinkSPSHeight = height
+			s.allowNextUplinkPictureSize = false
+			s.uplinkSPSDimensionBlocked = false
+			s.uplinkSPSDimensionLogged = false
+			continue
+		}
 		s.uplinkSPSDimensionBlocked = true
 		if !s.uplinkSPSDimensionLogged {
 			s.uplinkSPSDimensionLogged = true
