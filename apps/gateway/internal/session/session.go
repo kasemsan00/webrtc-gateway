@@ -241,6 +241,17 @@ type Session struct {
 	CachedSPS               []byte    `json:"-"`
 	CachedPPS               []byte    `json:"-"`
 	LastSPSPPSInjectionTime time.Time `json:"-"` // Track last SPS/PPS injection for periodic re-injection
+	// Chrome packetization-mode 0 sends every IDR slice as its own NAL type 5.
+	// Inject parameter sets once per RTP timestamp, and skip that injection when
+	// this access unit already forwarded SPS and PPS. A second in-band copy
+	// resets TTRS OpenH264 and the old GL uploader reads past the YUV buffer.
+	uplinkSPSPPSTimestamp    uint32 `json:"-"`
+	uplinkSPSPPSTimestampSet bool   `json:"-"`
+	uplinkSPSPPSWarmupDone   bool   `json:"-"`
+	uplinkInBandTimestamp    uint32 `json:"-"`
+	uplinkInBandTimestampSet bool   `json:"-"`
+	uplinkInBandSPS          bool   `json:"-"`
+	uplinkInBandPPS          bool   `json:"-"`
 	// SIP-side cached SPS/PPS (SIP→WebRTC direction, from SIP endpoint's encoder)
 	// Used to inject parameter sets before keyframes forwarded to browser for decoder recovery.
 	SIPCachedSPS             []byte                `json:"-"`

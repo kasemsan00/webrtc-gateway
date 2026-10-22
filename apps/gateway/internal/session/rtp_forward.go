@@ -273,6 +273,9 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 			}
 
 			uplinkOpen := !s.LastUplinkKeyframe.IsZero()
+			if isSPS || isPPS {
+				s.noteUplinkInBandParameterSetLocked(packet.Header.Timestamp, isSPS, isPPS)
+			}
 
 			// Handle STAP-A: de-aggregate into multiple single-NAL RTP packets
 			// This ensures compatibility with decoders (like OpenH264/Linphone) that expect single NAL per packet
@@ -479,26 +482,16 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 				continue
 			}
 
-			// Inject SPS/PPS ONLY before IDR keyframe start (NAL=5 or FU-A start with type=5)
-			// This prevents SPS/PPS from breaking FU-A fragment chains
-			shouldInjectSPSPPS := false
-			if len(s.CachedSPS) > 0 && len(s.CachedPPS) > 0 {
-				// ONLY inject before IDR start (isKeyframe already detects this correctly)
-				if isKeyframe {
-					shouldInjectSPSPPS = true
-				}
-				// Periodic injection REMOVED to prevent mid-FU-A corruption
+			// Inject SPS/PPS once per IDR access unit. Packetization-mode 0 puts
+			// every slice in its own NAL type 5 packet, so a packet-count window
+			// repeats SPS/PPS in front of each slice and resets the far decoder.
+			redundancyCount := 0
+			if len(s.CachedSPS) > 0 && len(s.CachedPPS) > 0 && isKeyframe {
+				redundancyCount = s.uplinkKeyframeParameterSetCopiesLocked(packet.Header.Timestamp)
 			}
 
-			if shouldInjectSPSPPS {
+			if redundancyCount > 0 {
 				s.LastSPSPPSInjectionTime = time.Now()
-
-				// Send Separate SPS/PPS packets with forced NRI=3.
-				// Use a small warmup redundancy window at call startup for decoder reliability.
-				redundancyCount := 1
-				if isKeyframe && packetCount <= 120 {
-					redundancyCount = 2
-				}
 
 				for i := 0; i < redundancyCount; i++ {
 					// 1. Send SPS (with forced NRI=3)
@@ -597,6 +590,48 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 			fmt.Printf("[%s] ⚠️ Cannot forward %s: Asterisk endpoint not set yet\n", s.ID, kind)
 		}
 	}
+}
+
+// noteUplinkInBandParameterSetLocked records SPS/PPS already forwarded in this
+// RTP timestamp. The caller holds s.mu.
+func (s *Session) noteUplinkInBandParameterSetLocked(timestamp uint32, sps, pps bool) {
+	if !s.uplinkInBandTimestampSet || s.uplinkInBandTimestamp != timestamp {
+		s.uplinkInBandTimestamp = timestamp
+		s.uplinkInBandTimestampSet = true
+		s.uplinkInBandSPS = false
+		s.uplinkInBandPPS = false
+	}
+	if sps {
+		s.uplinkInBandSPS = true
+	}
+	if pps {
+		s.uplinkInBandPPS = true
+	}
+}
+
+// uplinkKeyframeParameterSetCopiesLocked reports how many SPS+PPS pairs to
+// send before this IDR packet. The caller holds s.mu. Zero means this packet
+// continues an access unit that already received parameter sets, or the
+// browser already sent SPS and PPS for this timestamp. The first access unit
+// that arrives without in-band sets gets two pairs; later ones get one.
+func (s *Session) uplinkKeyframeParameterSetCopiesLocked(timestamp uint32) int {
+	if s.uplinkSPSPPSTimestampSet && s.uplinkSPSPPSTimestamp == timestamp {
+		return 0
+	}
+	s.uplinkSPSPPSTimestamp = timestamp
+	s.uplinkSPSPPSTimestampSet = true
+	if s.uplinkInBandTimestampSet && s.uplinkInBandTimestamp == timestamp && s.uplinkInBandSPS && s.uplinkInBandPPS {
+		// Chrome mode 0 already emitted SPS and PPS as their own NALs. Another
+		// pair in front of each IDR restarts TTRS OpenH264; the GL upload then
+		// reads past the previous YUV allocation.
+		s.uplinkSPSPPSWarmupDone = true
+		return 0
+	}
+	if !s.uplinkSPSPPSWarmupDone {
+		s.uplinkSPSPPSWarmupDone = true
+		return 2
+	}
+	return 1
 }
 
 func (s *Session) cacheSTAPAParameterSetsLocked(payload []byte, packetCount int) {

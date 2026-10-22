@@ -475,6 +475,13 @@ func (s *Session) ResetMediaState() {
 	// We keep Offer/SDP-derived SPS/PPS as a fallback so SIP SDP can include sprop-parameter-sets
 	// even before RTP starts flowing. Early RTP parsing will still overwrite within the first packets.
 	s.LastSPSPPSInjectionTime = time.Time{}
+	s.uplinkSPSPPSTimestamp = 0
+	s.uplinkSPSPPSTimestampSet = false
+	s.uplinkSPSPPSWarmupDone = false
+	s.uplinkInBandTimestamp = 0
+	s.uplinkInBandTimestampSet = false
+	s.uplinkInBandSPS = false
+	s.uplinkInBandPPS = false
 
 	s.mediaForwardReady = false
 	s.UpdatedAt = time.Now()
