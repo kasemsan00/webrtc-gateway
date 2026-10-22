@@ -277,6 +277,9 @@ type Session struct {
 	switchKeyframeBurstGen     uint64        `json:"-"`
 	proactivePLINotBefore      time.Time     `json:"-"`
 	proactivePLIWake           chan struct{} `json:"-"`
+	sipInfoFIRAt               time.Time     `json:"-"`
+	sipAnswerSDP               []byte        `json:"-"`
+	lastBrowserPLIReason       string        `json:"-"`
 	// SIP-side cached SPS/PPS (SIP→WebRTC direction, from SIP endpoint's encoder)
 	// Used to inject parameter sets before keyframes forwarded to browser for decoder recovery.
 	SIPCachedSPS             []byte                `json:"-"`

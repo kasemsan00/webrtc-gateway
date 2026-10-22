@@ -95,17 +95,29 @@ func TestSwitchKeyframeResetsProactiveWaitToTwoSeconds(t *testing.T) {
 	}
 }
 
-func TestSIPInfoPLIFollowUpRespectsOneSecondCap(t *testing.T) {
+func TestSIPInfoFIRDebounceCollapsesRepeats(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
-	last := now
-	if !SIPInfoPLIShouldSend(last, now, false) {
-		t.Fatal("immediate INFO PLI must bypass the 1s cap")
+	if SIPInfoFIRDebounced(time.Time{}, now) {
+		t.Fatal("first VFU must not be debounced")
 	}
-	if SIPInfoPLIShouldSend(last, now.Add(300*time.Millisecond), true) {
-		t.Fatal("INFO follow-up at 300ms must stay inside the 1s cap")
+	if !SIPInfoFIRDebounced(now, now.Add(249*time.Millisecond)) {
+		t.Fatal("repeat inside 250ms must be debounced")
 	}
-	if !SIPInfoPLIShouldSend(last, now.Add(time.Second), true) {
-		t.Fatal("INFO follow-up at 1s must be allowed")
+	if SIPInfoFIRDebounced(now, now.Add(SIPInfoFIRDebounce)) {
+		t.Fatal("repeat at 250ms is a new VFU")
+	}
+	sess := &Session{ID: "info-debounce"}
+	if !sess.HandleSIPInfoPictureFastUpdate(now) {
+		t.Fatal("first INFO was debounced")
+	}
+	if sess.HandleSIPInfoPictureFastUpdate(now.Add(100 * time.Millisecond)) {
+		t.Fatal("repeat INFO sent another PLI")
+	}
+	if sess.LastBrowserPLIReason() != "sip_info_fir" {
+		t.Fatalf("reason %q", sess.LastBrowserPLIReason())
+	}
+	if !sess.HandleSIPInfoPictureFastUpdate(now.Add(SIPInfoFIRDebounce)) {
+		t.Fatal("INFO after the debounce window was ignored")
 	}
 }
 

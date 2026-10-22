@@ -121,6 +121,41 @@ func TestHandleINFORejectsWrongDialogTags(t *testing.T) {
 	assertResponseCodes(t, tx, []int{481})
 }
 
+func TestHandleActiveReINVITEReusesSDPAndRequestsPLI(t *testing.T) {
+	srv, sess := newMidCallTestServer(t, "call-reinvite")
+	stored := []byte("v=0\r\nm=audio 4000 RTP/AVP 107\r\na=rtpmap:107 opus/48000/2\r\nm=video 4002 RTP/AVP 96\r\na=rtpmap:96 H264/90000\r\na=fmtp:96 profile-level-id=42e01f;packetization-mode=1\r\n")
+	sess.RememberSIPAnswer(stored)
+	req := sip.NewRequest(sip.INVITE, sip.Uri{User: "1002", Host: "sip.example.com", Port: 5060})
+	req.AppendHeader(sip.NewHeader("Call-ID", "call-reinvite"))
+	req.AppendHeader(sip.NewHeader("From", "<sip:1001@example.com>;tag=remote-tag"))
+	req.AppendHeader(sip.NewHeader("To", "<sip:1002@example.com>;tag=local-tag"))
+	req.AppendHeader(sip.NewHeader("CSeq", "8 INVITE"))
+	req.AppendHeader(sip.NewHeader("Content-Type", "application/sdp"))
+	req.SetBody([]byte("v=0\r\nm=audio 18072 RTP/AVP 107\r\na=rtpmap:107 opus/48000/2\r\na=sendrecv\r\nm=video 18074 RTP/AVP 96\r\na=rtpmap:96 H264/90000\r\na=fmtp:96 profile-level-id=42801F;packetization-mode=0\r\na=sendrecv\r\n"))
+	tx := &midCallServerTxStub{}
+
+	srv.handleActiveReINVITE(req, tx, sess, "call-reinvite")
+
+	var answer *sip.Response
+	for _, res := range tx.responses {
+		if res != nil && res.StatusCode == 200 {
+			answer = res
+		}
+	}
+	if answer == nil {
+		t.Fatal("re-INVITE was not answered with 200")
+	}
+	if string(answer.Body()) != string(stored) {
+		t.Fatalf("answer SDP changed:\n%s", answer.Body())
+	}
+	if strings.Contains(string(answer.Body()), "42801F") || strings.Contains(string(answer.Body()), "packetization-mode=0") {
+		t.Fatalf("answer adopted the re-INVITE fmtp:\n%s", answer.Body())
+	}
+	if sess.LastBrowserPLIReason() != "sip_reinvite" {
+		t.Fatalf("PLI reason %q", sess.LastBrowserPLIReason())
+	}
+}
+
 func newInfoRequest(callID, contentType, body string) *sip.Request {
 	req := sip.NewRequest(sip.INFO, sip.Uri{User: "1002", Host: "sip.example.com", Port: 5060})
 	req.AppendHeader(sip.NewHeader("Call-ID", callID))

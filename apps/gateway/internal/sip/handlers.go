@@ -507,7 +507,12 @@ func (s *Server) handleActiveReINVITE(req *sip.Request, tx sip.ServerTransaction
 	if rtpPort <= 0 {
 		rtpPort = 4000
 	}
-	answerSDP := s.createSDPAnswerForInvite(rtpPort, sess, req.Body())
+	answerSDP := sess.SIPAnswerSDP()
+	if len(answerSDP) == 0 {
+		answerSDP = s.createSDPAnswerForInvite(rtpPort, sess, req.Body())
+		sess.RememberSIPAnswer(answerSDP)
+	}
+	fmt.Printf("[%s] sip_reinvite answered sdp=unchanged bytes=%d\n", sess.ID, len(answerSDP))
 	res := sip.NewResponseFromRequest(req, 200, "OK", answerSDP)
 	res.AppendHeader(&sip.ContactHeader{
 		Address: sip.Uri{Host: s.publicAddress, Port: s.sipPort},
@@ -517,6 +522,7 @@ func (s *Server) handleActiveReINVITE(req *sip.Request, tx sip.ServerTransaction
 		_ = sess.FailMidCallRenegotiation(started.ID, 500, err.Error())
 		return
 	}
+	sess.HandleSIPReinviteKeyframe(time.Now())
 	if !requiresClientRenegotiation {
 		_ = sess.CompleteMidCallRenegotiation(started.ID, string(answerSDP))
 	}

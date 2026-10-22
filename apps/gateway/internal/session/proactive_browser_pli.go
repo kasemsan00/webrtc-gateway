@@ -17,6 +17,9 @@ const (
 	ProactiveBrowserPLISteadyInterval = 4 * time.Second
 	// SwitchKeyframePLIFollowUp is the first retry after a switch request.
 	SwitchKeyframePLIFollowUp = 300 * time.Millisecond
+	// SIPInfoFIRDebounce collapses Linphone's repeated picture_fast_update
+	// INFOs. The SDK sends another VFU while the decoder is still broken.
+	SIPInfoFIRDebounce = 250 * time.Millisecond
 	// SwitchKeyframePLISecond is the second retry after a switch request.
 	SwitchKeyframePLISecond = time.Second
 )
@@ -152,19 +155,44 @@ func (s *Session) runSwitchKeyframeBurst(gen uint64) {
 	}
 }
 
-// HandleSIPInfoPictureFastUpdate is a SIP INFO picture_fast_update.
-// The first PLI bypasses the 400ms throttle and the 1s cap. The follow-up
-// 300ms later uses the 1s cap. The proactive schedule's next PLI is 2s later.
-func (s *Session) HandleSIPInfoPictureFastUpdate(now time.Time) {
+// HandleSIPInfoPictureFastUpdate is one Linphone VFU. Repeats inside
+// SIPInfoFIRDebounce do not send another PLI. An accepted request sends one
+// forced PLI and pulls the next proactive PLI forward to 2s.
+func (s *Session) HandleSIPInfoPictureFastUpdate(now time.Time) bool {
 	s.mu.Lock()
-	s.switchKeyframeBurstGen++
-	gen := s.switchKeyframeBurstGen
+	if SIPInfoFIRDebounced(s.sipInfoFIRAt, now) {
+		id := s.ID
+		s.mu.Unlock()
+		fmt.Printf("[%s] sip_info_fir debounced\n", id)
+		return false
+	}
+	s.sipInfoFIRAt = now
+	s.armBrowserIDRLocked(now)
+	s.mu.Unlock()
+	s.signalProactivePLIWake()
+	s.SendBrowserPLIImmediate("sip_info_fir")
+	return true
+}
+
+// HandleSIPReinviteKeyframe asks the browser for an IDR after a SIP re-INVITE.
+func (s *Session) HandleSIPReinviteKeyframe(now time.Time) {
+	s.mu.Lock()
+	s.armBrowserIDRLocked(now)
+	s.mu.Unlock()
+	s.signalProactivePLIWake()
+	fmt.Printf("[%s] sip_reinvite pli\n", s.ID)
+	s.SendBrowserPLIImmediate("sip_reinvite")
+}
+
+func (s *Session) armBrowserIDRLocked(now time.Time) {
 	s.switchKeyframeRequestedAt = now
 	s.switchKeyframeIDRPending = true
 	s.proactivePLINotBefore = now.Add(ProactiveBrowserPLIInitialInterval)
-	s.mu.Unlock()
-	s.signalProactivePLIWake()
-	go s.runSIPInfoPLI(gen)
+}
+
+// SIPInfoFIRDebounced reports whether this VFU is a repeat inside the window.
+func SIPInfoFIRDebounced(last, now time.Time) bool {
+	return !last.IsZero() && now.Sub(last) < SIPInfoFIRDebounce
 }
 
 // SIPInfoKeyframePending reports that an INFO picture_fast_update is waiting
@@ -178,41 +206,11 @@ func (s *Session) SIPInfoKeyframePending() bool {
 	return s.switchKeyframeIDRPending
 }
 
-func (s *Session) runSIPInfoPLI(gen uint64) {
-	ctx := s.ctx
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	s.SendBrowserPLIImmediate("sip_info_fir")
-	timer := time.NewTimer(SwitchKeyframePLIFollowUp)
-	select {
-	case <-ctx.Done():
-		timer.Stop()
-		return
-	case <-timer.C:
-	}
-	s.mu.Lock()
-	current := s.switchKeyframeBurstGen
-	s.mu.Unlock()
-	if current != gen {
-		return
-	}
-	s.SendBrowserPLI("sip_info_fir")
-}
-
-// SIPInfoPLIShouldSend reports whether an INFO-triggered PLI is allowed.
-// The immediate request bypasses the 1s cap. The follow-up does not.
-func SIPInfoPLIShouldSend(lastSent, now time.Time, followUp bool) bool {
-	if !followUp {
-		return true
-	}
-	return !webrtcPLIThrottled(true, lastSent, now)
-}
-
 // SendBrowserPLIImmediate writes one browser PLI even when one was sent in
 // the last second. Forced sends still skip the 400ms window.
 func (s *Session) SendBrowserPLIImmediate(reason string) bool {
 	s.mu.Lock()
+	s.lastBrowserPLIReason = reason
 	saved := s.LastWebRTCPLISent
 	s.LastWebRTCPLISent = time.Time{}
 	snapshot := s.prepareWebRTCFeedbackLocked("pli", true, nil)
@@ -238,6 +236,7 @@ func (s *Session) SendBrowserPLIImmediate(reason string) bool {
 // window and still honor the 1s overall cap. True only after WriteRTCP succeeds.
 func (s *Session) SendBrowserPLI(reason string) bool {
 	s.mu.Lock()
+	s.lastBrowserPLIReason = reason
 	snapshot := s.prepareWebRTCFeedbackLocked("pli", true, nil)
 	id := s.ID
 	throttled := snapshot.throttled
@@ -252,6 +251,39 @@ func (s *Session) SendBrowserPLI(reason string) bool {
 	}
 	fmt.Printf("[%s] browser_pli sent reason=%s\n", id, reason)
 	return true
+}
+
+// LastBrowserPLIReason is the most recent browser-PLI reason this session attempted.
+func (s *Session) LastBrowserPLIReason() string {
+	if s == nil {
+		return ""
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.lastBrowserPLIReason
+}
+
+// RememberSIPAnswer stores the SDP body we last answered with.
+func (s *Session) RememberSIPAnswer(sdp []byte) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.sipAnswerSDP = append([]byte(nil), sdp...)
+	s.mu.Unlock()
+}
+
+// SIPAnswerSDP returns a copy of the last SIP SDP answer, or nil.
+func (s *Session) SIPAnswerSDP() []byte {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if len(s.sipAnswerSDP) == 0 {
+		return nil
+	}
+	return append([]byte(nil), s.sipAnswerSDP...)
 }
 
 // HasSIPKeyframeRequest reports whether SIP RTCP has ever carried PLI or FIR.

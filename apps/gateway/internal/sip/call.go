@@ -816,6 +816,7 @@ func (s *Server) acceptCall(sess *session.Session) error {
 
 	// Create SDP answer using negotiated Opus PT and constraints from INVITE offer.
 	sdpOffer := s.createSDPAnswerForInvite(rtpPort, sess, inviteBody)
+	sess.RememberSIPAnswer(sdpOffer)
 
 	// Create 200 OK response using original request
 	okRes := sip.NewResponseFromRequest(req, 200, "OK", sdpOffer)
