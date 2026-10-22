@@ -102,11 +102,8 @@ func newGatewayWebRTCAPI(twccEnabled bool, sessionID string) (*webrtc.API, error
 	if err != nil {
 		return nil, err
 	}
-	registry := &interceptor.Registry{}
-	// Registered first so receiver reports and our TWCC sender both pass
-	// through the accounting writer, and RTP reads never block on feedback.
-	registry.Add(&browserFeedbackFactory{sessionID: sessionID, twcc: twccEnabled})
-	if err := webrtc.ConfigureRTCPReports(registry); err != nil {
+	registry, err := gatewayInterceptorRegistry(twccEnabled, sessionID)
+	if err != nil {
 		return nil, err
 	}
 	if twccEnabled {
@@ -118,6 +115,18 @@ func newGatewayWebRTCAPI(twccEnabled bool, sessionID string) (*webrtc.API, error
 		webrtc.WithMediaEngine(mediaEngine),
 		webrtc.WithInterceptorRegistry(registry),
 	), nil
+}
+
+// gatewayInterceptorRegistry is the interceptor chain installed on every
+// gateway PeerConnection. browserFeedback is first so it sees RTP before the
+// report interceptor and so RR writes pass through its accounting wrapper.
+func gatewayInterceptorRegistry(twccEnabled bool, sessionID string) (*interceptor.Registry, error) {
+	registry := &interceptor.Registry{}
+	registry.Add(&browserFeedbackFactory{sessionID: sessionID, twcc: twccEnabled})
+	if err := webrtc.ConfigureRTCPReports(registry); err != nil {
+		return nil, err
+	}
+	return registry, nil
 }
 
 func registerTransportCC(mediaEngine *webrtc.MediaEngine) error {

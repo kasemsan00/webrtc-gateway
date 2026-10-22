@@ -103,7 +103,32 @@ func TestH264Mode0ReassemblerDropsOversizedFUA(t *testing.T) {
 func TestH264Mode0ReassemblerDropsUnsupportedAggregationPacket(t *testing.T) {
 	r := h264Mode0Reassembler{}
 	packet := &rtp.Packet{Payload: []byte{0x79, 0x01}} // STAP-B (NAL type 25)
-	if decision := r.push(packet); decision.packet != nil || decision.result != h264Mode0Dropped || decision.reason != "malformed-fua" {
-		t.Fatalf("STAP-B result = (%v, %v, %s), want dropped malformed", decision.packet, decision.result, decision.reason)
+	decision := r.push(packet)
+	if decision.packet != nil || decision.result != h264Mode0Dropped || decision.reason != "unsupported-nal" || mode0DropArmsRecovery(decision.reason) {
+		t.Fatalf("STAP-B result = (%v, %v, %s), want an ignored unsupported NAL", decision.packet, decision.result, decision.reason)
+	}
+}
+
+func TestH264Mode0ReassemblerKeepsSmallFrames(t *testing.T) {
+	r := h264Mode0Reassembler{}
+	small := &rtp.Packet{Payload: []byte{0x65}}
+	if decision := r.push(small); decision.result != h264Mode0Passthrough || decision.packet != small {
+		t.Fatalf("1-byte IDR = %v %s", decision.result, decision.reason)
+	}
+
+	onePacket := r.push(mode0FUAPacket(7, 1000, true, true, 1, []byte{0x88}))
+	if onePacket.result != h264Mode0Reassembled || onePacket.reason != "" {
+		t.Fatalf("single-packet FU-A = %v %s", onePacket.result, onePacket.reason)
+	}
+	if want := []byte{0x61, 0x88}; !bytes.Equal(onePacket.packet.Payload, want) {
+		t.Fatalf("single-packet payload = %x, want %x", onePacket.packet.Payload, want)
+	}
+
+	headerOnly := r.push(&rtp.Packet{Payload: []byte{0x7c, 0xc5}})
+	if headerOnly.result != h264Mode0Reassembled || mode0DropArmsRecovery(headerOnly.reason) {
+		t.Fatalf("empty start+end FU-A = %v %s", headerOnly.result, headerOnly.reason)
+	}
+	if want := []byte{0x65}; !bytes.Equal(headerOnly.packet.Payload, want) {
+		t.Fatalf("header-only payload = %x", headerOnly.packet.Payload)
 	}
 }

@@ -20,8 +20,9 @@ const (
 	// SIPInfoFIRDebounce collapses Linphone's repeated picture_fast_update
 	// INFOs. The SDK sends another VFU while the decoder is still broken.
 	SIPInfoFIRDebounce = 250 * time.Millisecond
-	// Mode0DropPLIDebounce collapses PLIs while one broken FU-A frame is dropped.
-	Mode0DropPLIDebounce = 250 * time.Millisecond
+	// Mode0DropPLIRetry is the earliest a second mode0_drop PLI may be sent
+	// while the gateway is still waiting for the IDR from the first one.
+	Mode0DropPLIRetry = 2 * time.Second
 	// SwitchKeyframePLISecond is the second retry after a switch request.
 	SwitchKeyframePLISecond = time.Second
 )
@@ -255,15 +256,13 @@ func (s *Session) SendBrowserPLI(reason string) bool {
 	return true
 }
 
-// NoteMode0Drop records one bad mode-0 frame. Repeats inside Mode0DropPLIDebounce
-// do not send another PLI. The caller sends the PLI off the RTP read goroutine.
-// Forwarding stays held until the next IDR, then resumes.
+// NoteMode0Drop records one bad mode-0 frame. One PLI is sent for the wait.
+// Further broken frames do not send another until Mode0DropPLIRetry has passed
+// with no IDR, or the IDR arrives and a later frame breaks. The caller sends
+// the PLI off the RTP read goroutine.
 func (s *Session) NoteMode0Drop(now time.Time, reason string, nalBytes int) bool {
-	if s == nil {
+	if s == nil || !mode0DropArmsRecovery(reason) {
 		return false
-	}
-	if reason == "" {
-		reason = "discontinuous-fua"
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -275,7 +274,7 @@ func (s *Session) NoteMode0Drop(now time.Time, reason string, nalBytes int) bool
 	if reason == "oversized-fua" {
 		fmt.Printf("[%s] h264_mode0_oversized nal_bytes=%d\n", s.ID, nalBytes)
 	}
-	if !s.mode0PLIAt.IsZero() && now.Sub(s.mode0PLIAt) < Mode0DropPLIDebounce {
+	if !s.mode0PLIAt.IsZero() && now.Sub(s.mode0PLIAt) < Mode0DropPLIRetry {
 		return false
 	}
 	s.mode0PLIAt = now
@@ -302,6 +301,7 @@ func (s *Session) holdUplinkForMode0Locked(isIDR bool) bool {
 		return true
 	}
 	s.mode0NeedsIDR = false
+	s.mode0PLIAt = time.Time{}
 	s.uplinkStallSince = time.Time{}
 	s.uplinkStallReason = ""
 	s.uplinkStallLogAt = time.Time{}

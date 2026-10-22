@@ -192,14 +192,17 @@ func TestObserveUplinkVideoForward(t *testing.T) {
 	}
 }
 
-func TestMode0DropDebounceHoldsUntilIDR(t *testing.T) {
+func TestMode0DropPLIIsOnePerIDRWait(t *testing.T) {
 	sess := &Session{ID: "mode0"}
 	now := time.Unix(1_700_000_100, 0)
 	if !sess.NoteMode0Drop(now, "discontinuous-fua", 0) {
 		t.Fatal("first discontinuous FU-A did not request a PLI")
 	}
-	if sess.NoteMode0Drop(now.Add(100*time.Millisecond), "discontinuous-fua", 0) {
-		t.Fatal("repeat inside 250ms requested another PLI")
+	if sess.NoteMode0Drop(now.Add(260*time.Millisecond), "discontinuous-fua", 0) {
+		t.Fatal("second drop inside the IDR wait requested another PLI")
+	}
+	if sess.NoteMode0Drop(now.Add(520*time.Millisecond), "malformed-fua", 0) {
+		t.Fatal("non-frame reason requested a PLI")
 	}
 	if sess.LastBrowserPLIReason() != "mode0_drop" {
 		t.Fatalf("PLI reason %q", sess.LastBrowserPLIReason())
@@ -207,14 +210,17 @@ func TestMode0DropDebounceHoldsUntilIDR(t *testing.T) {
 	if !sess.UplinkHeldForMode0Recovery(false) {
 		t.Fatal("P-frame was forwarded while the broken frame was outstanding")
 	}
+	if !sess.NoteMode0Drop(now.Add(Mode0DropPLIRetry), "discontinuous-fua", 0) {
+		t.Fatal("retry after the IDR timeout was ignored")
+	}
 	if sess.UplinkHeldForMode0Recovery(true) {
 		t.Fatal("IDR was held after mode-0 recovery")
 	}
 	if sess.UplinkHeldForMode0Recovery(false) {
 		t.Fatal("P-frame stayed held after the IDR")
 	}
-	if !sess.NoteMode0Drop(now.Add(Mode0DropPLIDebounce), "oversized-fua", 90000) {
-		t.Fatal("drop after the debounce window was ignored")
+	if !sess.NoteMode0Drop(now.Add(Mode0DropPLIRetry+time.Millisecond), "oversized-fua", 90000) {
+		t.Fatal("a new broken frame after the IDR did not request a PLI")
 	}
 }
 

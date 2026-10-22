@@ -121,8 +121,13 @@ func (b *browserFeedback) observe(ssrc uint32, extensionID uint8, video bool, bu
 }
 
 func transportSequence(extensionID uint8, buf []byte, attr interceptor.Attributes) (uint16, bool) {
-	if extensionID == 0 || attr == nil {
+	if extensionID == 0 || len(buf) == 0 {
 		return 0, false
+	}
+	// Pion's SRTP reader returns the attributes it was given. Track.Read
+	// passes nil, so the header has to be unmarshalled from the packet bytes.
+	if attr == nil {
+		attr = interceptor.Attributes{}
 	}
 	header, err := attr.GetRTPHeader(buf)
 	if err != nil || header == nil {

@@ -49,6 +49,7 @@ func TestGatewayWebRTCAPIAdvertisesTWCC(t *testing.T) {
 		"a=rtcp-fb:96 nack pli",
 		"a=rtcp-fb:96 ccm fir",
 		"a=rtcp-fb:96 transport-cc",
+		"a=extmap:",
 		transportCCURI,
 	} {
 		if !strings.Contains(sdp, want) {
