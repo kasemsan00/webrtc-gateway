@@ -152,6 +152,88 @@ func (s *Session) runSwitchKeyframeBurst(gen uint64) {
 	}
 }
 
+// HandleSIPInfoPictureFastUpdate is a SIP INFO picture_fast_update.
+// The first PLI bypasses the 400ms throttle and the 1s cap. The follow-up
+// 300ms later uses the 1s cap. The proactive schedule's next PLI is 2s later.
+func (s *Session) HandleSIPInfoPictureFastUpdate(now time.Time) {
+	s.mu.Lock()
+	s.switchKeyframeBurstGen++
+	gen := s.switchKeyframeBurstGen
+	s.switchKeyframeRequestedAt = now
+	s.switchKeyframeIDRPending = true
+	s.proactivePLINotBefore = now.Add(ProactiveBrowserPLIInitialInterval)
+	s.mu.Unlock()
+	s.signalProactivePLIWake()
+	go s.runSIPInfoPLI(gen)
+}
+
+// SIPInfoKeyframePending reports that an INFO picture_fast_update is waiting
+// for the next uplink IDR.
+func (s *Session) SIPInfoKeyframePending() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.switchKeyframeIDRPending
+}
+
+func (s *Session) runSIPInfoPLI(gen uint64) {
+	ctx := s.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	s.SendBrowserPLIImmediate("sip_info_fir")
+	timer := time.NewTimer(SwitchKeyframePLIFollowUp)
+	select {
+	case <-ctx.Done():
+		timer.Stop()
+		return
+	case <-timer.C:
+	}
+	s.mu.Lock()
+	current := s.switchKeyframeBurstGen
+	s.mu.Unlock()
+	if current != gen {
+		return
+	}
+	s.SendBrowserPLI("sip_info_fir")
+}
+
+// SIPInfoPLIShouldSend reports whether an INFO-triggered PLI is allowed.
+// The immediate request bypasses the 1s cap. The follow-up does not.
+func SIPInfoPLIShouldSend(lastSent, now time.Time, followUp bool) bool {
+	if !followUp {
+		return true
+	}
+	return !webrtcPLIThrottled(true, lastSent, now)
+}
+
+// SendBrowserPLIImmediate writes one browser PLI even when one was sent in
+// the last second. Forced sends still skip the 400ms window.
+func (s *Session) SendBrowserPLIImmediate(reason string) bool {
+	s.mu.Lock()
+	saved := s.LastWebRTCPLISent
+	s.LastWebRTCPLISent = time.Time{}
+	snapshot := s.prepareWebRTCFeedbackLocked("pli", true, nil)
+	if !snapshot.ready {
+		s.LastWebRTCPLISent = saved
+	}
+	id := s.ID
+	throttled := snapshot.throttled
+	ready := snapshot.ready
+	s.mu.Unlock()
+	if throttled {
+		fmt.Printf("[%s] browser_pli throttled reason=%s\n", id, reason)
+		return false
+	}
+	if !ready || !sendPreparedWebRTCFeedback(id, snapshot) {
+		return false
+	}
+	fmt.Printf("[%s] browser_pli sent reason=%s\n", id, reason)
+	return true
+}
+
 // SendBrowserPLI writes one PLI to the browser. Forced sends bypass the 400ms
 // window and still honor the 1s overall cap. True only after WriteRTCP succeeds.
 func (s *Session) SendBrowserPLI(reason string) bool {

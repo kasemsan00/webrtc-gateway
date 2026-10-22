@@ -62,6 +62,12 @@ func (s *Server) setupHandlers() {
 		s.handleMESSAGE(req, tx)
 	})
 
+	// Handle INFO (picture_fast_update, DTMF). sipgo otherwise logs
+	// "SIP request handler not found" and never answers the dialog.
+	s.sipServer.OnInfo(func(req *sip.Request, tx sip.ServerTransaction) {
+		s.handleINFO(req, tx)
+	})
+
 	// Handle UPDATE requests (mid-dialog session refresh / SDP update)
 	s.sipServer.OnUpdate(func(req *sip.Request, tx sip.ServerTransaction) {
 		s.handleUPDATE(req, tx)

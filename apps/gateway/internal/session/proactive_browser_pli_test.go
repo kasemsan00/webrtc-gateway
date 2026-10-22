@@ -95,6 +95,20 @@ func TestSwitchKeyframeResetsProactiveWaitToTwoSeconds(t *testing.T) {
 	}
 }
 
+func TestSIPInfoPLIFollowUpRespectsOneSecondCap(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	last := now
+	if !SIPInfoPLIShouldSend(last, now, false) {
+		t.Fatal("immediate INFO PLI must bypass the 1s cap")
+	}
+	if SIPInfoPLIShouldSend(last, now.Add(300*time.Millisecond), true) {
+		t.Fatal("INFO follow-up at 300ms must stay inside the 1s cap")
+	}
+	if !SIPInfoPLIShouldSend(last, now.Add(time.Second), true) {
+		t.Fatal("INFO follow-up at 1s must be allowed")
+	}
+}
+
 func TestSwitchBrowserPLIRespectsOneSecondCap(t *testing.T) {
 	sess := &Session{ID: "switch-cap"}
 	sess.LastWebRTCPLISent = time.Now()
