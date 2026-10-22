@@ -25,6 +25,13 @@ const (
 	Mode0DropPLIRetry = 2 * time.Second
 	// SwitchKeyframePLISecond is the second retry after a switch request.
 	SwitchKeyframePLISecond = time.Second
+	// BrowserIDRRequestMinGap is the closest two browser IDR requests may be,
+	// whatever asked: SIP INFO, its retry, mode0 recovery, a switch, or the
+	// proactive schedule. Chrome ignores a PLI inside this window after an IDR.
+	BrowserIDRRequestMinGap = 500 * time.Millisecond
+	// SIPInfoFIRRetryCap bounds how many times one VFU is retried while the
+	// browser still has not forwarded a newer IDR.
+	SIPInfoFIRRetryCap = 6
 )
 
 // ProactiveBrowserPLIInterval is the wait before the next browser PLI.
@@ -54,7 +61,17 @@ func (s *Session) NoteSIPKeyframeRequest(kind string) {
 // written in the last second. The bool is true only after WriteRTCP succeeds.
 func (s *Session) SendProactivePLIToWebRTC() bool {
 	s.mu.Lock()
+	now := time.Now()
+	if !browserIDRRequestAllowed(s.lastBrowserIDRRequest, now) {
+		id := s.ID
+		s.mu.Unlock()
+		fmt.Printf("[%s] browser_pli coalesced reason=proactive\n", id)
+		return false
+	}
 	snapshot := s.prepareWebRTCFeedbackLocked("pli", true, nil)
+	if snapshot.ready && !snapshot.throttled {
+		s.lastBrowserIDRRequest = now
+	}
 	id := s.ID
 	s.mu.Unlock()
 	if snapshot.throttled || !snapshot.ready {
@@ -159,8 +176,9 @@ func (s *Session) runSwitchKeyframeBurst(gen uint64) {
 }
 
 // HandleSIPInfoPictureFastUpdate is one Linphone VFU. Repeats inside
-// SIPInfoFIRDebounce do not send another PLI. An accepted request sends one
-// forced PLI and pulls the next proactive PLI forward to 2s.
+// SIPInfoFIRDebounce do not send another PLI. A VFU that arrives while Chrome
+// is still inside its post-IDR ignore window does not send immediately; it
+// schedules sip_info_fir_retry for when that window ends.
 func (s *Session) HandleSIPInfoPictureFastUpdate(now time.Time) bool {
 	s.mu.Lock()
 	if SIPInfoFIRDebounced(s.sipInfoFIRAt, now) {
@@ -171,10 +189,87 @@ func (s *Session) HandleSIPInfoPictureFastUpdate(now time.Time) bool {
 	}
 	s.sipInfoFIRAt = now
 	s.armBrowserIDRLocked(now)
+	s.firIDRSliceLog = true
+	s.firIDRSliceTS = 0
+	s.firIDRSliceTSSet = false
+	wait, retry := SIPInfoFIRRetryWait(s.uplinkVideoLastIDR, now)
+	var gen uint64
+	if retry && !s.sipInfoFIRRetryActive {
+		s.sipInfoFIRRetryGen++
+		gen = s.sipInfoFIRRetryGen
+		s.sipInfoFIRRetryActive = true
+	}
+	id := s.ID
 	s.mu.Unlock()
 	s.signalProactivePLIWake()
+	if retry {
+		fmt.Printf("[%s] sip_info_fir deferred retry_in=%s\n", id, wait.Round(time.Millisecond))
+		if gen != 0 {
+			go s.runSIPInfoFIRRetry(gen, now, wait)
+		}
+		return true
+	}
 	s.SendBrowserPLIImmediate("sip_info_fir")
 	return true
+}
+
+// SIPInfoFIRRetryWait is the delay before the first retry when fir landed
+// inside Chrome's post-IDR window. The retry itself is one IDR request and
+// still has to pass BrowserIDRRequestMinGap.
+func SIPInfoFIRRetryWait(lastIDR, fir time.Time) (time.Duration, bool) {
+	if lastIDR.IsZero() || !fir.After(lastIDR) {
+		return 0, false
+	}
+	since := fir.Sub(lastIDR)
+	if since >= BrowserIDRRequestMinGap {
+		return 0, false
+	}
+	return BrowserIDRRequestMinGap - since, true
+}
+
+func browserIDRRequestAllowed(last, now time.Time) bool {
+	if last.IsZero() {
+		return true
+	}
+	return now.Sub(last) >= BrowserIDRRequestMinGap
+}
+
+func (s *Session) runSIPInfoFIRRetry(gen uint64, firAt time.Time, firstWait time.Duration) {
+	ctx := s.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	defer func() {
+		s.mu.Lock()
+		if s.sipInfoFIRRetryGen == gen {
+			s.sipInfoFIRRetryActive = false
+		}
+		s.mu.Unlock()
+	}()
+	timer := time.NewTimer(firstWait)
+	defer timer.Stop()
+	for n := 0; n < SIPInfoFIRRetryCap; n++ {
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+		}
+		s.mu.Lock()
+		stale := s.sipInfoFIRRetryGen != gen
+		satisfied := s.uplinkVideoIDRTimestampSeen && s.uplinkVideoLastIDR.After(firAt)
+		s.mu.Unlock()
+		if stale || satisfied {
+			return
+		}
+		s.SendBrowserPLIImmediate("sip_info_fir_retry")
+		timer.Reset(SIPInfoFIRRetryGap())
+	}
+}
+
+// SIPInfoFIRRetryGap is the spacing between retry PLIs after the first one
+// has waited out Chrome's post-IDR window.
+func SIPInfoFIRRetryGap() time.Duration {
+	return BrowserIDRRequestMinGap
 }
 
 // HandleSIPReinviteKeyframe asks the browser for an IDR after a SIP re-INVITE.
@@ -213,10 +308,20 @@ func (s *Session) SIPInfoKeyframePending() bool {
 // the last second. Forced sends still skip the 400ms window.
 func (s *Session) SendBrowserPLIImmediate(reason string) bool {
 	s.mu.Lock()
+	now := time.Now()
+	if !browserIDRRequestAllowed(s.lastBrowserIDRRequest, now) {
+		id := s.ID
+		s.mu.Unlock()
+		fmt.Printf("[%s] browser_pli coalesced reason=%s\n", id, reason)
+		return false
+	}
 	s.lastBrowserPLIReason = reason
 	saved := s.LastWebRTCPLISent
 	s.LastWebRTCPLISent = time.Time{}
 	snapshot := s.prepareWebRTCFeedbackLocked("pli", true, nil)
+	if snapshot.ready && !snapshot.throttled {
+		s.lastBrowserIDRRequest = now
+	}
 	if !snapshot.ready {
 		s.LastWebRTCPLISent = saved
 	}
@@ -239,8 +344,18 @@ func (s *Session) SendBrowserPLIImmediate(reason string) bool {
 // window and still honor the 1s overall cap. True only after WriteRTCP succeeds.
 func (s *Session) SendBrowserPLI(reason string) bool {
 	s.mu.Lock()
+	now := time.Now()
+	if !browserIDRRequestAllowed(s.lastBrowserIDRRequest, now) {
+		id := s.ID
+		s.mu.Unlock()
+		fmt.Printf("[%s] browser_pli coalesced reason=%s\n", id, reason)
+		return false
+	}
 	s.lastBrowserPLIReason = reason
 	snapshot := s.prepareWebRTCFeedbackLocked("pli", true, nil)
+	if snapshot.ready && !snapshot.throttled {
+		s.lastBrowserIDRRequest = now
+	}
 	id := s.ID
 	throttled := snapshot.throttled
 	ready := snapshot.ready

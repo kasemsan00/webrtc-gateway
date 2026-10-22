@@ -307,8 +307,15 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 			}
 
 			uplinkOpen := !s.LastUplinkKeyframe.IsZero()
+			// STAP-A learns whether it contains an IDR only after the inner scan.
+			// Probing the hold here would drop that IDR or clear mode-0 recovery
+			// before the scan runs.
+			held := false
+			if !isSTAPA {
+				held = s.holdUplinkForMode0Locked(isKeyframe) || holdUplinkVideoUntilIDR(uplinkOpen, isKeyframe)
+			}
 			if isSPS || isPPS {
-				s.noteUplinkInBandParameterSetLocked(packet.Header.Timestamp, isSPS, isPPS)
+				s.recordUplinkParameterSetIfForwarded(held, packet.Header.Timestamp, isSPS, isPPS)
 			}
 
 			// Handle STAP-A: de-aggregate into multiple single-NAL RTP packets
@@ -493,30 +500,18 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 				s.mu.Unlock()
 				// Flush buffered writes outside lock. Never record an uplink
 				// IDR while holding s.mu — RecordUplinkKeyframe takes the same lock.
-				if stapaForwarded && s.paceUplinkVideo() {
-					for _, w := range pendingWrites {
-						s.enqueueUplinkVideo(conn, destAddr, w, containsIDR, packet.Header.Timestamp, packetCount)
-					}
-					continue
-				}
-				for _, w := range pendingWrites {
-					_, _ = conn.WriteToUDP(w, destAddr)
-				}
-				if containsIDR {
-					if stapaForwarded {
-						s.RecordUplinkKeyframe()
-						fmt.Printf("[%s] 🔑 KEYFRAME (STAP-A IDR) forwarded in video packet #%d → Asterisk\n", s.ID, packetCount)
-					} else {
-						fmt.Printf("[%s] 🔑 KEYFRAME (STAP-A IDR) held in video packet #%d - Asterisk endpoint not set yet\n", s.ID, packetCount)
-					}
-				}
+				// The picture hold assigns the marker and logs one IDR per picture.
 				if stapaForwarded {
-					s.ObserveUplinkVideoForward(containsIDR, packet.Header.Timestamp, time.Now())
+					for _, w := range pendingWrites {
+						s.enqueueUplinkVideo(conn, destAddr, w, false, packet.Header.Timestamp, packetCount)
+					}
+				} else if containsIDR {
+					fmt.Printf("[%s] 🔑 KEYFRAME (STAP-A IDR) held in video packet #%d - Asterisk endpoint not set yet\n", s.ID, packetCount)
 				}
 				continue // STAP-A handled, skip normal forwarding
 			}
 
-			if s.holdUplinkForMode0Locked(isKeyframe) || holdUplinkVideoUntilIDR(uplinkOpen, isKeyframe) {
+			if held {
 				s.mu.Unlock()
 				heldUntilIDR++
 				if heldUntilIDR <= 5 || heldUntilIDR%100 == 0 {
@@ -601,10 +596,12 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 		}
 		s.mu.Unlock()
 
-		pacedVideo := kind == "video" && s.paceUplinkVideo() && destAddr != nil && conn != nil
+		videoForward := kind == "video" && destAddr != nil && conn != nil
 		// Flush any buffered SPS/PPS injection writes outside lock.
-		// Video datagrams go through the pacer; audio stays on this loop.
-		if pacedVideo {
+		// Video datagrams share one picture hold so slices keep their timestamp
+		// and only the last slice of that timestamp gets the marker. Audio stays
+		// on this loop.
+		if videoForward {
 			for _, w := range pendingWrites {
 				s.enqueueUplinkVideo(conn, destAddr, w, false, packet.Header.Timestamp, packetCount)
 			}
@@ -628,21 +625,10 @@ func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
 					s.ID, kind, packetCount, packet.Header.SequenceNumber, packet.Header.SSRC, len(outBuf), destAddr)
 			}
 
-			if pacedVideo {
+			if videoForward {
 				s.enqueueUplinkVideo(conn, destAddr, outBuf, isKeyframe, packet.Header.Timestamp, packetCount)
-			} else {
-				_, err = conn.WriteToUDP(outBuf, destAddr)
-				if err != nil {
-					if packetCount <= 5 {
-						fmt.Printf("[%s] Error forwarding %s to Asterisk: %v\n", s.ID, kind, err)
-					}
-				} else if kind == "video" {
-					if isKeyframe {
-						s.RecordUplinkKeyframe()
-						fmt.Printf("[%s] 🔑 KEYFRAME (Forwarded) detected in video packet #%d → Asterisk\n", s.ID, packetCount)
-					}
-					s.ObserveUplinkVideoForward(isKeyframe, packet.Header.Timestamp, time.Now())
-				}
+			} else if _, err = conn.WriteToUDP(outBuf, destAddr); err != nil && packetCount <= 5 {
+				fmt.Printf("[%s] Error forwarding %s to Asterisk: %v\n", s.ID, kind, err)
 			}
 		} else if packetCount == 1 {
 			fmt.Printf("[%s] ⚠️ Cannot forward %s: Asterisk endpoint not set yet\n", s.ID, kind)
@@ -707,6 +693,16 @@ func (s *Session) rejectUplinkPictureSizeChangeLocked(payload []byte) bool {
 		return true
 	}
 	return false
+}
+
+// recordUplinkParameterSetIfForwarded notes in-band SPS/PPS only when this
+// packet is actually sent. A set dropped while waiting for an IDR must not
+// suppress the injection that the following IDR needs. The caller holds s.mu.
+func (s *Session) recordUplinkParameterSetIfForwarded(held bool, timestamp uint32, sps, pps bool) {
+	if held {
+		return
+	}
+	s.noteUplinkInBandParameterSetLocked(timestamp, sps, pps)
 }
 
 // noteUplinkInBandParameterSetLocked records SPS/PPS already forwarded in this

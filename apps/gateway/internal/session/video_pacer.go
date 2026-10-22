@@ -41,15 +41,18 @@ type pacedVideoPacket struct {
 	enqueued    time.Time
 	released    time.Time
 	keyframe    bool
+	marker      bool
 	rtpTS       uint32
 	packetCount int
 	write       func()
 }
 
 type idrAccount struct {
+	ts           uint32
 	packets      int
 	bytes        int
 	pending      int
+	closed       bool
 	firstEnqueue time.Time
 	lastEnqueue  time.Time
 	firstRelease time.Time
@@ -57,10 +60,11 @@ type idrAccount struct {
 }
 
 type idrSizeEvent struct {
-	Packets int
-	Bytes   int
-	Burst   time.Duration
-	Paced   time.Duration
+	Timestamp uint32
+	Packets   int
+	Bytes     int
+	Burst     time.Duration
+	Paced     time.Duration
 }
 
 type videoPacer struct {
@@ -93,10 +97,16 @@ func (p *videoPacer) Enqueue(pkt pacedVideoPacket) {
 	if !pkt.keyframe {
 		return
 	}
+	// A picture can arrive in several bursts. Closing the account every time
+	// pending hits zero splits one multi-slice IDR into several logs.
+	p.finishIdleIDR(pkt.rtpTS)
 	acc := p.idrs[pkt.rtpTS]
 	if acc == nil {
-		acc = &idrAccount{firstEnqueue: pkt.enqueued}
+		acc = &idrAccount{ts: pkt.rtpTS, firstEnqueue: pkt.enqueued}
 		p.idrs[pkt.rtpTS] = acc
+	}
+	if pkt.marker {
+		acc.closed = true
 	}
 	acc.packets++
 	acc.bytes += pkt.size
@@ -189,16 +199,37 @@ func (p *videoPacer) noteRelease(pkt pacedVideoPacket, now time.Time) {
 	}
 	acc.lastRelease = now
 	acc.pending--
-	if acc.pending > 0 {
+	if acc.pending > 0 || !acc.closed {
+		return
+	}
+	p.logIDR(acc)
+	delete(p.idrs, pkt.rtpTS)
+}
+
+// finishIdleIDR closes a picture whose packets have all been released once a
+// later timestamp starts. Slices of the timestamp being enqueued stay open
+// until their marker packet is released.
+func (p *videoPacer) finishIdleIDR(except uint32) {
+	for ts, acc := range p.idrs {
+		if ts == except || acc == nil || acc.pending > 0 {
+			continue
+		}
+		p.logIDR(acc)
+		delete(p.idrs, ts)
+	}
+}
+
+func (p *videoPacer) logIDR(acc *idrAccount) {
+	if acc == nil || acc.packets == 0 {
 		return
 	}
 	p.logs = append(p.logs, idrSizeEvent{
-		Packets: acc.packets,
-		Bytes:   acc.bytes,
-		Burst:   acc.lastEnqueue.Sub(acc.firstEnqueue),
-		Paced:   acc.lastRelease.Sub(acc.firstRelease),
+		Timestamp: acc.ts,
+		Packets:   acc.packets,
+		Bytes:     acc.bytes,
+		Burst:     acc.lastEnqueue.Sub(acc.firstEnqueue),
+		Paced:     acc.lastRelease.Sub(acc.firstRelease),
 	})
-	delete(p.idrs, pkt.rtpTS)
 }
 
 func (p *videoPacer) TakeIDRLogs() []idrSizeEvent {

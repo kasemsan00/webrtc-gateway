@@ -14,11 +14,16 @@ func testPacer() *videoPacer {
 }
 
 func enqueueAt(p *videoPacer, seq, size int, at time.Time, keyframe bool, ts uint32) {
+	enqueueMarked(p, seq, size, at, keyframe, ts, false)
+}
+
+func enqueueMarked(p *videoPacer, seq, size int, at time.Time, keyframe bool, ts uint32, marker bool) {
 	p.Enqueue(pacedVideoPacket{
 		seq:      seq,
 		size:     size,
 		enqueued: at,
 		keyframe: keyframe,
+		marker:   marker,
 		rtpTS:    ts,
 	})
 }
@@ -80,7 +85,7 @@ func TestVideoPacerSpreadsIDRUnderRate(t *testing.T) {
 	const n = 40
 	const size = 1060
 	for i := 0; i < n; i++ {
-		enqueueAt(p, i, size, start, true, 9001)
+		enqueueMarked(p, i, size, start, true, 9001, i == n-1)
 	}
 	_, released, logs := drainPacer(t, p, start)
 	if len(released) != n {
@@ -125,7 +130,7 @@ func TestVideoPacerFlushesOverdueQueueWithoutDropping(t *testing.T) {
 	start := time.Unix(0, 0)
 	const n = 30
 	for i := 0; i < n; i++ {
-		enqueueAt(p, i, 1060, start, true, 7)
+		enqueueMarked(p, i, 1060, start, true, 7, i == n-1)
 	}
 	released, flushed, _ := p.Release(start.Add(600 * time.Millisecond))
 	logs := p.TakeIDRLogs()
@@ -153,10 +158,10 @@ func TestVideoPacerReportsArrivalBurstSeparately(t *testing.T) {
 	start := time.Unix(0, 0)
 	const size = 1060
 	for i := 0; i < 11; i++ {
-		enqueueAt(p, i, size, start, true, 42)
+		enqueueMarked(p, i, size, start, true, 42, false)
 	}
 	for i := 11; i < 40; i++ {
-		enqueueAt(p, i, size, start.Add(time.Duration(i-10)*time.Millisecond), true, 42)
+		enqueueMarked(p, i, size, start.Add(time.Duration(i-10)*time.Millisecond), true, 42, i == 39)
 	}
 	_, released, logs := drainPacer(t, p, start)
 	if len(released) != 40 {
@@ -186,7 +191,7 @@ func TestVideoPacerDoesNotDelayAnIDRByTheFlushWindow(t *testing.T) {
 		enqueueAt(p, i, size, start, false, 1)
 	}
 	for i := 8; i < 48; i++ {
-		enqueueAt(p, i, size, start, true, 2)
+		enqueueMarked(p, i, size, start, true, 2, i == 47)
 	}
 	finished, released, logs := drainPacer(t, p, start)
 	if len(released) != 48 {
@@ -202,6 +207,40 @@ func TestVideoPacerDoesNotDelayAnIDRByTheFlushWindow(t *testing.T) {
 	}
 	if len(logs) != 1 || logs[0].Packets != 40 {
 		t.Fatalf("IDR log %+v", logs)
+	}
+}
+
+func TestVideoPacerKeepsOnePictureAcrossDrainBursts(t *testing.T) {
+	p := testPacer()
+	start := time.Unix(0, 0)
+	const size = 1072
+	for i := 0; i < 3; i++ {
+		enqueueMarked(p, i, size, start, true, 90000, false)
+	}
+	_, released, logs := drainPacer(t, p, start)
+	if len(released) != 3 {
+		t.Fatalf("first burst released %d, want 3", len(released))
+	}
+	if len(logs) != 0 {
+		t.Fatalf("picture logged before its marker slice: %+v", logs)
+	}
+	for i := 3; i < 9; i++ {
+		enqueueMarked(p, i, size, start.Add(20*time.Millisecond), true, 90000, i == 8)
+	}
+	_, released, logs = drainPacer(t, p, start.Add(20*time.Millisecond))
+	if len(released) != 6 {
+		t.Fatalf("second burst released %d, want 6", len(released))
+	}
+	for i, pkt := range released {
+		if pkt.seq != i+3 {
+			t.Fatalf("packet %d has seq %d", i, pkt.seq)
+		}
+	}
+	if len(logs) != 1 {
+		t.Fatalf("logs %d, want 1", len(logs))
+	}
+	if logs[0].Timestamp != 90000 || logs[0].Packets != 9 || logs[0].Bytes != 9*size {
+		t.Fatalf("IDR log %+v, want ts=90000 packets=9", logs[0])
 	}
 }
 

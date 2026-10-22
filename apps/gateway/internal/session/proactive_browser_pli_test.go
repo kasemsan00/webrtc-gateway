@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"testing"
 	"time"
 )
@@ -118,6 +119,103 @@ func TestSIPInfoFIRDebounceCollapsesRepeats(t *testing.T) {
 	}
 	if !sess.HandleSIPInfoPictureFastUpdate(now.Add(SIPInfoFIRDebounce)) {
 		t.Fatal("INFO after the debounce window was ignored")
+	}
+}
+
+func TestSIPInfoFIRRetryWait(t *testing.T) {
+	idr := time.Unix(1_700_000_000, 0)
+	wait, ok := SIPInfoFIRRetryWait(idr, idr.Add(200*time.Millisecond))
+	if !ok || wait != 300*time.Millisecond {
+		t.Fatalf("wait=%s ok=%v, want 300ms", wait, ok)
+	}
+	if _, ok = SIPInfoFIRRetryWait(idr, idr.Add(3*time.Second)); ok {
+		t.Fatal("FIR well after the IDR must not be retried")
+	}
+	if _, ok = SIPInfoFIRRetryWait(idr, idr.Add(BrowserIDRRequestMinGap)); ok {
+		t.Fatal("FIR at the end of the window must not be retried")
+	}
+	if _, ok = SIPInfoFIRRetryWait(time.Time{}, idr); ok {
+		t.Fatal("FIR before any IDR must not be retried")
+	}
+}
+
+func TestBrowserIDRRequestGapIsShared(t *testing.T) {
+	now := time.Unix(50, 0)
+	if !browserIDRRequestAllowed(time.Time{}, now) {
+		t.Fatal("first request was coalesced")
+	}
+	if browserIDRRequestAllowed(now, now.Add(499*time.Millisecond)) {
+		t.Fatal("request inside 500ms was allowed")
+	}
+	if !browserIDRRequestAllowed(now, now.Add(BrowserIDRRequestMinGap)) {
+		t.Fatal("request at 500ms was coalesced")
+	}
+}
+
+func TestPLISourcesCoalesceToOneRequest(t *testing.T) {
+	sess := &Session{ID: "coalesce"}
+	sess.lastBrowserIDRRequest = time.Now()
+	if sess.SendBrowserPLIImmediate("sip_info_fir") ||
+		sess.SendBrowserPLI("switch") ||
+		sess.SendProactivePLIToWebRTC() ||
+		sess.SendBrowserPLIImmediate("mode0_drop") ||
+		sess.SendBrowserPLIImmediate("sip_info_fir_retry") {
+		t.Fatal("a second IDR request inside 500ms was sent")
+	}
+	if sess.LastBrowserPLIReason() != "" {
+		t.Fatalf("coalesced request recorded reason %q", sess.LastBrowserPLIReason())
+	}
+}
+
+func TestSIPInfoFIRInsideKeyframeWindowDefersPLI(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sess := &Session{ID: "fir-retry", ctx: ctx}
+	fir := time.Now()
+	sess.uplinkVideoLastIDR = fir.Add(-200 * time.Millisecond)
+	sess.uplinkVideoIDRTimestampSeen = true
+	sess.uplinkVideoLastIDRTimestamp = 111
+	if !sess.HandleSIPInfoPictureFastUpdate(fir) {
+		t.Fatal("FIR inside the window was ignored")
+	}
+	sess.mu.Lock()
+	active := sess.sipInfoFIRRetryActive
+	gen := sess.sipInfoFIRRetryGen
+	logged := sess.firIDRSliceLog
+	sess.mu.Unlock()
+	if !active || gen != 1 || !logged {
+		t.Fatalf("active=%v gen=%d sliceLog=%v", active, gen, logged)
+	}
+	if sess.LastBrowserPLIReason() == "sip_info_fir" {
+		t.Fatal("immediate PLI was sent inside Chrome's ignore window")
+	}
+	if sess.HandleSIPInfoPictureFastUpdate(fir.Add(100 * time.Millisecond)) {
+		t.Fatal("repeat FIR started another retry")
+	}
+	sess.mu.Lock()
+	if sess.sipInfoFIRRetryGen != 1 {
+		t.Fatalf("retry gen=%d, want 1", sess.sipInfoFIRRetryGen)
+	}
+	sess.mu.Unlock()
+	sess.ResetMediaState()
+}
+
+func TestSIPInfoFIRAfterKeyframeWindowSendsImmediately(t *testing.T) {
+	sess := &Session{ID: "fir-late"}
+	fir := time.Now()
+	sess.uplinkVideoLastIDR = fir.Add(-3 * time.Second)
+	sess.uplinkVideoIDRTimestampSeen = true
+	if !sess.HandleSIPInfoPictureFastUpdate(fir) {
+		t.Fatal("late FIR was ignored")
+	}
+	if sess.LastBrowserPLIReason() != "sip_info_fir" {
+		t.Fatalf("reason %q, want sip_info_fir", sess.LastBrowserPLIReason())
+	}
+	sess.mu.Lock()
+	active := sess.sipInfoFIRRetryActive
+	sess.mu.Unlock()
+	if active {
+		t.Fatal("late FIR armed a retry")
 	}
 }
 

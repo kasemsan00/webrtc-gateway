@@ -505,6 +505,16 @@ func (s *Session) ResetMediaState() {
 	s.uplinkStallSince = time.Time{}
 	s.uplinkStallReason = ""
 	s.uplinkStallLogAt = time.Time{}
+	s.lastBrowserIDRRequest = time.Time{}
+	s.sipInfoFIRRetryGen++
+	s.sipInfoFIRRetryActive = false
+	s.firIDRSliceLog = false
+	s.firIDRSliceTS = 0
+	s.firIDRSliceTSSet = false
+	s.uplinkPictureMu.Lock()
+	s.uplinkPicture = uplinkPictureHold{}
+	s.uplinkPictureGen++
+	s.uplinkPictureMu.Unlock()
 
 	s.mediaForwardReady = false
 	s.UpdatedAt = time.Now()

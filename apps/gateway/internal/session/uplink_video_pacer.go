@@ -49,16 +49,77 @@ func (s *Session) startUplinkVideoPacer() *uplinkVideoPacer {
 }
 
 func (s *Session) enqueueUplinkVideo(conn *net.UDPConn, addr *net.UDPAddr, data []byte, keyframe bool, rtpTS uint32, packetCount int) {
-	if conn == nil || addr == nil || len(data) == 0 {
+	if s == nil || conn == nil || addr == nil || len(data) == 0 {
 		return
 	}
+	next := heldUplinkVideo{
+		conn:        conn,
+		addr:        *addr,
+		data:        append([]byte(nil), data...),
+		keyframe:    keyframe,
+		rtpTS:       rtpTS,
+		packetCount: packetCount,
+	}
+	s.uplinkPictureMu.Lock()
+	prev, ok := s.uplinkPicture.push(next)
+	s.uplinkPictureGen++
+	gen := s.uplinkPictureGen
+	s.uplinkPictureMu.Unlock()
+	if ok {
+		s.deliverUplinkVideo(prev)
+	}
+	s.armUplinkPictureFlush(gen)
+}
+
+func (s *Session) deliverUplinkVideo(pkt heldUplinkVideo) {
+	payload := rtpPayload(pkt.data)
+	keyframe := pkt.keyframe
+	if len(payload) > 0 {
+		switch payload[0] & 0x1f {
+		case 5:
+			keyframe = true
+		case 7, 8:
+			keyframe = false
+		}
+	}
+	if keyframe {
+		s.maybeLogFIRIDRSlice(payload, pkt.rtpTS, pkt.marker)
+	}
+	if s.paceUplinkVideo() {
+		s.paceHeldUplinkVideo(pkt, keyframe)
+		return
+	}
+	if pkt.conn == nil {
+		return
+	}
+	if _, err := pkt.conn.WriteToUDP(pkt.data, &pkt.addr); err != nil {
+		if pkt.packetCount <= 5 {
+			fmt.Printf("[%s] Error forwarding video to Asterisk: %v\n", s.ID, err)
+		}
+		return
+	}
+	if keyframe {
+		s.RecordUplinkKeyframe()
+		if pkt.marker {
+			fmt.Printf("[%s] 🔑 KEYFRAME (Forwarded) detected in video packet #%d → Asterisk\n", s.ID, pkt.packetCount)
+		}
+	}
+	s.ObserveUplinkVideoForward(keyframe, pkt.rtpTS, time.Now())
+}
+
+func (s *Session) paceHeldUplinkVideo(pkt heldUplinkVideo, keyframe bool) {
 	p := s.startUplinkVideoPacer()
-	payload := append([]byte(nil), data...)
-	dest := *addr
-	pkt := pacedVideoPacket{
+	payload := pkt.data
+	dest := pkt.addr
+	conn := pkt.conn
+	packetCount := pkt.packetCount
+	rtpTS := pkt.rtpTS
+	marker := pkt.marker
+	paced := pacedVideoPacket{
 		size:        len(payload),
 		enqueued:    time.Now(),
 		keyframe:    keyframe,
+		marker:      marker,
 		rtpTS:       rtpTS,
 		packetCount: packetCount,
 		write: func() {
@@ -71,13 +132,15 @@ func (s *Session) enqueueUplinkVideo(conn *net.UDPConn, addr *net.UDPAddr, data 
 			}
 			if keyframe {
 				s.RecordUplinkKeyframe()
-				fmt.Printf("[%s] 🔑 KEYFRAME (Forwarded) detected in video packet #%d → Asterisk\n", s.ID, packetCount)
+				if marker {
+					fmt.Printf("[%s] 🔑 KEYFRAME (Forwarded) detected in video packet #%d → Asterisk\n", s.ID, packetCount)
+				}
 			}
 			s.ObserveUplinkVideoForward(keyframe, rtpTS, time.Now())
 		},
 	}
-	if !p.submit(pkt) {
-		pkt.write()
+	if !p.submit(paced) {
+		paced.write()
 	}
 }
 
@@ -147,8 +210,8 @@ func (p *uplinkVideoPacer) loop() {
 			}
 		}
 		for _, ev := range logs {
-			fmt.Printf("[%s] uplink_idr_size packets=%d bytes=%d burst_ms=%d paced_ms=%d\n",
-				p.session.ID, ev.Packets, ev.Bytes, ev.Burst.Milliseconds(), ev.Paced.Milliseconds())
+			fmt.Printf("[%s] uplink_idr_size ts=%d packets=%d bytes=%d burst_ms=%d paced_ms=%d\n",
+				p.session.ID, ev.Timestamp, ev.Packets, ev.Bytes, ev.Burst.Milliseconds(), ev.Paced.Milliseconds())
 		}
 		if seen && (nextStats.IsZero() || !now.Before(nextStats)) {
 			// Peak depth during the second, so a short IDR queue is visible

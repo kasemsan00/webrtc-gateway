@@ -271,20 +271,29 @@ type Session struct {
 	uplinkSPSDimensionLogged  bool   `json:"-"`
 	// allowNextUplinkPictureSize accepts one SPS size change after an explicit
 	// switch/source replacement, then locks that size again.
-	allowNextUplinkPictureSize bool          `json:"-"`
-	switchKeyframeRequestedAt  time.Time     `json:"-"`
-	switchKeyframeIDRPending   bool          `json:"-"`
-	switchKeyframeBurstGen     uint64        `json:"-"`
-	proactivePLINotBefore      time.Time     `json:"-"`
-	proactivePLIWake           chan struct{} `json:"-"`
-	sipInfoFIRAt               time.Time     `json:"-"`
-	sipAnswerSDP               []byte        `json:"-"`
-	lastBrowserPLIReason       string        `json:"-"`
-	mode0NeedsIDR              bool          `json:"-"`
-	mode0PLIAt                 time.Time     `json:"-"`
-	uplinkStallSince           time.Time     `json:"-"`
-	uplinkStallReason          string        `json:"-"`
-	uplinkStallLogAt           time.Time     `json:"-"`
+	allowNextUplinkPictureSize bool              `json:"-"`
+	switchKeyframeRequestedAt  time.Time         `json:"-"`
+	switchKeyframeIDRPending   bool              `json:"-"`
+	switchKeyframeBurstGen     uint64            `json:"-"`
+	proactivePLINotBefore      time.Time         `json:"-"`
+	proactivePLIWake           chan struct{}     `json:"-"`
+	sipInfoFIRAt               time.Time         `json:"-"`
+	sipAnswerSDP               []byte            `json:"-"`
+	lastBrowserPLIReason       string            `json:"-"`
+	mode0NeedsIDR              bool              `json:"-"`
+	mode0PLIAt                 time.Time         `json:"-"`
+	uplinkStallSince           time.Time         `json:"-"`
+	uplinkStallReason          string            `json:"-"`
+	uplinkStallLogAt           time.Time         `json:"-"`
+	lastBrowserIDRRequest      time.Time         `json:"-"`
+	sipInfoFIRRetryGen         uint64            `json:"-"`
+	sipInfoFIRRetryActive      bool              `json:"-"`
+	firIDRSliceLog             bool              `json:"-"`
+	firIDRSliceTS              uint32            `json:"-"`
+	firIDRSliceTSSet           bool              `json:"-"`
+	uplinkPictureMu            sync.Mutex        `json:"-"`
+	uplinkPicture              uplinkPictureHold `json:"-"`
+	uplinkPictureGen           uint64            `json:"-"`
 	// SIP-side cached SPS/PPS (SIP→WebRTC direction, from SIP endpoint's encoder)
 	// Used to inject parameter sets before keyframes forwarded to browser for decoder recovery.
 	SIPCachedSPS             []byte                `json:"-"`
