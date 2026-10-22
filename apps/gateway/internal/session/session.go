@@ -124,6 +124,13 @@ type Session struct {
 	LastWebRTCPLISent            time.Time     `json:"-"`
 	LastWebRTCFIRSent            time.Time     `json:"-"`
 	LastUplinkKeyframe           time.Time     `json:"-"`
+	sipKeyframeRequestSeen       bool          `json:"-"`
+	uplinkVideoPackets           int           `json:"-"`
+	uplinkVideoWindowStart       time.Time     `json:"-"`
+	uplinkVideoLastIDR           time.Time     `json:"-"`
+	uplinkVideoLastIDRTimestamp  uint32        `json:"-"`
+	uplinkVideoIDRTimestampSeen  bool          `json:"-"`
+	lastUplinkPacketsPerSec      int           `json:"-"`
 	SwitchFeedbackBurstSatisfied bool          `json:"-"`
 	VideoRecoveryBurstEnabled    bool          `json:"-"`
 	VideoRecoveryBurstWindow     time.Duration `json:"-"`

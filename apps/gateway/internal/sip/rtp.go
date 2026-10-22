@@ -249,6 +249,9 @@ func (s *Server) startRTPListenerForSession(sess *session.Session) (int, error) 
 
 		// Start periodic PLI sender for fast video start
 		go s.startPeriodicPLIForSession(sess)
+		// iOS never sends PLI/FIR. Keep asking the browser for an IDR until it does.
+		// This loop calls SendPLItoWebRTC directly and is not the rtp-flowing watchdog.
+		go s.startProactiveBrowserPLIForSession(sess)
 		// Start keyframe watchdog to recover from stalled decoders (iOS VideoToolbox)
 		go s.startKeyframeWatchdogForSession(sess)
 
@@ -1069,6 +1072,7 @@ func (s *Server) handleRTCPFromSIP(data []byte, sess *session.Session, rtcpCount
 	for _, pkt := range packets {
 		switch p := pkt.(type) {
 		case *rtcp.PictureLossIndication:
+			sess.NoteSIPKeyframeRequest("pli")
 			if allow, reason := sess.AllowSIPOriginatedBrowserKeyframe("pli"); !allow {
 				fmt.Printf("[%s] sip_keyframe_request_suppressed kind=pli reason=%s\n", sess.ID, reason)
 				continue
@@ -1077,6 +1081,7 @@ func (s *Server) handleRTCPFromSIP(data []byte, sess *session.Session, rtcpCount
 			sess.SendPLItoWebRTC()
 
 		case *rtcp.FullIntraRequest:
+			sess.NoteSIPKeyframeRequest("fir")
 			if allow, reason := sess.AllowSIPOriginatedBrowserKeyframe("fir"); !allow {
 				fmt.Printf("[%s] sip_keyframe_request_suppressed kind=fir reason=%s\n", sess.ID, reason)
 				continue
@@ -1112,6 +1117,34 @@ func (s *Server) handleRTCPFromSIP(data []byte, sess *session.Session, rtcpCount
 	}
 	if sawSIPVideoReport {
 		sess.KickUplinkKeyframeOnFirstSIPRTCPIfNeeded()
+	}
+}
+
+// startProactiveBrowserPLIForSession asks the browser for an IDR on a fixed
+// schedule when the SIP leg has never sent PLI or FIR. RTP that is already
+// flowing does not cancel it; only a real SIP PLI/FIR or the end of the call does.
+func (s *Server) startProactiveBrowserPLIForSession(sess *session.Session) {
+	fmt.Printf("[%s] proactive_browser_pli_start initial=%s window=%s steady=%s\n",
+		sess.ID,
+		session.ProactiveBrowserPLIInitialInterval,
+		session.ProactiveBrowserPLIInitialWindow,
+		session.ProactiveBrowserPLISteadyInterval)
+	started := time.Now()
+	for {
+		age := time.Since(started)
+		interval := session.ProactiveBrowserPLIInterval(age)
+		time.Sleep(interval)
+		if sess.GetState() == session.StateEnded {
+			fmt.Printf("[%s] proactive_browser_pli_stop reason=session-ended\n", sess.ID)
+			return
+		}
+		if sess.HasSIPKeyframeRequest() {
+			fmt.Printf("[%s] proactive_browser_pli_stop reason=sip-keyframe-request\n", sess.ID)
+			return
+		}
+		sess.SendPLItoWebRTC()
+		fmt.Printf("[%s] proactive_browser_pli sent interval=%s call_age=%s\n",
+			sess.ID, interval, time.Since(started).Round(time.Millisecond))
 	}
 }
 
