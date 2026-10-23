@@ -6,6 +6,7 @@ const (
 	defaultUplinkVideoPacerBitsPerSec = 3_500_000
 	defaultUplinkVideoPacerBurstPkts  = 4
 	defaultUplinkVideoPacerMaxQueue   = 500 * time.Millisecond
+	defaultUplinkIDRPace              = 225 * time.Millisecond
 	// uplinkVideoPacerNominalBytes is the size used to turn the burst
 	// allowance (packets) into token-bucket capacity. A ~1060 byte
 	// single-NAL packet still fits four times inside a 4-packet burst.
@@ -16,9 +17,11 @@ type videoPacerConfig struct {
 	BytesPerSec float64
 	BurstBytes  float64
 	MaxDelay    time.Duration
+	IDRTarget   time.Duration
+	IDRPackets  int
 }
 
-func videoPacerConfigFrom(bitsPerSec, burstPackets int, maxDelay time.Duration) videoPacerConfig {
+func videoPacerConfigFrom(bitsPerSec, burstPackets int, maxDelay, idrTarget time.Duration) videoPacerConfig {
 	if bitsPerSec <= 0 {
 		bitsPerSec = defaultUplinkVideoPacerBitsPerSec
 	}
@@ -28,10 +31,16 @@ func videoPacerConfigFrom(bitsPerSec, burstPackets int, maxDelay time.Duration) 
 	if maxDelay <= 0 {
 		maxDelay = defaultUplinkVideoPacerMaxQueue
 	}
+	idrPackets := TypicalUplinkIDRPackets
+	if idrPackets < 2 {
+		idrPackets = 2
+	}
 	return videoPacerConfig{
 		BytesPerSec: float64(bitsPerSec) / 8,
 		BurstBytes:  float64(burstPackets * uplinkVideoPacerNominalBytes),
 		MaxDelay:    maxDelay,
+		IDRTarget:   idrTarget,
+		IDRPackets:  idrPackets,
 	}
 }
 
@@ -129,6 +138,9 @@ func (p *videoPacer) Release(now time.Time) (released []pacedVideoPacket, flushe
 	p.refill(now)
 	for p.queued() > 0 {
 		pkt := p.queue[p.head]
+		if idrWait := p.idrPaceWait(pkt, now); idrWait > 0 {
+			return released, false, idrWait
+		}
 		need := float64(pkt.size)
 		if need > p.cfg.BurstBytes {
 			need = p.cfg.BurstBytes
@@ -165,6 +177,33 @@ func (p *videoPacer) takeAll(now time.Time) []pacedVideoPacket {
 	}
 	p.compact()
 	return released
+}
+
+func (p *videoPacer) idrPaceWait(pkt pacedVideoPacket, now time.Time) time.Duration {
+	if p.cfg.IDRTarget <= 0 || !pkt.keyframe {
+		return 0
+	}
+	acc := p.idrs[pkt.rtpTS]
+	if acc == nil || acc.firstRelease.IsZero() {
+		return 0
+	}
+	sent := acc.packets - acc.pending
+	if sent <= 0 {
+		return 0
+	}
+	denom := p.cfg.IDRPackets - 1
+	if denom < 1 {
+		denom = 1
+	}
+	due := acc.firstRelease.Add(time.Duration(float64(sent) / float64(denom) * float64(p.cfg.IDRTarget)))
+	if !now.Before(due) {
+		return 0
+	}
+	wait := due.Sub(now)
+	if wait < time.Millisecond {
+		return time.Millisecond
+	}
+	return wait
 }
 
 func (p *videoPacer) refill(now time.Time) {

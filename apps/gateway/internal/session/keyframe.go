@@ -305,10 +305,7 @@ func (s *Session) KickUplinkKeyframeOnRemoteJoinIfNeeded() bool {
 	if !s.TryClaimUplinkKeyframeKickOnRemoteJoin() {
 		return false
 	}
-	fmt.Printf("[%s] 📈 uplink_keyframe_kick reason=remote-ssrc-learn\n", s.ID)
-	s.SendFIRToWebRTC()
-	s.SendPLItoWebRTC()
-	return true
+	return s.KickUplinkKeyframeForSIPDecoder("remote-ssrc-learn")
 }
 
 // KickUplinkKeyframeOnFirstSIPRTCPIfNeeded claims the first SIP video SR/RR
@@ -318,8 +315,7 @@ func (s *Session) KickUplinkKeyframeOnFirstSIPRTCPIfNeeded() bool {
 	if !s.TryClaimUplinkKeyframeKickOnFirstSIPRTCP() {
 		return false
 	}
-	s.KickUplinkKeyframeForSIPDecoder("sip-rtcp-first")
-	return true
+	return s.KickUplinkKeyframeForSIPDecoder("sip-rtcp-first")
 }
 
 // RecordUplinkKeyframe marks that a WebRTC→SIP IDR was actually written to SIP.
@@ -376,7 +372,16 @@ func (s *Session) TryKickUplinkKeyframeForSwitch(reason string, now time.Time) b
 
 // KickUplinkKeyframeForSIPDecoder requests a fresh browser IDR so a SIP decoder
 // that just became reachable (200 OK / first RTP dest) is not stuck on P-frames.
-func (s *Session) KickUplinkKeyframeForSIPDecoder(reason string) {
+// Switch kicks always run. Decoder-join kicks skip when a complete IDR was
+// forwarded in the last 10s, or an IDR is still in flight.
+func (s *Session) KickUplinkKeyframeForSIPDecoder(reason string) bool {
+	if !isSwitchUplinkKeyframeKind(reason) {
+		send, why := s.DecideSessionUplinkKeyframeRequest(reason, time.Now())
+		if !send {
+			fmt.Printf("[%s] uplink_keyframe_kick_skipped reason=%s skip=%s\n", s.ID, reason, why)
+			return false
+		}
+	}
 	kickAt := time.Now()
 	fmt.Printf("[%s] 📈 uplink_keyframe_kick reason=%s\n", s.ID, reason)
 	s.sendWebRTCFeedbackWithForce("fir", true, nil)
@@ -390,16 +395,35 @@ func (s *Session) KickUplinkKeyframeForSIPDecoder(reason string) {
 				fmt.Printf("[%s] Stopping %s PLI burst - uplink IDR delivered\n", s.ID, reason)
 				return
 			}
+			if !isSwitchUplinkKeyframeKind(reason) && (s.UplinkIDRInFlight() || s.HasCompleteUplinkIDR()) {
+				fmt.Printf("[%s] Stopping %s PLI burst - uplink IDR delivered\n", s.ID, reason)
+				return
+			}
 			time.Sleep(300 * time.Millisecond)
+			if !isSwitchUplinkKeyframeKind(reason) {
+				if skip, _ := s.SkipUplinkKeyframeRequest(reason, time.Now()); skip {
+					return
+				}
+			}
 			s.sendWebRTCFeedbackWithForce("pli", true, nil)
 		}
 	}()
+	return true
 }
 
-// ShouldStopStartupBrowserPLI is true once the browser encoder is producing
-// parameter sets and at least one IDR. Used by the short first-packet burst.
+// ShouldStopStartupBrowserPLI is true once an uplink IDR is in flight or a
+// complete IDR has been forwarded. The first-packet and periodic bursts
+// must not ask for another picture while that IDR is still going out.
 func (s *Session) ShouldStopStartupBrowserPLI() bool {
-	return s.HasCachedSPSPPS() && s.HasUplinkKeyframe()
+	if s == nil {
+		return false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.uplinkIDRInFlight || !s.uplinkIDRCompleteAt.IsZero() || !s.LastUplinkKeyframe.IsZero() {
+		return true
+	}
+	return false
 }
 
 // ShouldStopPeriodicBrowserPLI is true once any WebRTC→SIP IDR has been
@@ -437,9 +461,13 @@ func (s *Session) AllowSIPOriginatedBrowserKeyframe(string) (bool, string) {
 	lastIDR := s.LastUplinkKeyframe
 	lastPLI := s.LastWebRTCPLISent
 	lastFIR := s.LastWebRTCFIRSent
+	inFlight := s.uplinkIDRInFlight
 	s.mu.Unlock()
 
 	now := time.Now()
+	if inFlight {
+		return false, "idr-in-flight"
+	}
 	if !lastIDR.IsZero() && now.Sub(lastIDR) < sipOriginatedBrowserKeyframeMinInterval {
 		return false, "uplink-idr-fresh"
 	}

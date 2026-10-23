@@ -129,6 +129,9 @@ type Session struct {
 	// and FU-A continuations plus the following P-frames are not keyframes;
 	// without this flag they are dropped and the flush marks one incomplete slice.
 	uplinkIDRAccepted            bool          `json:"-"`
+	uplinkIDRInFlight            bool          `json:"-"`
+	uplinkIDRInFlightTS          uint32        `json:"-"`
+	uplinkIDRCompleteAt          time.Time     `json:"-"`
 	sipKeyframeRequestSeen       bool          `json:"-"`
 	sipKeyframeRequestAt         time.Time     `json:"-"`
 	uplinkVideoPackets           int           `json:"-"`
@@ -191,6 +194,7 @@ type Session struct {
 	uplinkVideoPacerBPS                   int                  `json:"-"`
 	uplinkVideoPacerBurstPackets          int                  `json:"-"`
 	uplinkVideoPacerMaxQueue              time.Duration        `json:"-"`
+	uplinkVideoPacerIDRPace               time.Duration        `json:"-"`
 	uplinkVideoPacer                      *uplinkVideoPacer    `json:"-"`
 	uplinkVideoPacerOnce                  sync.Once            `json:"-"`
 	VideoTimestampJumpPLI                 bool                 `json:"-"`
@@ -674,6 +678,7 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 		uplinkVideoPacerBPS:                  cfg.SIP.UplinkVideoPacerBitsPerSec,
 		uplinkVideoPacerBurstPackets:         cfg.SIP.UplinkVideoPacerBurstPackets,
 		uplinkVideoPacerMaxQueue:             time.Duration(cfg.SIP.UplinkVideoPacerMaxQueueMS) * time.Millisecond,
+		uplinkVideoPacerIDRPace:              time.Duration(cfg.SIP.UplinkIDRPaceMS) * time.Millisecond,
 		proactiveBrowserPLIInitial:           time.Duration(cfg.SIP.ProactiveBrowserPLIInitialMS) * time.Millisecond,
 		proactiveBrowserPLISafety:            time.Duration(cfg.SIP.ProactiveBrowserPLISafetyMS) * time.Millisecond,
 		VideoTimestampJumpPLI:                cfg.SIP.VideoTimestampJumpPLI,
@@ -870,7 +875,9 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 					return
 				}
 				session.SendPLIToAsteriskForced("ice-connected")
-				session.SendPLItoWebRTC()
+				if skip, _ := session.SkipUplinkKeyframeRequest("startup", time.Now()); !skip {
+					session.SendPLItoWebRTC()
+				}
 			}()
 
 		case webrtc.ICEConnectionStateDisconnected, webrtc.ICEConnectionStateClosed:

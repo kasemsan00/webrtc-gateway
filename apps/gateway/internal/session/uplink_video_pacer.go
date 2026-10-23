@@ -39,6 +39,7 @@ func (s *Session) startUplinkVideoPacer() *uplinkVideoPacer {
 				s.uplinkVideoPacerBPS,
 				s.uplinkVideoPacerBurstPackets,
 				s.uplinkVideoPacerMaxQueue,
+				s.uplinkVideoPacerIDRPace,
 			)),
 			wake: make(chan struct{}, 1),
 			ctx:  ctx,
@@ -102,7 +103,7 @@ func (s *Session) deliverUplinkVideo(pkt heldUplinkVideo) {
 			fmt.Printf("[%s] 🔑 KEYFRAME (Forwarded) detected in video packet #%d → Asterisk\n", s.ID, pkt.packetCount)
 		}
 	}
-	s.ObserveUplinkVideoForward(keyframe, pkt.rtpTS, time.Now())
+	s.ObserveUplinkVideoForwardMarked(keyframe, pkt.rtpTS, time.Now(), pkt.marker)
 }
 
 func (s *Session) paceHeldUplinkVideo(pkt heldUplinkVideo, keyframe bool) {
@@ -134,7 +135,7 @@ func (s *Session) paceHeldUplinkVideo(pkt heldUplinkVideo, keyframe bool) {
 					fmt.Printf("[%s] 🔑 KEYFRAME (Forwarded) detected in video packet #%d → Asterisk\n", s.ID, packetCount)
 				}
 			}
-			s.ObserveUplinkVideoForward(keyframe, rtpTS, time.Now())
+			s.ObserveUplinkVideoForwardMarked(keyframe, rtpTS, time.Now(), marker)
 		},
 	}
 	if !p.submit(paced) {
@@ -208,6 +209,7 @@ func (p *uplinkVideoPacer) loop() {
 			}
 		}
 		for _, ev := range logs {
+			p.session.NoteUplinkIDRComplete(now)
 			fmt.Printf("[%s] uplink_idr_size ts=%d packets=%d bytes=%d burst_ms=%d paced_ms=%d\n",
 				p.session.ID, ev.Timestamp, ev.Packets, ev.Bytes, ev.Burst.Milliseconds(), ev.Paced.Milliseconds())
 		}

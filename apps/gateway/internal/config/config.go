@@ -178,6 +178,7 @@ type SIPConfig struct {
 	UplinkVideoPacerBitsPerSec           int    // Token-bucket rate for uplink video (default: 3500000)
 	UplinkVideoPacerBurstPackets         int    // Packets that may leave together before the rate limit (default: 4)
 	UplinkVideoPacerMaxQueueMS           int    // Flush queued uplink video after this delay instead of growing (default: 500)
+	UplinkIDRPaceMS                      int    // Spread one WebRTC→SIP IDR over this many ms (default: 225; 0 disables)
 	ProactiveBrowserPLIInitialMS         int    // Browser PLI interval until the first uplink IDR (default: 2000)
 	ProactiveBrowserPLISafetyMS          int    // Browser PLI only if no uplink IDR in this window (default: 10000)
 	VideoTimestampJumpPLI                bool   // Request a SIP keyframe when SIP video RTP timestamps jump (default: true)
@@ -357,6 +358,7 @@ func Load() (*Config, error) {
 			UplinkVideoPacerBitsPerSec:           clampInt(getEnvAsInt("SIP_UPLINK_VIDEO_PACER_BPS", 3_500_000), 100_000, 50_000_000),
 			UplinkVideoPacerBurstPackets:         clampInt(getEnvAsInt("SIP_UPLINK_VIDEO_PACER_BURST_PACKETS", 4), 1, 16),
 			UplinkVideoPacerMaxQueueMS:           clampInt(getEnvAsInt("SIP_UPLINK_VIDEO_PACER_MAX_QUEUE_MS", 500), 50, 5000),
+			UplinkIDRPaceMS:                      uplinkIDRPaceMSFromEnv(),
 			ProactiveBrowserPLIInitialMS:         clampInt(getEnvAsInt("SIP_PROACTIVE_BROWSER_PLI_INITIAL_MS", 2000), 500, 10000),
 			ProactiveBrowserPLISafetyMS:          clampInt(getEnvAsInt("SIP_PROACTIVE_BROWSER_PLI_SAFETY_MS", 10000), 2000, 60000),
 			VideoTimestampJumpPLI:                getEnvAsBool("SIP_VIDEO_TIMESTAMP_JUMP_PLI", true),
@@ -690,11 +692,12 @@ func (c *Config) Display() {
 	fmt.Printf("  SIP Video H264 AU Normalization: %v\n", c.SIP.VideoAUNormalizeEnabled)
 	fmt.Printf("  @switch Video Gate Min IDR Packets: %d\n", c.SIP.SwitchVideoGateMinIDRPackets)
 	fmt.Printf("  SIP Video Reorder Pacing: %dms\n", c.SIP.VideoReorderPacingMS)
-	fmt.Printf("  SIP Uplink Video Pacer: %v (rate=%d bps, burst=%d packets, maxQueue=%dms)\n",
+	fmt.Printf("  SIP Uplink Video Pacer: %v (rate=%d bps, burst=%d packets, maxQueue=%dms, idrPace=%dms)\n",
 		c.SIP.UplinkVideoPacerEnabled,
 		c.SIP.UplinkVideoPacerBitsPerSec,
 		c.SIP.UplinkVideoPacerBurstPackets,
 		c.SIP.UplinkVideoPacerMaxQueueMS,
+		c.SIP.UplinkIDRPaceMS,
 	)
 	fmt.Printf("  Proactive Browser PLI: initial=%dms safety=%dms\n",
 		c.SIP.ProactiveBrowserPLIInitialMS,
@@ -919,6 +922,14 @@ func getEnvAsInt(key string, defaultValue int) int {
 		return defaultValue
 	}
 	return value
+}
+
+func uplinkIDRPaceMSFromEnv() int {
+	v := getEnvAsInt("SIP_UPLINK_IDR_PACE_MS", 225)
+	if v <= 0 {
+		return 0
+	}
+	return clampInt(v, 80, 500)
 }
 
 func clampInt(value, min, max int) int {

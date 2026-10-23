@@ -10,6 +10,7 @@ func testPacer() *videoPacer {
 		defaultUplinkVideoPacerBitsPerSec,
 		defaultUplinkVideoPacerBurstPkts,
 		defaultUplinkVideoPacerMaxQueue,
+		0,
 	))
 }
 
@@ -106,7 +107,7 @@ func TestVideoPacerSpreadsIDRUnderRate(t *testing.T) {
 	}
 	pacedBytes := (n - defaultUplinkVideoPacerBurstPkts) * size
 	elapsed := released[n-1].released.Sub(released[defaultUplinkVideoPacerBurstPkts-1].released)
-	cfg := videoPacerConfigFrom(defaultUplinkVideoPacerBitsPerSec, defaultUplinkVideoPacerBurstPkts, defaultUplinkVideoPacerMaxQueue)
+	cfg := videoPacerConfigFrom(defaultUplinkVideoPacerBitsPerSec, defaultUplinkVideoPacerBurstPkts, defaultUplinkVideoPacerMaxQueue, 0)
 	minElapsed := time.Duration(float64(pacedBytes) / cfg.BytesPerSec * float64(time.Second) * 0.9)
 	if elapsed < minElapsed {
 		t.Fatalf("paced tail took %s, faster than %s at %d bps", elapsed, minElapsed, defaultUplinkVideoPacerBitsPerSec)
@@ -244,6 +245,53 @@ func TestVideoPacerKeepsOnePictureAcrossDrainBursts(t *testing.T) {
 	}
 	if logs[0].Burst != 50*time.Millisecond {
 		t.Fatalf("burst_ms %s, want 50ms across the hold-window gap", logs[0].Burst)
+	}
+}
+
+func TestVideoPacerSpreadsIDROverTarget(t *testing.T) {
+	p := newVideoPacer(videoPacerConfigFrom(
+		defaultUplinkVideoPacerBitsPerSec,
+		defaultUplinkVideoPacerBurstPkts,
+		defaultUplinkVideoPacerMaxQueue,
+		defaultUplinkIDRPace,
+	))
+	start := time.Unix(0, 0)
+	const n = 40
+	const size = 1060
+	for i := 0; i < n; i++ {
+		enqueueMarked(p, i, size, start, true, 9001, i == n-1)
+	}
+	_, released, logs := drainPacer(t, p, start)
+	if len(released) != n {
+		t.Fatalf("released %d packets, want %d", len(released), n)
+	}
+	paced := released[n-1].released.Sub(released[0].released)
+	if paced < 200*time.Millisecond || paced > 260*time.Millisecond {
+		t.Fatalf("IDR release span %s, want 200-260ms", paced)
+	}
+	if len(logs) != 1 || logs[0].Packets != n {
+		t.Fatalf("IDR log %+v", logs)
+	}
+}
+
+func TestVideoPacerKeepsPFrameLatency(t *testing.T) {
+	p := newVideoPacer(videoPacerConfigFrom(
+		defaultUplinkVideoPacerBitsPerSec,
+		defaultUplinkVideoPacerBurstPkts,
+		defaultUplinkVideoPacerMaxQueue,
+		defaultUplinkIDRPace,
+	))
+	start := time.Unix(0, 0)
+	const n = 8
+	for i := 0; i < n; i++ {
+		enqueueAt(p, i, 400, start, false, 3)
+	}
+	finished, released, _ := drainPacer(t, p, start)
+	if len(released) != n {
+		t.Fatalf("released %d, want %d", len(released), n)
+	}
+	if finished.Sub(start) > 20*time.Millisecond {
+		t.Fatalf("P-frames took %s, want them out immediately", finished.Sub(start))
 	}
 }
 

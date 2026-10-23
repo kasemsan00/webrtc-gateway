@@ -71,6 +71,28 @@ func TestTrunkPNAppIDConfigCanBeCustomizedAndTrimmed(t *testing.T) {
 	}
 }
 
+func TestUplinkIDRPaceConfigDefaults(t *testing.T) {
+	t.Setenv("SIP_UPLINK_IDR_PACE_MS", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.SIP.UplinkIDRPaceMS != 225 {
+		t.Fatalf("idrPace = %d, want 225", cfg.SIP.UplinkIDRPaceMS)
+	}
+}
+
+func TestUplinkIDRPaceConfigCanBeCustomized(t *testing.T) {
+	t.Setenv("SIP_UPLINK_IDR_PACE_MS", "250")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.SIP.UplinkIDRPaceMS != 250 {
+		t.Fatalf("idrPace = %d, want 250", cfg.SIP.UplinkIDRPaceMS)
+	}
+}
+
 func TestProactiveBrowserPLIConfigDefaults(t *testing.T) {
 	t.Setenv("SIP_PROACTIVE_BROWSER_PLI_INITIAL_MS", "")
 	t.Setenv("SIP_PROACTIVE_BROWSER_PLI_SAFETY_MS", "")

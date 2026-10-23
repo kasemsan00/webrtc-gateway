@@ -318,6 +318,9 @@ func (s *Session) forwardRTPToAsteriskFrom(track rtpByteReader, kind string) {
 							fmt.Printf("[%s] Stopping first-packet PLI burst - uplink keyframe ready\n", s.ID)
 							return
 						}
+						if skip, _ := s.SkipUplinkKeyframeRequest("startup", time.Now()); skip {
+							return
+						}
 						s.SendPLItoWebRTC()
 						select {
 						case <-time.After(400 * time.Millisecond):

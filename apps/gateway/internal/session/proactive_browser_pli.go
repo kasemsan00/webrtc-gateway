@@ -367,7 +367,17 @@ func (s *Session) HandleSIPInfoPictureFastUpdate(now time.Time) bool {
 	s.firIDRSliceLog = true
 	s.firIDRSliceTS = 0
 	s.firIDRSliceTSSet = false
-	wait, retry := SIPInfoFIRRetryWait(s.uplinkVideoLastIDR, now)
+	inFlight, completeAt, lastPLI := s.uplinkIDRGateLocked()
+	lastIDR := s.uplinkVideoLastIDR
+	wait, retry := SIPInfoFIRRetryWait(lastIDR, now)
+	skipReason := ""
+	if send, reason := DecideUplinkKeyframeRequest("sip_info_fir", inFlight, completeAt, lastPLI, now); !send {
+		skipReason = reason
+		if !retry {
+			retry = true
+			wait = sipInfoFIRDeferWait(reason, lastPLI, now)
+		}
+	}
 	var gen uint64
 	if retry && !s.sipInfoFIRRetryActive {
 		s.sipInfoFIRRetryGen++
@@ -377,6 +387,9 @@ func (s *Session) HandleSIPInfoPictureFastUpdate(now time.Time) bool {
 	id := s.ID
 	s.mu.Unlock()
 	s.signalProactivePLIWake()
+	if skipReason != "" {
+		fmt.Printf("[%s] uplink_keyframe_skipped kind=sip_info_fir reason=%s\n", id, skipReason)
+	}
 	if retry {
 		fmt.Printf("[%s] sip_info_fir deferred retry_in=%s\n", id, wait.Round(time.Millisecond))
 		if gen != 0 {
@@ -386,6 +399,19 @@ func (s *Session) HandleSIPInfoPictureFastUpdate(now time.Time) bool {
 	}
 	s.SendBrowserPLIImmediate("sip_info_fir")
 	return true
+}
+
+func sipInfoFIRDeferWait(reason string, lastPLI, now time.Time) time.Duration {
+	if reason == "coalesced" && !lastPLI.IsZero() {
+		remain := SIPKeyframePLICoalesce - now.Sub(lastPLI)
+		if remain > 0 {
+			return remain
+		}
+	}
+	if reason == "idr-in-flight" {
+		return 80 * time.Millisecond
+	}
+	return SIPKeyframePLICoalesce
 }
 
 // SIPInfoFIRRetryWait is the delay before the first retry when fir landed
@@ -423,7 +449,7 @@ func (s *Session) runSIPInfoFIRRetry(gen uint64, firAt time.Time, firstWait time
 	}()
 	timer := time.NewTimer(firstWait)
 	defer timer.Stop()
-	for n := 0; n < SIPInfoFIRRetryCap; n++ {
+	for sent := 0; sent < SIPInfoFIRRetryCap; {
 		select {
 		case <-ctx.Done():
 			return
@@ -431,37 +457,55 @@ func (s *Session) runSIPInfoFIRRetry(gen uint64, firAt time.Time, firstWait time
 		}
 		send, reason := s.sipInfoFIRRetryShouldSend(gen, firAt, time.Now())
 		if !send {
+			if reason == "idr-in-flight" || reason == "coalesced" {
+				fmt.Printf("[%s] uplink_keyframe_skipped kind=sip_info_fir_retry reason=%s\n", s.ID, reason)
+				wait := sipInfoFIRDeferWait(reason, s.lastSIPInfoRetryPLI(), time.Now())
+				timer.Reset(wait)
+				continue
+			}
 			if reason == "idr-forwarded" {
 				fmt.Printf("[%s] sip_info_fir_retry cancelled reason=%s\n", s.ID, reason)
 			}
 			return
 		}
 		s.SendBrowserPLIImmediate("sip_info_fir_retry")
+		sent++
 		timer.Reset(SIPInfoFIRRetryGap())
 	}
 }
 
+func (s *Session) lastSIPInfoRetryPLI() time.Time {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.lastBrowserIDRRequest
+}
+
 // sipInfoFIRRetryShouldSend is the fake-clock gate for one VFU retry. An IDR
-// forwarded after firAt, including leftover slices of the picture that was
-// already in flight, cancels the retry.
+// whose first slice is forwarded after firAt cancels the retry. An IDR still
+// in flight waits; leftover slices of a pre-FIR picture do not count.
 func (s *Session) sipInfoFIRRetryShouldSend(gen uint64, firAt, now time.Time) (bool, string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.sipInfoFIRRetryGen != gen {
 		return false, "stale"
 	}
-	lastIDR := s.lastForwardedIDRTimeLocked()
-	if IDRSatisfiesKeyframeRequest(lastIDR, firAt) || !s.switchKeyframeIDRPending {
+	firstSlice := s.uplinkVideoLastIDR
+	if IDRSatisfiesKeyframeRequest(firstSlice, firAt) || !s.switchKeyframeIDRPending {
 		return false, "idr-forwarded"
 	}
-	_ = now
+	if s.uplinkIDRInFlight {
+		return false, "idr-in-flight"
+	}
+	if send, reason := DecideUplinkKeyframeRequest("sip_info_fir_retry", false, s.uplinkIDRCompleteAt, s.lastBrowserIDRRequest, now); !send {
+		return false, reason
+	}
 	return true, ""
 }
 
 // SIPInfoFIRRetryGap is the spacing between retry PLIs after the first one
 // has waited out Chrome's post-IDR window.
 func SIPInfoFIRRetryGap() time.Duration {
-	return BrowserIDRRequestMinGap
+	return SIPKeyframePLICoalesce
 }
 
 // HandleSIPReinviteKeyframe asks the browser for an IDR after a SIP re-INVITE.
@@ -728,6 +772,12 @@ func (s *Session) HasSIPKeyframeRequest() bool {
 // A new IDR timestamp logs the gap since the previous IDR. Once a second it
 // logs the forwarded packet rate. Must not be called while holding s.mu.
 func (s *Session) ObserveUplinkVideoForward(isIDR bool, rtpTimestamp uint32, now time.Time) {
+	s.ObserveUplinkVideoForwardMarked(isIDR, rtpTimestamp, now, false)
+}
+
+// ObserveUplinkVideoForwardMarked is ObserveUplinkVideoForward with the RTP
+// marker. The marker ends the in-flight IDR picture used by the request gate.
+func (s *Session) ObserveUplinkVideoForwardMarked(isIDR bool, rtpTimestamp uint32, now time.Time, marker bool) {
 	s.mu.Lock()
 	if s.uplinkVideoWindowStart.IsZero() {
 		s.uplinkVideoWindowStart = now
@@ -748,6 +798,7 @@ func (s *Session) ObserveUplinkVideoForward(isIDR bool, rtpTimestamp uint32, now
 		if s.LastUplinkKeyframe.Before(now) {
 			s.LastUplinkKeyframe = now
 		}
+		s.noteUplinkIDRProgressLocked(true, rtpTimestamp, marker)
 	}
 	if isIDR && s.switchKeyframeIDRPending {
 		newPicture := !s.uplinkVideoIDRTimestampSeen || rtpTimestamp != s.uplinkVideoLastIDRTimestamp

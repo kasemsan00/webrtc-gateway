@@ -799,10 +799,13 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 								if sess.GetState() == session.StateEnded {
 									return
 								}
-								if sess.HasUplinkKeyframeSince(kickAt) {
+								if sess.HasUplinkKeyframeSince(kickAt) || sess.ShouldStopStartupBrowserPLI() {
 									return
 								}
 								time.Sleep(startupPLIInterval)
+								if skip, _ := sess.SkipUplinkKeyframeRequest("startup", time.Now()); skip {
+									return
+								}
 								sess.SendPLItoWebRTC()
 							}
 						}()
@@ -1202,7 +1205,8 @@ func (s *Server) startPeriodicPLIForSession(sess *session.Session) {
 		return true
 	}
 	stopIfReady := func() bool {
-		stop, reason := session.DecidePeriodicBrowserPLI(sess.HasUplinkKeyframe(), time.Now(), pliDeadline)
+		hasIDR := sess.HasUplinkKeyframe() || sess.UplinkIDRInFlight() || sess.HasCompleteUplinkIDR()
+		stop, reason := session.DecidePeriodicBrowserPLI(hasIDR, time.Now(), pliDeadline)
 		if !stop {
 			return false
 		}
@@ -1216,6 +1220,10 @@ func (s *Server) startPeriodicPLIForSession(sess *session.Session) {
 			return
 		}
 		if superseded() || stopIfReady() {
+			return
+		}
+		if skip, _ := sess.SkipUplinkKeyframeRequest("startup", time.Now()); skip {
+			fmt.Printf("[%s] periodic_pli_stop reason=uplink-idr-forwarded epoch=%d sent=%d\n", sess.ID, epoch, pliCount)
 			return
 		}
 		sess.SendPLItoWebRTC()
@@ -1234,6 +1242,10 @@ func (s *Server) startPeriodicPLIForSession(sess *session.Session) {
 			return
 		}
 		if superseded() || stopIfReady() {
+			return
+		}
+		if skip, _ := sess.SkipUplinkKeyframeRequest("startup", time.Now()); skip {
+			fmt.Printf("[%s] periodic_pli_stop reason=uplink-idr-forwarded epoch=%d sent=%d\n", sess.ID, epoch, pliCount)
 			return
 		}
 		pliCount++
