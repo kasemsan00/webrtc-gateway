@@ -195,10 +195,14 @@ func (p *uplinkVideoPacer) loop() {
 			}
 		}
 		logs := p.pacer.TakeIDRLogs()
+		dropped := p.pacer.TakeDropped()
 		stopped := p.stopped
 		seen := p.seen
 		p.mu.Unlock()
 
+		if dropped > 0 {
+			fmt.Printf("[%s] uplink_pacer_drop reason=catch-up-keyframe count=%d\n", p.session.ID, dropped)
+		}
 		if flushed && len(released) > 0 {
 			fmt.Printf("[%s] uplink_pacer_flush packets=%d bytes=%d delay_ms=%d\n",
 				p.session.ID, len(released), pacedBytes(released), headDelay.Milliseconds())

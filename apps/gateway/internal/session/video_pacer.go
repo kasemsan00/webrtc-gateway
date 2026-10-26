@@ -7,6 +7,11 @@ const (
 	defaultUplinkVideoPacerBurstPkts  = 4
 	defaultUplinkVideoPacerMaxQueue   = 500 * time.Millisecond
 	defaultUplinkIDRPace              = 225 * time.Millisecond
+	defaultUplinkFrameCatchUp         = 400 * time.Millisecond
+	defaultUplinkFrameCatchUpMax      = 12
+	uplinkVideoClockRate              = 90000
+	minUplinkFrameInterval            = 8 * time.Millisecond
+	maxUplinkFrameInterval            = 100 * time.Millisecond
 	// uplinkVideoPacerNominalBytes is the size used to turn the burst
 	// allowance (packets) into token-bucket capacity. A ~1060 byte
 	// single-NAL packet still fits four times inside a 4-packet burst.
@@ -14,11 +19,13 @@ const (
 )
 
 type videoPacerConfig struct {
-	BytesPerSec float64
-	BurstBytes  float64
-	MaxDelay    time.Duration
-	IDRTarget   time.Duration
-	IDRPackets  int
+	BytesPerSec      float64
+	BurstBytes       float64
+	MaxDelay         time.Duration
+	IDRTarget        time.Duration
+	IDRPackets       int
+	CatchUpCap       time.Duration
+	MaxCatchUpFrames int
 }
 
 func videoPacerConfigFrom(bitsPerSec, burstPackets int, maxDelay, idrTarget time.Duration) videoPacerConfig {
@@ -35,12 +42,18 @@ func videoPacerConfigFrom(bitsPerSec, burstPackets int, maxDelay, idrTarget time
 	if idrPackets < 2 {
 		idrPackets = 2
 	}
+	catchUp := defaultUplinkFrameCatchUp
+	if maxDelay > 0 && catchUp > maxDelay {
+		catchUp = maxDelay
+	}
 	return videoPacerConfig{
-		BytesPerSec: float64(bitsPerSec) / 8,
-		BurstBytes:  float64(burstPackets * uplinkVideoPacerNominalBytes),
-		MaxDelay:    maxDelay,
-		IDRTarget:   idrTarget,
-		IDRPackets:  idrPackets,
+		BytesPerSec:      float64(bitsPerSec) / 8,
+		BurstBytes:       float64(burstPackets * uplinkVideoPacerNominalBytes),
+		MaxDelay:         maxDelay,
+		IDRTarget:        idrTarget,
+		IDRPackets:       idrPackets,
+		CatchUpCap:       catchUp,
+		MaxCatchUpFrames: defaultUplinkFrameCatchUpMax,
 	}
 }
 
@@ -77,14 +90,19 @@ type idrSizeEvent struct {
 }
 
 type videoPacer struct {
-	cfg      videoPacerConfig
-	tokens   float64
-	refilled time.Time
-	primed   bool
-	queue    []pacedVideoPacket
-	head     int
-	idrs     map[uint32]*idrAccount
-	logs     []idrSizeEvent
+	cfg             videoPacerConfig
+	tokens          float64
+	refilled        time.Time
+	primed          bool
+	queue           []pacedVideoPacket
+	head            int
+	idrs            map[uint32]*idrAccount
+	logs            []idrSizeEvent
+	dropped         int
+	releaseSeen     bool
+	lastReleaseTS   uint32
+	lastReleaseAt   time.Time
+	catchUpDeadline time.Time
 }
 
 func newVideoPacer(cfg videoPacerConfig) *videoPacer {
@@ -137,9 +155,16 @@ func (p *videoPacer) Release(now time.Time) (released []pacedVideoPacket, flushe
 	}
 	p.refill(now)
 	for p.queued() > 0 {
+		p.dropCatchUpIfNeeded()
+		if p.queued() == 0 {
+			break
+		}
 		pkt := p.queue[p.head]
 		if idrWait := p.idrPaceWait(pkt, now); idrWait > 0 {
 			return released, false, idrWait
+		}
+		if frameWait := p.framePaceWait(pkt, now); frameWait > 0 {
+			return released, false, frameWait
 		}
 		need := float64(pkt.size)
 		if need > p.cfg.BurstBytes {
@@ -225,7 +250,137 @@ func (p *videoPacer) refill(now time.Time) {
 	p.refilled = now
 }
 
+func rtpTicksToDuration(delta uint32) time.Duration {
+	return time.Duration(float64(delta) / float64(uplinkVideoClockRate) * float64(time.Second))
+}
+
+func clampFrameInterval(interval time.Duration) time.Duration {
+	if interval < minUplinkFrameInterval {
+		return minUplinkFrameInterval
+	}
+	if interval > maxUplinkFrameInterval {
+		return maxUplinkFrameInterval
+	}
+	return interval
+}
+
+func (p *videoPacer) framePaceWait(pkt pacedVideoPacket, now time.Time) time.Duration {
+	if pkt.keyframe || !p.releaseSeen {
+		return 0
+	}
+	if pkt.rtpTS == p.lastReleaseTS {
+		return 0
+	}
+	interval := clampFrameInterval(rtpTicksToDuration(pkt.rtpTS - p.lastReleaseTS))
+	interval = p.compressInterval(interval, now)
+	due := p.lastReleaseAt.Add(interval)
+	if !now.Before(due) {
+		return 0
+	}
+	wait := due.Sub(now)
+	if wait < time.Millisecond {
+		return time.Millisecond
+	}
+	return wait
+}
+
+func (p *videoPacer) compressInterval(interval time.Duration, now time.Time) time.Duration {
+	if p.cfg.CatchUpCap <= 0 {
+		return interval
+	}
+	remain := p.remainingRTPDuration()
+	if remain <= p.cfg.CatchUpCap && p.catchUpDeadline.IsZero() {
+		return interval
+	}
+	frames, _ := p.queuedFrameStats()
+	if frames < 1 {
+		return interval
+	}
+	if p.catchUpDeadline.IsZero() {
+		p.catchUpDeadline = now.Add(p.cfg.CatchUpCap)
+	}
+	left := p.catchUpDeadline.Sub(now)
+	if left <= 0 {
+		return minUplinkFrameInterval
+	}
+	scaled := left / time.Duration(frames)
+	if scaled < minUplinkFrameInterval {
+		return minUplinkFrameInterval
+	}
+	if scaled > interval {
+		return interval
+	}
+	return scaled
+}
+
+func (p *videoPacer) remainingRTPDuration() time.Duration {
+	if !p.releaseSeen || p.queued() == 0 {
+		return 0
+	}
+	var maxTS uint32
+	seen := false
+	for i := p.head; i < len(p.queue); i++ {
+		ts := p.queue[i].rtpTS
+		if !seen || int32(ts-maxTS) > 0 {
+			maxTS = ts
+			seen = true
+		}
+	}
+	if !seen {
+		return 0
+	}
+	return rtpTicksToDuration(maxTS - p.lastReleaseTS)
+}
+
+func (p *videoPacer) dropCatchUpIfNeeded() {
+	maxFrames := p.cfg.MaxCatchUpFrames
+	if maxFrames <= 0 {
+		return
+	}
+	frames, hasLaterKeyframe := p.queuedFrameStats()
+	if frames <= maxFrames || !hasLaterKeyframe {
+		return
+	}
+	for p.queued() > 0 && !p.queue[p.head].keyframe {
+		p.head++
+		p.dropped++
+	}
+	p.compact()
+}
+
+func (p *videoPacer) queuedFrameStats() (frames int, hasLaterKeyframe bool) {
+	if p.queued() == 0 {
+		return 0, false
+	}
+	var prev uint32
+	prevSet := false
+	for i := p.head; i < len(p.queue); i++ {
+		pkt := p.queue[i]
+		if pkt.keyframe && (i > p.head || !p.queue[p.head].keyframe) {
+			hasLaterKeyframe = true
+		}
+		if !prevSet || pkt.rtpTS != prev {
+			frames++
+			prev = pkt.rtpTS
+			prevSet = true
+		}
+	}
+	return frames, hasLaterKeyframe
+}
+
+func (p *videoPacer) TakeDropped() int {
+	n := p.dropped
+	p.dropped = 0
+	return n
+}
+
 func (p *videoPacer) noteRelease(pkt pacedVideoPacket, now time.Time) {
+	p.lastReleaseAt = now
+	p.lastReleaseTS = pkt.rtpTS
+	p.releaseSeen = true
+	if pkt.keyframe {
+		p.catchUpDeadline = time.Time{}
+	}
 	if !pkt.keyframe {
 		return
 	}
@@ -303,6 +458,7 @@ func (p *videoPacer) compact() {
 	if p.head == len(p.queue) {
 		p.queue = nil
 		p.head = 0
+		p.catchUpDeadline = time.Time{}
 		return
 	}
 	if p.head > 32 {

@@ -301,3 +301,85 @@ func TestUplinkVideoPacerDisabledByDefaultOnBareSession(t *testing.T) {
 		t.Fatal("a session that did not load config must not pace")
 	}
 }
+
+func TestVideoPacerSpacesNonKeyframeFramesByRTPTimestamp(t *testing.T) {
+	p := newVideoPacer(videoPacerConfigFrom(
+		defaultUplinkVideoPacerBitsPerSec,
+		defaultUplinkVideoPacerBurstPkts,
+		defaultUplinkVideoPacerMaxQueue,
+		defaultUplinkIDRPace,
+	))
+	start := time.Unix(0, 0)
+	enqueueMarked(p, 0, 800, start, true, 90000, false)
+	enqueueMarked(p, 1, 800, start, true, 90000, true)
+	for i := 0; i < 4; i++ {
+		enqueueMarked(p, i+2, 400, start, false, 90000+uint32((i+1)*3000), true)
+	}
+	_, released, _ := drainPacer(t, p, start)
+	if len(released) != 6 {
+		t.Fatalf("released %d, want 6", len(released))
+	}
+	var pFrames []pacedVideoPacket
+	for _, pkt := range released {
+		if !pkt.keyframe {
+			pFrames = append(pFrames, pkt)
+		}
+	}
+	if len(pFrames) != 4 {
+		t.Fatalf("P-frames %d, want 4", len(pFrames))
+	}
+	idrEnd := released[1].released
+	if pFrames[0].released.Sub(idrEnd) < 30*time.Millisecond {
+		t.Fatalf("first P-frame %s after IDR, want ~33ms", pFrames[0].released.Sub(idrEnd))
+	}
+	span := pFrames[3].released.Sub(pFrames[0].released)
+	if span < 90*time.Millisecond || span > 140*time.Millisecond {
+		t.Fatalf("P-frame span %s, want ~99ms (3x 33ms)", span)
+	}
+}
+
+func TestVideoPacerCompressesCatchUpWhenBacklogExceedsCap(t *testing.T) {
+	p := newVideoPacer(videoPacerConfigFrom(
+		defaultUplinkVideoPacerBitsPerSec,
+		defaultUplinkVideoPacerBurstPkts,
+		defaultUplinkVideoPacerMaxQueue,
+		0,
+	))
+	start := time.Unix(0, 0)
+	enqueueMarked(p, 0, 400, start, true, 90000, true)
+	for i := 0; i < 20; i++ {
+		enqueueMarked(p, i+1, 400, start, false, 90000+uint32((i+1)*3000), true)
+	}
+	_, released, _ := drainPacer(t, p, start)
+	if len(released) != 21 {
+		t.Fatalf("released %d, want 21", len(released))
+	}
+	span := released[20].released.Sub(released[0].released)
+	if span > 480*time.Millisecond {
+		t.Fatalf("catch-up span %s, want compressed into ~400ms", span)
+	}
+	if span < 250*time.Millisecond {
+		t.Fatalf("catch-up span %s, too fast (back-to-back)", span)
+	}
+}
+
+func TestVideoPacerDropsBacklogToNextKeyframe(t *testing.T) {
+	p := newVideoPacer(videoPacerConfigFrom(
+		defaultUplinkVideoPacerBitsPerSec,
+		defaultUplinkVideoPacerBurstPkts,
+		defaultUplinkVideoPacerMaxQueue,
+		0,
+	))
+	start := time.Unix(0, 0)
+	for i := 0; i < 15; i++ {
+		enqueueMarked(p, i, 400, start, false, 90000+uint32(i*3000), true)
+	}
+	enqueueMarked(p, 15, 800, start, true, 90000+15*3000, true)
+	_, released, _ := drainPacer(t, p, start)
+	if len(released) != 1 || !released[0].keyframe || released[0].seq != 15 {
+		t.Fatalf("released %+v, want the later IDR only", released)
+	}
+	if got := p.TakeDropped(); got != 15 {
+		t.Fatalf("dropped %d, want 15", got)
+	}
+}

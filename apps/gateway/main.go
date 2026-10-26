@@ -427,6 +427,9 @@ func runAPIMode(ctx context.Context, cfg *config.Config, unicastAddress string, 
 
 	// Wire dependencies for BYE request handling
 	sipServer.SetSessionManager(sessionMgr)
+	sessionMgr.SetSIPKeyframeINFOSender(func(sess *session.Session, reason string) {
+		sipServer.RequestSIPVideoKeyframeINFO(sess, reason)
+	})
 	sipServer.SetStateNotifier(apiServer)
 	sipServer.SetMidCallRenegotiationNotifier(apiServer)
 	sipServer.SetRemoteMediaNotifier(apiServer)

@@ -10,11 +10,15 @@ import (
 	"webrtc-sip-gateway/internal/config"
 )
 
+// SIPKeyframeINFOSender sends in-dialog SIP INFO picture_fast_update for a session.
+type SIPKeyframeINFOSender func(sess *Session, reason string)
+
 // Manager manages multiple concurrent sessions
 type Manager struct {
-	sessions map[string]*Session
-	config   *config.Config
-	mu       sync.RWMutex
+	sessions        map[string]*Session
+	config          *config.Config
+	sipKeyframeINFO SIPKeyframeINFOSender
+	mu              sync.RWMutex
 }
 
 // NewManager creates a new session manager
@@ -37,11 +41,25 @@ func (m *Manager) CreateSession(turnConfig config.TURNConfig) (*Session, error) 
 	if err != nil {
 		return nil, err
 	}
+	if m.sipKeyframeINFO != nil {
+		info := m.sipKeyframeINFO
+		session.SetSIPKeyframeINFOSender(func(reason string) {
+			info(session, reason)
+		})
+	}
 
 	m.sessions[id] = session
 	fmt.Printf("[%s] Created new session\n", id)
 
 	return session, nil
+}
+
+// SetSIPKeyframeINFOSender is called from main once the SIP server can send
+// in-dialog INFO. New sessions inherit the hook.
+func (m *Manager) SetSIPKeyframeINFOSender(fn SIPKeyframeINFOSender) {
+	m.mu.Lock()
+	m.sipKeyframeINFO = fn
+	m.mu.Unlock()
 }
 
 // CreateSessionForIncoming creates a new session for incoming SIP calls

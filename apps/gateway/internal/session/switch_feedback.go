@@ -238,9 +238,30 @@ func sendPreparedWebRTCFeedback(id string, snapshot webRTCFeedbackSnapshot) bool
 }
 
 func (s *Session) sendSIPFeedback(kind string, force bool, trigger string, authority *switchFeedbackAuthority) bool {
+	now := time.Now()
+	if strings.TrimSpace(trigger) == "" {
+		trigger = kind
+	}
 	s.mu.Lock()
-	snapshot := s.prepareSIPFeedbackLocked(kind, force, trigger, time.Now(), authority)
+	decision := DecideSIPKeyframeFeedback(s.sipKeyframeFeedbackInputLocked(kind, now))
+	if decision.PendingRTCP {
+		s.queuePendingSIPRTCPLocked(kind, trigger, force, authority)
+	}
 	id := s.ID
+	s.mu.Unlock()
+
+	if decision.SendINFO {
+		s.requestSIPKeyframeINFO(trigger)
+	}
+	if !decision.SendRTCP {
+		if decision.Reason != "" {
+			fmt.Printf("[%s] sip_rtcp_fb_skipped kind=%s trigger=%s reason=%s\n", id, kind, trigger, decision.Reason)
+		}
+		return true
+	}
+
+	s.mu.Lock()
+	snapshot := s.prepareSIPFeedbackLocked(kind, force, trigger, now, authority)
 	s.mu.Unlock()
 	if !snapshot.authorized {
 		return false
@@ -313,11 +334,9 @@ func (s *Session) FlushPendingBrowserKeyframeRequestForSwitch(generation int, me
 		return true
 	}
 	s.clearPendingBrowserKeyframeRequestLocked()
-	snapshot := s.prepareSIPFeedbackLocked("pli", true, "ws-request_keyframe", time.Now(), &switchFeedbackAuthority{generation, mediaEpoch})
-	id := s.ID
 	s.mu.Unlock()
 
-	sendPreparedSIPFeedback(id, snapshot)
-	fmt.Printf("[%s] request_keyframe_flushed reason=%s tokenGeneration=%d mediaEpoch=%d\n", id, reason, generation, mediaEpoch)
+	s.sendSIPFeedback("pli", true, "ws-request_keyframe", &switchFeedbackAuthority{generation, mediaEpoch})
+	fmt.Printf("[%s] request_keyframe_flushed reason=%s tokenGeneration=%d mediaEpoch=%d\n", s.ID, reason, generation, mediaEpoch)
 	return true
 }

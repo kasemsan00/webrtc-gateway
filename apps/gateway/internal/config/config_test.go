@@ -82,6 +82,72 @@ func TestUplinkIDRPaceConfigDefaults(t *testing.T) {
 	}
 }
 
+func TestSIPKeyframeRequestConfigDefaults(t *testing.T) {
+	t.Setenv("SIP_KEYFRAME_REQUEST_MODE", "")
+	t.Setenv("SIP_RTCP_FB_MIN_INTERVAL_MS", "")
+	t.Setenv("SIP_RTCP_FB_GUARD_MS", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.SIP.KeyframeRequestMode != SIPKeyframeRequestModeInfo {
+		t.Fatalf("mode = %q, want %q", cfg.SIP.KeyframeRequestMode, SIPKeyframeRequestModeInfo)
+	}
+	if cfg.SIP.RTCPFBMinIntervalMS != 2000 {
+		t.Fatalf("minInterval = %d, want 2000", cfg.SIP.RTCPFBMinIntervalMS)
+	}
+	if cfg.SIP.RTCPFBGuardMS != 1500 {
+		t.Fatalf("guard = %d, want 1500", cfg.SIP.RTCPFBGuardMS)
+	}
+}
+
+func TestSIPKeyframeRequestConfigCanBeCustomized(t *testing.T) {
+	t.Setenv("SIP_KEYFRAME_REQUEST_MODE", "both")
+	t.Setenv("SIP_RTCP_FB_MIN_INTERVAL_MS", "2500")
+	t.Setenv("SIP_RTCP_FB_GUARD_MS", "800")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.SIP.KeyframeRequestMode != SIPKeyframeRequestModeBoth {
+		t.Fatalf("mode = %q, want both", cfg.SIP.KeyframeRequestMode)
+	}
+	if cfg.SIP.RTCPFBMinIntervalMS != 2500 {
+		t.Fatalf("minInterval = %d, want 2500", cfg.SIP.RTCPFBMinIntervalMS)
+	}
+	if cfg.SIP.RTCPFBGuardMS != 800 {
+		t.Fatalf("guard = %d, want 800", cfg.SIP.RTCPFBGuardMS)
+	}
+}
+
+func TestSIPKeyframeRequestConfigClampsAndRejectsInvalid(t *testing.T) {
+	t.Setenv("SIP_KEYFRAME_REQUEST_MODE", "pls")
+	t.Setenv("SIP_RTCP_FB_MIN_INTERVAL_MS", "50")
+	t.Setenv("SIP_RTCP_FB_GUARD_MS", "9000")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.SIP.KeyframeRequestMode != SIPKeyframeRequestModeInfo {
+		t.Fatalf("invalid mode = %q, want info", cfg.SIP.KeyframeRequestMode)
+	}
+	if cfg.SIP.RTCPFBMinIntervalMS != 500 {
+		t.Fatalf("minInterval = %d, want 500", cfg.SIP.RTCPFBMinIntervalMS)
+	}
+	if cfg.SIP.RTCPFBGuardMS != 5000 {
+		t.Fatalf("guard = %d, want 5000", cfg.SIP.RTCPFBGuardMS)
+	}
+
+	t.Setenv("SIP_RTCP_FB_GUARD_MS", "0")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.SIP.RTCPFBGuardMS != 0 {
+		t.Fatalf("guard 0 should disable, got %d", cfg.SIP.RTCPFBGuardMS)
+	}
+}
+
 func TestUplinkIDRPaceConfigCanBeCustomized(t *testing.T) {
 	t.Setenv("SIP_UPLINK_IDR_PACE_MS", "250")
 	cfg, err := Load()

@@ -207,6 +207,18 @@ type Session struct {
 	openedVideoSource                     string               `json:"-"`
 	bridgedKeyframeAt                     time.Time            `json:"-"`
 	switchVideoInfoFIRAt                  time.Time            `json:"-"`
+	sipKeyframeRequestMode                string               `json:"-"`
+	sipRTCPFBMinInterval                  time.Duration        `json:"-"`
+	sipRTCPFBGuard                        time.Duration        `json:"-"`
+	sipKeyframeINFO                       func(reason string)  `json:"-"`
+	uplinkVideoPacketSeen                 bool                 `json:"-"`
+	lastUplinkPacketMarker                bool                 `json:"-"`
+	pendingSIPRTCPKind                    string               `json:"-"`
+	pendingSIPRTCPTrigger                 string               `json:"-"`
+	pendingSIPRTCPForce                   bool                 `json:"-"`
+	pendingSIPRTCPHasAuthority            bool                 `json:"-"`
+	pendingSIPRTCPGeneration              int                  `json:"-"`
+	pendingSIPRTCPMediaEpoch              uint64               `json:"-"`
 	SwitchVideoGateFailOpen               time.Duration        `json:"-"`
 	SwitchVideoGateFailOpenCap            time.Duration        `json:"-"`
 	SwitchVideoGateActive                 bool                 `json:"-"`
@@ -281,14 +293,14 @@ type Session struct {
 	uplinkSPSDimensionLogged  bool   `json:"-"`
 	// allowNextUplinkPictureSize accepts one SPS size change after an explicit
 	// switch/source replacement, then locks that size again.
-	allowNextUplinkPictureSize bool              `json:"-"`
-	switchKeyframeRequestedAt  time.Time         `json:"-"`
-	switchKeyframeIDRPending   bool              `json:"-"`
-	switchKeyframeBurstGen     uint64            `json:"-"`
+	allowNextUplinkPictureSize bool      `json:"-"`
+	switchKeyframeRequestedAt  time.Time `json:"-"`
+	switchKeyframeIDRPending   bool      `json:"-"`
+	switchKeyframeBurstGen     uint64    `json:"-"`
 	// switchEpochAt is the start of the current source-switch epoch.
 	// Only an IDR whose first slice is forwarded at or after this time
 	// satisfies the switch. Leftover slices of a pre-switch picture do not.
-	switchEpochAt time.Time `json:"-"`
+	switchEpochAt              time.Time         `json:"-"`
 	proactivePLINotBefore      time.Time         `json:"-"`
 	proactivePLIWake           chan struct{}     `json:"-"`
 	proactiveBrowserPLIInitial time.Duration     `json:"-"`
@@ -679,6 +691,9 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 		uplinkVideoPacerBurstPackets:         cfg.SIP.UplinkVideoPacerBurstPackets,
 		uplinkVideoPacerMaxQueue:             time.Duration(cfg.SIP.UplinkVideoPacerMaxQueueMS) * time.Millisecond,
 		uplinkVideoPacerIDRPace:              time.Duration(cfg.SIP.UplinkIDRPaceMS) * time.Millisecond,
+		sipKeyframeRequestMode:               cfg.SIP.KeyframeRequestMode,
+		sipRTCPFBMinInterval:                 time.Duration(cfg.SIP.RTCPFBMinIntervalMS) * time.Millisecond,
+		sipRTCPFBGuard:                       time.Duration(cfg.SIP.RTCPFBGuardMS) * time.Millisecond,
 		proactiveBrowserPLIInitial:           time.Duration(cfg.SIP.ProactiveBrowserPLIInitialMS) * time.Millisecond,
 		proactiveBrowserPLISafety:            time.Duration(cfg.SIP.ProactiveBrowserPLISafetyMS) * time.Millisecond,
 		VideoTimestampJumpPLI:                cfg.SIP.VideoTimestampJumpPLI,

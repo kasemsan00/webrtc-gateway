@@ -179,6 +179,9 @@ type SIPConfig struct {
 	UplinkVideoPacerBurstPackets         int    // Packets that may leave together before the rate limit (default: 4)
 	UplinkVideoPacerMaxQueueMS           int    // Flush queued uplink video after this delay instead of growing (default: 500)
 	UplinkIDRPaceMS                      int    // Spread one WebRTC→SIP IDR over this many ms (default: 225; 0 disables)
+	KeyframeRequestMode                  string // How to ask the SIP peer for a keyframe: info|rtcp|both (default: info)
+	RTCPFBMinIntervalMS                  int    // Minimum gap between SIP-leg RTCP PLI/FIR (default: 2000)
+	RTCPFBGuardMS                        int    // Skip SIP-leg RTCP PLI/FIR this long after an uplink IDR (default: 1500)
 	ProactiveBrowserPLIInitialMS         int    // Browser PLI interval until the first uplink IDR (default: 2000)
 	ProactiveBrowserPLISafetyMS          int    // Browser PLI only if no uplink IDR in this window (default: 10000)
 	VideoTimestampJumpPLI                bool   // Request a SIP keyframe when SIP video RTP timestamps jump (default: true)
@@ -220,6 +223,10 @@ const (
 	SIPVideoFeedbackTransportRTP  = "rtp"
 	SIPVideoFeedbackTransportRTCP = "rtcp"
 	SIPVideoFeedbackTransportDual = "dual"
+
+	SIPKeyframeRequestModeInfo = "info"
+	SIPKeyframeRequestModeRTCP = "rtcp"
+	SIPKeyframeRequestModeBoth = "both"
 
 	SIPSwitchVideoTransitionPreserve = "preserve"
 	SIPSwitchVideoTransitionBlackout = "blackout" // default: blackout-until-safe-IDR on normalize path
@@ -359,6 +366,9 @@ func Load() (*Config, error) {
 			UplinkVideoPacerBurstPackets:         clampInt(getEnvAsInt("SIP_UPLINK_VIDEO_PACER_BURST_PACKETS", 4), 1, 16),
 			UplinkVideoPacerMaxQueueMS:           clampInt(getEnvAsInt("SIP_UPLINK_VIDEO_PACER_MAX_QUEUE_MS", 500), 50, 5000),
 			UplinkIDRPaceMS:                      uplinkIDRPaceMSFromEnv(),
+			KeyframeRequestMode:                  sipKeyframeRequestModeFromEnv(),
+			RTCPFBMinIntervalMS:                  sipRTCPFBMinIntervalMSFromEnv(),
+			RTCPFBGuardMS:                        sipRTCPFBGuardMSFromEnv(),
 			ProactiveBrowserPLIInitialMS:         clampInt(getEnvAsInt("SIP_PROACTIVE_BROWSER_PLI_INITIAL_MS", 2000), 500, 10000),
 			ProactiveBrowserPLISafetyMS:          clampInt(getEnvAsInt("SIP_PROACTIVE_BROWSER_PLI_SAFETY_MS", 10000), 2000, 60000),
 			VideoTimestampJumpPLI:                getEnvAsBool("SIP_VIDEO_TIMESTAMP_JUMP_PLI", true),
@@ -699,6 +709,11 @@ func (c *Config) Display() {
 		c.SIP.UplinkVideoPacerMaxQueueMS,
 		c.SIP.UplinkIDRPaceMS,
 	)
+	fmt.Printf("  SIP Keyframe Request: mode=%s rtcpMinInterval=%dms guard=%dms\n",
+		c.SIP.KeyframeRequestMode,
+		c.SIP.RTCPFBMinIntervalMS,
+		c.SIP.RTCPFBGuardMS,
+	)
 	fmt.Printf("  Proactive Browser PLI: initial=%dms safety=%dms\n",
 		c.SIP.ProactiveBrowserPLIInitialMS,
 		c.SIP.ProactiveBrowserPLISafetyMS,
@@ -930,6 +945,29 @@ func uplinkIDRPaceMSFromEnv() int {
 		return 0
 	}
 	return clampInt(v, 80, 500)
+}
+
+func sipKeyframeRequestModeFromEnv() string {
+	value := strings.ToLower(strings.TrimSpace(getEnvWithDefault("SIP_KEYFRAME_REQUEST_MODE", SIPKeyframeRequestModeInfo)))
+	switch value {
+	case SIPKeyframeRequestModeInfo, SIPKeyframeRequestModeRTCP, SIPKeyframeRequestModeBoth:
+		return value
+	default:
+		fmt.Printf("Warning: invalid SIP_KEYFRAME_REQUEST_MODE=%q, using %q\n", value, SIPKeyframeRequestModeInfo)
+		return SIPKeyframeRequestModeInfo
+	}
+}
+
+func sipRTCPFBMinIntervalMSFromEnv() int {
+	return clampInt(getEnvAsInt("SIP_RTCP_FB_MIN_INTERVAL_MS", 2000), 500, 10000)
+}
+
+func sipRTCPFBGuardMSFromEnv() int {
+	v := getEnvAsInt("SIP_RTCP_FB_GUARD_MS", 1500)
+	if v <= 0 {
+		return 0
+	}
+	return clampInt(v, 0, 5000)
 }
 
 func clampInt(value, min, max int) int {

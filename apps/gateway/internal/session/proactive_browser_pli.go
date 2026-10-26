@@ -779,6 +779,7 @@ func (s *Session) ObserveUplinkVideoForward(isIDR bool, rtpTimestamp uint32, now
 // marker. The marker ends the in-flight IDR picture used by the request gate.
 func (s *Session) ObserveUplinkVideoForwardMarked(isIDR bool, rtpTimestamp uint32, now time.Time, marker bool) {
 	s.mu.Lock()
+	pendingKind, pendingTrigger, pendingForce, pendingAuth, flushPending := s.noteUplinkForwardMarkerLocked(marker)
 	if s.uplinkVideoWindowStart.IsZero() {
 		s.uplinkVideoWindowStart = now
 	}
@@ -838,6 +839,10 @@ func (s *Session) ObserveUplinkVideoForwardMarked(isIDR bool, rtpTimestamp uint3
 	}
 	id := s.ID
 	s.mu.Unlock()
+
+	if flushPending {
+		s.sendSIPFeedback(pendingKind, pendingForce, pendingTrigger, pendingAuth)
+	}
 
 	if logSwitchSatisfied {
 		fmt.Printf("[%s] switch_keyframe_satisfied latency_ms=%d\n", id, switchLatency.Milliseconds())

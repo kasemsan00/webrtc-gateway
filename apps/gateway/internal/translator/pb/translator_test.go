@@ -32,7 +32,9 @@ func TestTranslationRequestImplementsProtoMessage(t *testing.T) {
 		got.TTSVoiceName != req.TTSVoiceName ||
 		got.Mode != req.Mode ||
 		string(got.AudioData) != string(req.AudioData) {
-		t.Fatalf("round trip mismatch: got %+v want %+v", got, req)
+		t.Fatalf("round trip mismatch: got lang=%q/%q voice=%q mode=%q audio=%d want lang=%q/%q voice=%q mode=%q audio=%d",
+			got.SourceLanguage, got.TargetLanguage, got.TTSVoiceName, got.Mode, len(got.AudioData),
+			req.SourceLanguage, req.TargetLanguage, req.TTSVoiceName, req.Mode, len(req.AudioData))
 	}
 }
 
@@ -58,6 +60,8 @@ func TestTranslationResultImplementsProtoMessage(t *testing.T) {
 		got.TranslatedText != res.TranslatedText ||
 		got.TTSVoiceUsed != res.TTSVoiceUsed ||
 		string(got.AudioData) != string(res.AudioData) {
-		t.Fatalf("round trip mismatch: got %+v want %+v", got, res)
+		t.Fatalf("round trip mismatch: got text=%q/%q voice=%q audio=%d want text=%q/%q voice=%q audio=%d",
+			got.RecognizedText, got.TranslatedText, got.TTSVoiceUsed, len(got.AudioData),
+			res.RecognizedText, res.TranslatedText, res.TTSVoiceUsed, len(res.AudioData))
 	}
 }
