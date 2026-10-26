@@ -337,8 +337,12 @@ func (s *Session) forwardRTPToAsteriskFrom(track rtpByteReader, kind string) {
 			// before the scan runs. SPS/PPS ride with the IDR they precede so a
 			// cold start does not drop them and then inject a second pair.
 			held := false
+			pictureSizePLI := false
 			if !isSTAPA {
+				var sizeHeld bool
+				sizeHeld, pictureSizePLI = s.holdUplinkForPictureSizeLocked(isKeyframe, isSPS || isPPS, nalType, time.Now())
 				held = s.holdUplinkForMode0Locked(isKeyframe) || holdUplinkVideoUntilIDR(uplinkOpen, isKeyframe || isSPS || isPPS)
+				held = held || sizeHeld
 			}
 			if isSPS || isPPS {
 				s.recordUplinkParameterSetIfForwarded(held, packet.Header.Timestamp, isSPS, isPPS)
@@ -395,8 +399,12 @@ func (s *Session) forwardRTPToAsteriskFrom(track rtpByteReader, kind string) {
 					}
 				}
 
-				if s.holdUplinkForMode0Locked(containsIDR) || holdUplinkVideoUntilIDR(uplinkOpen, containsIDR || containsSPS || containsPPS) {
+				sizeHeld, sizePLI := s.holdUplinkForPictureSizeLocked(containsIDR, containsSPS || containsPPS, nalType, time.Now())
+				if s.holdUplinkForMode0Locked(containsIDR) || holdUplinkVideoUntilIDR(uplinkOpen, containsIDR || containsSPS || containsPPS) || sizeHeld {
 					s.mu.Unlock()
+					if sizePLI {
+						go s.SendBrowserPLIImmediate("picture_size_change")
+					}
 					heldUntilIDR++
 					if heldUntilIDR <= 5 || heldUntilIDR%100 == 0 {
 						fmt.Printf("[%s] holding WebRTC→SIP video until uplink IDR (held=%d kind=stap-a)\n", s.ID, heldUntilIDR)
@@ -543,6 +551,9 @@ func (s *Session) forwardRTPToAsteriskFrom(track rtpByteReader, kind string) {
 
 			if held {
 				s.mu.Unlock()
+				if pictureSizePLI {
+					go s.SendBrowserPLIImmediate("picture_size_change")
+				}
 				heldUntilIDR++
 				if heldUntilIDR <= 5 || heldUntilIDR%100 == 0 {
 					fmt.Printf("[%s] holding WebRTC→SIP video until uplink IDR (held=%d nal=%d)\n", s.ID, heldUntilIDR, nalType)
@@ -686,9 +697,12 @@ func videoReadShouldStop(err error, ended bool) bool {
 	return strings.Contains(text, "closed") || strings.Contains(text, "eof")
 }
 
-// rejectUplinkPictureSizeChangeLocked keeps the first SPS picture size for
-// the call. A later SPS with different cropped dimensions is how Chrome tells
-// the phone to reallocate its YUV buffer; TTRS then overflows in
+// rejectUplinkPictureSizeChangeLocked tracks the SPS picture size. In the
+// default accept mode a change is taken and the forwarder holds the new size
+// until its IDR (armUplinkPictureSizeChangeLocked); this never returns true.
+// With SIP_UPLINK_PICTURE_SIZE_CHANGE=reject the first size is kept for the
+// call. A later SPS with different cropped dimensions is how Chrome tells
+// the phone to reallocate its YUV buffer; TTRS then overflowed in
 // glTexSubImage2D. The caller holds s.mu. True means this packet must not be
 // forwarded. After a change, every later uplink video packet is dropped too,
 // because those slices belong to the new picture size.
@@ -708,6 +722,10 @@ func (s *Session) rejectUplinkPictureSizeChangeLocked(payload []byte) bool {
 			continue
 		}
 		if width == s.uplinkSPSWidth && height == s.uplinkSPSHeight {
+			continue
+		}
+		if s.acceptUplinkPictureSizeChange() {
+			s.armUplinkPictureSizeChangeLocked(width, height, time.Now())
 			continue
 		}
 		if s.allowNextUplinkPictureSize {

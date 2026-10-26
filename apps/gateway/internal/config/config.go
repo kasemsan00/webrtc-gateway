@@ -182,6 +182,7 @@ type SIPConfig struct {
 	KeyframeRequestMode                  string // How to ask the SIP peer for a keyframe: info|rtcp|both (default: info)
 	RTCPFBMinIntervalMS                  int    // Minimum gap between SIP-leg RTCP PLI/FIR (default: 2000)
 	RTCPFBGuardMS                        int    // Skip SIP-leg RTCP PLI/FIR this long after an uplink IDR (default: 1500)
+	UplinkPictureSizeChange              string // Mid-call browser SPS picture-size change: accept|reject (default: accept)
 	ProactiveBrowserPLIInitialMS         int    // Browser PLI interval until the first uplink IDR (default: 2000)
 	ProactiveBrowserPLISafetyMS          int    // Browser PLI only if no uplink IDR in this window (default: 10000)
 	VideoTimestampJumpPLI                bool   // Request a SIP keyframe when SIP video RTP timestamps jump (default: true)
@@ -227,6 +228,9 @@ const (
 	SIPKeyframeRequestModeInfo = "info"
 	SIPKeyframeRequestModeRTCP = "rtcp"
 	SIPKeyframeRequestModeBoth = "both"
+
+	SIPUplinkPictureSizeAccept = "accept"
+	SIPUplinkPictureSizeReject = "reject"
 
 	SIPSwitchVideoTransitionPreserve = "preserve"
 	SIPSwitchVideoTransitionBlackout = "blackout" // default: blackout-until-safe-IDR on normalize path
@@ -369,6 +373,7 @@ func Load() (*Config, error) {
 			KeyframeRequestMode:                  sipKeyframeRequestModeFromEnv(),
 			RTCPFBMinIntervalMS:                  sipRTCPFBMinIntervalMSFromEnv(),
 			RTCPFBGuardMS:                        sipRTCPFBGuardMSFromEnv(),
+			UplinkPictureSizeChange:              sipUplinkPictureSizeChangeFromEnv(),
 			ProactiveBrowserPLIInitialMS:         clampInt(getEnvAsInt("SIP_PROACTIVE_BROWSER_PLI_INITIAL_MS", 2000), 500, 10000),
 			ProactiveBrowserPLISafetyMS:          clampInt(getEnvAsInt("SIP_PROACTIVE_BROWSER_PLI_SAFETY_MS", 10000), 2000, 60000),
 			VideoTimestampJumpPLI:                getEnvAsBool("SIP_VIDEO_TIMESTAMP_JUMP_PLI", true),
@@ -714,6 +719,7 @@ func (c *Config) Display() {
 		c.SIP.RTCPFBMinIntervalMS,
 		c.SIP.RTCPFBGuardMS,
 	)
+	fmt.Printf("  SIP Uplink Picture Size Change: %s\n", c.SIP.UplinkPictureSizeChange)
 	fmt.Printf("  Proactive Browser PLI: initial=%dms safety=%dms\n",
 		c.SIP.ProactiveBrowserPLIInitialMS,
 		c.SIP.ProactiveBrowserPLISafetyMS,
@@ -955,6 +961,17 @@ func sipKeyframeRequestModeFromEnv() string {
 	default:
 		fmt.Printf("Warning: invalid SIP_KEYFRAME_REQUEST_MODE=%q, using %q\n", value, SIPKeyframeRequestModeInfo)
 		return SIPKeyframeRequestModeInfo
+	}
+}
+
+func sipUplinkPictureSizeChangeFromEnv() string {
+	value := strings.ToLower(strings.TrimSpace(getEnvWithDefault("SIP_UPLINK_PICTURE_SIZE_CHANGE", SIPUplinkPictureSizeAccept)))
+	switch value {
+	case SIPUplinkPictureSizeAccept, SIPUplinkPictureSizeReject:
+		return value
+	default:
+		fmt.Printf("Warning: invalid SIP_UPLINK_PICTURE_SIZE_CHANGE=%q, using %q\n", value, SIPUplinkPictureSizeAccept)
+		return SIPUplinkPictureSizeAccept
 	}
 }
 

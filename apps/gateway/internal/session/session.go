@@ -291,6 +291,15 @@ type Session struct {
 	uplinkSPSHeight           int    `json:"-"`
 	uplinkSPSDimensionBlocked bool   `json:"-"`
 	uplinkSPSDimensionLogged  bool   `json:"-"`
+	// uplinkPictureSizeChange is SIP_UPLINK_PICTURE_SIZE_CHANGE. Empty means
+	// accept. In accept mode a mid-call size change holds non-IDR video until
+	// the first IDR of the new size, which gets the new SPS/PPS in front of it.
+	uplinkPictureSizeChange     string    `json:"-"`
+	uplinkPictureSizeIDRPending bool      `json:"-"`
+	uplinkPictureSizeChangedAt  time.Time `json:"-"`
+	uplinkPictureSizeHeld       int       `json:"-"`
+	uplinkPictureSizePLIAt      time.Time `json:"-"`
+	uplinkPictureSizePLIs       int       `json:"-"`
 	// allowNextUplinkPictureSize accepts one SPS size change after an explicit
 	// switch/source replacement, then locks that size again.
 	allowNextUplinkPictureSize bool      `json:"-"`
@@ -694,6 +703,7 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 		sipKeyframeRequestMode:               cfg.SIP.KeyframeRequestMode,
 		sipRTCPFBMinInterval:                 time.Duration(cfg.SIP.RTCPFBMinIntervalMS) * time.Millisecond,
 		sipRTCPFBGuard:                       time.Duration(cfg.SIP.RTCPFBGuardMS) * time.Millisecond,
+		uplinkPictureSizeChange:              cfg.SIP.UplinkPictureSizeChange,
 		proactiveBrowserPLIInitial:           time.Duration(cfg.SIP.ProactiveBrowserPLIInitialMS) * time.Millisecond,
 		proactiveBrowserPLISafety:            time.Duration(cfg.SIP.ProactiveBrowserPLISafetyMS) * time.Millisecond,
 		VideoTimestampJumpPLI:                cfg.SIP.VideoTimestampJumpPLI,

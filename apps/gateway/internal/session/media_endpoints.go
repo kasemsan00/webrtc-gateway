@@ -504,6 +504,11 @@ func (s *Session) ResetMediaState() {
 	s.uplinkSPSHeight = 0
 	s.uplinkSPSDimensionBlocked = false
 	s.uplinkSPSDimensionLogged = false
+	s.uplinkPictureSizeIDRPending = false
+	s.uplinkPictureSizeChangedAt = time.Time{}
+	s.uplinkPictureSizeHeld = 0
+	s.uplinkPictureSizePLIAt = time.Time{}
+	s.uplinkPictureSizePLIs = 0
 	s.allowNextUplinkPictureSize = false
 	s.switchKeyframeRequestedAt = time.Time{}
 	s.switchKeyframeIDRPending = false

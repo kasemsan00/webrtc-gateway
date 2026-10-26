@@ -127,6 +127,20 @@ func openH264Mode0SpreadDelays(packets [][]byte) []time.Duration {
 
 func forwardPictureToAsteriskDelayed(t *testing.T, uplinkOpen bool, mode uint8, packets [][]byte, delays []time.Duration) []rtp.Packet {
 	t.Helper()
+	got, _ := forwardUplinkVideoForTest(t, packets, delays, func(sess *Session) {
+		sess.SetSIPVideoPacketizationMode(mode)
+		if uplinkOpen {
+			sess.LastUplinkKeyframe = time.Now()
+		}
+	})
+	return got
+}
+
+// forwardUplinkVideoForTest runs the WebRTC→SIP video loop over packets and
+// returns what reached the fake Asterisk socket. setup adjusts the session
+// before the first read.
+func forwardUplinkVideoForTest(t *testing.T, packets [][]byte, delays []time.Duration, setup func(*Session)) ([]rtp.Packet, *Session) {
+	t.Helper()
 	recv, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
 	if err != nil {
 		t.Fatal(err)
@@ -154,9 +168,8 @@ func forwardPictureToAsteriskDelayed(t *testing.T, uplinkOpen bool, mode uint8, 
 		ctx:                     ctx,
 		cancel:                  cancel,
 	}
-	sess.SetSIPVideoPacketizationMode(mode)
-	if uplinkOpen {
-		sess.LastUplinkKeyframe = time.Now()
+	if setup != nil {
+		setup(sess)
 	}
 	done := make(chan struct{})
 	arrived := make(chan rtp.Packet, 128)
@@ -204,7 +217,7 @@ func forwardPictureToAsteriskDelayed(t *testing.T, uplinkOpen bool, mode uint8, 
 	for pkt := range arrived {
 		got = append(got, pkt)
 	}
-	return got
+	return got, sess
 }
 
 func TestMode0MultiSliceIDRReachesAsteriskAndEcho(t *testing.T) {

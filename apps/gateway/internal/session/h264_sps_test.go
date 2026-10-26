@@ -3,6 +3,8 @@ package session
 import (
 	"testing"
 	"time"
+
+	"webrtc-sip-gateway/internal/config"
 )
 
 func TestH264SPSPictureSizeBaseline720p(t *testing.T) {
@@ -22,7 +24,7 @@ func TestH264SPSPictureSizeCrops1088To1080(t *testing.T) {
 }
 
 func TestUplinkDropsVideoAfterSPSPictureSizeChange(t *testing.T) {
-	sess := &Session{ID: "sps-size"}
+	sess := &Session{ID: "sps-size", uplinkPictureSizeChange: config.SIPUplinkPictureSizeReject}
 	first := buildBaselineSPS(66, 0xe0, 31, 1280, 720, 0)
 	if sess.rejectUplinkPictureSizeChangeLocked(first) {
 		t.Fatal("first SPS was rejected")
@@ -60,6 +62,9 @@ func TestUplinkDropsVideoAfterSPSPictureSizeChange(t *testing.T) {
 	}
 
 	sess.ResetMediaState()
+	if sess.uplinkPictureSizeChange != config.SIPUplinkPictureSizeReject {
+		t.Fatal("media reset dropped the configured picture-size mode")
+	}
 	if sess.rejectUplinkPictureSizeChangeLocked(changed) {
 		t.Fatal("new call rejected its first SPS")
 	}

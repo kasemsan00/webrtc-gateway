@@ -462,3 +462,21 @@ func TestChatImageConfigPromotesLegacyTwoMegabyteLimit(t *testing.T) {
 		t.Fatalf("maxBytes = %d, want %d", cfg.ChatImage.MaxBytes, DefaultChatImageMaxBytes)
 	}
 }
+
+func TestSIPUplinkPictureSizeChangeConfig(t *testing.T) {
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.SIP.UplinkPictureSizeChange != SIPUplinkPictureSizeAccept {
+		t.Fatalf("default = %q, want accept", cfg.SIP.UplinkPictureSizeChange)
+	}
+	t.Setenv("SIP_UPLINK_PICTURE_SIZE_CHANGE", " Reject ")
+	if cfg, err = Load(); err != nil || cfg.SIP.UplinkPictureSizeChange != SIPUplinkPictureSizeReject {
+		t.Fatalf("reject = %q err=%v", cfg.SIP.UplinkPictureSizeChange, err)
+	}
+	t.Setenv("SIP_UPLINK_PICTURE_SIZE_CHANGE", "drop")
+	if cfg, err = Load(); err != nil || cfg.SIP.UplinkPictureSizeChange != SIPUplinkPictureSizeAccept {
+		t.Fatalf("invalid = %q err=%v, want accept", cfg.SIP.UplinkPictureSizeChange, err)
+	}
+}
