@@ -61,6 +61,12 @@ Correlate browser inbound RTP diagnostics with Gateway logs by `sessionId`:
   repair: `reason`, `in_prev`/`in` (SIP timestamps), `out_prev`/`out` (WebRTC
   timestamps), and `wall_ms` (real time since the previous forwarded frame).
   `out - out_prev` should match `wall_ms` at 90 kHz (90 ticks per millisecond).
+  `reason=same-picture-split ... reused=true` is not a repair: the phone sent
+  two access units on one RTP timestamp (Linphone's 10ms ticker), and the
+  second keeps the same outbound timestamp (`SIP_VIDEO_SAME_TS_REUSE`). Before
+  that flag, the same case logged `reason=source-gap` with `in_prev == in`
+  and `wall_ms` 0-2. It runs at a steady ~0.2/s on some Android legs for the
+  whole call, and is on the phone→agent path, not the agent→phone path.
   A later `switch_video_gate_activation outcome=satisfied-by-discontinuity-idr`
   means the agent IDR arrived before the `@switch` notice and already started
   the segment. Audio is not rewritten; Opus stays on the SIP timestamp.

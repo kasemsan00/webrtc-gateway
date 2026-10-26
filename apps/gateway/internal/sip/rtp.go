@@ -55,6 +55,7 @@ func writeNormalizedVideoAccessUnit(
 
 	sess.NumberSIPVideoAccessUnit(&au)
 	logVideoTimestampDiscontinuity(sess.ID, au.Discontinuity)
+	logVideoSameTimestampSplit(sess.ID, au.SameTimestampSplit)
 
 	for _, packet := range au.Packets {
 		data, err := packet.Marshal()
@@ -112,6 +113,17 @@ func logVideoTimestampDiscontinuity(sessionID string, d *session.H264TimestampDi
 	}
 	fmt.Printf("[%s] sip_video_ts_discontinuity reason=%s in_prev=%d in=%d out_prev=%d out=%d wall_ms=%d\n",
 		sessionID, d.Reason, d.PreviousIncoming, d.Incoming, d.PreviousOutgoing, d.Outgoing, d.Wall.Milliseconds())
+}
+
+// logVideoSameTimestampSplit logs the first five reused-timestamp access
+// units of a stream, then every 50th. first_mb=0 means a separate picture
+// that shares the timestamp; >0 means the tail of one split picture.
+func logVideoSameTimestampSplit(sessionID string, d *session.H264SameTimestampSplit) {
+	if d == nil || (d.Count > 5 && d.Count%50 != 0) {
+		return
+	}
+	fmt.Printf("[%s] sip_video_ts_discontinuity reason=same-picture-split in=%d out=%d reused=true first_mb=%d packets=%d prev_packets=%d count=%d wall_ms=%d\n",
+		sessionID, d.Incoming, d.Outgoing, d.FirstMB, d.Packets, d.PreviousPackets, d.Count, d.Wall.Milliseconds())
 }
 
 // startRTPListener starts an RTP listener and returns the port
@@ -537,7 +549,9 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 	// FU-A chain even though RTP bytes continue to arrive.
 	var auNormalizer *session.H264AccessUnitNormalizer
 	if sess.VideoAUNormalizeEnabled {
-		auNormalizer = session.NewH264AccessUnitNormalizer(session.H264AccessUnitNormalizerConfig{}, func(au session.NormalizedH264AccessUnit) {
+		auNormalizer = session.NewH264AccessUnitNormalizer(session.H264AccessUnitNormalizerConfig{
+			ReuseSameSourceTimestamp: sess.VideoSameTSReuse,
+		}, func(au session.NormalizedH264AccessUnit) {
 			if sess.VideoTrack == nil {
 				if au.IsIDR {
 					sess.RememberSIPVideoIDR(au, false)

@@ -523,3 +523,16 @@ func TestSIPLossyKeyframeAssistConfigOverridesAndBadValues(t *testing.T) {
 		t.Fatalf("bad values not reset to defaults: %+v", sip)
 	}
 }
+
+func TestSIPVideoSameTSReuseConfig(t *testing.T) {
+	for value, want := range map[string]bool{"": true, "on": true, "off": false, "false": false, "maybe": true} {
+		t.Setenv("SIP_VIDEO_SAME_TS_REUSE", value)
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+		if cfg.SIP.VideoSameTSReuse != want {
+			t.Fatalf("SIP_VIDEO_SAME_TS_REUSE=%q -> %v, want %v", value, cfg.SIP.VideoSameTSReuse, want)
+		}
+	}
+}

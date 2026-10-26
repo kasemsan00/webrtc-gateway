@@ -198,6 +198,7 @@ type Session struct {
 	uplinkVideoPacer                      *uplinkVideoPacer    `json:"-"`
 	uplinkVideoPacerOnce                  sync.Once            `json:"-"`
 	VideoTimestampJumpPLI                 bool                 `json:"-"`
+	VideoSameTSReuse                      bool                 `json:"-"`
 	VideoSuppressEarlyMedia               bool                 `json:"-"`
 	WebRTCTWCCEnabled                     bool                 `json:"-"`
 	videoDiscontinuityIDRAt               time.Time            `json:"-"`
@@ -728,6 +729,7 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 		proactiveBrowserPLIInitial:           time.Duration(cfg.SIP.ProactiveBrowserPLIInitialMS) * time.Millisecond,
 		proactiveBrowserPLISafety:            time.Duration(cfg.SIP.ProactiveBrowserPLISafetyMS) * time.Millisecond,
 		VideoTimestampJumpPLI:                cfg.SIP.VideoTimestampJumpPLI,
+		VideoSameTSReuse:                     cfg.SIP.VideoSameTSReuse,
 		VideoSuppressEarlyMedia:              cfg.SIP.VideoSuppressEarlyMedia,
 		WebRTCTWCCEnabled:                    cfg.SIP.WebRTCTWCCEnabled,
 		SwitchVideoGateFailOpen:              time.Duration(cfg.SIP.SwitchVideoGateFailOpenMS) * time.Millisecond,

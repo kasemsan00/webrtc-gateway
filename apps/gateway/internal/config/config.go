@@ -191,6 +191,7 @@ type SIPConfig struct {
 	ProactiveBrowserPLIInitialMS         int    // Browser PLI interval until the first uplink IDR (default: 2000)
 	ProactiveBrowserPLISafetyMS          int    // Browser PLI only if no uplink IDR in this window (default: 10000)
 	VideoTimestampJumpPLI                bool   // Request a SIP keyframe when SIP video RTP timestamps jump (default: true)
+	VideoSameTSReuse                     bool   // Same SIP video source timestamp keeps the same outbound timestamp (default: on)
 	VideoSuppressEarlyMedia              bool   // Drop SIP video until the call is answered (default: false; SIP_VIDEO_FORWARD_EARLY_MEDIA=true)
 	WebRTCTWCCEnabled                    bool   // Send transport-cc feedback to the phone (default: true; WEBRTC_TWCC_ENABLE)
 	SwitchVideoGateFailOpenMS            int    // Fail open a stalled same-stream gate after this many ms (default: 3000)
@@ -387,6 +388,7 @@ func Load() (*Config, error) {
 			ProactiveBrowserPLIInitialMS:         clampInt(getEnvAsInt("SIP_PROACTIVE_BROWSER_PLI_INITIAL_MS", 2000), 500, 10000),
 			ProactiveBrowserPLISafetyMS:          clampInt(getEnvAsInt("SIP_PROACTIVE_BROWSER_PLI_SAFETY_MS", 10000), 2000, 60000),
 			VideoTimestampJumpPLI:                getEnvAsBool("SIP_VIDEO_TIMESTAMP_JUMP_PLI", true),
+			VideoSameTSReuse:                     envOnOff("SIP_VIDEO_SAME_TS_REUSE", true),
 			VideoSuppressEarlyMedia:              !getEnvAsBool("SIP_VIDEO_FORWARD_EARLY_MEDIA", true),
 			WebRTCTWCCEnabled:                    getEnvAsBool("WEBRTC_TWCC_ENABLE", true),
 			SwitchVideoGateFailOpenMS:            getEnvAsInt("SIP_SWITCH_VIDEO_GATE_FAIL_OPEN_MS", 3000),
@@ -742,6 +744,7 @@ func (c *Config) Display() {
 		c.SIP.ProactiveBrowserPLISafetyMS,
 	)
 	fmt.Printf("  SIP Video Timestamp-Jump PLI: %v\n", c.SIP.VideoTimestampJumpPLI)
+	fmt.Printf("  SIP Video Same-Timestamp Reuse: %v\n", c.SIP.VideoSameTSReuse)
 	fmt.Printf("  SIP Video Forward Early Media: %v\n", !c.SIP.VideoSuppressEarlyMedia)
 	fmt.Printf("  WebRTC TWCC: %v\n", c.SIP.WebRTCTWCCEnabled)
 	fmt.Printf("  @switch Gate Fail-Open: sameStream=%dms cap=%dms infoFIR=%v\n",
@@ -982,15 +985,27 @@ func sipKeyframeRequestModeFromEnv() string {
 }
 
 func sipLossyKeyframeAssistFromEnv() bool {
-	value := strings.ToLower(strings.TrimSpace(os.Getenv("SIP_LOSSY_KEYFRAME_ASSIST")))
+	return envOnOff("SIP_LOSSY_KEYFRAME_ASSIST", true)
+}
+
+// envOnOff reads an on|off flag (also true|false|1|0|yes|no). Unset or
+// invalid values use the default; invalid ones print a warning.
+func envOnOff(key string, defaultValue bool) bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
 	switch value {
-	case "", "on", "true", "1", "yes":
+	case "":
+		return defaultValue
+	case "on", "true", "1", "yes":
 		return true
 	case "off", "false", "0", "no":
 		return false
 	default:
-		fmt.Printf("Warning: invalid SIP_LOSSY_KEYFRAME_ASSIST=%q, using \"on\"\n", value)
-		return true
+		name := "off"
+		if defaultValue {
+			name = "on"
+		}
+		fmt.Printf("Warning: invalid %s=%q, using \"%s\"\n", key, value, name)
+		return defaultValue
 	}
 }
 
