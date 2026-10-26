@@ -25,7 +25,15 @@ COPY apps/gateway/ .
 # Build the application (CGO required for libopus decode/encode)
 # -ldflags="-w -s" to reduce binary size
 ARG TARGETARCH
-RUN CGO_ENABLED=1 GOOS=linux GOARCH=${TARGETARCH} go build -ldflags="-w -s" -o webrtc-sip-gateway . && \
+# Build identity for GET /api/version (docker-ci.sh passes these from the
+# local checkout). Empty values fall back to "unknown" at runtime.
+ARG GIT_COMMIT=
+ARG GIT_BRANCH=
+ARG BUILD_TIME=
+ARG GIT_DIRTY=
+ARG GIT_VERSION=
+RUN BUILDINFO=webrtc-sip-gateway/internal/buildinfo && \
+    CGO_ENABLED=1 GOOS=linux GOARCH=${TARGETARCH} go build -ldflags="-w -s -X ${BUILDINFO}.Commit=${GIT_COMMIT} -X ${BUILDINFO}.Branch=${GIT_BRANCH} -X ${BUILDINFO}.BuildTime=${BUILD_TIME} -X ${BUILDINFO}.Dirty=${GIT_DIRTY} -X ${BUILDINFO}.Version=${GIT_VERSION}" -o webrtc-sip-gateway . && \
     CGO_ENABLED=1 GOOS=linux GOARCH=${TARGETARCH} go build -ldflags="-w -s" -o db-bootstrap ./cmd/db-bootstrap
 
 # Stage 2: Runtime
@@ -79,6 +87,13 @@ RUN sed -i 's/\r$//' /app/docker-entrypoint.sh && \
 # Health check (optional - check if process is running)
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
     CMD pgrep -f '^./webrtc-sip-gateway$' >/dev/null || exit 1
+
+ARG GIT_COMMIT=
+ARG BUILD_TIME=
+ARG GIT_VERSION=
+LABEL org.opencontainers.image.revision="${GIT_COMMIT}" \
+      org.opencontainers.image.version="${GIT_VERSION}" \
+      org.opencontainers.image.created="${BUILD_TIME}"
 
 # Run optional migrations, then the application
 ENTRYPOINT ["./docker-entrypoint.sh"]

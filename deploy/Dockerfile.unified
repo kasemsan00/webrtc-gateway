@@ -12,7 +12,15 @@ RUN go mod download
 RUN go install github.com/pressly/goose/v3/cmd/goose@v3.24.1
 COPY apps/gateway/ .
 ARG TARGETARCH
-RUN CGO_ENABLED=1 GOOS=linux GOARCH=${TARGETARCH} go build -ldflags="-w -s" -o webrtc-sip-gateway . && \
+# Build identity for GET /api/version (docker-ci.sh passes these from the
+# local checkout). Empty values fall back to "unknown" at runtime.
+ARG GIT_COMMIT=
+ARG GIT_BRANCH=
+ARG BUILD_TIME=
+ARG GIT_DIRTY=
+ARG GIT_VERSION=
+RUN BUILDINFO=webrtc-sip-gateway/internal/buildinfo && \
+    CGO_ENABLED=1 GOOS=linux GOARCH=${TARGETARCH} go build -ldflags="-w -s -X ${BUILDINFO}.Commit=${GIT_COMMIT} -X ${BUILDINFO}.Branch=${GIT_BRANCH} -X ${BUILDINFO}.BuildTime=${BUILD_TIME} -X ${BUILDINFO}.Dirty=${GIT_DIRTY} -X ${BUILDINFO}.Version=${GIT_VERSION}" -o webrtc-sip-gateway . && \
     CGO_ENABLED=1 GOOS=linux GOARCH=${TARGETARCH} go build -ldflags="-w -s" -o db-bootstrap ./cmd/db-bootstrap
 
 # --- Frontend deps ---
@@ -95,5 +103,12 @@ EXPOSE 10500-10600/udp
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD pgrep -f '^./webrtc-sip-gateway$' >/dev/null && pgrep -x node >/dev/null && pgrep -f 'nginx: master process' >/dev/null && wget -q --spider http://127.0.0.1:8088/admin/ || exit 1
+
+ARG GIT_COMMIT=
+ARG BUILD_TIME=
+ARG GIT_VERSION=
+LABEL org.opencontainers.image.revision="${GIT_COMMIT}" \
+      org.opencontainers.image.version="${GIT_VERSION}" \
+      org.opencontainers.image.created="${BUILD_TIME}"
 
 ENTRYPOINT ["/sbin/tini", "--", "/app/stack-entrypoint.sh"]

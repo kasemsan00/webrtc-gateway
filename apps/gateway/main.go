@@ -18,6 +18,7 @@ import (
 
 	"webrtc-sip-gateway/internal/api"
 	"webrtc-sip-gateway/internal/auth"
+	"webrtc-sip-gateway/internal/buildinfo"
 	"webrtc-sip-gateway/internal/config"
 	"webrtc-sip-gateway/internal/logger"
 	"webrtc-sip-gateway/internal/logstore"
@@ -64,6 +65,10 @@ func main() {
 		log.Fatalf("Failed to initialize logger: %v", err)
 	}
 	defer cleanup()
+
+	build := buildinfo.Get()
+	fmt.Printf("gateway_version version=%s commit=%s branch=%s build_time=%s dirty=%v go=%s\n",
+		build.Version, build.Commit, build.Branch, build.BuildTime, build.Dirty, build.GoVersion)
 
 	// Load configuration
 	cfg, err := config.Load()

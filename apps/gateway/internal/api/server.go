@@ -305,6 +305,36 @@ func (s *Server) SetRuntimeConfig(cfg *config.Config) {
 func (s *Server) Start(ctx context.Context) error {
 	s.startStatsCollector(ctx)
 	s.startChatImageStore(ctx)
+	router := s.newRouter()
+
+	addr := fmt.Sprintf(":%d", s.config.Port)
+	fmt.Printf("\n=== API Server ===\n")
+	fmt.Printf("Listening on: http://0.0.0.0%s\n", addr)
+	fmt.Printf("==================\n\n")
+
+	srv := &http.Server{
+		Addr:    addr,
+		Handler: router,
+	}
+
+	// Start server in a goroutine
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("API server error: %v", err)
+		}
+	}()
+
+	// Wait for context cancellation for graceful shutdown
+	<-ctx.Done()
+
+	// Graceful shutdown with timeout
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return srv.Shutdown(shutdownCtx)
+}
+
+// newRouter registers every HTTP/WS route and middleware.
+func (s *Server) newRouter() *mux.Router {
 	router := mux.NewRouter()
 
 	// Enable CORS
@@ -328,6 +358,11 @@ func (s *Server) Start(ctx context.Context) error {
 		router.HandleFunc("/ws-agent-device", s.handleAgentDeviceWebSocket)
 		fmt.Printf("Agent-device WebSocket endpoint enabled: /ws-agent-device\n")
 	}
+
+	// Build identity. Public and outside EnableREST so a deploy can always be
+	// checked without a token; registered before the authenticated /api
+	// subrouter so it is matched first.
+	router.HandleFunc("/api/version", s.handleVersion).Methods("GET", "OPTIONS")
 
 	// REST API endpoints
 	if s.config.EnableREST {
@@ -388,31 +423,7 @@ func (s *Server) Start(ctx context.Context) error {
 
 	// Serve static files for test client
 	router.PathPrefix("/").Handler(http.FileServer(http.Dir("./web")))
-
-	addr := fmt.Sprintf(":%d", s.config.Port)
-	fmt.Printf("\n=== API Server ===\n")
-	fmt.Printf("Listening on: http://0.0.0.0%s\n", addr)
-	fmt.Printf("==================\n\n")
-
-	srv := &http.Server{
-		Addr:    addr,
-		Handler: router,
-	}
-
-	// Start server in a goroutine
-	go func() {
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("API server error: %v", err)
-		}
-	}()
-
-	// Wait for context cancellation for graceful shutdown
-	<-ctx.Done()
-
-	// Graceful shutdown with timeout
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	return srv.Shutdown(shutdownCtx)
+	return router
 }
 
 // corsMiddleware adds CORS headers
