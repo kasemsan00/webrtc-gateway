@@ -183,6 +183,11 @@ type SIPConfig struct {
 	RTCPFBMinIntervalMS                  int    // Minimum gap between SIP-leg RTCP PLI/FIR (default: 2000)
 	RTCPFBGuardMS                        int    // Skip SIP-leg RTCP PLI/FIR this long after an uplink IDR (default: 1500)
 	UplinkPictureSizeChange              string // Mid-call browser SPS picture-size change: accept|reject (default: accept)
+	LossyKeyframeAssist                  bool   // Extra/faster browser IDRs when SIP video loss is high (default: on)
+	LossyLossThresholdPct                int    // SIP video loss % that marks the leg lossy (default: 5)
+	LossyExtraIDRDelayMS                 int    // Extra browser IDR this long after an answered VFU (default: 1200)
+	LossyEarlyWindowMS                   int    // Extra IDR only within this long after answer (default: 10000)
+	LossySafetyIDRIntervalMS             int    // Safety-net IDR interval while lossy (default: 3000)
 	ProactiveBrowserPLIInitialMS         int    // Browser PLI interval until the first uplink IDR (default: 2000)
 	ProactiveBrowserPLISafetyMS          int    // Browser PLI only if no uplink IDR in this window (default: 10000)
 	VideoTimestampJumpPLI                bool   // Request a SIP keyframe when SIP video RTP timestamps jump (default: true)
@@ -374,6 +379,11 @@ func Load() (*Config, error) {
 			RTCPFBMinIntervalMS:                  sipRTCPFBMinIntervalMSFromEnv(),
 			RTCPFBGuardMS:                        sipRTCPFBGuardMSFromEnv(),
 			UplinkPictureSizeChange:              sipUplinkPictureSizeChangeFromEnv(),
+			LossyKeyframeAssist:                  sipLossyKeyframeAssistFromEnv(),
+			LossyLossThresholdPct:                envIntInRangeOrDefault("SIP_LOSSY_LOSS_THRESHOLD_PCT", 5, 1, 50),
+			LossyExtraIDRDelayMS:                 envIntInRangeOrDefault("SIP_LOSSY_EXTRA_IDR_DELAY_MS", 1200, 500, 5000),
+			LossyEarlyWindowMS:                   envIntInRangeOrDefault("SIP_LOSSY_EARLY_WINDOW_MS", 10000, 1000, 60000),
+			LossySafetyIDRIntervalMS:             envIntInRangeOrDefault("SIP_LOSSY_SAFETY_IDR_INTERVAL_MS", 3000, 1000, 10000),
 			ProactiveBrowserPLIInitialMS:         clampInt(getEnvAsInt("SIP_PROACTIVE_BROWSER_PLI_INITIAL_MS", 2000), 500, 10000),
 			ProactiveBrowserPLISafetyMS:          clampInt(getEnvAsInt("SIP_PROACTIVE_BROWSER_PLI_SAFETY_MS", 10000), 2000, 60000),
 			VideoTimestampJumpPLI:                getEnvAsBool("SIP_VIDEO_TIMESTAMP_JUMP_PLI", true),
@@ -720,6 +730,13 @@ func (c *Config) Display() {
 		c.SIP.RTCPFBGuardMS,
 	)
 	fmt.Printf("  SIP Uplink Picture Size Change: %s\n", c.SIP.UplinkPictureSizeChange)
+	fmt.Printf("  SIP Lossy Keyframe Assist: enabled=%v threshold=%d%% extraDelay=%dms earlyWindow=%dms safety=%dms\n",
+		c.SIP.LossyKeyframeAssist,
+		c.SIP.LossyLossThresholdPct,
+		c.SIP.LossyExtraIDRDelayMS,
+		c.SIP.LossyEarlyWindowMS,
+		c.SIP.LossySafetyIDRIntervalMS,
+	)
 	fmt.Printf("  Proactive Browser PLI: initial=%dms safety=%dms\n",
 		c.SIP.ProactiveBrowserPLIInitialMS,
 		c.SIP.ProactiveBrowserPLISafetyMS,
@@ -962,6 +979,30 @@ func sipKeyframeRequestModeFromEnv() string {
 		fmt.Printf("Warning: invalid SIP_KEYFRAME_REQUEST_MODE=%q, using %q\n", value, SIPKeyframeRequestModeInfo)
 		return SIPKeyframeRequestModeInfo
 	}
+}
+
+func sipLossyKeyframeAssistFromEnv() bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv("SIP_LOSSY_KEYFRAME_ASSIST")))
+	switch value {
+	case "", "on", "true", "1", "yes":
+		return true
+	case "off", "false", "0", "no":
+		return false
+	default:
+		fmt.Printf("Warning: invalid SIP_LOSSY_KEYFRAME_ASSIST=%q, using \"on\"\n", value)
+		return true
+	}
+}
+
+// envIntInRangeOrDefault returns the default for a missing, non-numeric, or
+// out-of-range value instead of clamping it to the nearest bound.
+func envIntInRangeOrDefault(key string, defaultValue, min, max int) int {
+	v := getEnvAsInt(key, defaultValue)
+	if v < min || v > max {
+		fmt.Printf("Warning: %s=%d outside %d..%d, using default: %d\n", key, v, min, max, defaultValue)
+		return defaultValue
+	}
+	return v
 }
 
 func sipUplinkPictureSizeChangeFromEnv() string {

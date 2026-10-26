@@ -841,6 +841,7 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 		if err := packet.Unmarshal(buffer[:n]); err == nil {
 			seq := packet.Header.SequenceNumber
 			isKeyframe := false
+			sess.NoteSIPVideoSeq(time.Now(), seq)
 
 			forwardSeq := false
 			if !haveLastSeq {

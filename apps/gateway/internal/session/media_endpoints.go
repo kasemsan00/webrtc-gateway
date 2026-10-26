@@ -509,6 +509,7 @@ func (s *Session) ResetMediaState() {
 	s.uplinkPictureSizeHeld = 0
 	s.uplinkPictureSizePLIAt = time.Time{}
 	s.uplinkPictureSizePLIs = 0
+	s.resetLossyKeyframeAssistLocked()
 	s.allowNextUplinkPictureSize = false
 	s.switchKeyframeRequestedAt = time.Time{}
 	s.switchKeyframeIDRPending = false

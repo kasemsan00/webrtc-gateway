@@ -480,3 +480,46 @@ func TestSIPUplinkPictureSizeChangeConfig(t *testing.T) {
 		t.Fatalf("invalid = %q err=%v, want accept", cfg.SIP.UplinkPictureSizeChange, err)
 	}
 }
+
+func TestSIPLossyKeyframeAssistConfigDefaults(t *testing.T) {
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	sip := cfg.SIP
+	if !sip.LossyKeyframeAssist || sip.LossyLossThresholdPct != 5 || sip.LossyExtraIDRDelayMS != 1200 ||
+		sip.LossyEarlyWindowMS != 10000 || sip.LossySafetyIDRIntervalMS != 3000 {
+		t.Fatalf("defaults = %+v", sip)
+	}
+}
+
+func TestSIPLossyKeyframeAssistConfigOverridesAndBadValues(t *testing.T) {
+	t.Setenv("SIP_LOSSY_KEYFRAME_ASSIST", "off")
+	t.Setenv("SIP_LOSSY_LOSS_THRESHOLD_PCT", "8")
+	t.Setenv("SIP_LOSSY_EXTRA_IDR_DELAY_MS", "900")
+	t.Setenv("SIP_LOSSY_EARLY_WINDOW_MS", "15000")
+	t.Setenv("SIP_LOSSY_SAFETY_IDR_INTERVAL_MS", "2000")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	sip := cfg.SIP
+	if sip.LossyKeyframeAssist || sip.LossyLossThresholdPct != 8 || sip.LossyExtraIDRDelayMS != 900 ||
+		sip.LossyEarlyWindowMS != 15000 || sip.LossySafetyIDRIntervalMS != 2000 {
+		t.Fatalf("overrides = %+v", sip)
+	}
+
+	t.Setenv("SIP_LOSSY_KEYFRAME_ASSIST", "maybe")
+	t.Setenv("SIP_LOSSY_LOSS_THRESHOLD_PCT", "0")
+	t.Setenv("SIP_LOSSY_EXTRA_IDR_DELAY_MS", "abc")
+	t.Setenv("SIP_LOSSY_EARLY_WINDOW_MS", "999999")
+	t.Setenv("SIP_LOSSY_SAFETY_IDR_INTERVAL_MS", "-5")
+	if cfg, err = Load(); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	sip = cfg.SIP
+	if !sip.LossyKeyframeAssist || sip.LossyLossThresholdPct != 5 || sip.LossyExtraIDRDelayMS != 1200 ||
+		sip.LossyEarlyWindowMS != 10000 || sip.LossySafetyIDRIntervalMS != 3000 {
+		t.Fatalf("bad values not reset to defaults: %+v", sip)
+	}
+}

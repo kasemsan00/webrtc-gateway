@@ -210,7 +210,7 @@ func (s *Session) DecideSessionProactiveBrowserPLI(now time.Time) ProactiveBrows
 	lastPLI := s.lastBrowserIDRRequest
 	sipSeen, lastSIP := s.sipKeyframeStateLocked()
 	initial := s.proactiveInitialInterval()
-	safety := s.proactiveSafetyInterval()
+	safety, sipSeen := s.proactiveSafetyForCallLocked(sipSeen)
 	s.mu.RUnlock()
 	return DecideProactiveBrowserPLIForCall(lastIDR, lastPLI, lastSIP, now, sipSeen, initial, safety)
 }
@@ -226,7 +226,7 @@ func (s *Session) ProactiveBrowserPLIWait(now time.Time) time.Duration {
 	lastPLI := s.lastBrowserIDRRequest
 	sipSeen, lastSIP := s.sipKeyframeStateLocked()
 	initial := s.proactiveInitialInterval()
-	safety := s.proactiveSafetyInterval()
+	safety, sipSeen := s.proactiveSafetyForCallLocked(sipSeen)
 	s.mu.RUnlock()
 	return proactiveBrowserPLIWait(lastIDR, lastPLI, lastSIP, now, sipSeen, initial, safety)
 }
@@ -395,9 +395,11 @@ func (s *Session) HandleSIPInfoPictureFastUpdate(now time.Time) bool {
 		if gen != 0 {
 			go s.runSIPInfoFIRRetry(gen, now, wait)
 		}
+		s.maybeScheduleLossyExtraIDR(now)
 		return true
 	}
 	s.SendBrowserPLIImmediate("sip_info_fir")
+	s.maybeScheduleLossyExtraIDR(now)
 	return true
 }
 

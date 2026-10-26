@@ -300,6 +300,22 @@ type Session struct {
 	uplinkPictureSizeHeld       int       `json:"-"`
 	uplinkPictureSizePLIAt      time.Time `json:"-"`
 	uplinkPictureSizePLIs       int       `json:"-"`
+	// Lossy keyframe assist (SIP_LOSSY_*). lossyAssist=false keeps the old
+	// keyframe behaviour and skips loss tracking. lossyAnsweredAt and the
+	// lossyExtra* fields are under s.mu; the loss window under lossyMu.
+	lossyAssist       bool                     `json:"-"`
+	lossyThresholdPct int                      `json:"-"`
+	lossyExtraDelay   time.Duration            `json:"-"`
+	lossyEarlyWindow  time.Duration            `json:"-"`
+	lossySafety       time.Duration            `json:"-"`
+	lossyAnsweredAt   time.Time                `json:"-"`
+	lossyExtraPending bool                     `json:"-"`
+	lossyExtraGen     uint64                   `json:"-"`
+	lossyExtraSend    func(reason string) bool `json:"-"`
+	lossyMu           sync.Mutex               `json:"-"`
+	lossyLoss         sipVideoLossWindow       `json:"-"`
+	lossyActive       bool                     `json:"-"`
+	lossyPct          float64                  `json:"-"`
 	// allowNextUplinkPictureSize accepts one SPS size change after an explicit
 	// switch/source replacement, then locks that size again.
 	allowNextUplinkPictureSize bool      `json:"-"`
@@ -704,6 +720,11 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 		sipRTCPFBMinInterval:                 time.Duration(cfg.SIP.RTCPFBMinIntervalMS) * time.Millisecond,
 		sipRTCPFBGuard:                       time.Duration(cfg.SIP.RTCPFBGuardMS) * time.Millisecond,
 		uplinkPictureSizeChange:              cfg.SIP.UplinkPictureSizeChange,
+		lossyAssist:                          cfg.SIP.LossyKeyframeAssist,
+		lossyThresholdPct:                    cfg.SIP.LossyLossThresholdPct,
+		lossyExtraDelay:                      time.Duration(cfg.SIP.LossyExtraIDRDelayMS) * time.Millisecond,
+		lossyEarlyWindow:                     time.Duration(cfg.SIP.LossyEarlyWindowMS) * time.Millisecond,
+		lossySafety:                          time.Duration(cfg.SIP.LossySafetyIDRIntervalMS) * time.Millisecond,
 		proactiveBrowserPLIInitial:           time.Duration(cfg.SIP.ProactiveBrowserPLIInitialMS) * time.Millisecond,
 		proactiveBrowserPLISafety:            time.Duration(cfg.SIP.ProactiveBrowserPLISafetyMS) * time.Millisecond,
 		VideoTimestampJumpPLI:                cfg.SIP.VideoTimestampJumpPLI,
