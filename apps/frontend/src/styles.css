@@ -166,15 +166,6 @@ code {
   background-size: 18px 100%;
 }
 
-@utility live-link-dotted {
-  background-image: radial-gradient(
-    circle,
-    currentColor 1px,
-    transparent 1.5px
-  );
-  background-size: 8px 100%;
-}
-
 @keyframes live-link-flow {
   from {
     background-position: 0 0;
@@ -185,20 +176,21 @@ code {
 }
 
 @utility animate-live-link-flow {
-  animation: live-link-flow 0.6s linear infinite;
+  animation: live-link-flow 1.4s linear infinite;
 }
 
-@keyframes live-link-pulse {
+/* One soft streak travelling along a connected call, in the call's direction. */
+@keyframes live-link-stream {
   from {
-    left: 0%;
+    left: -40%;
   }
   to {
     left: 100%;
   }
 }
 
-@utility animate-live-link-pulse {
-  animation: live-link-pulse 1.8s ease-in-out infinite;
+@utility animate-live-link-stream {
+  animation: live-link-stream 2.8s linear infinite;
 }
 
 @keyframes live-phone-shake {

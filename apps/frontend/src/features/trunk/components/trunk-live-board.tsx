@@ -458,7 +458,7 @@ function LinkLine({
   reverse,
 }: {
   tone: Tone
-  flowing: 'dashed' | 'solid'
+  flowing: 'dashed' | 'solid' | 'static'
   reverse?: boolean
 }) {
   const color = TONE[tone].line
@@ -474,11 +474,27 @@ function LinkLine({
       />
     )
   }
+  // Connected: a calm base line with one streak moving the call's way
+  // (outbound left→right, inbound right→left). `static` = direction unknown.
   return (
-    <span className={cn('relative block h-1 w-full', color)} aria-hidden>
-      <span className="absolute inset-0 rounded-full bg-current opacity-60" />
-      <span className="animate-live-link-pulse absolute top-1/2 size-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-current motion-reduce:hidden" />
-      <span className="animate-live-link-pulse absolute top-1/2 size-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-current [animation-delay:-0.9s] [animation-direction:reverse] motion-reduce:hidden" />
+    <span
+      className={cn(
+        'relative block h-1 w-full overflow-hidden rounded-full',
+        color,
+      )}
+      aria-hidden
+    >
+      <span className="absolute inset-0 rounded-full bg-current opacity-35" />
+      {flowing === 'solid' ? (
+        <span
+          className={cn(
+            'animate-live-link-stream absolute inset-y-0 w-2/5 rounded-full from-transparent to-current motion-reduce:hidden',
+            reverse
+              ? 'bg-linear-to-l [animation-direction:reverse]'
+              : 'bg-linear-to-r',
+          )}
+        />
+      ) : null}
     </span>
   )
 }
@@ -490,7 +506,7 @@ function LinkCell({
   children,
 }: {
   tone: Tone
-  flowing: 'dashed' | 'solid'
+  flowing: 'dashed' | 'solid' | 'static'
   reverse?: boolean
   children: ReactNode
 }) {
@@ -566,7 +582,7 @@ function FallbackCallFlow({ row }: { row: TrunkLiveRow }) {
   return (
     <div className={CALL_GRID}>
       <OperatorNode operator={operator} />
-      <LinkCell tone="talking" flowing="solid">
+      <LinkCell tone="talking" flowing="static">
         On call
       </LinkCell>
       <RiArrowLeftRightLine
