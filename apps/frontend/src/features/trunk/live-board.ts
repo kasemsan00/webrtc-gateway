@@ -75,7 +75,10 @@ export interface LiveSummary {
   dialing: number
   /** Inbound calls still ringing (subset of `calling`). */
   incoming: number
+  /** Connected calls, including reconnecting ones. */
   talking: number
+  /** Connected calls currently reconnecting (subset of `talking`). */
+  reconnecting: number
   offline: number
   appsConnected: number
 }
@@ -287,9 +290,10 @@ const STATUS_RANK: Record<TrunkLiveStatus, number> = {
   dialing: 2,
   incoming: 2,
   busy: 3,
-  online: 4,
-  error: 5,
-  offline: 6,
+  // Idle trunks: problems first so they are noticed, disabled last.
+  error: 4,
+  offline: 5,
+  online: 6,
   disabled: 7,
 }
 
@@ -382,7 +386,26 @@ export function isOfflineStatus(status: TrunkLiveStatus) {
   return status === 'offline' || status === 'error' || status === 'disabled'
 }
 
-export function summarizeLiveRows(rows: Array<TrunkLiveRow>): LiveSummary {
+/**
+ * Calls a row stands for: its visible sessions, or the trunk's own count when
+ * the calls live on another gateway instance (`busy`).
+ */
+export function rowCallCount(
+  row: Pick<TrunkLiveRow, 'calls' | 'status' | 'trunk'>,
+) {
+  if (row.calls.length > 0) return row.calls.length
+  return row.status === 'busy' ? Math.max(1, row.trunk.activeCallCount) : 0
+}
+
+/**
+ * Tile counts. Every live call lands in exactly one of Calling or In call, so
+ * `calling + talking` equals the calls listed under "Live calls", including
+ * direct (no-trunk) calls passed as `otherCalls`.
+ */
+export function summarizeLiveRows(
+  rows: Array<TrunkLiveRow>,
+  otherCalls: Array<Pick<LiveCall, 'phase'>> = [],
+): LiveSummary {
   const summary: LiveSummary = {
     trunks: rows.length,
     online: 0,
@@ -390,29 +413,40 @@ export function summarizeLiveRows(rows: Array<TrunkLiveRow>): LiveSummary {
     dialing: 0,
     incoming: 0,
     talking: 0,
+    reconnecting: 0,
     offline: 0,
     appsConnected: 0,
+  }
+  const countCall = (call: Pick<LiveCall, 'phase'>) => {
+    switch (call.phase) {
+      case 'dialing':
+        summary.calling += 1
+        summary.dialing += 1
+        break
+      case 'incoming':
+        summary.calling += 1
+        summary.incoming += 1
+        break
+      case 'reconnecting':
+        summary.talking += 1
+        summary.reconnecting += 1
+        break
+      case 'talking':
+      default:
+        summary.talking += 1
+    }
   }
   for (const row of rows) {
     if (row.trunk.enabled && row.trunk.isRegistered) summary.online += 1
     if (isOfflineStatus(row.status)) summary.offline += 1
     if (row.clients.length > 0) summary.appsConnected += 1
-    if (row.calls.length === 0 && row.status === 'busy') {
-      summary.talking += Math.max(1, row.trunk.activeCallCount)
+    if (row.calls.length === 0) {
+      summary.talking += rowCallCount(row)
       continue
     }
-    for (const call of row.calls) {
-      if (call.phase === 'dialing') {
-        summary.calling += 1
-        summary.dialing += 1
-      } else if (call.phase === 'incoming') {
-        summary.calling += 1
-        summary.incoming += 1
-      } else {
-        summary.talking += 1
-      }
-    }
+    row.calls.forEach(countCall)
   }
+  otherCalls.forEach(countCall)
   return summary
 }
 

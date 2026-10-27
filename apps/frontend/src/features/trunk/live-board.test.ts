@@ -10,6 +10,7 @@ import {
   matchesLiveFilter,
   parseSipParty,
   resolveCallOperator,
+  rowCallCount,
   sessionCallPhase,
   summarizeLiveRows,
   toLiveCall,
@@ -200,12 +201,12 @@ describe('buildTrunkLiveRows', () => {
     expect(rows.map((row) => row.trunk.name)).toEqual([
       'Talking',
       'Dialing',
-      'Idle',
       'Offline',
+      'Idle',
     ])
     expect(rows[0].calls.map((call) => call.sessionId)).toEqual(['b'])
-    expect(rows[2].clients.map((client) => client.clientId)).toEqual(['x'])
-    expect(rows[3].clients).toEqual([])
+    expect(rows[3].clients.map((client) => client.clientId)).toEqual(['x'])
+    expect(rows[2].clients).toEqual([])
   })
 
   it('keeps trunk destinations when sessions are not visible', () => {
@@ -227,6 +228,7 @@ describe('buildTrunkLiveRows', () => {
       dialing: 1,
       incoming: 0,
       talking: 1,
+      reconnecting: 0,
       offline: 1,
       appsConnected: 1,
     })
@@ -336,5 +338,69 @@ describe('isActiveLiveRow', () => {
     expect(isActiveLiveRow({ status: 'busy' })).toBe(true)
     expect(isActiveLiveRow({ status: 'online' })).toBe(false)
     expect(isActiveLiveRow({ status: 'error' })).toBe(false)
+  })
+})
+
+describe('summary tiles add up to the live calls', () => {
+  it('counts reconnecting, other-instance and direct calls', () => {
+    const rows = buildTrunkLiveRows(
+      [
+        makeTrunk({ id: 1, isRegistered: true }),
+        makeTrunk({ id: 2, isRegistered: true }),
+        makeTrunk({ id: 3, isRegistered: true }),
+        makeTrunk({ id: 4, isRegistered: true }),
+        makeTrunk({ id: 5, activeCallCount: 2 }),
+      ],
+      [
+        makeSession({ id: 'talk', trunkId: 1, state: 'active' }),
+        makeSession({ id: 'rec', trunkId: 2, state: 'reconnecting' }),
+        makeSession({ id: 'out', trunkId: 3, state: 'ringing' }),
+        makeSession({
+          id: 'in',
+          trunkId: 4,
+          state: 'ringing',
+          direction: 'inbound',
+        }),
+      ],
+      [],
+    )
+    const direct = collectNonTrunkCalls([
+      makeSession({ id: 'direct', trunkId: 0, authMode: 'public' }),
+    ])
+    const summary = summarizeLiveRows(rows, direct)
+
+    expect(summary).toMatchObject({
+      calling: 2,
+      dialing: 1,
+      incoming: 1,
+      talking: 5,
+      reconnecting: 1,
+    })
+    const listedCalls =
+      rows.reduce((count, row) => count + rowCallCount(row), 0) + direct.length
+    expect(summary.calling + summary.talking).toBe(listedCalls)
+  })
+})
+
+describe('idle trunk order', () => {
+  it('puts register failures first, then offline, online and disabled', () => {
+    const rows = buildTrunkLiveRows(
+      [
+        makeTrunk({ id: 1, name: 'Disabled', enabled: false }),
+        makeTrunk({ id: 2, name: 'Online', isRegistered: true }),
+        makeTrunk({ id: 3, name: 'Offline' }),
+        makeTrunk({ id: 4, name: 'Failed', lastError: '401 Unauthorized' }),
+        makeTrunk({ id: 5, name: 'Online 2', isRegistered: true }),
+      ],
+      [],
+      [],
+    )
+    expect(rows.map((row) => row.trunk.name)).toEqual([
+      'Failed',
+      'Offline',
+      'Online',
+      'Online 2',
+      'Disabled',
+    ])
   })
 })

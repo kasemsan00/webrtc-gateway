@@ -346,7 +346,7 @@ export function TrunkListPage() {
     () => buildTrunkLiveRows(trunks, liveData.sessions, liveData.clients),
     [trunks, liveData.sessions, liveData.clients],
   )
-  const liveSummary = useMemo(() => summarizeLiveRows(liveRows), [liveRows])
+
   const visibleLiveRows = useMemo(
     () => liveRows.filter((row) => matchesLiveFilter(row, liveFilter)),
     [liveRows, liveFilter],
@@ -354,6 +354,10 @@ export function TrunkListPage() {
   const nonTrunkCalls = useMemo(
     () => collectNonTrunkCalls(liveData.sessions, liveData.clients),
     [liveData.sessions, liveData.clients],
+  )
+  const liveSummary = useMemo(
+    () => summarizeLiveRows(liveRows, nonTrunkCalls),
+    [liveRows, nonTrunkCalls],
   )
   const liveWarning = liveData.sessionsError
     ? `Live calls unavailable: ${liveData.sessionsError}`
@@ -753,116 +757,140 @@ export function TrunkListPage() {
     }
   }, [createForm, load])
 
+  const renderSearch = (className: string) => (
+    <Input
+      className={className}
+      placeholder="Search username or name..."
+      aria-label="Search trunks"
+      value={search}
+      onChange={(e) => {
+        setSearch(e.target.value)
+        debouncedSearch(e.target.value)
+      }}
+    />
+  )
+  const sortSelect =
+    viewMode === 'table' ? (
+      <Select
+        value={sortMode}
+        onValueChange={(value) => setSortMode(value as TrunkSortMode)}
+      >
+        <SelectTrigger
+          className="h-7 px-2 text-xs"
+          size="sm"
+          aria-label="Sort trunks"
+        >
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="activeCallsDesc">
+            Active Calls (High-Low)
+          </SelectItem>
+          <SelectItem value="activeCallsAsc">
+            Active Calls (Low-High)
+          </SelectItem>
+          <SelectItem value="idAsc">ID (Low-High)</SelectItem>
+          <SelectItem value="idDesc">ID (High-Low)</SelectItem>
+          <SelectItem value="nameAsc">Name (A-Z)</SelectItem>
+          <SelectItem value="nameDesc">Name (Z-A)</SelectItem>
+        </SelectContent>
+      </Select>
+    ) : null
+  const viewToggle = (
+    <div
+      className="flex items-center gap-0.5 rounded-md border p-0.5"
+      role="group"
+      aria-label="View mode"
+    >
+      <Button
+        size="sm"
+        variant={viewMode === 'card' ? 'secondary' : 'ghost'}
+        className="h-6 gap-1 px-2 text-xs"
+        onClick={() => setPersistedViewMode('card')}
+        aria-pressed={viewMode === 'card'}
+      >
+        <RiNodeTree className="size-3.5" />
+        Live
+      </Button>
+      <Button
+        size="sm"
+        variant={viewMode === 'table' ? 'secondary' : 'ghost'}
+        className="h-6 gap-1 px-2 text-xs"
+        onClick={() => setPersistedViewMode('table')}
+        aria-pressed={viewMode === 'table'}
+      >
+        <RiListCheck className="size-3.5" />
+        Table
+      </Button>
+    </div>
+  )
+  const columnsMenu =
+    viewMode === 'table' ? (
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 gap-1 px-2 text-xs"
+            aria-label="Toggle columns"
+          >
+            <RiLayoutColumnLine className="size-3.5" />
+            Columns
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-48">
+          <DropdownMenuLabel>Toggle columns</DropdownMenuLabel>
+          <DropdownMenuSeparator />
+          {TRUNK_TABLE_COLUMN_TOGGLES.map((column) => {
+            const locked = 'locked' in column && column.locked
+            return (
+              <DropdownMenuCheckboxItem
+                key={column.id}
+                checked={isColumnVisible(columnVisibility, column.id)}
+                disabled={locked}
+                onCheckedChange={(checked) => {
+                  if (locked) return
+                  toggleColumnVisibility(column.id, checked === true)
+                }}
+                onSelect={(event) => event.preventDefault()}
+              >
+                {column.label}
+              </DropdownMenuCheckboxItem>
+            )
+          })}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    ) : null
+
   return (
     <div className="flex h-screen flex-col bg-background text-foreground">
-      <Header>
-        <div className="flex flex-wrap items-center justify-end gap-2 text-xs">
-          {/* Search */}
-          <Input
-            className="order-last h-8 w-full text-xs sm:order-none sm:w-48"
-            placeholder="Search username or name..."
-            value={search}
-            onChange={(e) => {
-              setSearch(e.target.value)
-              debouncedSearch(e.target.value)
-            }}
-          />
-          {viewMode === 'table' ? (
-            <Select
-              value={sortMode}
-              onValueChange={(value) => setSortMode(value as TrunkSortMode)}
-            >
-              <SelectTrigger
-                className="h-7 px-2 text-xs"
-                size="sm"
-                aria-label="Sort trunks"
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="activeCallsDesc">
-                  Active Calls (High-Low)
-                </SelectItem>
-                <SelectItem value="activeCallsAsc">
-                  Active Calls (Low-High)
-                </SelectItem>
-                <SelectItem value="idAsc">ID (Low-High)</SelectItem>
-                <SelectItem value="idDesc">ID (High-Low)</SelectItem>
-                <SelectItem value="nameAsc">Name (A-Z)</SelectItem>
-                <SelectItem value="nameDesc">Name (Z-A)</SelectItem>
-              </SelectContent>
-            </Select>
-          ) : null}
+      <Header
+        subBar={
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            {viewToggle}
+            {renderSearch('h-8 min-w-0 flex-1 text-xs')}
+            {sortSelect}
+            {columnsMenu}
+          </div>
+        }
+      >
+        <div className="flex items-center gap-2 text-xs">
+          {/* Search, sort, view and columns move to the mobile sub bar. */}
+          <div className="hidden sm:contents">
+            {renderSearch('h-8 w-48 text-xs')}
+            {sortSelect}
+          </div>
           {viewMode === 'table' ? (
             <PageActiveCallsChip
               totalCalls={pageActiveCalls}
               trunksOnCall={pageTrunksOnCall}
             />
           ) : null}
-          <Separator orientation="vertical" className="hidden h-4 sm:block" />
-          {/* View mode toggle */}
-          <div
-            className="flex items-center gap-0.5 rounded-md border p-0.5"
-            role="group"
-            aria-label="View mode"
-          >
-            <Button
-              size="sm"
-              variant={viewMode === 'card' ? 'secondary' : 'ghost'}
-              className="h-6 gap-1 px-2 text-xs"
-              onClick={() => setPersistedViewMode('card')}
-              aria-pressed={viewMode === 'card'}
-            >
-              <RiNodeTree className="size-3.5" />
-              Live
-            </Button>
-            <Button
-              size="sm"
-              variant={viewMode === 'table' ? 'secondary' : 'ghost'}
-              className="h-6 gap-1 px-2 text-xs"
-              onClick={() => setPersistedViewMode('table')}
-              aria-pressed={viewMode === 'table'}
-            >
-              <RiListCheck className="size-3.5" />
-              Table
-            </Button>
+          <div className="hidden sm:contents">
+            <Separator orientation="vertical" className="h-4" />
+            {viewToggle}
+            {columnsMenu}
           </div>
-          {viewMode === 'table' ? (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="h-7 gap-1 px-2 text-xs"
-                  aria-label="Toggle columns"
-                >
-                  <RiLayoutColumnLine className="size-3.5" />
-                  Columns
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-48">
-                <DropdownMenuLabel>Toggle columns</DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                {TRUNK_TABLE_COLUMN_TOGGLES.map((column) => {
-                  const locked = 'locked' in column && column.locked
-                  return (
-                    <DropdownMenuCheckboxItem
-                      key={column.id}
-                      checked={isColumnVisible(columnVisibility, column.id)}
-                      disabled={locked}
-                      onCheckedChange={(checked) => {
-                        if (locked) return
-                        toggleColumnVisibility(column.id, checked === true)
-                      }}
-                      onSelect={(event) => event.preventDefault()}
-                    >
-                      {column.label}
-                    </DropdownMenuCheckboxItem>
-                  )
-                })}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          ) : null}
           <Separator orientation="vertical" className="hidden h-4 sm:block" />
           {/* Add Trunk */}
           <Button

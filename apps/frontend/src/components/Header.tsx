@@ -21,8 +21,16 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { usePasswordAuth } from '@/features/auth/password-provider'
 import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 
-export default function Header({ children }: { children?: React.ReactNode }) {
+export default function Header({
+  children,
+  subBar,
+}: {
+  children?: React.ReactNode
+  /** Optional second row shown only on small screens (below `sm`). */
+  subBar?: React.ReactNode
+}) {
   const [isOpen, setIsOpen] = useState(false)
   const openButtonRef = useRef<HTMLButtonElement>(null)
   const closeButtonRef = useRef<HTMLButtonElement>(null)
@@ -55,7 +63,12 @@ export default function Header({ children }: { children?: React.ReactNode }) {
 
   return (
     <>
-      <header className="flex items-center gap-3 border-b border-border bg-background/90 px-4 py-2 text-foreground backdrop-blur">
+      <header
+        className={cn(
+          'flex items-center gap-3 border-b border-border bg-background/90 px-4 py-2 text-foreground backdrop-blur',
+          subBar && 'flex-wrap gap-y-2 sm:flex-nowrap',
+        )}
+      >
         <button
           ref={openButtonRef}
           onClick={() => setIsOpen(true)}
@@ -82,6 +95,7 @@ export default function Header({ children }: { children?: React.ReactNode }) {
             <span className="hidden sm:inline">Logout</span>
           </Button>
         </div>
+        {subBar ? <div className="basis-full sm:hidden">{subBar}</div> : null}
       </header>
 
       <AnimatePresence

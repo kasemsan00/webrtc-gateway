@@ -31,6 +31,7 @@ import {
   callTimerSec,
   formatCallDuration,
   isActiveLiveRow,
+  rowCallCount,
 } from '@/features/trunk/live-board'
 import { resolveWSClientPresenceLabel } from '@/features/ws-clients/types'
 import { useNow } from '@/features/trunk/use-trunk-live-data'
@@ -206,7 +207,10 @@ const TILES: Array<{
     label: 'In call',
     icon: RiUserVoiceFill,
     value: (summary) => summary.talking,
-    hint: () => 'Connected calls',
+    hint: (summary) =>
+      summary.reconnecting > 0
+        ? `${summary.talking - summary.reconnecting} talking · ${summary.reconnecting} reconnecting`
+        : 'Connected calls',
   },
   {
     filter: 'offline',
@@ -784,7 +788,9 @@ export function TrunkLiveBoard({
     }
     return false
   })
-  const liveCount = activeRows.length + visibleOtherCalls.length
+  const liveCount =
+    activeRows.reduce((count, row) => count + rowCallCount(row), 0) +
+    visibleOtherCalls.length
   const showLiveSection =
     filter === 'all' || filter === 'calling' || filter === 'talking'
   const now = useNow(
