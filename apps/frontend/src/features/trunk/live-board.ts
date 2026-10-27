@@ -297,10 +297,11 @@ const STATUS_RANK: Record<TrunkLiveStatus, number> = {
   dialing: 2,
   incoming: 2,
   busy: 3,
-  // Idle trunks: problems first so they are noticed, disabled last.
-  error: 4,
-  offline: 5,
-  online: 6,
+  // Idle trunks: online (ready) first, then register failures, offline,
+  // and disabled last.
+  online: 4,
+  error: 5,
+  offline: 6,
   disabled: 7,
 }
 

@@ -201,12 +201,12 @@ describe('buildTrunkLiveRows', () => {
     expect(rows.map((row) => row.trunk.name)).toEqual([
       'Talking',
       'Dialing',
-      'Offline',
       'Idle',
+      'Offline',
     ])
     expect(rows[0].calls.map((call) => call.sessionId)).toEqual(['b'])
-    expect(rows[3].clients.map((client) => client.clientId)).toEqual(['x'])
-    expect(rows[2].clients).toEqual([])
+    expect(rows[2].clients.map((client) => client.clientId)).toEqual(['x'])
+    expect(rows[3].clients).toEqual([])
   })
 
   it('keeps trunk destinations when sessions are not visible', () => {
@@ -383,7 +383,7 @@ describe('summary tiles add up to the live calls', () => {
 })
 
 describe('idle trunk order', () => {
-  it('puts register failures first, then offline, online and disabled', () => {
+  it('puts online first, then register failures, offline and disabled', () => {
     const rows = buildTrunkLiveRows(
       [
         makeTrunk({ id: 1, name: 'Disabled', enabled: false }),
@@ -396,10 +396,10 @@ describe('idle trunk order', () => {
       [],
     )
     expect(rows.map((row) => row.trunk.name)).toEqual([
-      'Failed',
-      'Offline',
       'Online',
       'Online 2',
+      'Failed',
+      'Offline',
       'Disabled',
     ])
   })
