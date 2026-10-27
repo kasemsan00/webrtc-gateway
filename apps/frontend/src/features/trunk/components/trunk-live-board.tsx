@@ -15,9 +15,12 @@ import {
   RiWifiOffLine,
 } from '@remixicon/react'
 import { AnimatePresence, motion } from 'motion/react'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import type { ComponentType, ReactNode } from 'react'
 
+import type { ActiveSession } from '@/features/active-sessions/types'
+import type { Trunk } from '@/features/trunk/types'
+import type { WSClient } from '@/features/ws-clients/types'
 import type {
   CallOperator,
   LiveCall,
@@ -28,10 +31,14 @@ import type {
   TrunkLiveStatus,
 } from '@/features/trunk/live-board'
 import {
+  buildTrunkLiveRows,
   callTimerSec,
+  collectNonTrunkCalls,
   formatCallDuration,
   isActiveLiveRow,
+  matchesLiveFilter,
   rowCallCount,
+  summarizeLiveRows,
 } from '@/features/trunk/live-board'
 import { resolveWSClientPresenceLabel } from '@/features/ws-clients/types'
 import { useNow } from '@/features/trunk/use-trunk-live-data'
@@ -756,9 +763,10 @@ function CompactTrunkCard({
 /* ------------------------------------------------------------------ */
 
 export interface TrunkLiveBoardProps {
-  rows: Array<TrunkLiveRow>
-  otherCalls: Array<LiveCall>
-  summary: LiveSummary
+  /** Raw or normalised API data; mapping happens inside the board. */
+  trunks: Array<Trunk>
+  sessions: Array<ActiveSession>
+  clients: Array<WSClient>
   filter: LiveFilter
   onFilterChange: (filter: LiveFilter) => void
   sessionsFetchedAt: number
@@ -766,16 +774,36 @@ export interface TrunkLiveBoardProps {
   renderActions?: (row: TrunkLiveRow) => ReactNode
 }
 
+/**
+ * Builds rows from API data inside the board so mapping errors are caught by
+ * the surrounding LiveBoardErrorBoundary instead of blanking the page.
+ */
 export function TrunkLiveBoard({
-  rows,
-  otherCalls,
-  summary,
+  trunks,
+  sessions,
+  clients,
   filter,
   onFilterChange,
   sessionsFetchedAt,
   liveWarning,
   renderActions,
 }: TrunkLiveBoardProps) {
+  const allRows = useMemo(
+    () => buildTrunkLiveRows(trunks, sessions, clients),
+    [trunks, sessions, clients],
+  )
+  const otherCalls = useMemo(
+    () => collectNonTrunkCalls(sessions, clients),
+    [sessions, clients],
+  )
+  const summary = useMemo(
+    () => summarizeLiveRows(allRows, otherCalls),
+    [allRows, otherCalls],
+  )
+  const rows = useMemo(
+    () => allRows.filter((row) => matchesLiveFilter(row, filter)),
+    [allRows, filter],
+  )
   const activeRows = rows.filter(isActiveLiveRow)
   const idleRows = rows.filter((row) => !isActiveLiveRow(row))
   const visibleOtherCalls = otherCalls.filter((call) => {

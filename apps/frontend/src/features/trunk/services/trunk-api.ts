@@ -55,9 +55,11 @@ export async function fetchAllTrunks(
       page,
       pageSize: TRUNK_API_MAX_PAGE_SIZE,
     })
-    items.push(...res.items)
-    total = res.total
-    if (res.items.length === 0 || items.length >= total) break
+    // The gateway may send `items: null` for an empty page.
+    const pageItems: Array<Trunk> = Array.isArray(res.items) ? res.items : []
+    items.push(...pageItems)
+    total = typeof res.total === 'number' ? res.total : items.length
+    if (pageItems.length === 0 || items.length >= total) break
   }
   return { items, total, page: 1, pageSize: items.length }
 }

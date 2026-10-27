@@ -2,6 +2,11 @@ import type { ActiveSession } from '@/features/active-sessions/types'
 import type { Trunk } from '@/features/trunk/types'
 import type { WSClient } from '@/features/ws-clients/types'
 import { resolveWSClientPresenceLabel } from '@/features/ws-clients/types'
+import {
+  normalizeSessions,
+  normalizeTrunks,
+  normalizeWSClients,
+} from '@/features/trunk/live-normalize'
 
 /** Phase of one live call as seen from GET /api/sessions `state`. */
 export type CallPhase = 'dialing' | 'incoming' | 'talking' | 'reconnecting'
@@ -205,7 +210,9 @@ export function resolveCallOperator(
   clients: Array<WSClient>,
 ): CallOperator | null {
   const inUseBy = (trunk?.inUseBy ?? trunk?.in_use_by ?? '').trim()
-  const bound = clients.find((client) => client.sessionId === call.sessionId)
+  const bound = call.sessionId
+    ? clients.find((client) => client.sessionId === call.sessionId)
+    : undefined
   if (bound) {
     return {
       kind: clientOperatorKind(bound),
@@ -297,11 +304,18 @@ const STATUS_RANK: Record<TrunkLiveStatus, number> = {
   disabled: 7,
 }
 
+/**
+ * Inputs may be raw API payloads (fields missing / null, null entries); they
+ * are normalised here first so nothing below calls methods on raw values.
+ */
 export function buildTrunkLiveRows(
-  trunks: Array<Trunk>,
-  sessions: Array<ActiveSession>,
-  clients: Array<WSClient>,
+  rawTrunks: ReadonlyArray<Trunk> | unknown,
+  rawSessions: ReadonlyArray<ActiveSession> | unknown,
+  rawClients: ReadonlyArray<WSClient> | unknown,
 ): Array<TrunkLiveRow> {
+  const trunks = normalizeTrunks(rawTrunks)
+  const sessions = normalizeSessions(rawSessions)
+  const clients = normalizeWSClients(rawClients)
   const callsByTrunk = new Map<number, Array<LiveCall>>()
   for (const session of sessions) {
     const call = toLiveCall(session)
@@ -328,12 +342,9 @@ export function buildTrunkLiveRows(
         operator: resolveCallOperator(call, trunk, clients),
       })),
     )
+    // Normalised destinations are already trimmed and non-empty.
     const fallbackDestinations =
-      calls.length === 0
-        ? (trunk.activeDestinations ?? [])
-            .map((destination) => destination.trim())
-            .filter((destination) => destination.length > 0)
-        : []
+      calls.length === 0 ? (trunk.activeDestinations ?? []) : []
     return {
       index,
       row: {
@@ -357,11 +368,12 @@ export function buildTrunkLiveRows(
 
 /** Live calls that are not bound to any trunk (public / user-auth sessions). */
 export function collectNonTrunkCalls(
-  sessions: Array<ActiveSession>,
-  clients: Array<WSClient> = [],
+  rawSessions: ReadonlyArray<ActiveSession> | unknown,
+  rawClients: ReadonlyArray<WSClient> | unknown = [],
 ): Array<LiveCall> {
+  const clients = normalizeWSClients(rawClients)
   return sortCalls(
-    sessions
+    normalizeSessions(rawSessions)
       .map(toLiveCall)
       .filter((call): call is LiveCall => call !== null && call.trunkId <= 0)
       .map((call) => ({

@@ -10,6 +10,10 @@ import {
   fetchWSClients,
   subscribeWSClientEvents,
 } from '@/features/ws-clients/services/ws-clients-api'
+import {
+  normalizeSessions,
+  normalizeWSClients,
+} from '@/features/trunk/live-normalize'
 import { useVisibilityRealtimeReload } from '@/lib/use-visibility-realtime-reload'
 
 export interface TrunkLiveData {
@@ -46,7 +50,7 @@ export function useTrunkLiveData(): TrunkLiveData {
     try {
       const items = await fetchActiveSessions()
       if (!mountedRef.current) return
-      setSessions(Array.isArray(items) ? items : [])
+      setSessions(normalizeSessions(items))
       setSessionsFetchedAt(Date.now())
       setSessionsError(null)
     } catch (err) {
@@ -63,7 +67,7 @@ export function useTrunkLiveData(): TrunkLiveData {
     try {
       const items = await fetchWSClients()
       if (!mountedRef.current) return
-      setClients(Array.isArray(items) ? items : [])
+      setClients(normalizeWSClients(items))
       setClientsError(null)
     } catch (err) {
       if (!mountedRef.current) return

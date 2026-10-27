@@ -54,4 +54,18 @@ describe('fetchAllTrunks', () => {
     expect(res.items).toEqual([])
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
+
+  it('treats items: null as an empty page', async () => {
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(
+        jsonResponse({ items: null, total: 0, page: 1, pageSize: 100 }),
+      ),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const res = await fetchAllTrunks()
+
+    expect(res.items).toEqual([])
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
 })

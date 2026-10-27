@@ -93,12 +93,8 @@ import {
   trunkTableRowClassName,
 } from '@/features/trunk/components/trunk-active-visuals'
 import { TrunkLiveBoard } from '@/features/trunk/components/trunk-live-board'
-import {
-  buildTrunkLiveRows,
-  collectNonTrunkCalls,
-  matchesLiveFilter,
-  summarizeLiveRows,
-} from '@/features/trunk/live-board'
+import { LiveBoardErrorBoundary } from '@/features/trunk/components/live-board-error-boundary'
+import { normalizeTrunks } from '@/features/trunk/live-normalize'
 import { useTrunkLiveData } from '@/features/trunk/use-trunk-live-data'
 
 const DEFAULT_PAGE_SIZE = 20
@@ -342,23 +338,6 @@ export function TrunkListPage() {
 
   const liveData = useTrunkLiveData()
   const [liveFilter, setLiveFilter] = useState<LiveFilter>('all')
-  const liveRows = useMemo(
-    () => buildTrunkLiveRows(trunks, liveData.sessions, liveData.clients),
-    [trunks, liveData.sessions, liveData.clients],
-  )
-
-  const visibleLiveRows = useMemo(
-    () => liveRows.filter((row) => matchesLiveFilter(row, liveFilter)),
-    [liveRows, liveFilter],
-  )
-  const nonTrunkCalls = useMemo(
-    () => collectNonTrunkCalls(liveData.sessions, liveData.clients),
-    [liveData.sessions, liveData.clients],
-  )
-  const liveSummary = useMemo(
-    () => summarizeLiveRows(liveRows, nonTrunkCalls),
-    [liveRows, nonTrunkCalls],
-  )
   const liveWarning = liveData.sessionsError
     ? `Live calls unavailable: ${liveData.sessionsError}`
     : liveData.clientsError
@@ -429,7 +408,8 @@ export function TrunkListPage() {
                 page: params?.page ?? page,
                 pageSize: params?.pageSize ?? pageSize,
               })
-        let items = res.items
+        // Normalise once here: the API omits empty fields and may send nulls.
+        let items = normalizeTrunks(res.items)
         if (sortMode === 'activeCallsDesc' || sortMode === 'activeCallsAsc') {
           items = [...items].sort((left, right) => {
             const diff = left.activeCallCount - right.activeCallCount
@@ -437,7 +417,7 @@ export function TrunkListPage() {
           })
         }
         setTrunks(items)
-        setTotal(res.total)
+        setTotal(typeof res.total === 'number' ? res.total : items.length)
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to fetch trunks')
       } finally {
@@ -959,26 +939,30 @@ export function TrunkListPage() {
             <p className="text-sm">No trunks found</p>
           </div>
         ) : viewMode === 'card' ? (
-          <TrunkLiveBoard
-            rows={visibleLiveRows}
-            otherCalls={nonTrunkCalls}
-            summary={liveSummary}
-            filter={liveFilter}
-            onFilterChange={setLiveFilter}
-            sessionsFetchedAt={liveData.sessionsFetchedAt}
-            liveWarning={liveWarning}
-            renderActions={(row) => (
-              <TrunkActionsMenu
-                trunk={row.trunk}
-                onEdit={openEditModal}
-                onRegister={openRegisterModal}
-                onUnregister={openUnregisterModal}
-                onTestPush={openTestPushModal}
-                onSoftDelete={openSoftDeleteModal}
-                onRestore={openRestoreModal}
-              />
-            )}
-          />
+          <LiveBoardErrorBoundary
+            onSwitchToTable={() => setPersistedViewMode('table')}
+          >
+            <TrunkLiveBoard
+              trunks={trunks}
+              sessions={liveData.sessions}
+              clients={liveData.clients}
+              filter={liveFilter}
+              onFilterChange={setLiveFilter}
+              sessionsFetchedAt={liveData.sessionsFetchedAt}
+              liveWarning={liveWarning}
+              renderActions={(row) => (
+                <TrunkActionsMenu
+                  trunk={row.trunk}
+                  onEdit={openEditModal}
+                  onRegister={openRegisterModal}
+                  onUnregister={openUnregisterModal}
+                  onTestPush={openTestPushModal}
+                  onSoftDelete={openSoftDeleteModal}
+                  onRestore={openRestoreModal}
+                />
+              )}
+            />
+          </LiveBoardErrorBoundary>
         ) : (
           <TrunkTable
             trunks={trunks}
