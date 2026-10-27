@@ -1,10 +1,11 @@
 import {
   RiAddLine,
-  RiGridLine,
   RiLayoutColumnLine,
   RiListCheck,
   RiLoader4Line,
   RiMoonLine,
+  RiMore2Fill,
+  RiNodeTree,
   RiRefreshLine,
   RiServerLine,
   RiSunLine,
@@ -12,7 +13,6 @@ import {
 import { debounce } from '@tanstack/pacer'
 import { useStore } from '@tanstack/react-store'
 import { useSearch } from '@tanstack/react-router'
-import { motion } from 'motion/react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import type {
@@ -21,6 +21,7 @@ import type {
   VisibilityState,
 } from '@tanstack/react-table'
 
+import type { LiveFilter } from '@/features/trunk/live-board'
 import type {
   CreateTrunkPayload,
   TestIncomingPushStyle,
@@ -32,7 +33,6 @@ import { normalizeTrunkUid } from '@/features/trunk/types'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent } from '@/components/ui/card'
 import { DataTable } from '@/components/ui/data-table'
 import {
   Dialog,
@@ -46,6 +46,7 @@ import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
+  DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
@@ -86,13 +87,18 @@ import {
 } from '@/features/trunk/store/trunk-prefs-store'
 import {
   ActiveCallsDisplay,
-  ActiveDestinationDetailValue,
   isTrunkOnCall,
   PageActiveCallsChip,
-  TrunkOnCallCardShell,
-  TrunkOnCallHeaderBadge,
   trunkTableRowClassName,
 } from '@/features/trunk/components/trunk-active-visuals'
+import { TrunkLiveBoard } from '@/features/trunk/components/trunk-live-board'
+import {
+  buildTrunkLiveRows,
+  collectNonTrunkCalls,
+  matchesLiveFilter,
+  summarizeLiveRows,
+} from '@/features/trunk/live-board'
+import { useTrunkLiveData } from '@/features/trunk/use-trunk-live-data'
 
 const DEFAULT_PAGE_SIZE = 20
 
@@ -111,6 +117,7 @@ const TRUNK_TABLE_COLUMN_TOGGLES = [
   { id: 'calls', label: 'Calls' },
   { id: 'lastRegisteredAt', label: 'Last Registered' },
   { id: 'lastUnregisteredAt', label: 'Last Unregistered' },
+  { id: 'lastOnline', label: 'Last Online' },
   { id: 'uid', label: 'UID' },
 ] as const
 
@@ -154,9 +161,7 @@ export function isPushContactReady(trunk: Trunk) {
 
 export function canTestIncomingPush(trunk: Trunk) {
   return Boolean(
-    trunk.fcmTokenReady ||
-      trunk.notifyUserBound ||
-      isPushContactReady(trunk),
+    trunk.fcmTokenReady || trunk.notifyUserBound || isPushContactReady(trunk),
   )
 }
 
@@ -333,6 +338,27 @@ export function TrunkListPage() {
   const [savingCreate, setSavingCreate] = useState(false)
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
+
+  const liveData = useTrunkLiveData()
+  const [liveFilter, setLiveFilter] = useState<LiveFilter>('all')
+  const liveRows = useMemo(
+    () => buildTrunkLiveRows(trunks, liveData.sessions, liveData.clients),
+    [trunks, liveData.sessions, liveData.clients],
+  )
+  const liveSummary = useMemo(() => summarizeLiveRows(liveRows), [liveRows])
+  const visibleLiveRows = useMemo(
+    () => liveRows.filter((row) => matchesLiveFilter(row, liveFilter)),
+    [liveRows, liveFilter],
+  )
+  const nonTrunkCalls = useMemo(
+    () => collectNonTrunkCalls(liveData.sessions),
+    [liveData.sessions],
+  )
+  const liveWarning = liveData.sessionsError
+    ? `Live calls unavailable: ${liveData.sessionsError}`
+    : liveData.clientsError
+      ? `Connected apps unavailable: ${liveData.clientsError}`
+      : null
 
   const { pageActiveCalls, pageTrunksOnCall } = useMemo(() => {
     let calls = 0
@@ -721,10 +747,10 @@ export function TrunkListPage() {
   return (
     <div className="flex h-screen flex-col bg-background text-foreground">
       <Header>
-        <div className="flex items-center gap-2 text-xs">
+        <div className="flex flex-wrap items-center justify-end gap-2 text-xs">
           {/* Search */}
           <Input
-            className="h-8 w-48 text-xs"
+            className="h-8 w-36 text-xs sm:w-48"
             placeholder="Search username or name..."
             value={search}
             onChange={(e) => {
@@ -732,54 +758,64 @@ export function TrunkListPage() {
               debouncedSearch(e.target.value)
             }}
           />
-          <Select
-            value={sortMode}
-            onValueChange={(value) => setSortMode(value as TrunkSortMode)}
-          >
-            <SelectTrigger
-              className="h-7 px-2 text-xs"
-              size="sm"
-              aria-label="Sort trunks"
+          {viewMode === 'table' ? (
+            <Select
+              value={sortMode}
+              onValueChange={(value) => setSortMode(value as TrunkSortMode)}
             >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="activeCallsDesc">
-                Active Calls (High-Low)
-              </SelectItem>
-              <SelectItem value="activeCallsAsc">
-                Active Calls (Low-High)
-              </SelectItem>
-              <SelectItem value="idAsc">ID (Low-High)</SelectItem>
-              <SelectItem value="idDesc">ID (High-Low)</SelectItem>
-              <SelectItem value="nameAsc">Name (A-Z)</SelectItem>
-              <SelectItem value="nameDesc">Name (Z-A)</SelectItem>
-            </SelectContent>
-          </Select>
-          <PageActiveCallsChip
-            totalCalls={pageActiveCalls}
-            trunksOnCall={pageTrunksOnCall}
-          />
+              <SelectTrigger
+                className="h-7 px-2 text-xs"
+                size="sm"
+                aria-label="Sort trunks"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="activeCallsDesc">
+                  Active Calls (High-Low)
+                </SelectItem>
+                <SelectItem value="activeCallsAsc">
+                  Active Calls (Low-High)
+                </SelectItem>
+                <SelectItem value="idAsc">ID (Low-High)</SelectItem>
+                <SelectItem value="idDesc">ID (High-Low)</SelectItem>
+                <SelectItem value="nameAsc">Name (A-Z)</SelectItem>
+                <SelectItem value="nameDesc">Name (Z-A)</SelectItem>
+              </SelectContent>
+            </Select>
+          ) : null}
+          {viewMode === 'table' ? (
+            <PageActiveCallsChip
+              totalCalls={pageActiveCalls}
+              trunksOnCall={pageTrunksOnCall}
+            />
+          ) : null}
           <Separator orientation="vertical" className="h-4" />
           {/* View mode toggle */}
-          <div className="flex items-center gap-0.5">
+          <div
+            className="flex items-center gap-0.5 rounded-md border p-0.5"
+            role="group"
+            aria-label="View mode"
+          >
             <Button
-              size="icon"
+              size="sm"
               variant={viewMode === 'card' ? 'secondary' : 'ghost'}
-              className="size-7"
+              className="h-6 gap-1 px-2 text-xs"
               onClick={() => setPersistedViewMode('card')}
-              aria-label="Card view"
+              aria-pressed={viewMode === 'card'}
             >
-              <RiGridLine className="size-3.5" />
+              <RiNodeTree className="size-3.5" />
+              Live
             </Button>
             <Button
-              size="icon"
+              size="sm"
               variant={viewMode === 'table' ? 'secondary' : 'ghost'}
-              className="size-7"
+              className="h-6 gap-1 px-2 text-xs"
               onClick={() => setPersistedViewMode('table')}
-              aria-label="Table view"
+              aria-pressed={viewMode === 'table'}
             >
               <RiListCheck className="size-3.5" />
+              Table
             </Button>
           </div>
           {viewMode === 'table' ? (
@@ -828,9 +864,10 @@ export function TrunkListPage() {
               setCreateForm(newCreateForm())
               setCreateOpen(true)
             }}
+            aria-label="Add trunk"
           >
             <RiAddLine className="size-3.5" />
-            Add Trunk
+            <span className="hidden sm:inline">Add Trunk</span>
           </Button>
           <Separator orientation="vertical" className="h-4" />
           {/* Refresh */}
@@ -840,11 +877,12 @@ export function TrunkListPage() {
             className="h-7 gap-1 px-2 text-xs"
             onClick={handleRefresh}
             disabled={refreshing}
+            aria-label="Refresh trunks"
           >
             <RiRefreshLine
               className={`size-3.5 ${refreshing ? 'animate-spin' : ''}`}
             />
-            Refresh
+            <span className="hidden sm:inline">Refresh</span>
           </Button>
           <Separator orientation="vertical" className="h-4" />
           {/* Theme toggle */}
@@ -884,30 +922,26 @@ export function TrunkListPage() {
             <p className="text-sm">No trunks found</p>
           </div>
         ) : viewMode === 'card' ? (
-          <div className="grid items-stretch gap-3 sm:grid-cols-1 md:grid-cols-2 xl:grid-cols-3">
-            {trunks.map((trunk, index) => (
-              <motion.div
-                key={trunk.id}
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{
-                  duration: 0.25,
-                  delay: Math.min(index * 0.04, 0.32),
-                }}
-                className="h-full motion-reduce:transform-none motion-reduce:opacity-100"
-              >
-                <TrunkCard
-                  trunk={trunk}
-                  onEdit={openEditModal}
-                  onRegister={openRegisterModal}
-                  onUnregister={openUnregisterModal}
-                  onTestPush={openTestPushModal}
-                  onSoftDelete={openSoftDeleteModal}
-                  onRestore={openRestoreModal}
-                />
-              </motion.div>
-            ))}
-          </div>
+          <TrunkLiveBoard
+            rows={visibleLiveRows}
+            otherCalls={nonTrunkCalls}
+            summary={liveSummary}
+            filter={liveFilter}
+            onFilterChange={setLiveFilter}
+            sessionsFetchedAt={liveData.sessionsFetchedAt}
+            liveWarning={liveWarning}
+            renderActions={(row) => (
+              <TrunkActionsMenu
+                trunk={row.trunk}
+                onEdit={openEditModal}
+                onRegister={openRegisterModal}
+                onUnregister={openUnregisterModal}
+                onTestPush={openTestPushModal}
+                onSoftDelete={openSoftDeleteModal}
+                onRestore={openRestoreModal}
+              />
+            )}
+          />
         ) : (
           <TrunkTable
             trunks={trunks}
@@ -1546,6 +1580,17 @@ function TrunkTable({
         ),
       },
       {
+        id: 'lastOnline',
+        header: 'Last Online',
+        cell: ({ row }) => (
+          <span className="text-muted-foreground">
+            {row.original.lastOnlinePlatform
+              ? `${row.original.lastOnlinePlatform} · ${formatThaiDateTime(row.original.lastOnlineAt || '')}`
+              : '-'}
+          </span>
+        ),
+      },
+      {
         id: 'uid',
         header: 'UID',
         cell: ({ row }) => (
@@ -1632,7 +1677,16 @@ function TrunkTable({
   )
 }
 
-function TrunkCard({
+type TrunkActionHandlers = {
+  onEdit: (trunk: Trunk) => void
+  onRegister: (trunk: Trunk) => void
+  onUnregister: (trunk: Trunk) => void
+  onTestPush: (trunk: Trunk) => void
+  onSoftDelete: (trunk: Trunk) => void
+  onRestore: (trunk: Trunk) => void
+}
+
+function TrunkActionsMenu({
   trunk,
   onEdit,
   onRegister,
@@ -1640,217 +1694,72 @@ function TrunkCard({
   onTestPush,
   onSoftDelete,
   onRestore,
-}: {
-  trunk: Trunk
-  onEdit: (trunk: Trunk) => void
-  onRegister: (trunk: Trunk) => void
-  onUnregister: (trunk: Trunk) => void
-  onTestPush: (trunk: Trunk) => void
-  onSoftDelete: (trunk: Trunk) => void
-  onRestore: (trunk: Trunk) => void
-}) {
-  const onCall = isTrunkOnCall(trunk)
-
+}: TrunkActionHandlers & { trunk: Trunk }) {
+  const showRegister = !isRegisterActionDisabled(trunk)
   return (
-    <TrunkOnCallCardShell trunk={trunk}>
-      <Card
-        className={cn(
-          'h-full border-border/60 ring-0',
-          onCall &&
-            'animate-trunk-card-shimmer bg-size-[200%_200%] bg-linear-to-br from-cyan-500/12 via-emerald-500/6 to-cyan-500/10 dark:from-cyan-500/16 dark:via-emerald-500/8 dark:to-cyan-500/12 motion-reduce:animate-none',
-        )}
-      >
-        <CardContent className="flex flex-1 flex-col space-y-2 p-3">
-          {/* Header row */}
-          <div className="flex min-h-[2.75rem] shrink-0 items-center justify-between">
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-1.5">
-                <span className="text-sm font-semibold">{trunk.name}</span>
-                <TrunkOnCallHeaderBadge trunk={trunk} />
-              </div>
-              <p className="truncate font-mono text-[11px] text-muted-foreground">
-                #{trunk.id} · uid: {formatUid(normalizeTrunkUid(trunk))}
-              </p>
-            </div>
-          <div className="flex items-center gap-1.5">
-            {trunk.isDefault ? (
-              <Badge variant="default" className="text-[10px]">
-                Default
-              </Badge>
-            ) : null}
-            <Badge
-              variant={trunk.enabled ? 'success' : 'destructive'}
-              className="text-[10px]"
+    <div className="flex shrink-0 items-center gap-1">
+      {showRegister ? (
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7 px-2 text-xs"
+          onClick={() => onRegister(trunk)}
+        >
+          Register
+        </Button>
+      ) : null}
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            size="icon"
+            variant="ghost"
+            className="size-7"
+            aria-label={`Actions for ${trunk.name}`}
+          >
+            <RiMore2Fill className="size-4" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-44">
+          <DropdownMenuLabel className="truncate">
+            {trunk.name}
+          </DropdownMenuLabel>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            disabled={isRegisterActionDisabled(trunk)}
+            onSelect={() => onRegister(trunk)}
+          >
+            Register
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            disabled={!trunk.isRegistered}
+            onSelect={() => onUnregister(trunk)}
+          >
+            Unregister
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => onEdit(trunk)}>
+            Edit
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            disabled={!canTestIncomingPush(trunk)}
+            onSelect={() => onTestPush(trunk)}
+          >
+            Test push
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          {trunk.enabled ? (
+            <DropdownMenuItem
+              variant="destructive"
+              onSelect={() => onSoftDelete(trunk)}
             >
-              {getTrunkStatusLabel(trunk.enabled)}
-            </Badge>
-          </div>
-        </div>
-
-        <Separator className="shrink-0" />
-
-        {/* Details */}
-        <div className="grid min-h-0 flex-1 grid-cols-2 gap-x-4 gap-y-1 text-xs">
-          <Detail label="Domain" value={trunk.domain} />
-          <Detail label="Port" value={String(trunk.port)} />
-          <Detail label="Username" value={trunk.username} />
-          <Detail label="Transport" value={trunk.transport.toUpperCase()} />
-          <Detail
-            label="Destination"
-            value={
-              <ActiveDestinationDetailValue
-                destinations={trunk.activeDestinations}
-                onCall={onCall}
-              />
-            }
-          />
-          <Detail
-            label="Active Calls"
-            value={<ActiveCallsDisplay count={trunk.activeCallCount} />}
-          />
-          <Detail label="In Use By" value={formatInUseBy(trunk)} />
-          <Detail label="Lease Owner" value={trunk.leaseOwner || '-'} />
-          <Detail
-            label="Register"
-            value={
-              <div className="space-y-0.5">
-                <Badge
-                  variant={trunk.isRegistered ? 'success' : 'secondary'}
-                  className="text-[10px]"
-                >
-                  {trunk.isRegistered ? 'Registered' : 'Unregistered'}
-                </Badge>
-              </div>
-            }
-          />
-          <Detail
-            label="Push Contact"
-            value={
-              <div className="space-y-0.5">
-                <PushContactBadge trunk={trunk} />
-                <PushContactDetails trunk={trunk} compact />
-              </div>
-            }
-          />
-          <Detail label="PN App ID" value={trunk.pnAppId || '-'} />
-          <Detail label="PN Type" value={trunk.pnType || '-'} />
-          <Detail
-            label="PN Token"
-            value={trunk.pnTokenMasked ? trunk.pnTokenMasked : '-'}
-          />
-          <Detail
-            label="PN Updated"
-            value={formatThaiDateTime(trunk.pnUpdatedAt || '')}
-          />
-          <Detail
-            label="Last Registered"
-            value={formatThaiDateTime(trunk.lastRegisteredAt)}
-          />
-          <Detail
-            label="Last Unregistered"
-            value={formatThaiDateTime(trunk.lastUnregisteredAt || '')}
-          />
-          <Detail
-            label="Last Online"
-            value={
-              trunk.lastOnlinePlatform
-                ? `${trunk.lastOnlinePlatform} · ${formatThaiDateTime(trunk.lastOnlineAt || '')}`
-                : '-'
-            }
-          />
-          <Detail label="Updated" value={formatThaiDateTime(trunk.updatedAt)} />
-          <Detail
-            label="Lease Until"
-            value={formatThaiDateTime(trunk.leaseUntil)}
-          />
-        </div>
-
-        <div className="min-h-9 shrink-0">
-          {trunk.lastError ? (
-            <div
-              className="line-clamp-2 rounded bg-red-500/10 px-2 py-1 text-[11px] text-red-400"
-              title={trunk.lastError}
-            >
-              {trunk.lastError}
-            </div>
-          ) : null}
-        </div>
-
-        <Separator className="shrink-0" />
-
-        {/* Footer */}
-        <div className="flex shrink-0 items-center justify-between">
-          <span className="text-[10px] text-muted-foreground">
-            Created {formatThaiDateTime(trunk.createdAt)}
-          </span>
-          <div className="flex gap-1">
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-6 px-2 text-[10px]"
-              onClick={() => onEdit(trunk)}
-            >
-              Edit
-            </Button>
-            <Button
-              size="sm"
-              variant="secondary"
-              className="h-6 px-2 text-[10px]"
-              onClick={() => onRegister(trunk)}
-              disabled={isRegisterActionDisabled(trunk)}
-            >
-              Register
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-6 px-2 text-[10px]"
-              onClick={() => onUnregister(trunk)}
-              disabled={!trunk.isRegistered}
-            >
-              Unregister
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-6 px-2 text-[10px]"
-              onClick={() => onTestPush(trunk)}
-              disabled={!canTestIncomingPush(trunk)}
-            >
-              Test push
-            </Button>
-            {trunk.enabled ? (
-              <Button
-                size="sm"
-                variant="destructive"
-                className="h-6 px-2 text-[10px]"
-                onClick={() => onSoftDelete(trunk)}
-              >
-                {getTrunkLifecycleActionLabel(trunk.enabled)}
-              </Button>
-            ) : (
-              <Button
-                size="sm"
-                variant="default"
-                className="h-6 px-2 text-[10px]"
-                onClick={() => onRestore(trunk)}
-              >
-                {getTrunkLifecycleActionLabel(trunk.enabled)}
-              </Button>
-            )}
-          </div>
-        </div>
-      </CardContent>
-    </Card>
-    </TrunkOnCallCardShell>
-  )
-}
-
-function Detail({ label, value }: { label: string; value: React.ReactNode }) {
-  return (
-    <div className="flex items-baseline justify-between gap-1">
-      <span className="text-muted-foreground">{label}</span>
-      <span className="font-medium">{value}</span>
+              {getTrunkLifecycleActionLabel(trunk.enabled)}
+            </DropdownMenuItem>
+          ) : (
+            <DropdownMenuItem onSelect={() => onRestore(trunk)}>
+              {getTrunkLifecycleActionLabel(trunk.enabled)}
+            </DropdownMenuItem>
+          )}
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   )
 }

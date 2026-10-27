@@ -1,11 +1,7 @@
 import { RiPhoneLine, RiPulseLine } from '@remixicon/react'
-import { AnimatePresence, motion } from 'motion/react'
-import type { ReactNode } from 'react'
-
-import { Badge } from '@/components/ui/badge'
-import { cn } from '@/lib/utils'
 
 import type { Trunk } from '@/features/trunk/types'
+import { cn } from '@/lib/utils'
 
 export function isTrunkOnCall(trunk: Pick<Trunk, 'activeCallCount'>) {
   return trunk.activeCallCount > 0
@@ -32,7 +28,10 @@ type ActiveCallsDisplayProps = {
   className?: string
 }
 
-export function ActiveCallsDisplay({ count, className }: ActiveCallsDisplayProps) {
+export function ActiveCallsDisplay({
+  count,
+  className,
+}: ActiveCallsDisplayProps) {
   const live = count > 0
   return (
     <span
@@ -67,93 +66,13 @@ export function ActiveCallsDisplay({ count, className }: ActiveCallsDisplayProps
   )
 }
 
-type TrunkOnCallCardShellProps = {
-  trunk: Trunk
-  children: ReactNode
-}
-
-export function TrunkOnCallCardShell({ trunk, children }: TrunkOnCallCardShellProps) {
-  const onCall = isTrunkOnCall(trunk)
-  const label = onCall
-    ? `${trunk.name} — ${trunk.activeCallCount} active call${trunk.activeCallCount === 1 ? '' : 's'}`
-    : undefined
-
-  return (
-    <div
-      className="relative h-full rounded-xl"
-      title={label}
-      aria-label={label}
-    >
-      <AnimatePresence>
-        {onCall ? (
-          <motion.div
-            key="trunk-on-call-ring"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.2 }}
-            className={cn(
-              'pointer-events-none absolute -inset-[2px] z-0 overflow-hidden rounded-xl',
-              'motion-reduce:inset-0 motion-reduce:ring-2 motion-reduce:ring-cyan-400/70',
-            )}
-            aria-hidden
-          >
-            <div
-              className={cn(
-                'absolute inset-[-50%] size-[200%]',
-                'bg-[conic-gradient(from_0deg,#22d3ee,#34d399,#06b6d4,#6ee7b7,#22d3ee)]',
-                'animate-trunk-ring-spin motion-reduce:hidden',
-              )}
-            />
-          </motion.div>
-        ) : null}
-      </AnimatePresence>
-      <div className="relative z-1 h-full">{children}</div>
-    </div>
-  )
-}
-
-export function ActiveDestinationDetailValue({
-  destinations,
-  onCall,
+export function PageActiveCallsChip({
+  totalCalls,
+  trunksOnCall,
 }: {
-  destinations?: Array<string>
-  onCall: boolean
+  totalCalls: number
+  trunksOnCall: number
 }) {
-  const label = formatActiveDestinationLabel(destinations) ?? '-'
-  if (!onCall || label === '-') {
-    return <span>{label}</span>
-  }
-  return (
-    <span
-      className="font-mono text-base font-bold tabular-nums text-cyan-950 dark:text-cyan-100"
-      title={label}
-    >
-      {label}
-    </span>
-  )
-}
-
-export function TrunkOnCallHeaderBadge({ trunk }: { trunk: Trunk }) {
-  if (!isTrunkOnCall(trunk)) return null
-  return (
-    <Badge variant="success" className="gap-1 text-[10px]">
-      <span className="relative flex size-1.5 shrink-0">
-        <span
-          className="absolute inline-flex size-full animate-ping rounded-full bg-emerald-400 opacity-70 motion-reduce:animate-none"
-          aria-hidden
-        />
-        <span
-          className="relative inline-flex size-1.5 rounded-full bg-emerald-500"
-          aria-hidden
-        />
-      </span>
-      On call
-    </Badge>
-  )
-}
-
-export function PageActiveCallsChip({ totalCalls, trunksOnCall }: { totalCalls: number; trunksOnCall: number }) {
   const live = totalCalls > 0
   return (
     <div
@@ -175,7 +94,10 @@ export function PageActiveCallsChip({ totalCalls, trunksOnCall }: { totalCalls: 
             className="absolute inline-flex size-full animate-ping rounded-full bg-cyan-400 opacity-60 motion-reduce:animate-none"
             aria-hidden
           />
-          <span className="relative inline-flex size-2 rounded-full bg-cyan-500" aria-hidden />
+          <span
+            className="relative inline-flex size-2 rounded-full bg-cyan-500"
+            aria-hidden
+          />
         </span>
       ) : (
         <RiPhoneLine className="size-3 opacity-60" aria-hidden />

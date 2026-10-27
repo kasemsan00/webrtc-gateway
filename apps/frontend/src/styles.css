@@ -156,26 +156,67 @@ code {
   }
 }
 
-@keyframes trunk-ring-spin {
+/* Trunk live board links */
+@utility live-link-dashed {
+  background-image: repeating-linear-gradient(
+    90deg,
+    currentColor 0 10px,
+    transparent 10px 18px
+  );
+  background-size: 18px 100%;
+}
+
+@utility live-link-dotted {
+  background-image: radial-gradient(
+    circle,
+    currentColor 1px,
+    transparent 1.5px
+  );
+  background-size: 8px 100%;
+}
+
+@keyframes live-link-flow {
+  from {
+    background-position: 0 0;
+  }
   to {
-    transform: rotate(360deg);
+    background-position: 18px 0;
   }
 }
 
-@utility animate-trunk-ring-spin {
-  animation: trunk-ring-spin 3.5s linear infinite;
+@utility animate-live-link-flow {
+  animation: live-link-flow 0.6s linear infinite;
 }
 
-@keyframes trunk-card-shimmer {
+@keyframes live-link-pulse {
+  from {
+    left: 0%;
+  }
+  to {
+    left: 100%;
+  }
+}
+
+@utility animate-live-link-pulse {
+  animation: live-link-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes live-phone-shake {
   0%,
+  50%,
   100% {
-    background-position: 0% 50%;
+    transform: rotate(0deg);
   }
-  50% {
-    background-position: 100% 50%;
+  10%,
+  30% {
+    transform: rotate(-14deg);
+  }
+  20%,
+  40% {
+    transform: rotate(14deg);
   }
 }
 
-@utility animate-trunk-card-shimmer {
-  animation: trunk-card-shimmer 7s ease-in-out infinite;
+@utility animate-live-phone-shake {
+  animation: live-phone-shake 1.2s ease-in-out infinite;
 }
