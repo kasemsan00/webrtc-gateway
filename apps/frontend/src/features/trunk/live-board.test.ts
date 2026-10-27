@@ -2,11 +2,14 @@ import { describe, expect, it } from 'vitest'
 
 import {
   buildTrunkLiveRows,
+  callTimerSec,
   collectNonTrunkCalls,
   deriveTrunkLiveStatus,
   formatCallDuration,
+  isActiveLiveRow,
   matchesLiveFilter,
   parseSipParty,
+  resolveCallOperator,
   sessionCallPhase,
   summarizeLiveRows,
   toLiveCall,
@@ -221,6 +224,8 @@ describe('buildTrunkLiveRows', () => {
       trunks: 4,
       online: 3,
       calling: 1,
+      dialing: 1,
+      incoming: 0,
       talking: 1,
       offline: 1,
       appsConnected: 1,
@@ -248,5 +253,88 @@ describe('formatCallDuration', () => {
     expect(formatCallDuration(65)).toBe('01:05')
     expect(formatCallDuration(3725)).toBe('1:02:05')
     expect(formatCallDuration(-5)).toBe('00:00')
+  })
+})
+
+describe('callTimerSec', () => {
+  const base = {
+    durationSec: 100,
+    createdAt: '2026-10-27T06:00:00Z',
+    answeredAt: '2026-10-27T06:00:30Z',
+  }
+
+  it('counts talk time from answeredAt plus time since fetch', () => {
+    expect(callTimerSec({ ...base, phase: 'talking' }, 5_000, 0)).toBe(75)
+  })
+
+  it('falls back to call start without answeredAt', () => {
+    expect(
+      callTimerSec({ ...base, phase: 'talking', answeredAt: null }, 0, 0),
+    ).toBe(100)
+  })
+
+  it('counts ringing time from call start', () => {
+    expect(
+      callTimerSec({ ...base, phase: 'dialing', answeredAt: null }, 2_000, 0),
+    ).toBe(102)
+  })
+})
+
+describe('resolveCallOperator', () => {
+  const trunk = { username: '2001', inUseBy: null, in_use_by: null }
+
+  it('prefers the client bound to the session', () => {
+    expect(
+      resolveCallOperator({ sessionId: 's-1' }, trunk, [
+        makeClient({
+          sessionId: 's-1',
+          agentOnly: true,
+          authSubject: 'nok@k2',
+        }),
+      ]),
+    ).toEqual({ kind: 'agent', label: 'nok@k2' })
+  })
+
+  it('uses inUseBy as the label and skips UUID subjects', () => {
+    expect(
+      resolveCallOperator({ sessionId: 's-1' }, { ...trunk, inUseBy: 'nok' }, [
+        makeClient({
+          sessionId: 's-1',
+          authSubject: '0f8fad5b-d9cb-469f-a165-70867728950e',
+        }),
+      ]),
+    ).toEqual({ kind: 'app', label: 'nok' })
+    expect(
+      resolveCallOperator({ sessionId: 's-1' }, trunk, [
+        makeClient({
+          sessionId: 's-1',
+          authSubject: '0f8fad5b-d9cb-469f-a165-70867728950e',
+          sipUsername: '2001',
+        }),
+      ]),
+    ).toEqual({ kind: 'app', label: '2001' })
+  })
+
+  it('falls back to inUseBy, then the trunk line', () => {
+    expect(
+      resolveCallOperator(
+        { sessionId: 's-1' },
+        { ...trunk, inUseBy: 'nok' },
+        [],
+      ),
+    ).toEqual({ kind: 'user', label: 'nok' })
+    expect(resolveCallOperator({ sessionId: 's-1' }, trunk, [])).toEqual({
+      kind: 'line',
+      label: '2001',
+    })
+  })
+})
+
+describe('isActiveLiveRow', () => {
+  it('keeps only rows with live calls wide', () => {
+    expect(isActiveLiveRow({ status: 'incoming' })).toBe(true)
+    expect(isActiveLiveRow({ status: 'busy' })).toBe(true)
+    expect(isActiveLiveRow({ status: 'online' })).toBe(false)
+    expect(isActiveLiveRow({ status: 'error' })).toBe(false)
   })
 })

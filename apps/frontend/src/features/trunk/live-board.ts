@@ -1,6 +1,7 @@
 import type { ActiveSession } from '@/features/active-sessions/types'
 import type { Trunk } from '@/features/trunk/types'
 import type { WSClient } from '@/features/ws-clients/types'
+import { resolveWSClientPresenceLabel } from '@/features/ws-clients/types'
 
 /** Phase of one live call as seen from GET /api/sessions `state`. */
 export type CallPhase = 'dialing' | 'incoming' | 'talking' | 'reconnecting'
@@ -38,9 +39,22 @@ export interface LiveCall {
   remote: SipParty
   local: SipParty
   durationSec: number
+  /** Server time the call started (RFC3339). */
+  createdAt: string
+  /** Server time the call was first answered (RFC3339), null while ringing. */
+  answeredAt: string | null
   trunkId: number
   trunkName: string
   sipUsername: string
+  /** Who on our side is on this call (agent / app / user), when known. */
+  operator: CallOperator | null
+}
+
+export type OperatorKind = 'agent' | 'app' | 'user' | 'line'
+
+export interface CallOperator {
+  kind: OperatorKind
+  label: string
 }
 
 export interface TrunkLiveRow {
@@ -57,6 +71,10 @@ export interface LiveSummary {
   trunks: number
   online: number
   calling: number
+  /** Outbound calls still dialing / ringing (subset of `calling`). */
+  dialing: number
+  /** Inbound calls still ringing (subset of `calling`). */
+  incoming: number
   talking: number
   offline: number
   appsConnected: number
@@ -144,10 +162,89 @@ export function toLiveCall(session: ActiveSession): LiveCall | null {
     remote: parseSipParty(remoteRaw),
     local: parseSipParty(localRaw || session.sipUsername),
     durationSec: Math.max(0, session.durationSec || 0),
+    createdAt: session.createdAt || '',
+    answeredAt: session.answeredAt ?? null,
     trunkId: session.trunkId || 0,
     trunkName: session.trunkName || '',
     sipUsername: session.sipUsername || '',
+    operator: null,
   }
+}
+
+const UUID_LIKE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+function clientOperatorKind(client: WSClient): OperatorKind {
+  switch (resolveWSClientPresenceLabel(client)) {
+    case 'agent':
+      return 'agent'
+    case 'public':
+      return 'user'
+    case 'mobile':
+    default:
+      return 'app'
+  }
+}
+
+function clientOperatorLabel(client: WSClient): string {
+  const subject = client.authSubject?.trim() ?? ''
+  if (subject && !UUID_LIKE.test(subject)) return subject
+  return client.sipUsername?.trim() || subject || client.clientId
+}
+
+/**
+ * Who is on our side of a call: the WS client bound to the session first, then
+ * the trunk's `inUseBy` (preferred_username of the caller), then the trunk line.
+ */
+export function resolveCallOperator(
+  call: Pick<LiveCall, 'sessionId'>,
+  trunk: Pick<Trunk, 'inUseBy' | 'in_use_by' | 'username'> | null,
+  clients: Array<WSClient>,
+): CallOperator | null {
+  const inUseBy = (trunk?.inUseBy ?? trunk?.in_use_by ?? '').trim()
+  const bound = clients.find((client) => client.sessionId === call.sessionId)
+  if (bound) {
+    return {
+      kind: clientOperatorKind(bound),
+      label: inUseBy || clientOperatorLabel(bound),
+    }
+  }
+  if (inUseBy) return { kind: 'user', label: inUseBy }
+  const username = trunk?.username.trim()
+  return username ? { kind: 'line', label: username } : null
+}
+
+/**
+ * Seconds to show on a call timer: time since answer for connected calls
+ * (falls back to call start when `answeredAt` is missing), time since start
+ * while ringing. Uses server-relative offsets so local clock skew is ignored.
+ */
+export function callTimerSec(
+  call: Pick<LiveCall, 'phase' | 'durationSec' | 'createdAt' | 'answeredAt'>,
+  nowMs: number,
+  fetchedAtMs: number,
+) {
+  const sinceStart =
+    call.durationSec + Math.max(0, (nowMs - fetchedAtMs) / 1000)
+  if (call.phase !== 'talking' && call.phase !== 'reconnecting') {
+    return sinceStart
+  }
+  if (!call.answeredAt || !call.createdAt) return sinceStart
+  const answerOffset =
+    (Date.parse(call.answeredAt) - Date.parse(call.createdAt)) / 1000
+  if (!Number.isFinite(answerOffset) || answerOffset < 0) return sinceStart
+  return Math.max(0, sinceStart - answerOffset)
+}
+
+/** Rows with a live call keep the wide link layout; the rest go in the grid. */
+export function isActiveLiveRow(row: Pick<TrunkLiveRow, 'status'>) {
+  return (
+    row.status === 'talking' ||
+    row.status === 'reconnecting' ||
+    row.status === 'dialing' ||
+    row.status === 'incoming' ||
+    row.status === 'busy'
+  )
 }
 
 const CALL_PHASE_RANK: Record<CallPhase, number> = {
@@ -220,7 +317,13 @@ export function buildTrunkLiveRows(
   }
 
   const rows = trunks.map((trunk, index) => {
-    const calls = sortCalls(callsByTrunk.get(trunk.id) ?? [])
+    const trunkClients = clientsByTrunk.get(trunk.id) ?? []
+    const calls = sortCalls(
+      (callsByTrunk.get(trunk.id) ?? []).map((call) => ({
+        ...call,
+        operator: resolveCallOperator(call, trunk, clients),
+      })),
+    )
     const fallbackDestinations =
       calls.length === 0
         ? (trunk.activeDestinations ?? [])
@@ -233,7 +336,7 @@ export function buildTrunkLiveRows(
         trunk,
         status: deriveTrunkLiveStatus(trunk, calls),
         calls,
-        clients: clientsByTrunk.get(trunk.id) ?? [],
+        clients: trunkClients,
         fallbackDestinations,
       } satisfies TrunkLiveRow,
     }
@@ -251,11 +354,19 @@ export function buildTrunkLiveRows(
 /** Live calls that are not bound to any trunk (public / user-auth sessions). */
 export function collectNonTrunkCalls(
   sessions: Array<ActiveSession>,
+  clients: Array<WSClient> = [],
 ): Array<LiveCall> {
   return sortCalls(
     sessions
       .map(toLiveCall)
-      .filter((call): call is LiveCall => call !== null && call.trunkId <= 0),
+      .filter((call): call is LiveCall => call !== null && call.trunkId <= 0)
+      .map((call) => ({
+        ...call,
+        operator: resolveCallOperator(call, null, clients) ?? {
+          kind: 'user',
+          label: call.sipUsername || call.local.label,
+        },
+      })),
   )
 }
 
@@ -276,6 +387,8 @@ export function summarizeLiveRows(rows: Array<TrunkLiveRow>): LiveSummary {
     trunks: rows.length,
     online: 0,
     calling: 0,
+    dialing: 0,
+    incoming: 0,
     talking: 0,
     offline: 0,
     appsConnected: 0,
@@ -289,8 +402,12 @@ export function summarizeLiveRows(rows: Array<TrunkLiveRow>): LiveSummary {
       continue
     }
     for (const call of row.calls) {
-      if (call.phase === 'dialing' || call.phase === 'incoming') {
+      if (call.phase === 'dialing') {
         summary.calling += 1
+        summary.dialing += 1
+      } else if (call.phase === 'incoming') {
+        summary.calling += 1
+        summary.incoming += 1
       } else {
         summary.talking += 1
       }

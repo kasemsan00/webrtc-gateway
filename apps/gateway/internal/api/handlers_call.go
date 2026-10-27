@@ -317,6 +317,17 @@ func (s *Server) handleHangup(w http.ResponseWriter, r *http.Request) {
 	s.respondJSON(w, http.StatusOK, response)
 }
 
+// sessionAnsweredAt formats the first-active time as RFC3339, or nil while
+// the call has not been answered.
+func sessionAnsweredAt(sess *session.Session) *string {
+	answeredAt := sess.AnsweredAt()
+	if answeredAt.IsZero() {
+		return nil
+	}
+	formatted := answeredAt.Format(time.RFC3339)
+	return &formatted
+}
+
 // handleListSessions returns all active sessions
 func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	sessions := s.sessionMgr.ListSessions()
@@ -354,6 +365,7 @@ func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 			TranslatorSrcLang:  snap.TranslatorSrcLang,
 			TranslatorTgtLang:  snap.TranslatorTgtLang,
 			TranslatorTTSVoice: snap.TranslatorTTSVoice,
+			AnsweredAt:         sessionAnsweredAt(sess),
 		}
 	}
 
@@ -407,6 +419,7 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 		TranslatorSrcLang:  snap.TranslatorSrcLang,
 		TranslatorTgtLang:  snap.TranslatorTgtLang,
 		TranslatorTTSVoice: snap.TranslatorTTSVoice,
+		AnsweredAt:         sessionAnsweredAt(sess),
 	}
 
 	s.respondJSON(w, http.StatusOK, response)

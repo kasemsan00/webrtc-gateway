@@ -106,6 +106,9 @@ type Session struct {
 	telemetryTransferred   bool      `json:"-"`
 	telemetryCallStartedAt time.Time `json:"-"`
 	telemetryCallActiveAt  time.Time `json:"-"`
+	// First time the call reached StateActive (either direction); zero until answered.
+	// Read-only for admin APIs; never cleared by ICE reconnects.
+	answeredAt time.Time `json:"-"`
 	// ICE-lite credentials for SIP side
 	ICEUfrag string `json:"-"`
 	ICEPwd   string `json:"-"`

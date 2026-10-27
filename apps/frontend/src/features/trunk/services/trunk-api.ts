@@ -36,6 +36,32 @@ export async function fetchTrunks(
   return fetchJson<TrunkListResponse>(url)
 }
 
+/** Largest page the gateway accepts for GET /api/trunks. */
+export const TRUNK_API_MAX_PAGE_SIZE = 100
+const FETCH_ALL_TRUNKS_MAX_PAGES = 50
+
+/**
+ * Fetches every trunk matching `params` by walking pages of the API maximum.
+ * Used by the live board, which shows all trunks without pagination.
+ */
+export async function fetchAllTrunks(
+  params: Omit<TrunkListParams, 'page' | 'pageSize'> = {},
+): Promise<TrunkListResponse> {
+  const items: Array<Trunk> = []
+  let total = 0
+  for (let page = 1; page <= FETCH_ALL_TRUNKS_MAX_PAGES; page += 1) {
+    const res = await fetchTrunks({
+      ...params,
+      page,
+      pageSize: TRUNK_API_MAX_PAGE_SIZE,
+    })
+    items.push(...res.items)
+    total = res.total
+    if (res.items.length === 0 || items.length >= total) break
+  }
+  return { items, total, page: 1, pageSize: items.length }
+}
+
 export async function refreshTrunks(): Promise<{ status: string }> {
   return fetchJson<{ status: string }>(`${API_BASE}/trunks/refresh`, {
     method: 'POST',

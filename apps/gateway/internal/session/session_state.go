@@ -32,6 +32,9 @@ func (s *Session) SetState(state SessionState) {
 	s.State = state
 	now := time.Now()
 	s.UpdatedAt = now
+	if state == StateActive && s.answeredAt.IsZero() {
+		s.answeredAt = now
+	}
 	started, startedAt := s.beginCallTelemetryLocked(now)
 	direction := s.Direction
 	recordSetup := state == StateActive && previous != StateActive && s.telemetryCallStarted && !s.telemetrySetupRecorded && !s.telemetryTransferred
@@ -203,4 +206,12 @@ func isTerminalCleanupState(state SessionState, terminalAction string) bool {
 	default:
 		return false
 	}
+}
+
+// AnsweredAt returns when the call first became active, or zero if it has not
+// been answered yet.
+func (s *Session) AnsweredAt() time.Time {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.answeredAt
 }

@@ -68,6 +68,7 @@ import { useTheme } from '@/lib/theme'
 import { useVisibilityRealtimeReload } from '@/lib/use-visibility-realtime-reload'
 import {
   createTrunk,
+  fetchAllTrunks,
   fetchTrunks,
   refreshTrunks,
   registerTrunk,
@@ -351,8 +352,8 @@ export function TrunkListPage() {
     [liveRows, liveFilter],
   )
   const nonTrunkCalls = useMemo(
-    () => collectNonTrunkCalls(liveData.sessions),
-    [liveData.sessions],
+    () => collectNonTrunkCalls(liveData.sessions, liveData.clients),
+    [liveData.sessions, liveData.clients],
   )
   const liveWarning = liveData.sessionsError
     ? `Live calls unavailable: ${liveData.sessionsError}`
@@ -408,15 +409,22 @@ export function TrunkListPage() {
       setError(null)
       try {
         const sortParams = getSortParams()
-        const res = await fetchTrunks({
-          page: params?.page ?? page,
-          pageSize: params?.pageSize ?? pageSize,
+        const filters = {
           search: (params?.search ?? searchRef.current) || undefined,
           trunkId: params?.trunkId ?? routeSearch.trunkId,
           trunkPublicId: params?.trunkPublicId ?? routeSearch.trunkPublicId,
           sortBy: sortParams.sortBy,
           sortDir: sortParams.sortDir,
-        })
+        }
+        // The live board shows every trunk; only the table is paginated.
+        const res =
+          viewMode === 'card'
+            ? await fetchAllTrunks(filters)
+            : await fetchTrunks({
+                ...filters,
+                page: params?.page ?? page,
+                pageSize: params?.pageSize ?? pageSize,
+              })
         let items = res.items
         if (sortMode === 'activeCallsDesc' || sortMode === 'activeCallsAsc') {
           items = [...items].sort((left, right) => {
@@ -439,6 +447,7 @@ export function TrunkListPage() {
       pageSize,
       getSortParams,
       sortMode,
+      viewMode,
       routeSearch.trunkId,
       routeSearch.trunkPublicId,
     ],
@@ -750,7 +759,7 @@ export function TrunkListPage() {
         <div className="flex flex-wrap items-center justify-end gap-2 text-xs">
           {/* Search */}
           <Input
-            className="h-8 w-36 text-xs sm:w-48"
+            className="order-last h-8 w-full text-xs sm:order-none sm:w-48"
             placeholder="Search username or name..."
             value={search}
             onChange={(e) => {
@@ -790,7 +799,7 @@ export function TrunkListPage() {
               trunksOnCall={pageTrunksOnCall}
             />
           ) : null}
-          <Separator orientation="vertical" className="h-4" />
+          <Separator orientation="vertical" className="hidden h-4 sm:block" />
           {/* View mode toggle */}
           <div
             className="flex items-center gap-0.5 rounded-md border p-0.5"
@@ -854,12 +863,12 @@ export function TrunkListPage() {
               </DropdownMenuContent>
             </DropdownMenu>
           ) : null}
-          <Separator orientation="vertical" className="h-4" />
+          <Separator orientation="vertical" className="hidden h-4 sm:block" />
           {/* Add Trunk */}
           <Button
             size="sm"
             variant="default"
-            className="h-7 gap-1 px-2 text-xs"
+            className="h-7 gap-1 bg-cyan-600 px-2 text-xs text-white hover:bg-cyan-700 dark:bg-cyan-500 dark:text-cyan-950 dark:hover:bg-cyan-400"
             onClick={() => {
               setCreateForm(newCreateForm())
               setCreateOpen(true)
@@ -869,7 +878,7 @@ export function TrunkListPage() {
             <RiAddLine className="size-3.5" />
             <span className="hidden sm:inline">Add Trunk</span>
           </Button>
-          <Separator orientation="vertical" className="h-4" />
+          <Separator orientation="vertical" className="hidden h-4 sm:block" />
           {/* Refresh */}
           <Button
             size="sm"
@@ -884,7 +893,7 @@ export function TrunkListPage() {
             />
             <span className="hidden sm:inline">Refresh</span>
           </Button>
-          <Separator orientation="vertical" className="h-4" />
+          <Separator orientation="vertical" className="hidden h-4 sm:block" />
           {/* Theme toggle */}
           <Button
             size="icon"
@@ -956,15 +965,17 @@ export function TrunkListPage() {
           />
         )}
 
-        <ServerPaginationControls
-          page={page}
-          totalPages={totalPages}
-          total={total}
-          pageSize={pageSize}
-          onPageChange={handlePageChange}
-          onPageSizeChange={handlePageSizeChange}
-          totalLabel="total"
-        />
+        {viewMode === 'table' ? (
+          <ServerPaginationControls
+            page={page}
+            totalPages={totalPages}
+            total={total}
+            pageSize={pageSize}
+            onPageChange={handlePageChange}
+            onPageSizeChange={handlePageSizeChange}
+            totalLabel="total"
+          />
+        ) : null}
       </div>
       {/* Register confirmation modal */}
       <Dialog

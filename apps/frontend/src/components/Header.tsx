@@ -64,12 +64,13 @@ export default function Header({ children }: { children?: React.ReactNode }) {
         >
           <RiMenuLine size={18} />
         </button>
-        <Link to="/" className="flex items-center gap-2">
-          <span className="bg-linear-to-r from-cyan-600 to-emerald-600 bg-clip-text text-sm font-bold text-transparent dark:from-cyan-400 dark:to-emerald-400">
-            WebRTC-SIP Gateway Console
+        <Link to="/" className="flex shrink-0 items-center gap-2">
+          <span className="bg-linear-to-r from-cyan-600 to-emerald-600 bg-clip-text text-sm font-bold whitespace-nowrap text-transparent dark:from-cyan-400 dark:to-emerald-400">
+            <span className="sm:hidden">Gateway</span>
+            <span className="hidden sm:inline">WebRTC-SIP Gateway Console</span>
           </span>
         </Link>
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex min-w-0 items-center gap-2">
           {children}
           <Button
             size="sm"

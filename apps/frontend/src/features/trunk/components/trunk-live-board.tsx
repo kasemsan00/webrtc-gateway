@@ -1,27 +1,37 @@
 import {
   RiArrowLeftLine,
+  RiArrowLeftRightLine,
   RiArrowRightLine,
   RiCheckboxCircleFill,
+  RiCustomerService2Line,
   RiErrorWarningFill,
   RiForbidLine,
   RiPhoneFill,
   RiPhoneLine,
   RiServerLine,
   RiSmartphoneLine,
+  RiUserLine,
   RiUserVoiceFill,
   RiWifiOffLine,
 } from '@remixicon/react'
 import { AnimatePresence, motion } from 'motion/react'
+import { useState } from 'react'
 import type { ComponentType, ReactNode } from 'react'
 
 import type {
+  CallOperator,
   LiveCall,
   LiveFilter,
   LiveSummary,
+  OperatorKind,
   TrunkLiveRow,
   TrunkLiveStatus,
 } from '@/features/trunk/live-board'
-import { formatCallDuration } from '@/features/trunk/live-board'
+import {
+  callTimerSec,
+  formatCallDuration,
+  isActiveLiveRow,
+} from '@/features/trunk/live-board'
 import { resolveWSClientPresenceLabel } from '@/features/ws-clients/types'
 import { useNow } from '@/features/trunk/use-trunk-live-data'
 import { cn } from '@/lib/utils'
@@ -29,18 +39,24 @@ import { cn } from '@/lib/utils'
 type Tone =
   | 'talking'
   | 'reconnecting'
-  | 'calling'
+  | 'dialing'
+  | 'incoming'
   | 'online'
   | 'error'
   | 'offline'
 
-/** One palette for every node, link, pill and tile on the board. */
+type IconType = ComponentType<{ className?: string }>
+
+/**
+ * Colour is reserved for status: the left accent border, the link line, the
+ * status badge and the timer. Everything else stays neutral.
+ */
 const TONE: Record<
   Tone,
   {
     text: string
-    soft: string
-    border: string
+    badge: string
+    pillBorder: string
     accent: string
     dot: string
     line: string
@@ -48,57 +64,65 @@ const TONE: Record<
 > = {
   talking: {
     text: 'text-emerald-700 dark:text-emerald-300',
-    soft: 'bg-emerald-500/12 dark:bg-emerald-500/15',
-    border: 'border-emerald-500/50',
+    badge: 'border-emerald-500/40 bg-emerald-500/10',
+    pillBorder: 'border-emerald-500/50',
     accent: 'border-l-emerald-500',
     dot: 'bg-emerald-500',
     line: 'text-emerald-500',
   },
   reconnecting: {
     text: 'text-orange-700 dark:text-orange-300',
-    soft: 'bg-orange-500/12 dark:bg-orange-500/15',
-    border: 'border-orange-500/50',
+    badge: 'border-orange-500/40 bg-orange-500/10',
+    pillBorder: 'border-orange-500/50',
     accent: 'border-l-orange-500',
     dot: 'bg-orange-500',
     line: 'text-orange-500',
   },
-  calling: {
+  dialing: {
     text: 'text-amber-700 dark:text-amber-300',
-    soft: 'bg-amber-500/12 dark:bg-amber-500/15',
-    border: 'border-amber-500/50',
+    badge: 'border-amber-500/40 bg-amber-500/10',
+    pillBorder: 'border-amber-500/50',
     accent: 'border-l-amber-500',
     dot: 'bg-amber-500',
     line: 'text-amber-500',
   },
+  incoming: {
+    text: 'text-violet-700 dark:text-violet-300',
+    badge: 'border-violet-500/40 bg-violet-500/10',
+    pillBorder: 'border-violet-500/50',
+    accent: 'border-l-violet-500',
+    dot: 'bg-violet-500',
+    line: 'text-violet-500',
+  },
   online: {
     text: 'text-sky-700 dark:text-sky-300',
-    soft: 'bg-sky-500/10 dark:bg-sky-500/15',
-    border: 'border-sky-500/40',
+    badge: 'border-sky-500/40 bg-sky-500/10',
+    pillBorder: 'border-sky-500/50',
     accent: 'border-l-sky-500',
     dot: 'bg-sky-500',
-    line: 'text-sky-500/40',
+    line: 'text-sky-500',
   },
   error: {
     text: 'text-rose-700 dark:text-rose-300',
-    soft: 'bg-rose-500/10 dark:bg-rose-500/15',
-    border: 'border-rose-500/40',
+    badge: 'border-rose-500/40 bg-rose-500/10',
+    pillBorder: 'border-rose-500/50',
     accent: 'border-l-rose-500',
     dot: 'bg-rose-500',
-    line: 'text-rose-500/30',
+    line: 'text-rose-500',
   },
   offline: {
     text: 'text-zinc-600 dark:text-zinc-400',
-    soft: 'bg-zinc-500/8 dark:bg-zinc-500/12',
-    border: 'border-border',
+    badge: 'border-border bg-muted/60',
+    pillBorder: 'border-border',
     accent: 'border-l-zinc-300 dark:border-l-zinc-600',
     dot: 'bg-zinc-400 dark:bg-zinc-500',
-    line: 'text-zinc-400/40',
+    line: 'text-zinc-400',
   },
 }
 
 const STATUS_META: Record<
   TrunkLiveStatus,
-  { tone: Tone; label: string; icon: ComponentType<{ className?: string }> }
+  { tone: Tone; label: string; icon: IconType }
 > = {
   talking: { tone: 'talking', label: 'In call', icon: RiUserVoiceFill },
   reconnecting: {
@@ -106,8 +130,8 @@ const STATUS_META: Record<
     label: 'Reconnecting',
     icon: RiUserVoiceFill,
   },
-  dialing: { tone: 'calling', label: 'Calling', icon: RiPhoneFill },
-  incoming: { tone: 'calling', label: 'Incoming call', icon: RiPhoneFill },
+  dialing: { tone: 'dialing', label: 'Dialing out', icon: RiPhoneFill },
+  incoming: { tone: 'incoming', label: 'Incoming call', icon: RiPhoneFill },
   busy: { tone: 'talking', label: 'In call', icon: RiUserVoiceFill },
   online: { tone: 'online', label: 'Online', icon: RiCheckboxCircleFill },
   error: { tone: 'error', label: 'Register failed', icon: RiErrorWarningFill },
@@ -115,27 +139,14 @@ const STATUS_META: Record<
   disabled: { tone: 'offline', label: 'Disabled', icon: RiForbidLine },
 }
 
-function isLiveStatus(status: TrunkLiveStatus) {
-  return (
-    status === 'talking' ||
-    status === 'reconnecting' ||
-    status === 'dialing' ||
-    status === 'incoming' ||
-    status === 'busy'
-  )
+const OPERATOR_META: Record<OperatorKind, { label: string; icon: IconType }> = {
+  agent: { label: 'Agent', icon: RiCustomerService2Line },
+  app: { label: 'App', icon: RiSmartphoneLine },
+  user: { label: 'User', icon: RiUserLine },
+  line: { label: 'Line', icon: RiServerLine },
 }
 
-function callTone(call: LiveCall): Tone {
-  if (call.phase === 'talking') return 'talking'
-  if (call.phase === 'reconnecting') return 'reconnecting'
-  return 'calling'
-}
-
-function callElapsed(call: LiveCall, now: number, fetchedAt: number) {
-  return call.durationSec + Math.max(0, (now - fetchedAt) / 1000)
-}
-
-function callPhaseLabel(call: LiveCall) {
+function callPhaseLabel(call: Pick<LiveCall, 'phase'>) {
   switch (call.phase) {
     case 'talking':
       return 'Talking'
@@ -145,65 +156,65 @@ function callPhaseLabel(call: LiveCall) {
       return 'Incoming'
     case 'dialing':
     default:
-      return 'Calling'
+      return 'Dialing'
   }
 }
 
-function describeRow(row: TrunkLiveRow) {
-  const meta = STATUS_META[row.status]
-  const parties = row.calls.length
-    ? row.calls
-        .map((call) => `${callPhaseLabel(call)} ${call.remote.label}`)
-        .join(', ')
-    : row.fallbackDestinations.join(', ')
-  return [row.trunk.name, meta.label, parties].filter(Boolean).join(' — ')
+function describeCall(call: LiveCall) {
+  const who = call.operator
+    ? `${OPERATOR_META[call.operator.kind].label} ${call.operator.label}`
+    : 'Unknown'
+  return `${who} ${callPhaseLabel(call).toLowerCase()} ${call.remote.label}`
 }
 
 /* ------------------------------------------------------------------ */
-/* Summary tiles                                                       */
+/* Summary tiles + legend                                              */
 /* ------------------------------------------------------------------ */
 
 const TILES: Array<{
   filter: Exclude<LiveFilter, 'all'>
   tone: Tone
   label: string
-  hint: string
-  icon: ComponentType<{ className?: string }>
+  icon: IconType
   value: (summary: LiveSummary) => number
   suffix?: (summary: LiveSummary) => string
+  hint: (summary: LiveSummary) => string
 }> = [
   {
     filter: 'online',
     tone: 'online',
     label: 'Online',
-    hint: 'SIP registered',
     icon: RiCheckboxCircleFill,
     value: (summary) => summary.online,
     suffix: (summary) => `/ ${summary.trunks}`,
+    hint: () => 'SIP registered',
   },
   {
     filter: 'calling',
-    tone: 'calling',
+    tone: 'dialing',
     label: 'Calling',
-    hint: 'Dialing or ringing',
     icon: RiPhoneFill,
     value: (summary) => summary.calling,
+    hint: (summary) =>
+      summary.calling > 0
+        ? `${summary.dialing} out · ${summary.incoming} in`
+        : 'Dialing or ringing',
   },
   {
     filter: 'talking',
     tone: 'talking',
     label: 'In call',
-    hint: 'Connected calls',
     icon: RiUserVoiceFill,
     value: (summary) => summary.talking,
+    hint: () => 'Connected calls',
   },
   {
     filter: 'offline',
     tone: 'offline',
     label: 'Offline',
-    hint: 'Not registered',
     icon: RiWifiOffLine,
     value: (summary) => summary.offline,
+    hint: () => 'Not registered or disabled',
   },
 ]
 
@@ -230,20 +241,15 @@ function SummaryTiles({
             aria-pressed={active}
             onClick={() => onFilterChange(active ? 'all' : tile.filter)}
             className={cn(
-              'group flex items-center gap-3 rounded-xl border bg-card px-4 py-3 text-left transition-all',
+              'flex items-center gap-3 rounded-xl border border-l-4 bg-card px-3 py-3 text-left transition-shadow sm:px-4',
               'hover:shadow-sm focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none',
-              active ? cn('border-2', tone.border, tone.soft) : 'border-border',
+              tone.accent,
+              active && 'bg-muted/60 ring-2 ring-ring/40',
             )}
           >
-            <span
-              className={cn(
-                'flex size-11 shrink-0 items-center justify-center rounded-full',
-                tone.soft,
-                tone.text,
-              )}
-            >
-              <Icon className="size-6" />
-            </span>
+            <Icon
+              className={cn('hidden size-8 shrink-0 sm:block', tone.text)}
+            />
             <span className="min-w-0">
               <span className="flex items-baseline gap-1">
                 <span
@@ -255,16 +261,16 @@ function SummaryTiles({
                   {value}
                 </span>
                 {tile.suffix ? (
-                  <span className="text-sm text-muted-foreground tabular-nums">
+                  <span className="text-base text-muted-foreground tabular-nums">
                     {tile.suffix(summary)}
                   </span>
                 ) : null}
               </span>
-              <span className="mt-1 block text-sm font-semibold">
+              <span className="mt-1 block text-base font-semibold">
                 {tile.label}
               </span>
-              <span className="block text-xs text-muted-foreground">
-                {active ? 'Showing only these · tap to clear' : tile.hint}
+              <span className="block text-sm text-muted-foreground">
+                {active ? 'Filtered · tap to clear' : tile.hint(summary)}
               </span>
             </span>
           </button>
@@ -274,22 +280,24 @@ function SummaryTiles({
   )
 }
 
+const LEGEND: Array<{ tone: Tone; label: string }> = [
+  { tone: 'online', label: 'Online' },
+  { tone: 'dialing', label: 'Dialing out' },
+  { tone: 'incoming', label: 'Incoming' },
+  { tone: 'talking', label: 'In call' },
+  { tone: 'reconnecting', label: 'Reconnecting' },
+  { tone: 'error', label: 'Register failed' },
+  { tone: 'offline', label: 'Offline / disabled' },
+]
+
 function Legend() {
-  const items: Array<{ tone: Tone; label: string }> = [
-    { tone: 'online', label: 'Online (ready)' },
-    { tone: 'calling', label: 'Calling / ringing' },
-    { tone: 'talking', label: 'In call' },
-    { tone: 'reconnecting', label: 'Reconnecting' },
-    { tone: 'error', label: 'Register failed' },
-    { tone: 'offline', label: 'Offline / disabled' },
-  ]
   return (
     <ul
-      className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground"
+      className="-mx-1 flex max-w-full min-w-0 flex-nowrap items-center gap-x-4 overflow-x-auto px-1 pb-1 text-xs whitespace-nowrap text-muted-foreground sm:flex-wrap sm:gap-y-1 sm:overflow-visible sm:pb-0"
       aria-label="Colour legend"
     >
-      {items.map((item) => (
-        <li key={item.tone} className="flex items-center gap-1.5">
+      {LEGEND.map((item) => (
+        <li key={item.tone} className="flex shrink-0 items-center gap-1.5">
           <span
             className={cn('size-2.5 rounded-full', TONE[item.tone].dot)}
             aria-hidden
@@ -302,12 +310,12 @@ function Legend() {
 }
 
 /* ------------------------------------------------------------------ */
-/* Nodes                                                               */
+/* Shared bits                                                         */
 /* ------------------------------------------------------------------ */
 
 function StatusDot({ tone, live }: { tone: Tone; live: boolean }) {
   return (
-    <span className="relative flex size-3 shrink-0" aria-hidden>
+    <span className="relative flex size-2.5 shrink-0" aria-hidden>
       {live ? (
         <span
           className={cn(
@@ -318,7 +326,7 @@ function StatusDot({ tone, live }: { tone: Tone; live: boolean }) {
       ) : null}
       <span
         className={cn(
-          'relative inline-flex size-3 rounded-full ring-2 ring-background',
+          'relative inline-flex size-2.5 rounded-full',
           TONE[tone].dot,
         )}
       />
@@ -326,178 +334,124 @@ function StatusDot({ tone, live }: { tone: Tone; live: boolean }) {
   )
 }
 
-function TrunkNode({
-  row,
-  actions,
-}: {
-  row: TrunkLiveRow
-  actions?: ReactNode
-}) {
-  const { trunk, status, clients } = row
+function StatusBadge({ status }: { status: TrunkLiveStatus }) {
   const meta = STATUS_META[status]
   const tone = TONE[meta.tone]
   const Icon = meta.icon
+  return (
+    <span
+      className={cn(
+        'inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-semibold whitespace-nowrap',
+        tone.badge,
+        tone.text,
+      )}
+    >
+      <Icon className="size-3.5" aria-hidden />
+      {meta.label}
+    </span>
+  )
+}
+
+function ConnectedChip({ row }: { row: TrunkLiveRow }) {
+  const { clients } = row
+  if (clients.length === 0) return null
   const agents = clients.filter(
     (client) => resolveWSClientPresenceLabel(client) === 'agent',
   ).length
   const apps = clients.length - agents
-  const inUseBy = trunk.inUseBy ?? trunk.in_use_by
-
+  const label = [
+    agents > 0 ? `${agents} agent${agents === 1 ? '' : 's'}` : '',
+    apps > 0 ? `${apps} app${apps === 1 ? '' : 's'}` : '',
+  ]
+    .filter(Boolean)
+    .join(' + ')
   return (
-    <div className="flex min-w-0 items-start gap-3">
-      <div
-        className={cn(
-          'relative flex size-12 shrink-0 items-center justify-center rounded-2xl border-2',
-          tone.border,
-          tone.soft,
-          tone.text,
-        )}
-      >
-        <RiServerLine className="size-6" aria-hidden />
-        <span className="absolute -right-1 -bottom-1">
-          <StatusDot tone={meta.tone} live={isLiveStatus(status)} />
-        </span>
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-start justify-between gap-2">
-          <div className="min-w-0">
-            <p
-              className={cn(
-                'truncate text-base leading-tight font-semibold',
-                status === 'disabled' && 'text-muted-foreground line-through',
-              )}
-              title={trunk.name}
-            >
-              {trunk.name}
-            </p>
-            <p
-              className="truncate font-mono text-xs text-muted-foreground"
-              title={`${trunk.username}@${trunk.domain}:${trunk.port}`}
-            >
-              {trunk.username}@{trunk.domain}
-            </p>
-          </div>
-          {actions}
-        </div>
-        <div className="mt-2 flex flex-wrap items-center gap-1.5">
-          <span
-            className={cn(
-              'inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-sm font-semibold',
-              tone.border,
-              tone.soft,
-              tone.text,
-            )}
-          >
-            <Icon className="size-4" aria-hidden />
-            {meta.label}
-          </span>
-          {clients.length > 0 ? (
-            <span
-              className="inline-flex items-center gap-1 rounded-full border border-violet-500/40 bg-violet-500/10 px-2 py-0.5 text-xs font-medium text-violet-700 dark:text-violet-300"
-              title={clients
-                .map(
-                  (client) =>
-                    `${resolveWSClientPresenceLabel(client)}${client.sipUsername ? ` · ${client.sipUsername}` : ''}`,
-                )
-                .join('\n')}
-            >
-              <RiSmartphoneLine className="size-3.5" aria-hidden />
-              {[
-                agents > 0 ? `${agents} agent${agents === 1 ? '' : 's'}` : '',
-                apps > 0 ? `${apps} app${apps === 1 ? '' : 's'}` : '',
-              ]
-                .filter(Boolean)
-                .join(' + ')}{' '}
-              connected
-            </span>
-          ) : null}
-          {trunk.isDefault ? (
-            <span className="rounded-full border px-2 py-0.5 text-xs text-muted-foreground">
-              Default
-            </span>
-          ) : null}
-          {inUseBy ? (
-            <span
-              className="max-w-40 truncate rounded-full border px-2 py-0.5 text-xs text-muted-foreground"
-              title={`In use by ${inUseBy}`}
-            >
-              by {inUseBy}
-            </span>
-          ) : null}
-        </div>
-      </div>
-    </div>
+    <span
+      className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs whitespace-nowrap text-muted-foreground"
+      title={clients
+        .map(
+          (client) =>
+            `${resolveWSClientPresenceLabel(client)}${client.sipUsername ? ` · ${client.sipUsername}` : ''}`,
+        )
+        .join('\n')}
+    >
+      <RiSmartphoneLine className="size-3.5" aria-hidden />
+      {label} online
+    </span>
   )
 }
 
-function RemoteNode({ call, tone }: { call: LiveCall; tone: Tone }) {
-  const styles = TONE[tone]
+/* ------------------------------------------------------------------ */
+/* Active call rows                                                    */
+/* ------------------------------------------------------------------ */
+
+function OperatorNode({ operator }: { operator: CallOperator | null }) {
+  const meta = OPERATOR_META[operator?.kind ?? 'line']
+  const Icon = meta.icon
   return (
-    <div
-      className={cn(
-        'flex min-w-0 items-center gap-3 rounded-xl border-2 px-3 py-2',
-        styles.border,
-        styles.soft,
-      )}
-    >
-      <span
-        className={cn(
-          'flex size-10 shrink-0 items-center justify-center rounded-full bg-background',
-          styles.text,
-        )}
-      >
-        {call.phase === 'talking' || call.phase === 'reconnecting' ? (
-          <RiUserVoiceFill className="size-5" aria-hidden />
-        ) : (
-          <RiPhoneFill
-            className="size-5 animate-live-phone-shake motion-reduce:animate-none"
-            aria-hidden
-          />
-        )}
+    <div className="flex min-w-0 items-center gap-2.5">
+      <span className="hidden size-9 shrink-0 items-center justify-center rounded-full border bg-muted/50 text-muted-foreground sm:flex">
+        <Icon className="size-4.5" aria-hidden />
       </span>
       <div className="min-w-0">
+        <p className="text-xs text-muted-foreground">{meta.label}</p>
         <p
-          className="truncate font-mono text-lg leading-tight font-bold tabular-nums"
-          title={call.remote.label}
+          className="truncate text-base leading-tight font-bold sm:text-lg"
+          title={operator?.label}
         >
-          {call.remote.label}
-        </p>
-        <p className="truncate text-xs text-muted-foreground">
-          {call.direction === 'inbound'
-            ? 'Caller'
-            : call.direction === 'outbound'
-              ? 'Destination'
-              : 'Remote party'}
-          {call.remote.detail ? ` · ${call.remote.detail}` : ''}
+          {operator?.label ?? 'Unknown'}
         </p>
       </div>
     </div>
   )
 }
 
-/* ------------------------------------------------------------------ */
-/* Links                                                               */
-/* ------------------------------------------------------------------ */
+function RemoteNode({
+  label,
+  caption,
+  ringing,
+}: {
+  label: string
+  caption: string
+  ringing?: boolean
+}) {
+  return (
+    <div className="flex min-w-0 items-center justify-end gap-2.5 text-right md:justify-start md:text-left">
+      <span className="hidden size-9 shrink-0 items-center justify-center rounded-full border bg-muted/50 text-muted-foreground sm:flex">
+        <RiPhoneLine
+          className={cn(
+            'size-4.5',
+            ringing && 'animate-live-phone-shake motion-reduce:animate-none',
+          )}
+          aria-hidden
+        />
+      </span>
+      <div className="min-w-0">
+        <p className="truncate text-xs text-muted-foreground" title={caption}>
+          {caption}
+        </p>
+        <p
+          className="truncate font-mono text-base leading-tight font-bold tabular-nums sm:text-lg"
+          title={label}
+        >
+          {label}
+        </p>
+      </div>
+    </div>
+  )
+}
 
 function LinkLine({
   tone,
-  variant,
+  flowing,
   reverse,
 }: {
   tone: Tone
-  variant: 'dashed-flow' | 'solid-flow' | 'dotted'
+  flowing: 'dashed' | 'solid'
   reverse?: boolean
 }) {
   const color = TONE[tone].line
-  if (variant === 'dotted') {
-    return (
-      <span
-        className={cn('live-link-dotted block h-0.5 w-full', color)}
-        aria-hidden
-      />
-    )
-  }
-  if (variant === 'dashed-flow') {
+  if (flowing === 'dashed') {
     return (
       <span
         className={cn(
@@ -511,14 +465,45 @@ function LinkLine({
   }
   return (
     <span className={cn('relative block h-1 w-full', color)} aria-hidden>
-      <span className="absolute inset-0 rounded-full bg-current opacity-70" />
-      <span className="animate-live-link-pulse absolute top-1/2 size-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-current shadow-[0_0_10px_currentColor] motion-reduce:hidden" />
-      <span className="animate-live-link-pulse absolute top-1/2 size-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-current shadow-[0_0_10px_currentColor] [animation-direction:reverse] [animation-delay:-0.9s] motion-reduce:hidden" />
+      <span className="absolute inset-0 rounded-full bg-current opacity-60" />
+      <span className="animate-live-link-pulse absolute top-1/2 size-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-current motion-reduce:hidden" />
+      <span className="animate-live-link-pulse absolute top-1/2 size-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-current [animation-delay:-0.9s] [animation-direction:reverse] motion-reduce:hidden" />
     </span>
   )
 }
 
-function CallLink({
+function LinkCell({
+  tone,
+  flowing,
+  reverse,
+  children,
+}: {
+  tone: Tone
+  flowing: 'dashed' | 'solid'
+  reverse?: boolean
+  children: ReactNode
+}) {
+  return (
+    <div className="relative order-last col-span-3 flex min-h-9 items-center md:order-none md:col-span-1">
+      <LinkLine tone={tone} flowing={flowing} reverse={reverse} />
+      <span
+        className={cn(
+          'absolute left-1/2 inline-flex -translate-x-1/2 items-center gap-1.5 rounded-full border bg-background px-3 py-0.5 text-sm font-semibold whitespace-nowrap shadow-xs',
+          TONE[tone].pillBorder,
+          TONE[tone].text,
+        )}
+      >
+        {children}
+      </span>
+    </div>
+  )
+}
+
+/** operator · link · remote on desktop; operator ↔ remote, then link, on mobile. */
+const CALL_GRID =
+  'grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-x-3 gap-y-2 md:grid-cols-[minmax(0,14rem)_minmax(9rem,1fr)_minmax(0,15rem)]'
+
+function CallFlow({
   call,
   now,
   fetchedAt,
@@ -527,124 +512,72 @@ function CallLink({
   now: number
   fetchedAt: number
 }) {
-  const tone = callTone(call)
-  const styles = TONE[tone]
+  const tone: Tone = call.phase
   const ringing = call.phase === 'dialing' || call.phase === 'incoming'
-  const elapsed = formatCallDuration(callElapsed(call, now, fetchedAt))
-  const Arrow =
-    call.direction === 'inbound' ? RiArrowLeftLine : RiArrowRightLine
+  const inbound = call.direction === 'inbound'
+  const elapsed = formatCallDuration(callTimerSec(call, now, fetchedAt))
+  const Arrow = inbound ? RiArrowLeftLine : RiArrowRightLine
+  const MobileGlyph = ringing ? Arrow : RiArrowLeftRightLine
 
   return (
-    <div className="relative flex min-h-12 items-center">
-      <LinkLine
+    <div className={CALL_GRID} aria-label={describeCall(call)}>
+      <OperatorNode operator={call.operator} />
+      <LinkCell
         tone={tone}
-        variant={
-          ringing || call.phase === 'reconnecting'
-            ? 'dashed-flow'
-            : 'solid-flow'
-        }
-        reverse={call.direction === 'inbound'}
-      />
-      <span
-        className={cn(
-          'absolute left-1/2 -translate-x-1/2 inline-flex items-center gap-1.5 rounded-full border-2 bg-background px-3 py-1 text-sm font-semibold whitespace-nowrap shadow-sm',
-          styles.border,
-          styles.text,
-        )}
+        flowing={ringing || call.phase === 'reconnecting' ? 'dashed' : 'solid'}
+        reverse={inbound}
       >
-        {call.direction === 'inbound' ? (
-          <Arrow className="size-4" aria-hidden />
-        ) : null}
+        {inbound ? <Arrow className="size-4" aria-hidden /> : null}
         {callPhaseLabel(call)}
-        <span className="font-mono tabular-nums" aria-label={`for ${elapsed}`}>
-          {elapsed}
-        </span>
-        {call.direction !== 'inbound' ? (
-          <Arrow className="size-4" aria-hidden />
-        ) : null}
-      </span>
+        <span className="font-mono tabular-nums">{elapsed}</span>
+        {!inbound ? <Arrow className="size-4" aria-hidden /> : null}
+      </LinkCell>
+      <MobileGlyph
+        className={cn('size-5 md:hidden', TONE[tone].text)}
+        aria-hidden
+      />
+      <RemoteNode
+        label={call.remote.label}
+        caption={[inbound ? 'Caller' : 'Destination', call.remote.detail]
+          .filter(Boolean)
+          .join(' · ')}
+        ringing={ringing}
+      />
     </div>
   )
 }
 
-function FallbackCallLink({ destinations }: { destinations: Array<string> }) {
-  const styles = TONE.talking
+function FallbackCallFlow({ row }: { row: TrunkLiveRow }) {
+  const inUseBy = (row.trunk.inUseBy ?? row.trunk.in_use_by ?? '').trim()
+  const operator: CallOperator = inUseBy
+    ? { kind: 'user', label: inUseBy }
+    : { kind: 'line', label: row.trunk.username }
   return (
-    <div className="grid items-center gap-3 sm:grid-cols-[minmax(6rem,1fr)_minmax(0,15rem)]">
-      <div className="relative flex min-h-12 items-center">
-        <LinkLine tone="talking" variant="solid-flow" />
-        <span
-          className={cn(
-            'absolute left-1/2 -translate-x-1/2 rounded-full border-2 bg-background px-3 py-1 text-sm font-semibold whitespace-nowrap',
-            styles.border,
-            styles.text,
-          )}
-        >
-          On call
-        </span>
-      </div>
-      <div
-        className={cn(
-          'flex min-w-0 items-center gap-3 rounded-xl border-2 px-3 py-2',
-          styles.border,
-          styles.soft,
-        )}
-      >
-        <RiPhoneLine
-          className={cn('size-5 shrink-0', styles.text)}
-          aria-hidden
-        />
-        <div className="min-w-0">
-          <p className="truncate font-mono text-lg leading-tight font-bold">
-            {destinations.length ? destinations.join(', ') : 'Unknown party'}
-          </p>
-          <p className="truncate text-xs text-muted-foreground">
-            Call handled by another gateway instance
-          </p>
-        </div>
-      </div>
+    <div className={CALL_GRID}>
+      <OperatorNode operator={operator} />
+      <LinkCell tone="talking" flowing="solid">
+        On call
+      </LinkCell>
+      <RiArrowLeftRightLine
+        className={cn('size-5 md:hidden', TONE.talking.text)}
+        aria-hidden
+      />
+      <RemoteNode
+        label={
+          row.fallbackDestinations.length
+            ? row.fallbackDestinations.join(', ')
+            : 'Unknown'
+        }
+        caption="On another gateway instance"
+      />
     </div>
   )
 }
 
-function IdleLink({ row }: { row: TrunkLiveRow }) {
-  const { status, trunk } = row
-  const meta = STATUS_META[status]
-  let text: ReactNode
-  switch (status) {
-    case 'online':
-      text = 'Ready for calls'
-      break
-    case 'error':
-      text = trunk.lastError || 'Registration failed'
-      break
-    case 'disabled':
-      text = 'Trunk is disabled'
-      break
-    default:
-      text = 'Not registered'
-  }
-  return (
-    <div className="flex min-h-12 items-center gap-3">
-      <LinkLine tone={meta.tone} variant="dotted" />
-      <span
-        className={cn(
-          'max-w-[70%] shrink-0 truncate text-sm',
-          status === 'error' ? TONE.error.text : 'text-muted-foreground',
-        )}
-        title={typeof text === 'string' ? text : undefined}
-      >
-        {text}
-      </span>
-    </div>
-  )
-}
+const LANE_GRID =
+  'grid gap-3 rounded-xl border border-l-4 bg-card p-3 sm:p-4 md:grid-cols-[minmax(11rem,15rem)_1fr] md:items-center md:gap-5'
 
-/* ------------------------------------------------------------------ */
-/* Lanes                                                               */
-/* ------------------------------------------------------------------ */
-
-function TrunkLane({
+function ActiveLane({
   row,
   now,
   fetchedAt,
@@ -656,9 +589,6 @@ function TrunkLane({
   actions?: ReactNode
 }) {
   const meta = STATUS_META[row.status]
-  const tone = TONE[meta.tone]
-  const live = isLiveStatus(row.status)
-
   return (
     <motion.li
       layout
@@ -666,37 +596,50 @@ function TrunkLane({
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0 }}
       transition={{ duration: 0.2 }}
-      aria-label={describeRow(row)}
-      className={cn(
-        'grid gap-4 rounded-2xl border border-l-4 bg-card p-4 md:grid-cols-[minmax(15rem,20rem)_1fr] md:items-center',
-        tone.accent,
-        live && cn(tone.border, tone.soft),
-        row.status === 'disabled' && 'opacity-60',
-      )}
+      className={cn(LANE_GRID, TONE[meta.tone].accent)}
     >
-      <TrunkNode row={row} actions={actions} />
-      <div className="flex min-w-0 flex-col gap-2">
+      <div className="flex min-w-0 items-start justify-between gap-2 md:flex-col md:items-stretch">
+        <div className="min-w-0">
+          <div className="flex min-w-0 items-center gap-2">
+            <StatusDot tone={meta.tone} live />
+            <p
+              className="truncate text-sm font-semibold"
+              title={row.trunk.name}
+            >
+              {row.trunk.name}
+            </p>
+          </div>
+          <p
+            className="truncate pl-4.5 font-mono text-xs text-muted-foreground"
+            title={`${row.trunk.username}@${row.trunk.domain}:${row.trunk.port}`}
+          >
+            {row.trunk.username}@{row.trunk.domain}
+          </p>
+        </div>
+        <div className="flex shrink-0 items-center gap-1 md:justify-between md:pl-4.5">
+          <StatusBadge status={row.status} />
+          {actions}
+        </div>
+      </div>
+      <div className="flex min-w-0 flex-col gap-3 md:border-l md:pl-5">
         {row.calls.length > 0 ? (
           row.calls.map((call) => (
-            <div
+            <CallFlow
               key={call.sessionId}
-              className="grid items-center gap-3 sm:grid-cols-[minmax(6rem,1fr)_minmax(0,15rem)]"
-            >
-              <CallLink call={call} now={now} fetchedAt={fetchedAt} />
-              <RemoteNode call={call} tone={callTone(call)} />
-            </div>
+              call={call}
+              now={now}
+              fetchedAt={fetchedAt}
+            />
           ))
-        ) : row.status === 'busy' ? (
-          <FallbackCallLink destinations={row.fallbackDestinations} />
         ) : (
-          <IdleLink row={row} />
+          <FallbackCallFlow row={row} />
         )}
       </div>
     </motion.li>
   )
 }
 
-function OtherCallLane({
+function DirectCallLane({
   call,
   now,
   fetchedAt,
@@ -705,41 +648,102 @@ function OtherCallLane({
   now: number
   fetchedAt: number
 }) {
-  const tone = callTone(call)
   return (
-    <li
-      className={cn(
-        'grid gap-4 rounded-2xl border border-l-4 bg-card p-4 md:grid-cols-[minmax(15rem,20rem)_1fr] md:items-center',
-        TONE[tone].border,
-        TONE[tone].accent,
-      )}
-      aria-label={`${call.local.label} — ${callPhaseLabel(call)} ${call.remote.label}`}
-    >
-      <div className="flex min-w-0 items-center gap-3">
-        <span
-          className={cn(
-            'flex size-12 shrink-0 items-center justify-center rounded-2xl border-2',
-            TONE[tone].border,
-            TONE[tone].soft,
-            TONE[tone].text,
-          )}
-        >
-          <RiSmartphoneLine className="size-6" aria-hidden />
-        </span>
+    <li className={cn(LANE_GRID, TONE[call.phase].accent)}>
+      <div className="flex min-w-0 items-center gap-2">
+        <StatusDot tone={call.phase} live />
         <div className="min-w-0">
-          <p className="truncate text-base font-semibold">
-            {call.sipUsername || call.local.label}
-          </p>
-          <p className="truncate text-xs text-muted-foreground">
-            Direct (no trunk)
-          </p>
+          <p className="truncate text-sm font-semibold">Direct call</p>
+          <p className="truncate text-xs text-muted-foreground">No trunk</p>
         </div>
       </div>
-      <div className="grid items-center gap-3 sm:grid-cols-[minmax(6rem,1fr)_minmax(0,15rem)]">
-        <CallLink call={call} now={now} fetchedAt={fetchedAt} />
-        <RemoteNode call={call} tone={tone} />
+      <div className="min-w-0 md:border-l md:pl-5">
+        <CallFlow call={call} now={now} fetchedAt={fetchedAt} />
       </div>
     </li>
+  )
+}
+
+/* ------------------------------------------------------------------ */
+/* Compact cards for idle / offline trunks                             */
+/* ------------------------------------------------------------------ */
+
+function ErrorLine({ message }: { message: string }) {
+  const [expanded, setExpanded] = useState(false)
+  return (
+    <button
+      type="button"
+      onClick={() => setExpanded((value) => !value)}
+      aria-expanded={expanded}
+      aria-label={expanded ? 'Collapse error' : `Show full error: ${message}`}
+      title={expanded ? undefined : message}
+      className={cn(
+        'w-full rounded-md bg-rose-500/8 px-2 py-1 text-left text-xs text-rose-700 hover:bg-rose-500/12 dark:text-rose-300',
+        expanded ? 'break-words whitespace-normal' : 'truncate',
+      )}
+    >
+      {message}
+    </button>
+  )
+}
+
+function CompactTrunkCard({
+  row,
+  actions,
+}: {
+  row: TrunkLiveRow
+  actions?: ReactNode
+}) {
+  const { trunk, status } = row
+  const meta = STATUS_META[status]
+  const tone = TONE[meta.tone]
+  return (
+    <motion.li
+      layout
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.2 }}
+      className={cn(
+        'flex min-w-0 flex-col gap-1.5 rounded-xl border border-l-4 bg-card px-3 py-2.5',
+        tone.accent,
+        status === 'disabled' && 'opacity-60',
+      )}
+    >
+      <div className="flex min-w-0 items-center gap-2">
+        <StatusDot tone={meta.tone} live={false} />
+        <p
+          className={cn(
+            'min-w-0 flex-1 truncate text-sm font-semibold',
+            status === 'disabled' && 'line-through',
+          )}
+          title={trunk.name}
+        >
+          {trunk.name}
+        </p>
+        {actions}
+      </div>
+      <p
+        className="truncate pl-4.5 font-mono text-xs text-muted-foreground"
+        title={`${trunk.username}@${trunk.domain}:${trunk.port}`}
+      >
+        {trunk.username}@{trunk.domain}
+      </p>
+      <div className="flex flex-wrap items-center gap-1.5 pl-4.5">
+        <span className={cn('text-xs font-semibold', tone.text)}>
+          {meta.label}
+        </span>
+        <ConnectedChip row={row} />
+        {trunk.isDefault ? (
+          <span className="rounded-full border px-1.5 text-[11px] text-muted-foreground">
+            Default
+          </span>
+        ) : null}
+      </div>
+      {status === 'error' && trunk.lastError ? (
+        <ErrorLine message={trunk.lastError} />
+      ) : null}
+    </motion.li>
   )
 }
 
@@ -768,6 +772,8 @@ export function TrunkLiveBoard({
   liveWarning,
   renderActions,
 }: TrunkLiveBoardProps) {
+  const activeRows = rows.filter(isActiveLiveRow)
+  const idleRows = rows.filter((row) => !isActiveLiveRow(row))
   const visibleOtherCalls = otherCalls.filter((call) => {
     if (filter === 'all') return true
     if (filter === 'calling') {
@@ -778,18 +784,22 @@ export function TrunkLiveBoard({
     }
     return false
   })
-  const anyLive =
-    visibleOtherCalls.length > 0 || rows.some((row) => row.calls.length > 0)
-  const now = useNow(anyLive)
+  const liveCount = activeRows.length + visibleOtherCalls.length
+  const showLiveSection =
+    filter === 'all' || filter === 'calling' || filter === 'talking'
+  const now = useNow(
+    visibleOtherCalls.length > 0 ||
+      activeRows.some((row) => row.calls.length > 0),
+  )
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex min-w-0 flex-col gap-4">
       <SummaryTiles
         summary={summary}
         filter={filter}
         onFilterChange={onFilterChange}
       />
-      <div className="flex flex-wrap items-center justify-between gap-2">
+      <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
         <Legend />
         {liveWarning ? (
           <span className="flex items-center gap-1 text-xs text-amber-700 dark:text-amber-300">
@@ -799,55 +809,76 @@ export function TrunkLiveBoard({
         ) : null}
       </div>
 
-      {rows.length === 0 ? (
-        <div className="flex flex-col items-center gap-2 rounded-2xl border border-dashed py-14 text-muted-foreground">
-          <RiServerLine className="size-10 opacity-30" aria-hidden />
-          <p className="text-sm">No trunks match this filter</p>
-          {filter !== 'all' ? (
-            <button
-              type="button"
-              className="text-sm font-medium text-primary underline-offset-4 hover:underline"
-              onClick={() => onFilterChange('all')}
-            >
-              Show all trunks
-            </button>
-          ) : null}
-        </div>
-      ) : (
-        <ul className="flex flex-col gap-3" aria-label="Trunks live status">
-          <AnimatePresence initial={false}>
-            {rows.map((row) => (
-              <TrunkLane
-                key={row.trunk.id}
-                row={row}
-                now={now}
-                fetchedAt={sessionsFetchedAt}
-                actions={renderActions?.(row)}
-              />
-            ))}
-          </AnimatePresence>
-        </ul>
-      )}
+      {showLiveSection ? (
+        <section className="flex flex-col gap-2" aria-label="Live calls">
+          <h2 className="text-sm font-semibold text-muted-foreground">
+            Live calls <span className="tabular-nums">({liveCount})</span>
+          </h2>
+          {liveCount === 0 ? (
+            <p className="rounded-xl border border-dashed px-4 py-4 text-sm text-muted-foreground">
+              No calls right now.
+            </p>
+          ) : (
+            <ul className="flex flex-col gap-2.5">
+              <AnimatePresence initial={false}>
+                {activeRows.map((row) => (
+                  <ActiveLane
+                    key={row.trunk.id}
+                    row={row}
+                    now={now}
+                    fetchedAt={sessionsFetchedAt}
+                    actions={renderActions?.(row)}
+                  />
+                ))}
+              </AnimatePresence>
+              {visibleOtherCalls.map((call) => (
+                <DirectCallLane
+                  key={call.sessionId}
+                  call={call}
+                  now={now}
+                  fetchedAt={sessionsFetchedAt}
+                />
+              ))}
+            </ul>
+          )}
+        </section>
+      ) : null}
 
-      {visibleOtherCalls.length > 0 ? (
+      {idleRows.length > 0 ? (
         <section
           className="flex flex-col gap-2"
-          aria-label="Calls without a trunk"
+          aria-label="Trunks not in a call"
         >
           <h2 className="text-sm font-semibold text-muted-foreground">
-            Calls without a trunk
+            Not in a call{' '}
+            <span className="tabular-nums">({idleRows.length})</span>
           </h2>
-          <ul className="flex flex-col gap-3">
-            {visibleOtherCalls.map((call) => (
-              <OtherCallLane
-                key={call.sessionId}
-                call={call}
-                now={now}
-                fetchedAt={sessionsFetchedAt}
-              />
-            ))}
+          <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+            <AnimatePresence initial={false}>
+              {idleRows.map((row) => (
+                <CompactTrunkCard
+                  key={row.trunk.id}
+                  row={row}
+                  actions={renderActions?.(row)}
+                />
+              ))}
+            </AnimatePresence>
           </ul>
         </section>
+      ) : null}
+
+      {rows.length === 0 && !showLiveSection ? (
+        <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed py-12 text-muted-foreground">
+          <RiServerLine className="size-10 opacity-30" aria-hidden />
+          <p className="text-sm">No trunks match this filter</p>
+          <button
+            type="button"
+            className="text-sm font-medium text-primary underline-offset-4 hover:underline"
+            onClick={() => onFilterChange('all')}
+          >
+            Show all trunks
+          </button>
+        </div>
       ) : null}
     </div>
   )
