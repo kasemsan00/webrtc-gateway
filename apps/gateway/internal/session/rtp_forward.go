@@ -544,7 +544,7 @@ func (s *Session) forwardRTPToAsteriskFrom(track rtpByteReader, kind string) {
 				// the next timestamp, so one IDR stays one access unit.
 				if stapaForwarded {
 					for _, w := range pendingWrites {
-						s.enqueueUplinkVideo(conn, destAddr, w, false, stapaTS, packetCount)
+						s.sendUplinkVideo(conn, destAddr, w, false, stapaTS, packetCount)
 					}
 				} else if containsIDR {
 					fmt.Printf("[%s] 🔑 KEYFRAME (STAP-A IDR) held in video packet #%d - Asterisk endpoint not set yet\n", s.ID, packetCount)
@@ -658,7 +658,7 @@ func (s *Session) forwardRTPToAsteriskFrom(track rtpByteReader, kind string) {
 		// timestamp) gets the marker. Audio stays on this loop.
 		if videoForward {
 			for _, w := range pendingWrites {
-				s.enqueueUplinkVideo(conn, destAddr, w, false, packet.Header.Timestamp, packetCount)
+				s.sendUplinkVideo(conn, destAddr, w, false, packet.Header.Timestamp, packetCount)
 			}
 		} else {
 			for _, w := range pendingWrites {
@@ -681,7 +681,7 @@ func (s *Session) forwardRTPToAsteriskFrom(track rtpByteReader, kind string) {
 			}
 
 			if videoForward {
-				s.enqueueUplinkVideo(conn, destAddr, outBuf, isKeyframe, packet.Header.Timestamp, packetCount)
+				s.sendUplinkVideo(conn, destAddr, outBuf, isKeyframe, packet.Header.Timestamp, packetCount)
 			} else if _, err = conn.WriteToUDP(outBuf, destAddr); err != nil && packetCount <= 5 {
 				fmt.Printf("[%s] Error forwarding %s to Asterisk: %v\n", s.ID, kind, err)
 			}

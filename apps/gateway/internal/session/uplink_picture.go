@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"time"
 )
 
 // heldUplinkVideo is one WebRTC→SIP packet waiting to learn whether it is
@@ -97,7 +98,7 @@ func rtpPayload(p []byte) []byte {
 }
 
 // uplinkHeldKeyframe is true for an IDR NAL or FU-A IDR fragment. SPS/PPS
-// ride in front of that IDR and must not start a new pacer account.
+// ride in front of that IDR and are not themselves counted as the keyframe.
 func uplinkHeldKeyframe(payload []byte, flagged bool) bool {
 	if len(payload) == 0 {
 		return flagged
@@ -181,6 +182,65 @@ func (s *Session) maybeLogFIRIDRSlice(payload []byte, ts uint32, marker bool) {
 	}
 	fmt.Printf("[%s] uplink_idr_slice ts=%d first_mb=%s nal_bytes=%d marker=%d\n",
 		id, ts, mbText, len(payload), markerBit)
+}
+
+// sendUplinkVideo writes one WebRTC→SIP video datagram to the SIP video
+// socket. The only hold is uplinkPictureHold: the previous packet is written
+// as soon as this one shows whether it ended its picture, so the marker bit
+// is right. There is no queue, pacing, or IDR delay. data is copied because
+// the WebRTC read buffer is reused.
+func (s *Session) sendUplinkVideo(conn *net.UDPConn, addr *net.UDPAddr, data []byte, keyframe bool, rtpTS uint32, packetCount int) {
+	if s == nil || conn == nil || addr == nil || len(data) == 0 {
+		return
+	}
+	next := heldUplinkVideo{
+		conn:        conn,
+		addr:        *addr,
+		data:        append([]byte(nil), data...),
+		keyframe:    keyframe,
+		rtpTS:       rtpTS,
+		packetCount: packetCount,
+	}
+	browserEnded := rtpHasMarker(next.data)
+	s.uplinkPictureMu.Lock()
+	prev, ok := s.uplinkPicture.push(next)
+	var last heldUplinkVideo
+	lastOK := false
+	if browserEnded {
+		last, lastOK = s.uplinkPicture.flush()
+	}
+	s.uplinkPictureMu.Unlock()
+	if ok {
+		s.deliverUplinkVideo(prev)
+	}
+	if lastOK {
+		s.deliverUplinkVideo(last)
+	}
+}
+
+// deliverUplinkVideo writes a released packet straight to the SIP socket.
+func (s *Session) deliverUplinkVideo(pkt heldUplinkVideo) {
+	payload := rtpPayload(pkt.data)
+	keyframe := uplinkHeldKeyframe(payload, pkt.keyframe)
+	if keyframe {
+		s.maybeLogFIRIDRSlice(payload, pkt.rtpTS, pkt.marker)
+	}
+	if pkt.conn == nil {
+		return
+	}
+	if _, err := pkt.conn.WriteToUDP(pkt.data, &pkt.addr); err != nil {
+		if pkt.packetCount <= 5 {
+			fmt.Printf("[%s] Error forwarding video to Asterisk: %v\n", s.ID, err)
+		}
+		return
+	}
+	if keyframe {
+		s.RecordUplinkKeyframe()
+		if pkt.marker {
+			fmt.Printf("[%s] 🔑 KEYFRAME (Forwarded) detected in video packet #%d → Asterisk\n", s.ID, pkt.packetCount)
+		}
+	}
+	s.ObserveUplinkVideoForwardMarked(keyframe, pkt.rtpTS, time.Now(), pkt.marker)
 }
 
 // flushUplinkPicture emits the held packet as the last slice of its picture.

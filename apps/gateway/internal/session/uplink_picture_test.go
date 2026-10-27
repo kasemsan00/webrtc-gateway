@@ -99,7 +99,7 @@ func TestUplinkPictureHoldDoesNotInventAMarkerUntilFlushOrNewTimestamp(t *testin
 	}
 }
 
-func TestEnqueueUplinkVideoCopiesHeldPayload(t *testing.T) {
+func TestSendUplinkVideoCopiesHeldPayload(t *testing.T) {
 	recv, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
 	if err != nil {
 		t.Fatal(err)
@@ -122,12 +122,12 @@ func TestEnqueueUplinkVideoCopiesHeldPayload(t *testing.T) {
 	}
 	first := testRTP(90000, false, []byte{0x65, 0x80, 0x11, 0x22, 0x33})
 	want := append([]byte(nil), first...)
-	sess.enqueueUplinkVideo(send, recv.LocalAddr().(*net.UDPAddr), first, true, 90000, 1)
+	sess.sendUplinkVideo(send, recv.LocalAddr().(*net.UDPAddr), first, true, 90000, 1)
 	for i := range first {
 		first[i] = 0xff
 	}
 	second := testRTP(180000, true, []byte{0x41, 0x80})
-	sess.enqueueUplinkVideo(send, recv.LocalAddr().(*net.UDPAddr), second, false, 180000, 2)
+	sess.sendUplinkVideo(send, recv.LocalAddr().(*net.UDPAddr), second, false, 180000, 2)
 
 	_ = recv.SetReadDeadline(time.Now().Add(time.Second))
 	buf := make([]byte, 64)
@@ -189,12 +189,12 @@ func readUplinkHoldPackets(t *testing.T, recv *net.UDPConn, deadline time.Durati
 	}
 }
 
-func TestEnqueueUplinkVideoKeepsPictureAcross40msGap(t *testing.T) {
+func TestSendUplinkVideoKeepsPictureAcross40msGap(t *testing.T) {
 	sess, recv, dest := uplinkHoldUDP(t)
 	send := sess.VideoRTPConn
 	const ts = uint32(90000)
 	for i := 0; i < 5; i++ {
-		sess.enqueueUplinkVideo(send, dest, testRTP(ts, false, []byte{0x65, 0x80, byte(i)}), true, ts, i+1)
+		sess.sendUplinkVideo(send, dest, testRTP(ts, false, []byte{0x65, 0x80, byte(i)}), true, ts, i+1)
 	}
 	time.Sleep(80 * time.Millisecond)
 	first := readUplinkHoldPackets(t, recv, 20*time.Millisecond)
@@ -207,7 +207,7 @@ func TestEnqueueUplinkVideoKeepsPictureAcross40msGap(t *testing.T) {
 		}
 	}
 	for i := 5; i < 8; i++ {
-		sess.enqueueUplinkVideo(send, dest, testRTP(ts, false, []byte{0x65, 0x80, byte(i)}), true, ts, i+1)
+		sess.sendUplinkVideo(send, dest, testRTP(ts, false, []byte{0x65, 0x80, byte(i)}), true, ts, i+1)
 	}
 	mid := readUplinkHoldPackets(t, recv, 20*time.Millisecond)
 	if len(mid) != 3 {
@@ -218,7 +218,7 @@ func TestEnqueueUplinkVideoKeepsPictureAcross40msGap(t *testing.T) {
 			t.Fatalf("second-burst packet %d had marker before the browser marker", i)
 		}
 	}
-	sess.enqueueUplinkVideo(send, dest, testRTP(ts, true, []byte{0x65, 0x80, 8}), true, ts, 9)
+	sess.sendUplinkVideo(send, dest, testRTP(ts, true, []byte{0x65, 0x80, 8}), true, ts, 9)
 	last := readUplinkHoldPackets(t, recv, 20*time.Millisecond)
 	if len(last) != 2 {
 		t.Fatalf("browser marker released %d packets, want held slice + last slice", len(last))
@@ -228,9 +228,9 @@ func TestEnqueueUplinkVideoKeepsPictureAcross40msGap(t *testing.T) {
 	}
 }
 
-func TestEnqueueUplinkVideoReleasesOnBrowserMarker(t *testing.T) {
+func TestSendUplinkVideoReleasesOnBrowserMarker(t *testing.T) {
 	sess, recv, dest := uplinkHoldUDP(t)
-	sess.enqueueUplinkVideo(sess.VideoRTPConn, dest, testRTP(90000, true, []byte{0x65, 0x80}), true, 90000, 1)
+	sess.sendUplinkVideo(sess.VideoRTPConn, dest, testRTP(90000, true, []byte{0x65, 0x80}), true, 90000, 1)
 	got := readUplinkHoldPackets(t, recv, 20*time.Millisecond)
 	if len(got) != 1 {
 		t.Fatalf("forwarded %d packets, want the marked slice without a 40ms wait", len(got))

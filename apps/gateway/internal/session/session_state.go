@@ -33,9 +33,6 @@ func (s *Session) SetState(state SessionState) {
 	now := time.Now()
 	s.UpdatedAt = now
 	started, startedAt := s.beginCallTelemetryLocked(now)
-	if state == StateActive && previous != StateActive {
-		s.noteCallAnsweredLocked(now)
-	}
 	direction := s.Direction
 	recordSetup := state == StateActive && previous != StateActive && s.telemetryCallStarted && !s.telemetrySetupRecorded && !s.telemetryTransferred
 	setupDuration := time.Duration(0)

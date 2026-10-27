@@ -190,13 +190,6 @@ type Session struct {
 	VideoAUNormalizeEnabled               bool                 `json:"-"`
 	SwitchVideoGateMinIDRPackets          int                  `json:"-"`
 	VideoReorderPacing                    time.Duration        `json:"-"`
-	UplinkVideoPacerEnabled               bool                 `json:"-"`
-	uplinkVideoPacerBPS                   int                  `json:"-"`
-	uplinkVideoPacerBurstPackets          int                  `json:"-"`
-	uplinkVideoPacerMaxQueue              time.Duration        `json:"-"`
-	uplinkVideoPacerIDRPace               time.Duration        `json:"-"`
-	uplinkVideoPacer                      *uplinkVideoPacer    `json:"-"`
-	uplinkVideoPacerOnce                  sync.Once            `json:"-"`
 	VideoTimestampJumpPLI                 bool                 `json:"-"`
 	VideoSameTSReuse                      bool                 `json:"-"`
 	sipVideoTSRebase                      bool                 `json:"-"` // SIP_VIDEO_TS_REBASE
@@ -304,22 +297,6 @@ type Session struct {
 	uplinkPictureSizeHeld       int       `json:"-"`
 	uplinkPictureSizePLIAt      time.Time `json:"-"`
 	uplinkPictureSizePLIs       int       `json:"-"`
-	// Lossy keyframe assist (SIP_LOSSY_*). lossyAssist=false keeps the old
-	// keyframe behaviour and skips loss tracking. lossyAnsweredAt and the
-	// lossyExtra* fields are under s.mu; the loss window under lossyMu.
-	lossyAssist       bool                     `json:"-"`
-	lossyThresholdPct int                      `json:"-"`
-	lossyExtraDelay   time.Duration            `json:"-"`
-	lossyEarlyWindow  time.Duration            `json:"-"`
-	lossySafety       time.Duration            `json:"-"`
-	lossyAnsweredAt   time.Time                `json:"-"`
-	lossyExtraPending bool                     `json:"-"`
-	lossyExtraGen     uint64                   `json:"-"`
-	lossyExtraSend    func(reason string) bool `json:"-"`
-	lossyMu           sync.Mutex               `json:"-"`
-	lossyLoss         sipVideoLossWindow       `json:"-"`
-	lossyActive       bool                     `json:"-"`
-	lossyPct          float64                  `json:"-"`
 	// allowNextUplinkPictureSize accepts one SPS size change after an explicit
 	// switch/source replacement, then locks that size again.
 	allowNextUplinkPictureSize bool      `json:"-"`
@@ -715,20 +692,10 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 		VideoAUNormalizeEnabled:              cfg.SIP.VideoAUNormalizeEnabled,
 		SwitchVideoGateMinIDRPackets:         cfg.SIP.SwitchVideoGateMinIDRPackets,
 		VideoReorderPacing:                   time.Duration(cfg.SIP.VideoReorderPacingMS) * time.Millisecond,
-		UplinkVideoPacerEnabled:              cfg.SIP.UplinkVideoPacerEnabled,
-		uplinkVideoPacerBPS:                  cfg.SIP.UplinkVideoPacerBitsPerSec,
-		uplinkVideoPacerBurstPackets:         cfg.SIP.UplinkVideoPacerBurstPackets,
-		uplinkVideoPacerMaxQueue:             time.Duration(cfg.SIP.UplinkVideoPacerMaxQueueMS) * time.Millisecond,
-		uplinkVideoPacerIDRPace:              time.Duration(cfg.SIP.UplinkIDRPaceMS) * time.Millisecond,
 		sipKeyframeRequestMode:               cfg.SIP.KeyframeRequestMode,
 		sipRTCPFBMinInterval:                 time.Duration(cfg.SIP.RTCPFBMinIntervalMS) * time.Millisecond,
 		sipRTCPFBGuard:                       time.Duration(cfg.SIP.RTCPFBGuardMS) * time.Millisecond,
 		uplinkPictureSizeChange:              cfg.SIP.UplinkPictureSizeChange,
-		lossyAssist:                          cfg.SIP.LossyKeyframeAssist,
-		lossyThresholdPct:                    cfg.SIP.LossyLossThresholdPct,
-		lossyExtraDelay:                      time.Duration(cfg.SIP.LossyExtraIDRDelayMS) * time.Millisecond,
-		lossyEarlyWindow:                     time.Duration(cfg.SIP.LossyEarlyWindowMS) * time.Millisecond,
-		lossySafety:                          time.Duration(cfg.SIP.LossySafetyIDRIntervalMS) * time.Millisecond,
 		proactiveBrowserPLIInitial:           time.Duration(cfg.SIP.ProactiveBrowserPLIInitialMS) * time.Millisecond,
 		proactiveBrowserPLISafety:            time.Duration(cfg.SIP.ProactiveBrowserPLISafetyMS) * time.Millisecond,
 		VideoTimestampJumpPLI:                cfg.SIP.VideoTimestampJumpPLI,

@@ -16,9 +16,6 @@ const (
 	// SIPKeyframePLICoalesce is the minimum gap between SIP INFO/FIR
 	// browser PLIs. Repeats wait for this window instead of stacking IDRs.
 	SIPKeyframePLICoalesce = time.Second
-	// TypicalUplinkIDRPackets is the picture size used to turn IDRPace
-	// into an inter-packet gap (Linphone mode-0 IDRs are ~30-40 packets).
-	TypicalUplinkIDRPackets = 36
 )
 
 // DecideUplinkKeyframeRequest is the fake-clock gate for browser IDR
@@ -129,20 +126,6 @@ func (s *Session) noteUplinkIDRProgressLocked(isIDR bool, rtpTimestamp uint32, m
 			s.uplinkIDRCompleteAt = time.Now()
 		}
 	}
-}
-
-// NoteUplinkIDRComplete records that a full IDR picture was written to SIP.
-func (s *Session) NoteUplinkIDRComplete(now time.Time) {
-	if s == nil {
-		return
-	}
-	s.mu.Lock()
-	s.uplinkIDRInFlight = false
-	if now.IsZero() {
-		now = time.Now()
-	}
-	s.uplinkIDRCompleteAt = now
-	s.mu.Unlock()
 }
 
 // UplinkIDRInFlight reports that an IDR picture has started toward SIP

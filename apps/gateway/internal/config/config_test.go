@@ -71,17 +71,6 @@ func TestTrunkPNAppIDConfigCanBeCustomizedAndTrimmed(t *testing.T) {
 	}
 }
 
-func TestUplinkIDRPaceConfigDefaults(t *testing.T) {
-	t.Setenv("SIP_UPLINK_IDR_PACE_MS", "")
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	if cfg.SIP.UplinkIDRPaceMS != 225 {
-		t.Fatalf("idrPace = %d, want 225", cfg.SIP.UplinkIDRPaceMS)
-	}
-}
-
 func TestSIPKeyframeRequestConfigDefaults(t *testing.T) {
 	t.Setenv("SIP_KEYFRAME_REQUEST_MODE", "")
 	t.Setenv("SIP_RTCP_FB_MIN_INTERVAL_MS", "")
@@ -145,17 +134,6 @@ func TestSIPKeyframeRequestConfigClampsAndRejectsInvalid(t *testing.T) {
 	}
 	if cfg.SIP.RTCPFBGuardMS != 0 {
 		t.Fatalf("guard 0 should disable, got %d", cfg.SIP.RTCPFBGuardMS)
-	}
-}
-
-func TestUplinkIDRPaceConfigCanBeCustomized(t *testing.T) {
-	t.Setenv("SIP_UPLINK_IDR_PACE_MS", "250")
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	if cfg.SIP.UplinkIDRPaceMS != 250 {
-		t.Fatalf("idrPace = %d, want 250", cfg.SIP.UplinkIDRPaceMS)
 	}
 }
 
@@ -481,46 +459,26 @@ func TestSIPUplinkPictureSizeChangeConfig(t *testing.T) {
 	}
 }
 
-func TestSIPLossyKeyframeAssistConfigDefaults(t *testing.T) {
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	sip := cfg.SIP
-	if !sip.LossyKeyframeAssist || sip.LossyLossThresholdPct != 5 || sip.LossyExtraIDRDelayMS != 1200 ||
-		sip.LossyEarlyWindowMS != 10000 || sip.LossySafetyIDRIntervalMS != 3000 {
-		t.Fatalf("defaults = %+v", sip)
-	}
-}
-
-func TestSIPLossyKeyframeAssistConfigOverridesAndBadValues(t *testing.T) {
+// Leftover k2 env for the removed pacer, IDR pace, and lossy-assist flags
+// must not fail startup. godotenv keeps unknown keys; Load only reads known ones.
+func TestRemovedUplinkMediaFlagsAreIgnored(t *testing.T) {
 	t.Setenv("SIP_LOSSY_KEYFRAME_ASSIST", "off")
-	t.Setenv("SIP_LOSSY_LOSS_THRESHOLD_PCT", "8")
-	t.Setenv("SIP_LOSSY_EXTRA_IDR_DELAY_MS", "900")
-	t.Setenv("SIP_LOSSY_EARLY_WINDOW_MS", "15000")
-	t.Setenv("SIP_LOSSY_SAFETY_IDR_INTERVAL_MS", "2000")
+	t.Setenv("SIP_LOSSY_LOSS_THRESHOLD_PCT", "9")
+	t.Setenv("SIP_LOSSY_EXTRA_IDR_DELAY_MS", "1500")
+	t.Setenv("SIP_LOSSY_EARLY_WINDOW_MS", "8000")
+	t.Setenv("SIP_LOSSY_SAFETY_IDR_INTERVAL_MS", "2500")
+	t.Setenv("SIP_UPLINK_IDR_PACE_MS", "0")
+	t.Setenv("SIP_UPLINK_VIDEO_PACER_ENABLE", "false")
+	t.Setenv("SIP_UPLINK_VIDEO_PACER_BPS", "3500000")
+	t.Setenv("SIP_UPLINK_VIDEO_PACER_BURST_PACKETS", "4")
+	t.Setenv("SIP_UPLINK_VIDEO_PACER_MAX_QUEUE_MS", "500")
+
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	sip := cfg.SIP
-	if sip.LossyKeyframeAssist || sip.LossyLossThresholdPct != 8 || sip.LossyExtraIDRDelayMS != 900 ||
-		sip.LossyEarlyWindowMS != 15000 || sip.LossySafetyIDRIntervalMS != 2000 {
-		t.Fatalf("overrides = %+v", sip)
-	}
-
-	t.Setenv("SIP_LOSSY_KEYFRAME_ASSIST", "maybe")
-	t.Setenv("SIP_LOSSY_LOSS_THRESHOLD_PCT", "0")
-	t.Setenv("SIP_LOSSY_EXTRA_IDR_DELAY_MS", "abc")
-	t.Setenv("SIP_LOSSY_EARLY_WINDOW_MS", "999999")
-	t.Setenv("SIP_LOSSY_SAFETY_IDR_INTERVAL_MS", "-5")
-	if cfg, err = Load(); err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	sip = cfg.SIP
-	if !sip.LossyKeyframeAssist || sip.LossyLossThresholdPct != 5 || sip.LossyExtraIDRDelayMS != 1200 ||
-		sip.LossyEarlyWindowMS != 10000 || sip.LossySafetyIDRIntervalMS != 3000 {
-		t.Fatalf("bad values not reset to defaults: %+v", sip)
+	if cfg.SIP.UplinkPictureSizeChange != SIPUplinkPictureSizeAccept || !cfg.SIP.VideoTSRebase {
+		t.Fatalf("known media flags changed: picture=%q rebase=%v", cfg.SIP.UplinkPictureSizeChange, cfg.SIP.VideoTSRebase)
 	}
 }
 

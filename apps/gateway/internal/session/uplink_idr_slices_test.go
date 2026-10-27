@@ -157,16 +157,15 @@ func forwardUplinkVideoForTest(t *testing.T, packets [][]byte, delays []time.Dur
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	sess := &Session{
-		ID:                      "idr-slices",
-		RTPBufferSize:           2048,
-		mediaForwardReady:       true,
-		VideoRTPConn:            send,
-		AsteriskVideoAddr:       recv.LocalAddr().(*net.UDPAddr),
-		UplinkVideoPacerEnabled: true,
-		CachedSPS:               []byte{0x67, 0x42, 0x00, 0x1f, 0xab},
-		CachedPPS:               []byte{0x68, 0xce, 0x06, 0xe2},
-		ctx:                     ctx,
-		cancel:                  cancel,
+		ID:                "idr-slices",
+		RTPBufferSize:     2048,
+		mediaForwardReady: true,
+		VideoRTPConn:      send,
+		AsteriskVideoAddr: recv.LocalAddr().(*net.UDPAddr),
+		CachedSPS:         []byte{0x67, 0x42, 0x00, 0x1f, 0xab},
+		CachedPPS:         []byte{0x68, 0xce, 0x06, 0xe2},
+		ctx:               ctx,
+		cancel:            cancel,
 	}
 	if setup != nil {
 		setup(sess)
@@ -202,7 +201,7 @@ func forwardUplinkVideoForTest(t *testing.T, packets [][]byte, delays []time.Dur
 	}()
 	go func() {
 		sess.forwardRTPToAsteriskFrom(&sliceReader{packets: packets, delays: delays}, "video")
-		// Browser marker releases the last slice; wait for the pacer to drain.
+		// Browser marker releases the last slice; let the receiver drain.
 		time.Sleep(500 * time.Millisecond)
 		close(done)
 	}()

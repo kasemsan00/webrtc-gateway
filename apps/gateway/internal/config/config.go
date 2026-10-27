@@ -174,20 +174,10 @@ type SIPConfig struct {
 	VideoAUNormalizeEnabled              bool   // Normalize SIP->WebRTC H.264 into complete access units (default: true)
 	SwitchVideoGateMinIDRPackets         int    // Min packets in a post-switch IDR before stall timeout (default: 1)
 	VideoReorderPacingMS                 int    // Sleep between consecutive reorder-burst packet writes (default: 1; 0 disables)
-	UplinkVideoPacerEnabled              bool   // Pace WebRTC→SIP video so an IDR cannot leave as one burst (default: true)
-	UplinkVideoPacerBitsPerSec           int    // Token-bucket rate for uplink video (default: 3500000)
-	UplinkVideoPacerBurstPackets         int    // Packets that may leave together before the rate limit (default: 4)
-	UplinkVideoPacerMaxQueueMS           int    // Flush queued uplink video after this delay instead of growing (default: 500)
-	UplinkIDRPaceMS                      int    // Spread one WebRTC→SIP IDR over this many ms (default: 225; 0 disables)
 	KeyframeRequestMode                  string // How to ask the SIP peer for a keyframe: info|rtcp|both (default: info)
 	RTCPFBMinIntervalMS                  int    // Minimum gap between SIP-leg RTCP PLI/FIR (default: 2000)
 	RTCPFBGuardMS                        int    // Skip SIP-leg RTCP PLI/FIR this long after an uplink IDR (default: 1500)
 	UplinkPictureSizeChange              string // Mid-call browser SPS picture-size change: accept|reject (default: accept)
-	LossyKeyframeAssist                  bool   // Extra/faster browser IDRs when SIP video loss is high (default: on)
-	LossyLossThresholdPct                int    // SIP video loss % that marks the leg lossy (default: 5)
-	LossyExtraIDRDelayMS                 int    // Extra browser IDR this long after an answered VFU (default: 1200)
-	LossyEarlyWindowMS                   int    // Extra IDR only within this long after answer (default: 10000)
-	LossySafetyIDRIntervalMS             int    // Safety-net IDR interval while lossy (default: 3000)
 	ProactiveBrowserPLIInitialMS         int    // Browser PLI interval until the first uplink IDR (default: 2000)
 	ProactiveBrowserPLISafetyMS          int    // Browser PLI only if no uplink IDR in this window (default: 10000)
 	VideoTimestampJumpPLI                bool   // Request a SIP keyframe when SIP video RTP timestamps jump (default: true)
@@ -373,20 +363,10 @@ func Load() (*Config, error) {
 			VideoAUNormalizeEnabled:              getEnvAsBool("SIP_VIDEO_AU_NORMALIZE_ENABLE", true),
 			SwitchVideoGateMinIDRPackets:         clampInt(getEnvAsInt("SIP_SWITCH_VIDEO_GATE_MIN_IDR_PACKETS", 1), 1, 64),
 			VideoReorderPacingMS:                 clampInt(getEnvAsInt("SIP_VIDEO_REORDER_PACING_MS", 1), 0, 10),
-			UplinkVideoPacerEnabled:              getEnvAsBool("SIP_UPLINK_VIDEO_PACER_ENABLE", true),
-			UplinkVideoPacerBitsPerSec:           clampInt(getEnvAsInt("SIP_UPLINK_VIDEO_PACER_BPS", 3_500_000), 100_000, 50_000_000),
-			UplinkVideoPacerBurstPackets:         clampInt(getEnvAsInt("SIP_UPLINK_VIDEO_PACER_BURST_PACKETS", 4), 1, 16),
-			UplinkVideoPacerMaxQueueMS:           clampInt(getEnvAsInt("SIP_UPLINK_VIDEO_PACER_MAX_QUEUE_MS", 500), 50, 5000),
-			UplinkIDRPaceMS:                      uplinkIDRPaceMSFromEnv(),
 			KeyframeRequestMode:                  sipKeyframeRequestModeFromEnv(),
 			RTCPFBMinIntervalMS:                  sipRTCPFBMinIntervalMSFromEnv(),
 			RTCPFBGuardMS:                        sipRTCPFBGuardMSFromEnv(),
 			UplinkPictureSizeChange:              sipUplinkPictureSizeChangeFromEnv(),
-			LossyKeyframeAssist:                  sipLossyKeyframeAssistFromEnv(),
-			LossyLossThresholdPct:                envIntInRangeOrDefault("SIP_LOSSY_LOSS_THRESHOLD_PCT", 5, 1, 50),
-			LossyExtraIDRDelayMS:                 envIntInRangeOrDefault("SIP_LOSSY_EXTRA_IDR_DELAY_MS", 1200, 500, 5000),
-			LossyEarlyWindowMS:                   envIntInRangeOrDefault("SIP_LOSSY_EARLY_WINDOW_MS", 10000, 1000, 60000),
-			LossySafetyIDRIntervalMS:             envIntInRangeOrDefault("SIP_LOSSY_SAFETY_IDR_INTERVAL_MS", 3000, 1000, 10000),
 			ProactiveBrowserPLIInitialMS:         clampInt(getEnvAsInt("SIP_PROACTIVE_BROWSER_PLI_INITIAL_MS", 2000), 500, 10000),
 			ProactiveBrowserPLISafetyMS:          clampInt(getEnvAsInt("SIP_PROACTIVE_BROWSER_PLI_SAFETY_MS", 10000), 2000, 60000),
 			VideoTimestampJumpPLI:                getEnvAsBool("SIP_VIDEO_TIMESTAMP_JUMP_PLI", true),
@@ -723,26 +703,12 @@ func (c *Config) Display() {
 	fmt.Printf("  SIP Video H264 AU Normalization: %v\n", c.SIP.VideoAUNormalizeEnabled)
 	fmt.Printf("  @switch Video Gate Min IDR Packets: %d\n", c.SIP.SwitchVideoGateMinIDRPackets)
 	fmt.Printf("  SIP Video Reorder Pacing: %dms\n", c.SIP.VideoReorderPacingMS)
-	fmt.Printf("  SIP Uplink Video Pacer: %v (rate=%d bps, burst=%d packets, maxQueue=%dms, idrPace=%dms)\n",
-		c.SIP.UplinkVideoPacerEnabled,
-		c.SIP.UplinkVideoPacerBitsPerSec,
-		c.SIP.UplinkVideoPacerBurstPackets,
-		c.SIP.UplinkVideoPacerMaxQueueMS,
-		c.SIP.UplinkIDRPaceMS,
-	)
 	fmt.Printf("  SIP Keyframe Request: mode=%s rtcpMinInterval=%dms guard=%dms\n",
 		c.SIP.KeyframeRequestMode,
 		c.SIP.RTCPFBMinIntervalMS,
 		c.SIP.RTCPFBGuardMS,
 	)
 	fmt.Printf("  SIP Uplink Picture Size Change: %s\n", c.SIP.UplinkPictureSizeChange)
-	fmt.Printf("  SIP Lossy Keyframe Assist: enabled=%v threshold=%d%% extraDelay=%dms earlyWindow=%dms safety=%dms\n",
-		c.SIP.LossyKeyframeAssist,
-		c.SIP.LossyLossThresholdPct,
-		c.SIP.LossyExtraIDRDelayMS,
-		c.SIP.LossyEarlyWindowMS,
-		c.SIP.LossySafetyIDRIntervalMS,
-	)
 	fmt.Printf("  Proactive Browser PLI: initial=%dms safety=%dms\n",
 		c.SIP.ProactiveBrowserPLIInitialMS,
 		c.SIP.ProactiveBrowserPLISafetyMS,
@@ -970,14 +936,6 @@ func getEnvAsInt(key string, defaultValue int) int {
 	return value
 }
 
-func uplinkIDRPaceMSFromEnv() int {
-	v := getEnvAsInt("SIP_UPLINK_IDR_PACE_MS", 225)
-	if v <= 0 {
-		return 0
-	}
-	return clampInt(v, 80, 500)
-}
-
 func sipKeyframeRequestModeFromEnv() string {
 	value := strings.ToLower(strings.TrimSpace(getEnvWithDefault("SIP_KEYFRAME_REQUEST_MODE", SIPKeyframeRequestModeInfo)))
 	switch value {
@@ -999,10 +957,6 @@ const (
 
 func sipVideoTSBaseFromEnv() uint32 {
 	return uint32(envIntInRangeOrDefault("SIP_VIDEO_TS_BASE", SIPVideoTSBaseDefault, SIPVideoTSBaseMin, SIPVideoTSBaseMax))
-}
-
-func sipLossyKeyframeAssistFromEnv() bool {
-	return envOnOff("SIP_LOSSY_KEYFRAME_ASSIST", true)
 }
 
 // envOnOff reads an on|off flag (also true|false|1|0|yes|no). Unset or
