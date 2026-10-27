@@ -414,6 +414,9 @@ func (s *Session) forwardRTPToAsteriskFrom(track rtpByteReader, kind string) {
 				if containsIDR {
 					s.noteUplinkIDRAcceptedLocked()
 				}
+				// One outbound timestamp for the injected SPS/PPS and every
+				// de-aggregated NAL of this STAP-A (SIP_VIDEO_TS_REBASE).
+				stapaTS := s.uplinkVideoOutboundTSLocked(packet.Header.Timestamp, packet.Header.SSRC, time.Now())
 
 				// Inject SPS/PPS before STAP-A IDR only when STAP-A does not already carry both.
 				// This avoids duplicate SPS/PPS bursts at call startup that can destabilize decoders.
@@ -438,7 +441,7 @@ func (s *Session) forwardRTPToAsteriskFrom(track rtpByteReader, kind string) {
 								Version:        2,
 								PayloadType:    videoPT,
 								SequenceNumber: s.VideoSeq,
-								Timestamp:      packet.Header.Timestamp,
+								Timestamp:      stapaTS,
 								SSRC:           s.VideoSSRC,
 								Marker:         false,
 							},
@@ -461,7 +464,7 @@ func (s *Session) forwardRTPToAsteriskFrom(track rtpByteReader, kind string) {
 								Version:        2,
 								PayloadType:    videoPT,
 								SequenceNumber: s.VideoSeq,
-								Timestamp:      packet.Header.Timestamp,
+								Timestamp:      stapaTS,
 								SSRC:           s.VideoSSRC,
 								Marker:         false,
 							},
@@ -508,7 +511,7 @@ func (s *Session) forwardRTPToAsteriskFrom(track rtpByteReader, kind string) {
 								Version:        2,
 								PayloadType:    videoPT,
 								SequenceNumber: s.VideoSeq,
-								Timestamp:      packet.Header.Timestamp,
+								Timestamp:      stapaTS,
 								SSRC:           s.VideoSSRC,
 								Marker:         false,
 							},
@@ -541,7 +544,7 @@ func (s *Session) forwardRTPToAsteriskFrom(track rtpByteReader, kind string) {
 				// the next timestamp, so one IDR stays one access unit.
 				if stapaForwarded {
 					for _, w := range pendingWrites {
-						s.enqueueUplinkVideo(conn, destAddr, w, false, packet.Header.Timestamp, packetCount)
+						s.enqueueUplinkVideo(conn, destAddr, w, false, stapaTS, packetCount)
 					}
 				} else if containsIDR {
 					fmt.Printf("[%s] 🔑 KEYFRAME (STAP-A IDR) held in video packet #%d - Asterisk endpoint not set yet\n", s.ID, packetCount)
@@ -566,6 +569,10 @@ func (s *Session) forwardRTPToAsteriskFrom(track rtpByteReader, kind string) {
 				// RecordUplinkKeyframe does not run until the write.
 				s.noteUplinkIDRAcceptedLocked()
 			}
+			// Outbound timestamp for this packet and the SPS/PPS injected in
+			// front of it (SIP_VIDEO_TS_REBASE). Held packets never reach this,
+			// so the first forwarded packet sets the base.
+			outTS := s.uplinkVideoOutboundTSLocked(packet.Header.Timestamp, packet.Header.SSRC, time.Now())
 
 			// Inject SPS/PPS once per IDR access unit. Packetization-mode 0 puts
 			// every slice in its own NAL type 5 packet, so a packet-count window
@@ -587,7 +594,7 @@ func (s *Session) forwardRTPToAsteriskFrom(track rtpByteReader, kind string) {
 							Version:        2,
 							PayloadType:    videoPT,
 							SequenceNumber: s.VideoSeq,
-							Timestamp:      packet.Header.Timestamp,
+							Timestamp:      outTS,
 							SSRC:           s.VideoSSRC,
 							Marker:         false,
 						},
@@ -612,7 +619,7 @@ func (s *Session) forwardRTPToAsteriskFrom(track rtpByteReader, kind string) {
 							Version:        2,
 							PayloadType:    videoPT,
 							SequenceNumber: s.VideoSeq,
-							Timestamp:      packet.Header.Timestamp,
+							Timestamp:      outTS,
 							SSRC:           s.VideoSSRC,
 							Marker:         false,
 						},
@@ -635,6 +642,7 @@ func (s *Session) forwardRTPToAsteriskFrom(track rtpByteReader, kind string) {
 			s.VideoSeq++
 			packet.Header.SSRC = s.VideoSSRC
 			packet.Header.SequenceNumber = s.VideoSeq
+			packet.Header.Timestamp = outTS
 			packet.Header.PayloadType = videoPT // H264 negotiated with the SIP peer
 			packet.Header.Extension = false
 			packet.Header.Extensions = nil

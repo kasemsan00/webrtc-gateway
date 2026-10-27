@@ -536,3 +536,28 @@ func TestSIPVideoSameTSReuseConfig(t *testing.T) {
 		}
 	}
 }
+
+func TestSIPVideoTSRebaseConfig(t *testing.T) {
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.SIP.VideoTSRebase || cfg.SIP.VideoTSBase != 5400000 {
+		t.Fatalf("defaults rebase=%v base=%d", cfg.SIP.VideoTSRebase, cfg.SIP.VideoTSBase)
+	}
+	t.Setenv("SIP_VIDEO_TS_REBASE", "off")
+	t.Setenv("SIP_VIDEO_TS_BASE", "691110")
+	if cfg, err = Load(); err != nil || cfg.SIP.VideoTSRebase || cfg.SIP.VideoTSBase != 691110 {
+		t.Fatalf("override rebase=%v base=%d err=%v", cfg.SIP.VideoTSRebase, cfg.SIP.VideoTSBase, err)
+	}
+	for _, bad := range []string{"691020", "0", "-1", "2147483648", "4200000000", "abc"} {
+		t.Setenv("SIP_VIDEO_TS_BASE", bad)
+		if cfg, err = Load(); err != nil || cfg.SIP.VideoTSBase != 5400000 {
+			t.Fatalf("SIP_VIDEO_TS_BASE=%s -> %d err=%v, want default", bad, cfg.SIP.VideoTSBase, err)
+		}
+	}
+	t.Setenv("SIP_VIDEO_TS_BASE", "2147483647")
+	if cfg, err = Load(); err != nil || cfg.SIP.VideoTSBase != 2147483647 {
+		t.Fatalf("max base -> %d err=%v", cfg.SIP.VideoTSBase, err)
+	}
+}

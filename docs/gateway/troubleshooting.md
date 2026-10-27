@@ -70,6 +70,7 @@ Correlate browser inbound RTP diagnostics with Gateway logs by `sessionId`:
   A later `switch_video_gate_activation outcome=satisfied-by-discontinuity-idr`
   means the agent IDR arrived before the `@switch` notice and already started
   the segment. Audio is not rewritten; Opus stays on the SIP timestamp.
+- Android Linphone frozen on the agent picture right after answer (decoder errors 0x24/0x4004, then 0x10): check `uplink_video_ts_rebase start browser_ts=... base=5400000` for the call. The first WebRTC→SIP video packet toward Asterisk must carry RTP ts `5400000` (`SIP_VIDEO_TS_BASE`). In a pcap on the gateway→Asterisk video leg, filter `rtp.ssrc == <gateway video SSRC> && rtp.timestamp == 5400000`; it is the first packet of that SSRC. With `SIP_VIDEO_TS_REBASE=off` it is the browser's random timestamp instead.
 - If normalization itself is suspected, temporarily set `SIP_VIDEO_AU_NORMALIZE_ENABLE=false` and restart the gateway. This restores the legacy raw reordered path and should be used only as a bounded comparison because incomplete frames can poison strict mobile decoders.
 
 ## Queue-to-agent video is blocky or has incorrect colors

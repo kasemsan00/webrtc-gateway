@@ -192,6 +192,8 @@ type SIPConfig struct {
 	ProactiveBrowserPLISafetyMS          int    // Browser PLI only if no uplink IDR in this window (default: 10000)
 	VideoTimestampJumpPLI                bool   // Request a SIP keyframe when SIP video RTP timestamps jump (default: true)
 	VideoSameTSReuse                     bool   // Same SIP video source timestamp keeps the same outbound timestamp (default: on)
+	VideoTSRebase                        bool   // Rebase WebRTC→SIP video RTP timestamps per call (default: on)
+	VideoTSBase                          uint32 // First outbound WebRTC→SIP video timestamp per call (default: 5400000)
 	VideoSuppressEarlyMedia              bool   // Drop SIP video until the call is answered (default: false; SIP_VIDEO_FORWARD_EARLY_MEDIA=true)
 	WebRTCTWCCEnabled                    bool   // Send transport-cc feedback to the phone (default: true; WEBRTC_TWCC_ENABLE)
 	SwitchVideoGateFailOpenMS            int    // Fail open a stalled same-stream gate after this many ms (default: 3000)
@@ -389,6 +391,8 @@ func Load() (*Config, error) {
 			ProactiveBrowserPLISafetyMS:          clampInt(getEnvAsInt("SIP_PROACTIVE_BROWSER_PLI_SAFETY_MS", 10000), 2000, 60000),
 			VideoTimestampJumpPLI:                getEnvAsBool("SIP_VIDEO_TIMESTAMP_JUMP_PLI", true),
 			VideoSameTSReuse:                     envOnOff("SIP_VIDEO_SAME_TS_REUSE", true),
+			VideoTSRebase:                        envOnOff("SIP_VIDEO_TS_REBASE", true),
+			VideoTSBase:                          sipVideoTSBaseFromEnv(),
 			VideoSuppressEarlyMedia:              !getEnvAsBool("SIP_VIDEO_FORWARD_EARLY_MEDIA", true),
 			WebRTCTWCCEnabled:                    getEnvAsBool("WEBRTC_TWCC_ENABLE", true),
 			SwitchVideoGateFailOpenMS:            getEnvAsInt("SIP_SWITCH_VIDEO_GATE_FAIL_OPEN_MS", 3000),
@@ -745,6 +749,7 @@ func (c *Config) Display() {
 	)
 	fmt.Printf("  SIP Video Timestamp-Jump PLI: %v\n", c.SIP.VideoTimestampJumpPLI)
 	fmt.Printf("  SIP Video Same-Timestamp Reuse: %v\n", c.SIP.VideoSameTSReuse)
+	fmt.Printf("  SIP Video TS Rebase: enabled=%v base=%d\n", c.SIP.VideoTSRebase, c.SIP.VideoTSBase)
 	fmt.Printf("  SIP Video Forward Early Media: %v\n", !c.SIP.VideoSuppressEarlyMedia)
 	fmt.Printf("  WebRTC TWCC: %v\n", c.SIP.WebRTCTWCCEnabled)
 	fmt.Printf("  @switch Gate Fail-Open: sameStream=%dms cap=%dms infoFIR=%v\n",
@@ -982,6 +987,18 @@ func sipKeyframeRequestModeFromEnv() string {
 		fmt.Printf("Warning: invalid SIP_KEYFRAME_REQUEST_MODE=%q, using %q\n", value, SIPKeyframeRequestModeInfo)
 		return SIPKeyframeRequestModeInfo
 	}
+}
+
+// Asterisk's waiting video ends at RTP ts 691020; the outbound base must be
+// past it and stay in the positive int32 range so it is "newer" mod 2^32.
+const (
+	SIPVideoTSBaseDefault = 5400000
+	SIPVideoTSBaseMin     = 691110
+	SIPVideoTSBaseMax     = 2147483647
+)
+
+func sipVideoTSBaseFromEnv() uint32 {
+	return uint32(envIntInRangeOrDefault("SIP_VIDEO_TS_BASE", SIPVideoTSBaseDefault, SIPVideoTSBaseMin, SIPVideoTSBaseMax))
 }
 
 func sipLossyKeyframeAssistFromEnv() bool {

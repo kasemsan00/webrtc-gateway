@@ -403,6 +403,7 @@ func (s *Session) ResetMediaState() {
 	// Reset video RTP state
 	s.VideoSeq = 0
 	s.VideoSSRC = 0
+	s.uplinkTSRebaser = uplinkVideoTSRebaser{}
 	s.RemoteVideoSSRC = 0
 	s.remoteVideoReadyNotified = false
 	s.uplinkKeyframeKickOnRemoteJoinDone = false
