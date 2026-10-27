@@ -370,12 +370,27 @@ func (s *Session) TryKickUplinkKeyframeForSwitch(reason string, now time.Time) b
 	return true
 }
 
+// decoderJoinPLIFollowUp is the guarded PLI retry after the initial FIR+PLI.
+// A pre-learn IDR gets one retry after the forced-PLI cap so the browser is
+// not asked again while that cap would drop the packet. Other kicks keep
+// the short burst.
+func decoderJoinPLIFollowUp(preLearnIDRIgnored bool) (attempts int, gap time.Duration) {
+	if preLearnIDRIgnored {
+		return 1, webrtcPLIOverallMinInterval
+	}
+	return 3, 300 * time.Millisecond
+}
+
 // KickUplinkKeyframeForSIPDecoder requests a fresh browser IDR so a SIP decoder
 // that just became reachable (200 OK / first RTP dest) is not stuck on P-frames.
 // Switch kicks always run. Decoder-join kicks skip when a complete IDR was
-// forwarded in the last 10s, or an IDR is still in flight.
+// forwarded in the last 10s, or an IDR is still in flight. An IDR forwarded
+// before remote video SSRC learn or the first SIP video RTP/RTCP does not
+// count for remote-ssrc-learn and sip-rtcp-first.
 func (s *Session) KickUplinkKeyframeForSIPDecoder(reason string) bool {
+	ignoredPreLearn := false
 	if !isSwitchUplinkKeyframeKind(reason) {
+		ignoredPreLearn = s.preLearnUplinkIDRIgnored(reason)
 		send, why := s.DecideSessionUplinkKeyframeRequest(reason, time.Now())
 		if !send {
 			fmt.Printf("[%s] uplink_keyframe_kick_skipped reason=%s skip=%s\n", s.ID, reason, why)
@@ -383,11 +398,16 @@ func (s *Session) KickUplinkKeyframeForSIPDecoder(reason string) bool {
 		}
 	}
 	kickAt := time.Now()
-	fmt.Printf("[%s] 📈 uplink_keyframe_kick reason=%s\n", s.ID, reason)
+	if ignoredPreLearn {
+		fmt.Printf("[%s] 📈 uplink_keyframe_kick reason=%s pre_learn_idr=ignored\n", s.ID, reason)
+	} else {
+		fmt.Printf("[%s] 📈 uplink_keyframe_kick reason=%s\n", s.ID, reason)
+	}
 	s.sendWebRTCFeedbackWithForce("fir", true, nil)
 	s.sendWebRTCFeedbackWithForce("pli", true, nil)
+	attempts, gap := decoderJoinPLIFollowUp(ignoredPreLearn)
 	go func() {
-		for i := 0; i < 3; i++ {
+		for i := 0; i < attempts; i++ {
 			if s.GetState() == StateEnded {
 				return
 			}
@@ -395,15 +415,29 @@ func (s *Session) KickUplinkKeyframeForSIPDecoder(reason string) bool {
 				fmt.Printf("[%s] Stopping %s PLI burst - uplink IDR delivered\n", s.ID, reason)
 				return
 			}
-			if !isSwitchUplinkKeyframeKind(reason) && (s.UplinkIDRInFlight() || s.HasCompleteUplinkIDR()) {
+			// A pre-learn IDR is already complete, but the far end never saw
+			// it. Keep the one follow-up until an IDR lands after this kick.
+			if !isSwitchUplinkKeyframeKind(reason) && !ignoredPreLearn && (s.UplinkIDRInFlight() || s.HasCompleteUplinkIDR()) {
 				fmt.Printf("[%s] Stopping %s PLI burst - uplink IDR delivered\n", s.ID, reason)
 				return
 			}
-			time.Sleep(300 * time.Millisecond)
+			time.Sleep(gap)
+			if ignoredPreLearn {
+				if s.GetState() == StateEnded {
+					return
+				}
+				if s.HasUplinkKeyframeSince(kickAt) {
+					fmt.Printf("[%s] Stopping %s PLI burst - uplink IDR delivered\n", s.ID, reason)
+					return
+				}
+			}
 			if !isSwitchUplinkKeyframeKind(reason) {
 				if skip, _ := s.SkipUplinkKeyframeRequest(reason, time.Now()); skip {
 					return
 				}
+			}
+			if ignoredPreLearn {
+				fmt.Printf("[%s] 📈 uplink_keyframe_kick reason=%s pre_learn_idr=ignored follow_up=%d\n", s.ID, reason, i+1)
 			}
 			s.sendWebRTCFeedbackWithForce("pli", true, nil)
 		}

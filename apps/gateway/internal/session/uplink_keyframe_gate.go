@@ -88,6 +88,48 @@ func (s *Session) uplinkIDRGateLocked() (inFlight bool, completeAt, lastPLI time
 	return s.uplinkIDRInFlight, s.uplinkIDRCompleteAt, s.lastBrowserIDRRequest
 }
 
+// isRemoteJoinKeyframeKind is the first-learn kicks. An uplink IDR that was
+// forwarded before the SIP far end existed must not count as fresh for these.
+func isRemoteJoinKeyframeKind(kind string) bool {
+	return kind == "remote-ssrc-learn" || kind == "sip-rtcp-first"
+}
+
+// uplinkIDRBeforeFarEnd reports whether t is strictly before a recorded
+// far-end event. A zero event time is not a bound. Both bounds apply: an
+// IDR before SSRC learn or before the first SIP video RTP/RTCP is too early.
+func uplinkIDRBeforeFarEnd(t, ssrcLearned, farEndSeen time.Time) bool {
+	if t.IsZero() {
+		return false
+	}
+	if !ssrcLearned.IsZero() && t.Before(ssrcLearned) {
+		return true
+	}
+	if !farEndSeen.IsZero() && t.Before(farEndSeen) {
+		return true
+	}
+	return false
+}
+
+// ignorePreLearnUplinkIDR drops an uplink IDR that finished, or started,
+// before the SIP far end was seen. With no far-end clock the original
+// values are returned so callers that have not learned a remote yet keep
+// the 10s fresh window.
+func ignorePreLearnUplinkIDR(inFlight bool, completeAt, lastUplink, ssrcLearned, farEndSeen time.Time) (bool, time.Time, bool) {
+	if ssrcLearned.IsZero() && farEndSeen.IsZero() {
+		return inFlight, completeAt, false
+	}
+	ignored := false
+	if uplinkIDRBeforeFarEnd(completeAt, ssrcLearned, farEndSeen) {
+		completeAt = time.Time{}
+		ignored = true
+	}
+	if inFlight && (lastUplink.IsZero() || uplinkIDRBeforeFarEnd(lastUplink, ssrcLearned, farEndSeen)) {
+		inFlight = false
+		ignored = true
+	}
+	return inFlight, completeAt, ignored
+}
+
 // DecideSessionUplinkKeyframeRequest is DecideUplinkKeyframeRequest using session clocks.
 func (s *Session) DecideSessionUplinkKeyframeRequest(kind string, now time.Time) (bool, string) {
 	if s == nil {
@@ -95,8 +137,29 @@ func (s *Session) DecideSessionUplinkKeyframeRequest(kind string, now time.Time)
 	}
 	s.mu.RLock()
 	inFlight, completeAt, lastPLI := s.uplinkIDRGateLocked()
+	lastUplink := s.LastUplinkKeyframe
+	ssrcLearned := s.remoteVideoSSRCLearnedAt
 	s.mu.RUnlock()
+	if isRemoteJoinKeyframeKind(kind) {
+		inFlight, completeAt, _ = ignorePreLearnUplinkIDR(inFlight, completeAt, lastUplink, ssrcLearned, s.sipFarEndVideoSeenAt())
+	}
 	return DecideUplinkKeyframeRequest(kind, inFlight, completeAt, lastPLI, now)
+}
+
+// preLearnUplinkIDRIgnored reports that remote-ssrc-learn / sip-rtcp-first
+// are looking at an uplink IDR from before the SIP far end was seen.
+func (s *Session) preLearnUplinkIDRIgnored(kind string) bool {
+	if s == nil || !isRemoteJoinKeyframeKind(kind) {
+		return false
+	}
+	s.mu.RLock()
+	inFlight := s.uplinkIDRInFlight
+	completeAt := s.uplinkIDRCompleteAt
+	lastUplink := s.LastUplinkKeyframe
+	ssrcLearned := s.remoteVideoSSRCLearnedAt
+	s.mu.RUnlock()
+	_, _, ignored := ignorePreLearnUplinkIDR(inFlight, completeAt, lastUplink, ssrcLearned, s.sipFarEndVideoSeenAt())
+	return ignored
 }
 
 // SkipUplinkKeyframeRequest logs and reports that this kind of browser IDR

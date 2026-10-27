@@ -118,6 +118,163 @@ func TestStartupPLIStopsOnceIDRIsInFlight(t *testing.T) {
 	}
 }
 
+func TestOutboundIDRBeforeSSRCLearnKicks(t *testing.T) {
+	// Browser IDR is forwarded just after 200 OK. Android's video SSRC is
+	// learned about two seconds later, so that IDR never reached the decoder.
+	sess := &Session{ID: "pre-learn-idr"}
+	answer := time.Now().Add(-2 * time.Second)
+	idrAt := answer.Add(57 * time.Millisecond)
+	sess.LastUplinkKeyframe = idrAt
+	sess.uplinkIDRCompleteAt = idrAt
+
+	learned := time.Now()
+	sess.remoteVideoSSRCLearnedAt = learned
+	sess.NoteSIPFarEndVideoSeen(learned)
+
+	send, reason := sess.DecideSessionUplinkKeyframeRequest("remote-ssrc-learn", learned)
+	if !send || reason != "" {
+		t.Fatalf("remote-ssrc-learn after pre-learn IDR: send=%v reason=%s", send, reason)
+	}
+	if !sess.KickUplinkKeyframeOnRemoteJoinIfNeeded() {
+		t.Fatal("remote-ssrc-learn kick did not fire")
+	}
+	sess.mu.Lock()
+	sess.State = StateEnded
+	sess.mu.Unlock()
+
+	// First SIP RTCP still has only the pre-learn IDR, so it kicks too.
+	send, reason = sess.DecideSessionUplinkKeyframeRequest("sip-rtcp-first", learned.Add(3*time.Second))
+	if !send || reason != "" {
+		t.Fatalf("sip-rtcp-first with only a pre-learn IDR: send=%v reason=%s", send, reason)
+	}
+	if !sess.KickUplinkKeyframeForSIPDecoder("sip-rtcp-first") {
+		t.Fatal("sip-rtcp-first kick did not fire")
+	}
+
+	// An IDR forwarded after learn satisfies the next check.
+	post := time.Now()
+	sess.mu.Lock()
+	sess.LastUplinkKeyframe = post
+	sess.uplinkIDRCompleteAt = post
+	sess.mu.Unlock()
+	send, reason = sess.DecideSessionUplinkKeyframeRequest("remote-ssrc-learn", post.Add(20*time.Millisecond))
+	if send || reason != "idr-fresh" {
+		t.Fatalf("post-learn IDR: send=%v reason=%s, want idr-fresh", send, reason)
+	}
+}
+
+func TestIDRAfterSSRCLearnSkipsJoinKicks(t *testing.T) {
+	sess := &Session{ID: "post-learn-idr"}
+	learned := time.Now().Add(-400 * time.Millisecond)
+	sess.remoteVideoSSRCLearnedAt = learned
+	sess.NoteSIPFarEndVideoSeen(learned.Add(-time.Millisecond))
+	idrAt := learned.Add(50 * time.Millisecond)
+	sess.LastUplinkKeyframe = idrAt
+	sess.uplinkIDRCompleteAt = idrAt
+
+	for _, kind := range []string{"remote-ssrc-learn", "sip-rtcp-first"} {
+		send, reason := sess.DecideSessionUplinkKeyframeRequest(kind, time.Now())
+		if send || reason != "idr-fresh" {
+			t.Fatalf("%s: send=%v reason=%s, want idr-fresh", kind, send, reason)
+		}
+		if sess.KickUplinkKeyframeForSIPDecoder(kind) {
+			t.Fatalf("%s kick fired after a post-learn IDR", kind)
+		}
+	}
+}
+
+func TestIDRBeforeFirstSIPRTCPDoesNotCountAsFresh(t *testing.T) {
+	sess := &Session{ID: "pre-rtcp-idr"}
+	idrAt := time.Now().Add(-3 * time.Second)
+	sess.LastUplinkKeyframe = idrAt
+	sess.uplinkIDRCompleteAt = idrAt
+	sess.NoteSIPFarEndVideoSeen(time.Now())
+
+	send, reason := sess.DecideSessionUplinkKeyframeRequest("sip-rtcp-first", time.Now())
+	if !send || reason != "" {
+		t.Fatalf("sip-rtcp-first: send=%v reason=%s", send, reason)
+	}
+	// SSRC was never learned. remote-ssrc-learn still ignores the early IDR
+	// because SIP video RTCP has already been seen.
+	send, reason = sess.DecideSessionUplinkKeyframeRequest("remote-ssrc-learn", time.Now())
+	if !send || reason != "" {
+		t.Fatalf("remote-ssrc-learn before SSRC with RTCP seen: send=%v reason=%s", send, reason)
+	}
+}
+
+func TestInFlightIDRBeforeLearnDoesNotBlockJoinKick(t *testing.T) {
+	sess := &Session{ID: "pre-learn-inflight"}
+	sess.uplinkIDRInFlight = true
+	sess.LastUplinkKeyframe = time.Now().Add(-2 * time.Second)
+	sess.remoteVideoSSRCLearnedAt = time.Now()
+	sess.NoteSIPFarEndVideoSeen(sess.remoteVideoSSRCLearnedAt)
+
+	send, reason := sess.DecideSessionUplinkKeyframeRequest("remote-ssrc-learn", time.Now())
+	if !send || reason != "" {
+		t.Fatalf("in-flight pre-learn IDR: send=%v reason=%s", send, reason)
+	}
+
+	sess.LastUplinkKeyframe = time.Now()
+	send, reason = sess.DecideSessionUplinkKeyframeRequest("remote-ssrc-learn", time.Now())
+	if send || reason != "idr-in-flight" {
+		t.Fatalf("in-flight after learn: send=%v reason=%s, want idr-in-flight", send, reason)
+	}
+}
+
+func TestDestReadyStillTreatsRecentIDRAsFresh(t *testing.T) {
+	sess := &Session{ID: "dest-ready-fresh"}
+	idrAt := time.Now().Add(-2 * time.Second)
+	sess.LastUplinkKeyframe = idrAt
+	sess.uplinkIDRCompleteAt = idrAt
+	sess.remoteVideoSSRCLearnedAt = time.Now()
+	sess.NoteSIPFarEndVideoSeen(sess.remoteVideoSSRCLearnedAt)
+
+	send, reason := sess.DecideSessionUplinkKeyframeRequest("sip-video-dest-ready", time.Now())
+	if send || reason != "idr-fresh" {
+		t.Fatalf("dest-ready: send=%v reason=%s, want idr-fresh", send, reason)
+	}
+}
+
+func TestDecoderJoinPLIFollowUp(t *testing.T) {
+	attempts, gap := decoderJoinPLIFollowUp(false)
+	if attempts != 3 || gap != 300*time.Millisecond {
+		t.Fatalf("default follow-up = (%d, %s)", attempts, gap)
+	}
+	attempts, gap = decoderJoinPLIFollowUp(true)
+	if attempts != 1 || gap != webrtcPLIOverallMinInterval {
+		t.Fatalf("pre-learn follow-up = (%d, %s), want one retry at %s", attempts, gap, webrtcPLIOverallMinInterval)
+	}
+}
+
+func TestRemoteVideoSSRCLearnedAtSticks(t *testing.T) {
+	sess := &Session{ID: "ssrc-learn-at"}
+	sess.SetRemoteVideoSSRC(0)
+	if !sess.remoteVideoSSRCLearnedAt.IsZero() {
+		t.Fatal("SSRC 0 recorded a learn time")
+	}
+	sess.SetRemoteVideoSSRC(111)
+	learned := sess.remoteVideoSSRCLearnedAt
+	if learned.IsZero() {
+		t.Fatal("first real SSRC did not record learn time")
+	}
+	time.Sleep(2 * time.Millisecond)
+	sess.SetRemoteVideoSSRC(222)
+	if !sess.remoteVideoSSRCLearnedAt.Equal(learned) {
+		t.Fatal("later SSRC change moved the first learn time")
+	}
+}
+
+func TestNoteSIPFarEndVideoSeenKeepsFirst(t *testing.T) {
+	sess := &Session{ID: "far-end-seen"}
+	first := time.Now().Add(-time.Second)
+	sess.NoteSIPFarEndVideoSeen(first)
+	sess.NoteSIPVideoRTP(time.Now())
+	got := sess.sipFarEndVideoSeenAt()
+	if !got.Equal(first) {
+		t.Fatalf("far-end seen = %s, want %s", got, first)
+	}
+}
+
 func TestSIPInfoWaitsForInFlightIDR(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

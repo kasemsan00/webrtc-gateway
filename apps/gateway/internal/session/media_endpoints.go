@@ -377,10 +377,14 @@ func (s *Session) SetRemoteAudioSSRC(ssrc uint32) {
 	s.RemoteAudioSSRC = ssrc
 }
 
-// SetRemoteVideoSSRC sets the remote video SSRC
+// SetRemoteVideoSSRC sets the remote video SSRC.
+// The first transition from 0 records when the SIP decoder's SSRC was learned.
 func (s *Session) SetRemoteVideoSSRC(ssrc uint32) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.RemoteVideoSSRC == 0 && ssrc != 0 && s.remoteVideoSSRCLearnedAt.IsZero() {
+		s.remoteVideoSSRCLearnedAt = time.Now()
+	}
 	s.RemoteVideoSSRC = ssrc
 }
 
@@ -408,6 +412,8 @@ func (s *Session) ResetMediaState() {
 	s.remoteVideoReadyNotified = false
 	s.uplinkKeyframeKickOnRemoteJoinDone = false
 	s.uplinkKeyframeKickOnFirstSIPRTCP = false
+	s.remoteVideoSSRCLearnedAt = time.Time{}
+	s.sipFarEndVideoSeenUnixNano.Store(0)
 	s.sipVideoDestReadyAt = time.Time{}
 	s.bridgedPeerAnsweredAt = time.Time{}
 	s.PendingBrowserKeyframeRequest = false
@@ -614,6 +620,27 @@ func (s *Session) NoteSIPVideoRTP(now time.Time) {
 		return
 	}
 	s.sipVideoRTPUnixNano.Store(now.UnixNano())
+	s.NoteSIPFarEndVideoSeen(now)
+}
+
+// NoteSIPFarEndVideoSeen records the first SIP video RTP packet or RTCP
+// SR/RR from the far end. Later calls keep the original timestamp.
+func (s *Session) NoteSIPFarEndVideoSeen(now time.Time) {
+	if s == nil || now.IsZero() {
+		return
+	}
+	s.sipFarEndVideoSeenUnixNano.CompareAndSwap(0, now.UnixNano())
+}
+
+func (s *Session) sipFarEndVideoSeenAt() time.Time {
+	if s == nil {
+		return time.Time{}
+	}
+	n := s.sipFarEndVideoSeenUnixNano.Load()
+	if n == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, n)
 }
 
 // LastSIPVideoRTPAt returns the last SIP video RTP arrival time.

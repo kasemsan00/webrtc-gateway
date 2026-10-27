@@ -1133,6 +1133,7 @@ func (s *Server) handleRTCPFromSIP(data []byte, sess *session.Session, rtcpCount
 		}
 	}
 	if sawSIPVideoReport {
+		sess.NoteSIPFarEndVideoSeen(time.Now())
 		sess.KickUplinkKeyframeOnFirstSIPRTCPIfNeeded()
 	}
 }

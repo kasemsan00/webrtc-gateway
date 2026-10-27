@@ -82,6 +82,10 @@ type Session struct {
 	uplinkKeyframeKickOnRemoteJoinDone bool `json:"-"`
 	// One-shot WebRTC→SIP keyframe kick on the first SIP video SR/RR.
 	uplinkKeyframeKickOnFirstSIPRTCP bool `json:"-"`
+	// First time SIP remote video SSRC went from 0 to a real SSRC.
+	// An uplink IDR forwarded before this was sent to a decoder that was
+	// not receiving yet, so remote-ssrc-learn must not treat it as fresh.
+	remoteVideoSSRCLearnedAt time.Time `json:"-"`
 	// When SIP video dest first became reachable (200 OK / first RTP dest).
 	sipVideoDestReadyAt time.Time `json:"-"`
 	// Queue-bridged callee answered after this outbound session already sent
@@ -399,19 +403,22 @@ type Session struct {
 	// keep advertising video.
 	sipOfferIncludeVideo *bool
 	// PLI (Picture Loss Indication) tracking
-	PLISent                   int           `json:"pliSent"`
-	PLIResponse               int           `json:"pliResponse"`
-	LastPLISent               time.Time     `json:"-"`
-	LastKeyframe              time.Time     `json:"-"`
-	AudioRTCPRRCount          atomic.Uint64 `json:"-"`
-	AudioRTCPSRCount          atomic.Uint64 `json:"-"`
-	VideoRTCPRRCount          atomic.Uint64 `json:"-"`
-	VideoRTCPSRCount          atomic.Uint64 `json:"-"`
-	sipVideoRTPUnixNano       atomic.Int64  `json:"-"`
-	sipVideoRequireHealthyIDR atomic.Bool   `json:"-"`
-	sipVideoHealthyIDR        atomic.Bool   `json:"-"`
-	FIRSeq                    uint8         `json:"-"`
-	RTPBufferSize             int           `json:"-"` // RTP/RTCP packet buffer size (from Config.RTP.BufferSize, minimum 1500)
+	PLISent             int           `json:"pliSent"`
+	PLIResponse         int           `json:"pliResponse"`
+	LastPLISent         time.Time     `json:"-"`
+	LastKeyframe        time.Time     `json:"-"`
+	AudioRTCPRRCount    atomic.Uint64 `json:"-"`
+	AudioRTCPSRCount    atomic.Uint64 `json:"-"`
+	VideoRTCPRRCount    atomic.Uint64 `json:"-"`
+	VideoRTCPSRCount    atomic.Uint64 `json:"-"`
+	sipVideoRTPUnixNano atomic.Int64  `json:"-"`
+	// First SIP video RTP packet or RTCP SR/RR. Same freshness rule as
+	// remoteVideoSSRCLearnedAt: an earlier uplink IDR does not count.
+	sipFarEndVideoSeenUnixNano atomic.Int64 `json:"-"`
+	sipVideoRequireHealthyIDR  atomic.Bool  `json:"-"`
+	sipVideoHealthyIDR         atomic.Bool  `json:"-"`
+	FIRSeq                     uint8        `json:"-"`
+	RTPBufferSize              int          `json:"-"` // RTP/RTCP packet buffer size (from Config.RTP.BufferSize, minimum 1500)
 	// Video RTP retransmission cache (for WebRTC NACK handling)
 	VideoRTPHistoryPackets [][]byte `json:"-"`
 	VideoRTPHistorySeq     []uint16 `json:"-"`
