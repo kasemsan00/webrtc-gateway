@@ -691,7 +691,8 @@ func (s *Session) holdUplinkForMode0Locked(isIDR bool) bool {
 }
 
 // MaybeLogUplinkVideoStall prints one stall line per second while mode-0
-// recovery or the SPS size lock is dropping uplink video.
+// recovery, the accept-mode picture-size hold (waiting for the new IDR), or
+// the reject-mode SPS size lock is holding or dropping uplink video.
 func (s *Session) MaybeLogUplinkVideoStall(now time.Time, browserRTPPerSec int) {
 	if s == nil {
 		return

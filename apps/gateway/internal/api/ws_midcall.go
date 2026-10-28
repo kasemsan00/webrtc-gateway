@@ -209,8 +209,10 @@ func (s *Server) handleWSPing(client *WSClient, _ WSMessage) {
 	}
 }
 
-// handleWSRequestKeyframe handles explicit keyframe requests from clients.
-// Used by resume/video-recovery flows to trigger fast FIR/PLI toward SIP side.
+// handleWSRequestKeyframe handles WS request_keyframe (underscore) from clients.
+// Used by resume/video-recovery flows to recover the SIP-to-browser picture:
+// a cached SIP IDR replay or a SIP-leg FIR/PLI (shaped by
+// SIP_KEYFRAME_REQUEST_MODE), deferred until the SIP video SSRC is known.
 func (s *Server) handleWSRequestKeyframe(client *WSClient, msg WSMessage) {
 	sessionID := msg.SessionID
 	if sessionID == "" {

@@ -28,7 +28,7 @@ type TrunkListParams struct {
 	Search        string     // Search by username or name (ILIKE)
 	CreatedAfter  *time.Time // Filter trunks created after this time
 	CreatedBefore *time.Time // Filter trunks created before this time
-	SortBy        string     // Sort field: id, name, domain, created_at, updated_at (default: id)
+	SortBy        string     // Sort field: id, name, domain, port, username, enabled, created_at, updated_at (default: id)
 	SortDir       string     // Sort direction: asc, desc (default: asc)
 }
 

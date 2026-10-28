@@ -94,11 +94,11 @@ Runtime configuration (read-only):
 ## Operational health and session evidence
 
 - `GET /api/health/details` returns authenticated, cached operational health.
-- `GET /api/version` returns the running build without auth (like `/api/logs`), and is excluded from HTTP telemetry: `{"version","commit","branch","buildTime","dirty","goVersion"}`. Docker builds get the values from the `GIT_COMMIT`, `GIT_BRANCH`, `GIT_VERSION`, `BUILD_TIME`, `GIT_DIRTY` build args (`docker-ci.sh` fills them from the local checkout; they are also the image's `org.opencontainers.image.revision|version|created` labels). A local `go build` falls back to Go's embedded `vcs.*` info; anything missing reads `unknown`. The same values are logged once at startup as `gateway_version version=... commit=... branch=... build_time=... dirty=...`.
   Component states are `disabled`, `connected`, `degraded`, `unavailable`, or
   `unknown`. The response contains only allowlisted readiness facts, queue
   depth/capacity, accepted/dropped totals, and freshness timestamps; it never
   includes a DSN, credentials, tokens, payload bodies, or push identifiers.
+- `GET /api/version` returns the running build without auth (like `/api/logs`), and is excluded from HTTP telemetry: `{"version","commit","branch","buildTime","dirty","goVersion"}`. Docker builds get the values from the `GIT_COMMIT`, `GIT_BRANCH`, `GIT_VERSION`, `BUILD_TIME`, `GIT_DIRTY` build args (they are also the image's `org.opencontainers.image.revision|version|created` labels). `docker-ci.sh` fills them from the local checkout; `docker-ci.ps1` does not pass them, so a PowerShell-built image falls back to Go's embedded `vcs.*` info for those fields (normally `unknown` inside the Docker build). A local `go build` falls back to Go's embedded `vcs.*` info; anything missing reads `unknown`. The same values are logged once at startup as `gateway_version version=... commit=... branch=... build_time=... dirty=... go=...`.
 - `GET /api/dashboard` keeps the existing `dbConnected` field. It is `true`
   only when persistent database logging is actually connected; `DB_ENABLE=false`
   reports `false` even though the gateway uses an internal no-op LogStore.

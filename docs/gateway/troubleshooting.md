@@ -42,7 +42,7 @@ Checkpoints:
 
 Correlate browser inbound RTP diagnostics with Gateway logs by `sessionId`:
 
-- Look for `request_keyframe_handled` when the client sends a legacy keyframe request.
+- Look for `request_keyframe_handled ... action=` when the client sends WS `request_keyframe` (underscore). That message recovers the SIP→browser picture (cached IDR replay or SIP-leg keyframe request); `action=webrtc` with `request_keyframe_deferred` means the SIP video address/SSRC was not known yet. The hyphenated `request-keyframe` is the opposite direction (browser IDR toward SIP) and logs `switch_keyframe_request received`.
 - Confirm switch recovery reaches `h264_au_normalized status=complete-idr` and ends through Gateway RTP stability or its bounded timeout.
 - Confirm startup prints `SIP Video H264 AU Normalization: true`. Every 300 SIP video packets, inspect `h264_au_stats` for `emitted`, `dropped_incomplete`, `dropped_overflow`, and `pending_packets`.
 - A `h264_au_normalized status=complete-idr` line now means the marker and all FU-A fragments were complete; a bare IDR/FU-A start no longer counts as successful keyframe delivery.
@@ -98,9 +98,9 @@ PeerConnection must produce a new camera IDR toward Asterisk; correlate
 `OnTrack (renegotiated)` with SIP FIR/PLI after ICE connected.
 
 - `switch_video_gate_activation outcome=active` means the new media generation is gated.
-- `switch_video_au_rejected` identifies an unsafe AU; inspect `reason` for a
+- `switch_video_gate_reject` identifies an unsafe AU; inspect `reason` for a
   stale generation, non-IDR frame, or missing fresh parameter sets.
-- `switch_video_gate_release` reports the clean release latency in `wait_ms`.
+- `switch_video_gate_release` reports the clean release latency in `waitMs`.
 - `switch_video_gate_stalled` reports packet gaps, missing/out-of-order RTP,
   reorder timeouts, rejected AUs, and the active feedback transport.
 
@@ -108,6 +108,31 @@ For RTPengine deployments, capture both media legs—Asterisk to RTPengine and
 RTPengine to Gateway. Compare the first fresh SPS/PPS, first complete IDR, RTP
 sequence gaps/order/timestamps, and whether Gateway FIR/PLI reaches Asterisk.
 Do not bypass RTPengine in production for this diagnosis.
+
+## Phone shows no agent video, or it freezes after answer (WebRTC→SIP)
+
+- Decoder-join kicks ask the browser for a fresh IDR when the SIP far end
+  becomes reachable: `uplink_keyframe_kick reason=sip-video-dest-ready|sip-video-rtp-learn|remote-ssrc-learn|sip-rtcp-first|bridged-*`.
+  `uplink_keyframe_kick_skipped reason=... skip=idr-fresh` means a complete
+  uplink IDR was forwarded in the last 10s; `skip=idr-in-flight` means one is
+  still being written.
+- `uplink_keyframe_kick reason=remote-ssrc-learn pre_learn_idr=ignored` (or
+  `reason=sip-rtcp-first`) means the only recent IDR was forwarded before the
+  phone's video SSRC was learned or before its first video RTP/RTCP, so the
+  phone never saw it. The gateway sends FIR + PLI anyway, then one follow-up PLI
+  after 1s (`... pre_learn_idr=ignored follow_up=1`) unless a new IDR lands
+  first. If no later `uplink_keyframe_kick` or IDR appears, the browser did
+  not answer the PLI.
+- Lower agent resolution mid-call is expected under low bandwidth (Chrome
+  `degradationPreference=balanced`). With the default
+  `SIP_UPLINK_PICTURE_SIZE_CHANGE=accept` the gateway does not drop the call's
+  video: it logs `uplink_sps_dimension_change accepted WxH was WxH`, holds the
+  new size (`uplink_picture_size_hold`) until its first IDR, sends one fresh
+  SPS/PPS pair in front of that IDR, and logs `uplink_picture_size_idr released`.
+  If the browser changes size without an IDR it gets a PLI at most once per
+  second (`browser_pli sent reason=picture_size_change`). Only
+  `SIP_UPLINK_PICTURE_SIZE_CHANGE=reject` drops video after a size change
+  (`uplink_sps_dimension_change dropped`).
 
 ## 401 Unauthorized on API/WS
 

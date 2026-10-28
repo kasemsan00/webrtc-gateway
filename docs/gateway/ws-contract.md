@@ -23,6 +23,9 @@ Auth behavior:
   - provisioning or SIP REGISTER failure rejects the WebSocket connection;
   - after successful provisioning and SIP REGISTER, the gateway sends `trunk_resolved` with `trunkId` and `trunkPublicId`.
 - Mobile presence is sticky: WebSocket disconnect does **not** SIP UNREGISTER (push wake remains available).
+- `/ws` has no extra message allowlist: every type handled by the dispatcher in
+  `internal/api/ws_dispatch.go` is accepted, subject to the handler's own
+  validation.
 
 ---
 
@@ -41,6 +44,8 @@ Auth and scope:
 - Supported session messages are `call`, `ice`, `hangup`, `dtmf`,
   `request_keyframe`, `renegotiate_answer`, `translate`, `translate_stop`,
   `send_message`, and `resume`, subject to their normal validation.
+  `request-keyframe` (hyphen), `hold`, `unhold`, `accept`, and `reject` are not
+  accepted on `/ws-public`.
 - `media_health` is obsolete: although a legacy policy entry still recognizes
   the name, the dispatcher intentionally returns `Unknown message type` and the
   message is not part of the supported contract.
@@ -60,7 +65,7 @@ Auth behavior:
 - Multiple `/ws-agent` clients may share the same SIP identity (refcount). REGISTER stays while refcount ≥ 1.
 - When the last bound agent WebSocket disconnects: hang up any remaining call sessions for that trunk, then SIP UNREGISTER immediately (no grace period).
 - No FCM/APNs push for agent offline incoming; zero bound clients → offline reject.
-- Allowed messages: `agent_register`, `offer`, `ice`, `call`, `hangup`, `accept`, `reject`, `dtmf`, `send_message`, `hold`, `unhold`, `ping`, `request_keyframe`, `renegotiate_answer`, `client_state`.
+- Allowed messages: `agent_register`, `offer`, `ice`, `call`, `hangup`, `accept`, `reject`, `dtmf`, `send_message`, `hold`, `unhold`, `ping`, `request_keyframe`, `request-keyframe`, `renegotiate_answer`, `client_state`. Every session-scoped type must carry an explicit `sessionId` the connection owns (or, for `offer`/`accept`/`reject`, an incoming call presented to it); the connection's legacy active session is not used as a fallback.
 - Rejected on `/ws-agent`: `trunk_push_token`, `trunk_resolve`, `resume`, and other non-allowlisted types.
 
 #### `/ws-agent` multi-call negotiation
@@ -88,7 +93,7 @@ Auth behavior:
 - Client `device_push_token` with `pnType:"fcm"` stores the FCM token on the trunk. Offline incoming sends that token via FCM and does not look up TTRS notification tokens.
 - `/ws-agent` last-disconnect UNREGISTER must not unregister an agent-device trunk.
 - Owned `/ws-agent` and `/ws-agent-device` trunks for the same SIP username/domain/port are one incoming identity group: live WS clients on either trunk are presented the call. Stored device FCM is sent for every agent-device incoming call that is presented or waiting offline, including while that device WebSocket is connected, so the phone app is woken to answer. A live desktop `/ws-agent` client does not receive that push.
-- Allowed messages: `device_register`, `device_push_token`, `unregister`, `offer`, `ice`, `call`, `hangup`, `accept`, `reject`, `dtmf`, `send_message`, `hold`, `unhold`, `ping`, `request_keyframe`, `renegotiate_answer`, `client_state`, `resume`.
+- Allowed messages: `device_register`, `device_push_token`, `unregister`, `offer`, `ice`, `call`, `hangup`, `accept`, `reject`, `dtmf`, `send_message`, `hold`, `unhold`, `ping`, `request_keyframe`, `request-keyframe`, `renegotiate_answer`, `client_state`, `resume`. Session-scoped types follow the same explicit, owned `sessionId` rule as `/ws-agent`.
 - Rejected on `/ws-agent-device`: `agent_register`, `trunk_resolve`, `trunk_push_token`, `translate`, `translate_stop`.
 
 ### Client -> Server message types
@@ -107,8 +112,12 @@ Auth behavior:
 - `accept` -> requires `sessionId`
 - `reject` -> requires `sessionId` (`reason` optional, defaults to `busy`)
 - `dtmf` -> requires `sessionId`, `digits`
-- `hold` / `unhold` -> `/ws-agent` multi-call only; requires an active, owned `sessionId`
-- `send_message` -> requires `body`; when a session exists, sends an out-of-dialog PBX-routed SIP MESSAGE using the remote/local identities and SIP credentials stored on that session. This is intentional for Asterisk B2BUA interoperability: a `2xx` response to an in-dialog MESSAGE does not guarantee forwarding to the other call leg. Without a session, `destination` is required. On `/ws-agent`, it requires an owned active-call `sessionId`, supports held calls, and never trusts caller-supplied `destination`/`from`. Success returns `messageSent` with the same `sessionId` and `body`. Chat bootstrap/control payloads are initiated by the Electron/Web client so the client can supply the dynamic queue extension and agent identity.
+- `hold` / `unhold` -> requires `sessionId` of an active call. Accepted on `/ws`, `/ws-agent`, and `/ws-agent-device` (agent sockets must own the session); not accepted on `/ws-public`. Already in the requested state returns `hold_state` without a re-INVITE.
+- `send_message` -> requires `body` (`contentType` defaults to `text/plain;charset=UTF-8`). The target session is `msg.sessionId`; on `/ws` and `/ws-public` an omitted `sessionId` falls back to the connection's current session, while `/ws-agent` and `/ws-agent-device` never fall back and must name an owned session.
+  - `/ws` and `/ws-public` with a session: an optional `destination` updates the session's chat peer, then the gateway sends an out-of-dialog PBX-routed SIP MESSAGE using the remote/local identities and SIP credentials stored on that session. This is intentional for Asterisk B2BUA interoperability: a `2xx` response to an in-dialog MESSAGE does not guarantee forwarding to the other call leg. When the session is bridged to an agent session on this gateway, the text is relayed to that agent directly instead.
+  - `/ws-agent` and `/ws-agent-device` (agent mode, SIP MESSAGE supported): the gateway sends an **in-dialog** SIP MESSAGE when the session has dialog state, otherwise the PBX-routed out-of-dialog form. Held calls are supported. Caller-supplied `destination` is ignored; `from` is used only when the session has no SIP username. Without a session the request fails with `Active SIP session required for agent message`. A copy is relayed to a bridged public session on this gateway.
+  - Without any session (`/ws` only; `/ws-public` always requires its own session), `destination` is required and the gateway sends a plain out-of-dialog MESSAGE.
+  - Success returns `messageSent` with the same `sessionId` and `body`. Chat bootstrap/control payloads are initiated by the Electron/Web client so the client can supply the dynamic queue extension and agent identity.
 - Chat images are not sent as binary in `send_message`. Clients `POST /api/chat-images` (multipart `file` + live `sessionId`) and then send the returned URL as the whole SIP MESSAGE body, for example `https://host/api/chat-images/{uuid}`, with `contentType` `text/plain;charset=UTF-8`. Receivers render it when the origin matches the gateway and the path is `/api/chat-images/{uuid}`; others show the URL as text (desktop VRS can linkify it). Legacy whole-body `<image>URL</image>` tags are still accepted. Control tokens (`@switch`, `@open_chat`, `<operator>`) are unrelated.
 - `resume` -> requires `sessionId`, optional `sdp`
 - `trunk_resolve` -> requires `sipDomain`, `sipUsername`, `sipPassword`, optional `sipPort` (resolve-only; no auto-create)
@@ -118,7 +127,8 @@ Auth behavior:
   characters; optional `devicePlatform` must be `ios` or `android`, and optional
   `trunkId` or `trunkPublicId` must match the connection's resolved trunk.
 - `ping` -> keepalive
-- `request_keyframe` -> requires `sessionId` (or the connection's active session) and uses bounded legacy SIP-directed recovery.
+- `request_keyframe` (underscore) -> **SIP→browser recovery**: the client is not receiving a decodable picture from the SIP leg. Requires `sessionId` (on `/ws` and `/ws-public` the connection's active session is used when omitted). The gateway calls `Session.SendBrowserRecoveryToAsterisk`: it replays a cached SIP IDR when one is available, otherwise sends a bounded SIP-leg FIR/PLI (which `SIP_KEYFRAME_REQUEST_MODE`, default `info`, turns into SIP INFO `picture_fast_update`). If the SIP video address or SSRC is not known yet, the request is deferred and flushed on SSRC learn. Log: `request_keyframe_handled session=... action=replay|pli|fir|both|none|webrtc`.
+- `request-keyframe` (hyphen) -> **browser→SIP uplink IDR**: the agent replaced its outbound picture (e.g. after `@switch`) and needs the browser encoder to send a new IDR toward SIP. Requires `sessionId` (same fallback rule as above). The gateway calls `Session.HandleSwitchKeyframeRequest`: it arms the post-switch IDR path, allows one uplink picture-size change, and sends a bounded PLI burst to the browser that stops once an IDR from after the request is forwarded. Accepted on `/ws`, `/ws-agent`, and `/ws-agent-device`; not on `/ws-public`. Log: `switch_keyframe_request received`.
 - `renegotiate_answer` -> requires the owning `sessionId` and matching
   `renegotiationId`; includes optional `sdp`, `status`, and `reason`.
 - `client_state` -> optional `availability`, `callState`, `sessionId`; multi-call clients also send `multiCall: true` and `activeCalls`.
