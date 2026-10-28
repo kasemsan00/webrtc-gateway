@@ -7,7 +7,7 @@ There is **no compose-level nginx proxy** — routing is either on your external
 
 | Mode | Compose file | Containers | External proxy |
 |------|--------------|------------|----------------|
-| **Split** (default) | [`docker-compose.split.yml`](docker-compose.split.yml) or root [`docker-compose.yml`](../docker-compose.yml) | `gateway-console` + `gateway` | Path-based — see [`nginx.external.conf.example`](nginx.external.conf.example) |
+| **Split** | [`docker-compose.split.yml`](docker-compose.split.yml) | `gateway-console` + `gateway` | Path-based — see [`nginx.external.conf.example`](nginx.external.conf.example) |
 | **Unified** | [`docker-compose.unified.yml`](docker-compose.unified.yml) | `gateway-stack` (gateway + frontend + internal nginx) | Single upstream → `:8088` |
 
 - **Split** — update or scale frontend and gateway independently.
@@ -20,7 +20,7 @@ There is **no compose-level nginx proxy** — routing is either on your external
 | `/` | `302` → `/admin/` (external nginx) | internal nginx → `302 /admin/` |
 | `/admin/` | frontend `:4173` | internal nginx → frontend `:4173` |
 | `/api/` | gateway `:8080` | internal nginx → gateway `:8080` |
-| `/ws`, `/ws-public` | gateway `:8080` | internal nginx → gateway `:8080` |
+| `/ws`, `/ws-public`, `/ws-agent`, `/ws-agent-device` | gateway `:8080` | internal nginx → gateway `:8080` |
 
 Public URLs:
 
@@ -28,15 +28,19 @@ Public URLs:
 - REST: `https://gateway.example.com/api/...`
 - WebSocket: `wss://gateway.example.com/ws`
 
+Both nginx files use a prefix `location /ws`, so it also forwards `/ws-agent` and
+`/ws-agent-device`; `/ws-public` has its own block. Each WebSocket route exists
+only when its `API_ENABLE_*` flag is on.
+
 ## Split deploy
 
-From repo root (`.env` required):
+From repo root (the compose files read `../.env`, i.e. the repo-root `.env`):
 
 ```bash
-docker compose up -d
-# or explicitly:
 docker compose -f deploy/docker-compose.split.yml up -d
 ```
+
+There is no root `docker-compose.yml`.
 
 Services use `network_mode: host` (SIP/RTP).
 
@@ -47,7 +51,7 @@ Configure external nginx/Coolify using [`nginx.external.conf.example`](nginx.ext
 ### Split environment
 
 ```env
-TAG=1.3.2
+TAG=1.4.1
 VITE_GATEWAY_URL=gateway.example.com
 VITE_BASE_PATH=/admin/
 GATEWAY_PUBLIC_WS_URL=wss://gateway.example.com/ws
@@ -61,7 +65,7 @@ FRONTEND_PORT=4173
 Build image (CI or manual):
 
 ```bash
-docker build -f deploy/Dockerfile.unified -t registry.kasemsan.com/webrtc-sip-gateway-stack:1.3.2 .
+docker build -f deploy/Dockerfile.unified -t registry.kasemsan.com/webrtc-sip-gateway-stack:1.4.1 .
 ```
 
 Run:
@@ -70,7 +74,7 @@ Run:
 docker compose -f deploy/docker-compose.unified.yml up -d
 ```
 
-The unified profile also runs `db-bootstrap` before the `webrtc-sip-gateway-stack` service. A failed bootstrap or a gateway process that exits during startup makes the stack fail instead of serving an admin frontend without a working gateway.
+The unified profile also runs `db-bootstrap` before the `gateway-stack` service (image `webrtc-sip-gateway-stack`). A failed bootstrap or a gateway process that exits during startup makes the stack fail instead of serving an admin frontend without a working gateway.
 
 External proxy forwards the **entire host** to `STACK_PROXY_PORT` (default **8088**).
 
@@ -119,7 +123,16 @@ The frontend process exits if `FRONTEND_PASSWORD` is empty. Do not set `VITE_FRO
 | `webrtc-sip-gateway` | [`apps/gateway/Dockerfile`](../apps/gateway/Dockerfile) |
 | `webrtc-sip-gateway-stack` | [`Dockerfile.unified`](Dockerfile.unified) |
 
-Built via [`docker-ci.ps1`](../docker-ci.ps1).
+[`docker-ci.sh`](../docker-ci.sh) and [`docker-ci.ps1`](../docker-ci.ps1) build and push **only the unified stack image** from `deploy/Dockerfile.unified`:
+
+- tags `registry.kasemsan.com/webrtc-sip-gateway-stack:${BRANCH}` and `:latest`; `BRANCH` defaults to `1.4.1`, `REGISTRY` to `registry.kasemsan.com`, `PLATFORMS` to `linux/amd64`;
+- `VITE_BASE_PATH` defaults to `/admin/`; `VITE_GATEWAY_URL` and `VITE_CONFIG_AUTORECORD` are passed through;
+- `RUN_MIGRATIONS=true` (with `DB_DSN`) runs Goose migrations before the build;
+- only `docker-ci.sh` passes the `GIT_*`/`BUILD_TIME` build args that `GET /api/version` reports.
+
+The split images (`webrtc-sip-gateway-console`, `webrtc-sip-gateway`) are built from their own Dockerfiles; no script in this repo builds them. The compose files default `TAG` to `1.4.0`, so set `TAG` explicitly to the release you pushed.
+
+k2 deployment: a release recreates only the `k2-stack` container (the legacy stack name, see `LEGACY_IMAGE_NAMES` below); other containers on that host are left running.
 
 ## Rename compatibility window
 
@@ -129,7 +142,7 @@ deployments and released clients can still reference the former `k2-*` image
 names or legacy hostname during a short, operator-controlled migration window.
 
 - Publish the same immutable stack digest under a legacy image name by setting
-  `LEGACY_IMAGE_NAMES` in `docker-ci.ps1`, for example
+  `LEGACY_IMAGE_NAMES` for `docker-ci.sh`/`docker-ci.ps1` (comma-separated; tagged with `${BRANCH}` only, not `latest`), for example
   `LEGACY_IMAGE_NAMES=k2-stack`.
 - Keep the legacy DNS/TLS hostname proxying to the same gateway until the
   inventory of supported mobile, desktop, and deployment clients has moved to
