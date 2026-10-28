@@ -58,6 +58,7 @@ Browser / Mobile / Agent
 
 - เสียง: Opus passthrough ถ้าเปิด `SIP_AUDIO_INBOUND_GAIN_ENABLE` จะ transcode เฉพาะทิศ SIP → WebRTC
 - วิดีโอ: H.264 Gateway แยก STAP-A, cache SPS/PPS แล้วฉีดก่อน IDR เพื่อให้ decoder ฝั่ง SIP เริ่มภาพได้
+- วิดีโอขาออก WebRTC → SIP ส่งตรงโดยไม่มี pacer เมื่อเบราว์เซอร์เปลี่ยนความละเอียดกลางสาย ค่าเริ่มต้น `SIP_UPLINK_PICTURE_SIZE_CHANGE=accept` จะพักภาพขนาดใหม่ไว้จนถึง IDR แรกแล้วส่งต่อ (ไม่ทิ้งวิดีโอ) รายละเอียดใน [`docs/gateway/config-reference.md`](docs/gateway/config-reference.md)
 - NAT ฝั่ง WebRTC ใช้ TURN (`TURN_SERVER`) ฝั่ง SIP ใช้ symmetric RTP และ `SIP_PUBLIC_IP` เมื่อ gateway อยู่หลัง NAT
 - พื้นที่ที่เปลี่ยนแล้วกระทบสายจริง: การแยก NAL, จังหวะฉีด SPS/PPS, การเร่ง PLI/FIR, และการเรียนรู้ที่อยู่ RTP
 

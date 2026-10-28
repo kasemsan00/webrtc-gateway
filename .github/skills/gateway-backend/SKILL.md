@@ -29,14 +29,13 @@ Use this skill for tasks in `apps/gateway` where correctness under live media lo
 
 Start from these files before widening scope:
 
-- `apps/gateway/internal/api/server.go` for WebSocket handlers, payload routing, call control, resume entry points, and most client contract changes
+- `apps/gateway/internal/api/ws_dispatch.go` (WebSocket router and per-endpoint allowlists), the `ws_*.go` handler files, and `server.go` (`WSMessage`, routes) for client contract changes; see the file map in `apps/gateway/AGENTS.md`
 - `apps/gateway/internal/session/session.go`, `session_state.go`, and `session_media.go` for session lifecycle and runtime state
-- `apps/gateway/internal/session/rtp_forward.go`, `keyframe.go`, `h264_paramsets.go`, and `sdp_h264.go` for media-path changes and H.264 behavior
+- `apps/gateway/internal/session/rtp_forward.go`, `keyframe.go`, `uplink_keyframe_gate.go`, `uplink_picture.go`, `uplink_picture_size.go`, `h264_paramsets.go`, and `sdp_h264.go` for media-path changes and H.264 behavior
 - `apps/gateway/internal/sip/server.go`, `handlers.go`, `call.go`, `dialog.go`, and `registration.go` for SIP signaling behavior
 - `apps/gateway/internal/sip/sdp.go` and `rtp.go` for SIP media negotiation and RTP flow
 - `apps/gateway/internal/sip/trunk_manager.go` and `trunk_public_id.go` for trunk resolution and multi-instance routing
-- `docs/dual-flow.md` for end-to-end flow expectations
-- `docs/call-resume.md` for reconnect and resume behavior
+- `docs/gateway/ws-contract.md` for end-to-end flow, resume, and message expectations
 
 ## Procedure
 
@@ -61,7 +60,7 @@ Start from these files before widening scope:
    - Prefer explicit errors and logs over panic paths.
 
 5. Sync adjacent contract surfaces when required.
-   - If a WebSocket message type or payload changes, update the gateway server handling, the frontend client contract in `apps/frontend`, and gateway docs.
+   - If a WebSocket message type or payload changes, update `ws_dispatch.go` (including the allowlists), the handler, `WSMessage` in `server.go`, any consumer in `apps/frontend`, and `docs/gateway/ws-contract.md`.
    - If auth behavior changes, verify both HTTP and WebSocket auth entry points.
    - If resume or trunk behavior changes, check the cross-instance or redirect path as well as the local happy path.
 
@@ -70,7 +69,7 @@ Start from these files before widening scope:
    - Preferred order:
      1. focused Go test for the touched package if one exists
      2. `go test ./...` from `apps/gateway`
-3. `go build -o webrtc-sip-gateway .` from `apps/gateway` when compilation coverage is the main concern
+     3. `go build -o webrtc-sip-gateway .` from `apps/gateway` when compilation coverage is the main concern
    - If the change affects payload contracts or docs, verify those updates before expanding scope.
 
 7. Finish with regression checks.
@@ -81,8 +80,8 @@ Start from these files before widening scope:
 ## Required References
 
 - Read `apps/gateway/AGENTS.md` before substantial gateway changes.
-- Use `docs/dual-flow.md` for call flow or signaling behavior.
-- Use `docs/call-resume.md` for resume or reconnect changes.
+- Use `docs/gateway/ws-contract.md` for call flow, signaling, resume, or reconnect behavior.
+- Use `docs/gateway/config-reference.md` and `docs/gateway/troubleshooting.md` for env knobs and log lines.
 - Check `apps/gateway/project.json` for standard build and test commands.
 
 ## Completion Criteria

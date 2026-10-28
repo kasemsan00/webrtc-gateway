@@ -17,9 +17,12 @@ GET /api/trunks
 | `page`          | int    | 1       | Page number (1-based)                             |
 | `pageSize`      | int    | 20      | Items per page (max 100)                          |
 | `trunkId`       | int64  | —       | Filter by exact trunk ID                          |
+| `trunkPublicId` | UUID   | —       | Filter by trunk public ID (`400` if not a UUID)   |
 | `search`        | string | —       | Search by username or name (case-insensitive)     |
 | `createdAfter`  | string | —       | Filter trunks created after this time (RFC 3339)  |
 | `createdBefore` | string | —       | Filter trunks created before this time (RFC 3339) |
+| `sortBy`        | string | `id`    | `id`, `name`, `domain`, `port`, `username`, `enabled`, `created_at`, `updated_at`; other values sort by `id` (`activeCallCount` is not server-sortable) |
+| `sortDir`       | string | `asc`   | `asc` or `desc`                                   |
 
 ---
 
@@ -47,7 +50,8 @@ POST /api/trunks/refresh
 
 ```json
 {
-  "status": "refreshed"
+  "status": "refreshed",
+  "message": "Trunk list reloaded from database"
 }
 ```
 

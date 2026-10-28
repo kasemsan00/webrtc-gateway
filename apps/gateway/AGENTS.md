@@ -23,7 +23,7 @@
 
 WebRTC-SIP Gateway bridges WebRTC clients (browser/mobile) to SIP/RTP endpoints (Asterisk, Kamailio).
 
-- **Language:** Go 1.26.2 (`go.mod`)
+- **Language:** Go 1.26.5 (`go.mod`)
 - **Core libs:** `pion/webrtc/v4`, `emiago/sipgo`, `gorilla/websocket`, `gorilla/mux`, `pion/rtp`, `pion/rtcp`, `pion/sdp/v3`, `pgx/v5`, `golang-jwt/jwt/v5`
 - **Runtime mode:** API mode (HTTP + WebSocket)
 - **Data plane:** SRTP (WebRTC side) <-> RTP/RTCP (SIP side)
@@ -51,24 +51,32 @@ WebRTC-SIP Gateway bridges WebRTC clients (browser/mobile) to SIP/RTP endpoints 
 
 ## 4. Repository Map
 
-> Client integration guides: `docs/dual-flow.md`, `docs/call-resume.md`, `docs/web.md`, `docs/react-native.md`, `docs/ios.md`, `docs/android.md`.
+> Client-facing behaviour (call flows, resume, keyframe messages) is documented in [`docs/gateway/ws-contract.md`](../../docs/gateway/ws-contract.md).
 
 ```text
 apps/gateway/
 |- main.go
+|- cmd/db-bootstrap/ # one-shot schema bootstrap/migration job
 |- internal/
 |  |- api/           # HTTP/WS server (see file map below)
-|  |- auth/verifier.go
+|  |- auth/          # JWKS + realm verifiers
 |  |- audio/         # inbound Opus gain
+|  |- buildinfo/     # build identity for GET /api/version
 |  |- chatimage/     # in-call chat image disk store
 |  |- config/config.go
+|  |- dbbootstrap/   # bootstrap baseline + Goose runner
+|  |- logger/        # process log files served by /api/logs
 |  |- logstore/
 |  |- push/          # FCM, APNS, TTRS
-|  |- session/       # WebRTC + RTP forwarding
+|  |- session/       # WebRTC + RTP forwarding, keyframe gates
 |  |- sip/           # SIP server, trunks, SDP
 |  |- sipclientauth/ # mobile trunk provision client
+|  |- telemetry/     # optional OTLP export
 |  |- translator/    # gRPC translation client
+|  |- pkg/webrtc/
 |  `- webrtc/
+|- migrations/       # Goose migrations
+|- schema/           # bootstrap baseline
 |- init.sql
 `- .env.example
 ```
@@ -83,23 +91,32 @@ apps/gateway/
 | `auth_http.go` | HTTP/WS JWT middleware |
 | `mobile_sip_provision.go` | Mobile trunk auto-provision on `/ws` connect |
 | `client_diagnostics.go` | `/api/client-diagnostics` upload and query |
-| `ws_conn.go` | WebSocket upgrade, read/write pumps (`/ws`, `/ws-public`, `/ws-agent`) |
+| `ws_conn.go` | WebSocket upgrade, read/write pumps (`/ws`, `/ws-public`, `/ws-agent`, `/ws-agent-device`) |
 | `ws_agent.go` | `/ws-agent` `agent_register`, refcount presence, last-disconnect hangup+unregister |
 | `ws_agent_device.go` | `/ws-agent-device` `device_register`, sticky REGISTER, FCM token, logout `unregister` |
-| `ws_dispatch.go` | `handleWSMessage` router, public-only guards |
+| `ws_dispatch.go` | `handleWSMessage` router and per-endpoint allowlists (`/ws-public`, `/ws-agent`, `/ws-agent-device`) |
+| `ws_multicall.go` | agent multi-call session ownership (`agentClientCanAccessSession`) |
+| `ws_hold.go` | `hold`, `unhold` |
+| `ws_unregister.go` | explicit logout `unregister` |
 | `ws_call.go` | `offer`, `ice`, `call`, `hangup`, `dtmf` |
 | `ws_incoming.go` | `accept`, `reject`, push dispatch, ring timeout |
 | `ws_resume.go` | `resume`, SDP diagnostics |
 | `ws_trunk.go` | `trunk_resolve`, `trunk_push_token` |
-| `ws_midcall.go` | `renegotiate_answer`, `client_state`, `request_keyframe`, `ping` |
+| `ws_midcall.go` | `renegotiate_answer`, `client_state`, `ping`, `request_keyframe` (SIP→browser recovery, `SendBrowserRecoveryToAsterisk`), `request-keyframe` (browser IDR toward SIP, `HandleSwitchKeyframeRequest`) |
 | `ws_translate.go` | `translate`, `translate_stop`, caption events |
-| `ws_notify.go` | `Notify*` callbacks, `send_message` |
+| `ws_notify.go` | `Notify*` callbacks, `send_message` (routes by `msg.SessionID`; agent sockets send in-dialog MESSAGE when the session has dialog state) |
 | `ws_util.go` | `sendWSMessage`, logging helpers, SSE broadcast |
 | `handlers.go` | Shared REST types, `respondJSON`/`respondError` |
 | `handlers_call.go` | offer/call/hangup/dtmf/switch REST |
 | `handlers_trunk.go` | trunk CRUD, register/unregister, heartbeat |
 | `handlers_session.go` | session history, events, payloads, dialogs, stats |
 | `handlers_ops.go` | dashboard, instances, ws-clients, public accounts |
+| `handlers_health.go` | `/api/health/details` |
+| `handlers_config.go` | `/api/config` (redacted) |
+| `handlers_version.go` | `/api/version` |
+| `switch_renegotiate.go` | `@switch` client-assisted WebRTC renegotiation |
+| `stats_collector.go` | periodic session stats to LogStore |
+| `telemetry_http.go` | HTTP telemetry middleware |
 | `handlers_sse.go` | trunk/session/ws-client SSE streams |
 | `handlers_log.go` | `/api/logs/*` |
 | `handlers_chat_image.go` | `/api/chat-images` upload/get |
@@ -138,6 +155,7 @@ Full WS message types: [`docs/gateway/ws-contract.md`](../../docs/gateway/ws-con
 
 - **Audio:** Opus passthrough default; optional SIP→WebRTC gain in `internal/audio/` (`SIP_AUDIO_INBOUND_GAIN_ENABLE`). Outbound passthrough. DTMF via RFC2833.
 - **Video:** H.264 only. Preserve SPS/PPS cache/reinject (`h264_paramsets.go`, `keyframe.go`, `sip/sdp.go`).
+- **Uplink (WebRTC→SIP) video:** written directly, no pacer or IDR pacing. Held until the first IDR; mid-call picture-size changes are accepted by default and held until the new IDR (`uplink_picture_size.go`, `SIP_UPLINK_PICTURE_SIZE_CHANGE`). Browser IDR requests are gated in `uplink_keyframe_gate.go`; IDRs forwarded before the SIP far end was seen do not suppress the `remote-ssrc-learn`/`sip-rtcp-first` kicks.
 - **Recovery:** Session resume is first-class; session directory enables cross-instance redirect; incoming uses first-accept-wins.
 
 ---
