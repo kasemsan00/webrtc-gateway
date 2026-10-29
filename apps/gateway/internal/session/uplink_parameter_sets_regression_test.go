@@ -7,8 +7,6 @@ import (
 	"time"
 
 	"github.com/pion/rtp"
-
-	"webrtc-sip-gateway/internal/config"
 )
 
 func assertParameterSetIDR(t *testing.T, got []rtp.Packet, sps, pps []byte, slices int) {
@@ -64,7 +62,7 @@ func TestUplinkIDRPrefixesLatestSetsWithoutDuplicates(t *testing.T) {
 	}
 }
 
-func TestPreparedStartDiscardsIDRBeforeParameterSets(t *testing.T) {
+func TestUplinkStartDiscardsIDRBeforeParameterSets(t *testing.T) {
 	sps := []byte{0x67, 0x42, 0, 0x1f, 0xab}
 	pps := []byte{0x68, 0xce, 6, 0xe2}
 	input := [][]byte{
@@ -80,15 +78,9 @@ func TestPreparedStartDiscardsIDRBeforeParameterSets(t *testing.T) {
 	for _, mode := range []uint8{0, 1} {
 		t.Run(fmt.Sprintf("mode%d", mode), func(t *testing.T) {
 			got, sess := forwardUplinkVideoForTest(t, input, nil, func(s *Session) {
-				// Promote a prepared PC into this cold media session, as accept does.
-				s.State = StateIncoming
-				addUnnegotiatedPrepared(t, s, "agent", 0, nil)
-				if _, err := s.AcceptPreparedIncoming("agent"); err != nil {
-					t.Fatal(err)
-				}
+				// Exercise a cold media session with no cached parameter sets.
 				s.CachedSPS, s.CachedPPS = nil, nil
 				s.SetSIPVideoPacketizationMode(mode)
-				t.Cleanup(func() { ClosePeerConnectionAsync(s.DetachPeerConnection(), s.ID) })
 			})
 			var fresh []rtp.Packet
 			for _, p := range got {
@@ -222,36 +214,5 @@ func TestMissingParameterSetsRequestKeyframeIsRateLimited(t *testing.T) {
 		if s.uplinkVideoOpenLocked() {
 			t.Fatal("missing SPS/PPS opened the startup gate")
 		}
-	}
-}
-
-func TestPreparedH264ModeComesFromPendingInvite(t *testing.T) {
-	for _, mode := range []uint8{0, 1} {
-		t.Run(fmt.Sprintf("mode%d", mode), func(t *testing.T) {
-			s := newPrepareTestSession(t, "prepared-mode")
-			t.Cleanup(func() {
-				s.SetState(StateEnded)
-				ClosePeerConnectionAsync(s.DetachPeerConnection(), s.ID)
-			})
-			// Deliberately stale session value: prepare precedes SIP answer creation.
-			s.SetSIPVideoPacketizationMode(1 - mode)
-			s.SetIncomingInvite(nil, nil, []byte(fmt.Sprintf("v=0\r\nm=video 4000 RTP/AVP 96\r\na=rtpmap:96 H264/90000\r\na=fmtp:96 profile-level-id=42e01f;packetization-mode=%d\r\n", mode)), "", "")
-			client := newH264DualModeOfferer(t)
-			defer client.Close()
-			offer, err := client.CreateOffer(nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-			answer, err := s.PrepareIncomingAnswer("agent", offer.SDP, config.TURNConfig{}, false, 0, nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, err := offeredH264CodecForPacketizationMode(answer, mode); err != nil {
-				t.Fatalf("prepared answer missing SIP mode %d: %v", mode, err)
-			}
-			if _, err := offeredH264CodecForPacketizationMode(answer, 1-mode); err == nil {
-				t.Fatalf("prepared answer also includes wrong mode %d", 1-mode)
-			}
-		})
 	}
 }

@@ -126,9 +126,5 @@ func (s *Server) agentClientCanAccessSession(client *WSClient, msg WSMessage) (b
 	if (msg.Type == "accept" || msg.Type == "reject" || msg.Type == "offer") && s.clientHasPendingIncoming(client, sessionID) {
 		return true, ""
 	}
-	// Trickle ICE for a prepared PC on a presented incoming call.
-	if msg.Type == "ice" && s.clientHasPendingIncoming(client, sessionID) && s.clientHasPreparedPC(client, sessionID) {
-		return true, ""
-	}
 	return false, "Agent WebSocket can only access its own or presented incoming sessions"
 }

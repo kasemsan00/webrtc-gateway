@@ -72,54 +72,11 @@ Auth behavior:
 
 - Multi-call is backward compatible and connection-scoped. The gateway enables it only after `agent_register` or `client_state` includes `multiCall: true`; omitted/false keeps the original single-call busy admission behavior.
 - A multi-call connection can own multiple `sessionId` values. Every call-control/media command after `answer` MUST carry the intended `sessionId`; the gateway rejects access to sessions not owned or explicitly presented to that connection.
-- A busy multi-call agent remains eligible for call waiting. For a presented incoming call, prepare WebRTC in place with `offer.sessionId` equal to the incoming `sessionId`, then send `accept` with the same ID. The ID stays stable through answer, hold, resume, and hangup.
-- Multiple `/ws-agent` clients may share one SIP identity. Incoming INVITEs are fanned out to every idle/multi-call client on that trunk. The first `offer` (without `prepare`) or `accept` claims the session (first-claim-wins). An `offer` with `prepare: true` does not claim; see [Prepared incoming offer](#prepared-incoming-offer-offerprepare). Other clients then receive `cancel` with `reason=answered_elsewhere` and must stop ringing and tear down any local media. They must not receive `state: active` for a claim they lost, and a later `hangup` from a losing client must not BYE the winner's SIP dialog.
+- A busy multi-call agent remains eligible for call waiting. For a presented incoming call, negotiate WebRTC in place with `offer.sessionId` equal to the incoming `sessionId`, then send `accept` with the same ID. The ID stays stable through answer, hold, resume, and hangup.
+- Multiple `/ws-agent` clients may share one SIP identity. Incoming INVITEs are fanned out to every idle/multi-call client on that trunk. The first `offer` or `accept` claims the session (first-claim-wins). Other clients then receive `cancel` with `reason=answered_elsewhere` and must stop ringing and tear down any local media. They must not receive `state: active` for a claim they lost, and a later `hangup` from a losing client must not BYE the winner's SIP dialog.
 - `hold` and `unhold` perform an in-dialog SIP re-INVITE (`inactive` and `sendrecv`). Success returns `hold_state`; an error leaves the previous hold state unchanged. `491` glare and other non-2xx responses are reported as errors without ending the call.
 - `client_state` may include `activeCalls` for diagnostics/admission visibility. The gateway still derives session ownership from successful offers and presented incoming calls.
 - Disconnect ends every call owned by that WebSocket. The last connection for the SIP identity then unregisters the agent trunk.
-
-#### Prepared incoming offer (`offer.prepare`)
-
-Lets every presented agent build its PeerConnection (ICE + DTLS) while the
-call is still ringing, so media starts almost at once on `accept`. Works on
-`/ws`, `/ws-agent`, and `/ws-agent-device`.
-
-- Capability: every `trunk_resolved` carries `prepareOffer: true`. Clients
-  must only send `prepare` when they saw it; older gateways treat the field as
-  absent and the offer claims the call.
-- Request: `{"type":"offer","sessionId":"<incoming sessionId>","sdp":"<offer>","prepare":true}`.
-  `sessionId` must be a call presented to this connection that is still
-  ringing.
-- Response: `{"type":"answer","sessionId":"<same id>","sdp":"<answer>","prepare":true}`.
-  The answer is non-trickle (ICE gathering complete). The client may trickle
-  its own candidates with `ice` and the same `sessionId`; they go to its
-  prepared PeerConnection.
-- A prepare does **not** claim the call, does not bind the session to the
-  connection, and does not answer SIP. No SIP audio/video is sent to a
-  prepared PeerConnection and media from the agent is dropped until its
-  `accept` wins. Several agents may hold prepared PeerConnections for the same
-  call. A repeated prepare from the same connection replaces its previous one.
-- `accept` (unchanged message) decides the winner. The gateway claims the call
-  atomically: only a call that is still ringing and not claimed by another
-  connection can be won. The winner's prepared PeerConnection becomes the call's
-  PeerConnection, the gateway sends SIP `200 OK`, replies `state: active` with
-  the **same** `sessionId`, and requests a keyframe toward both sides. Later
-  accepts get `cancel` with `reason=answered_elsewhere`. If a caller cancel or
-  ring timeout came first, the accept fails (`state` with the current state, or
-  `cancel` `answered_elsewhere` once the session is gone).
-- The gateway closes every prepared PeerConnection that did not win as soon as
-  the call leaves ringing, and sends that connection one `cancel`:
-  `answered_elsewhere` (someone accepted), `caller_cancelled`, `no_answer`
-  (ring timeout), or `ended` (rejected, SIP failure). Clients do not need to
-  clean up on the gateway's behalf.
-- A WebSocket disconnect closes that connection's prepared PeerConnections
-  without affecting the ringing call. An unclaimed prepared PeerConnection is
-  also closed after `WEBRTC_PREPARE_TTL` (default `60s`; the ring timeout ends
-  the call earlier when it is shorter). An `accept` after that returns `error`
-  `Prepared WebRTC session closed; send a new offer with prepare=true`; the call
-  keeps ringing and the client may prepare again.
-- An `offer` without `prepare` keeps the original behaviour: on a ringing
-  `sessionId` it claims the call at offer time.
 
 ---
 
@@ -145,8 +102,8 @@ Auth behavior:
 - `device_register` -> `/ws-agent-device` only; requires `sipDomain`, `sipUsername`, `sipPassword`; optional `sipPort`, `multiCall`
 - `device_push_token` -> `/ws-agent-device` only after `device_register`; requires `pnType:"fcm"` and `pnToken` (FCM registration token); optional `devicePlatform`
 - `unregister` -> provisioned user-realm `/ws` or `/ws-agent-device`; SIP UNREGISTER the connection's mobile/device trunk and clear stored FCM and notify-user binding. Optional `requestId` is echoed in the acknowledgement or error.
-- `offer` -> requires `sdp` (`sessionId` optional for existing session). Optional `prepare: true` with a ringing incoming `sessionId` prepares WebRTC without claiming the call (see [Prepared incoming offer](#prepared-incoming-offer-offerprepare)).
-- `ice` -> requires `candidate` and the owning `sessionId` once an offer has been answered. A connection holding a prepared PeerConnection for a presented incoming call may also send `ice` with that `sessionId`.
+- `offer` -> requires `sdp` (`sessionId` optional for existing session)
+- `ice` -> requires `candidate` and the owning `sessionId` once an offer has been answered
 - `call` -> requires `sessionId`, `destination` (`from` optional)
   - Public mode: include `sipDomain`, `sipUsername`, `sipPassword`, optional `sipPort`. On `/ws-agent` this works with no `access_token` even when JWT auth is enabled.
   - Trunk mode: include `trunkId` or `trunkPublicId`. Without verified claims this is rejected with `Token authentication required to use trunk`, except a `/ws-agent` socket whose trunk was bound by `agent_register`.
@@ -209,7 +166,6 @@ flow; clients should display the pending failure and retain authentication.
 ### Call and media events
 
 - `answer`, `state`, `incoming`, `ringing`, `media`, `hold_state`
-  - `answer` to a prepare offer echoes `prepare: true`.
   - `hold_state` includes `sessionId` and `held: true|false` and confirms a successful or idempotent `hold`/`unhold` request.
 - `message`, `messageSent`, `dtmf`
   - `message` is `{type:"message", sessionId?, from, to, body, contentType}` for inbound SIP MESSAGE.
@@ -223,14 +179,12 @@ flow; clients should display the pending failure and retain authentication.
 - `resumed`, `resume_failed`, `resume_redirect`
 - `trunk_resolved`, `trunk_redirect`, `trunk_not_found`, `trunk_not_ready`
   - `trunk_resolved` now returns both `trunkId` and `trunkPublicId`
-  - `trunk_resolved` also carries `prepareOffer: true` when the gateway supports `offer` with `prepare: true`
 - `pong`, `error`
   - Recoverable `send_message` failures include `operation:"send_message"` and `operationSessionId`. They intentionally omit `sessionId` so SDK versions through `0.1.30` do not mistake a chat delivery failure for a terminal call failure and close the active PeerConnection.
 - `cancel` -> cancels a previously presented incoming call and includes
   `sessionId` plus `reason`. Known reasons: `caller_cancelled`, `no_answer`,
   and `answered_elsewhere` (another client on the same SIP identity claimed
-  the call). A connection whose prepared PeerConnection is closed because the
-  call was rejected or failed receives `ended`. After a successful `accept`, the gateway sends
+  the call). After a successful `accept`, the gateway sends
   `answered_elsewhere` to every other resolved client on that trunk. The
   winning connection receives `state: active` and must not receive that
   cancel.

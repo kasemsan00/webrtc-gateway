@@ -27,11 +27,6 @@ func (s *Server) handleWSoffer(client *WSClient, msg WSMessage) {
 	var sess *session.Session
 	var err error
 
-	if msg.Prepare {
-		s.handleWSPrepareOffer(client, msg)
-		return
-	}
-
 	if msg.SessionID != "" {
 		var ok bool
 		sess, ok = s.sessionMgr.GetSession(msg.SessionID)
@@ -149,7 +144,7 @@ func (s *Server) handleWSoffer(client *WSClient, msg WSMessage) {
 		PayloadID: answerPayloadID,
 	})
 
-	// An incoming session may be prepared in place by a multi-call client. Keep
+	// An incoming session may be negotiated in place by a multi-call client. Keep
 	// it in StateIncoming until the explicit accept command wins the SIP race.
 	resultState := sess.GetState()
 	if resultState != session.StateIncoming {
@@ -189,6 +184,10 @@ func (s *Server) handleWSIce(client *WSClient, msg WSMessage) {
 	if s.incomingClaimedByOther(sess, client) {
 		return
 	}
+	if sess.PeerConnection == nil {
+		s.sendWSError(client, sessionID, "PeerConnection not available")
+		return
+	}
 
 	var candidate webrtc.ICECandidateInit
 	if err := json.Unmarshal(msg.Candidate, &candidate); err != nil {
@@ -196,19 +195,6 @@ func (s *Server) handleWSIce(client *WSClient, msg WSMessage) {
 		return
 	}
 	if strings.TrimSpace(candidate.Candidate) == "" {
-		return
-	}
-	// A ringing call may carry one prepared PC per presented client.
-	if handled, queued, err := sess.AddPreparedICECandidate(wsClientClaimID(client), candidate); handled {
-		if err != nil {
-			s.sendWSError(client, sessionID, fmt.Sprintf("Failed to add ICE candidate: %v", err))
-			return
-		}
-		log.Printf("[%s] 🧊 Remote ICE candidate for prepared PC queued=%v client=%s", sessionID, queued, client.clientID)
-		return
-	}
-	if sess.PeerConnection == nil {
-		s.sendWSError(client, sessionID, "PeerConnection not available")
 		return
 	}
 	queued, err := sess.AddRemoteICECandidate(candidate)

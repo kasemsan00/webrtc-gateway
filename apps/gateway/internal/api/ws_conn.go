@@ -196,7 +196,6 @@ func (s *Server) handleWebSocketConn(w http.ResponseWriter, r *http.Request, pub
 	if provisioned != nil && provisioned.TrunkID > 0 {
 		s.sendWSMessage(client, WSMessage{
 			Type:          "trunk_resolved",
-			PrepareOffer:  true,
 			TrunkID:       provisioned.TrunkID,
 			TrunkPublicID: provisioned.TrunkPublicID,
 		})
@@ -230,8 +229,6 @@ func (s *Server) handleWebSocketConn(w http.ResponseWriter, r *http.Request, pub
 	// indexed until that work completes lets a closed agent remain an incoming
 	// call recipient and can leave trunk refcounts stale after a reconnect.
 	s.detachWSClient(client)
-	// Prepared PCs (offer prepare=true) belong to this socket only.
-	s.dropClientPreparedPeerConnections(client)
 
 	// Agent presence cleanup may hang up calls and unregister the trunk. The
 	// client is already absent from notification maps at this point.

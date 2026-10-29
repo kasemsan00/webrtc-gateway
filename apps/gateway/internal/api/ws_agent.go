@@ -84,7 +84,6 @@ func (s *Server) handleWSAgentRegister(client *WSClient, msg WSMessage) {
 	s.notifyWSClientChanged("updated", client)
 	s.sendWSMessage(client, WSMessage{
 		Type:          "trunk_resolved",
-		PrepareOffer:  true,
 		TrunkID:       trunk.ID,
 		TrunkPublicID: trunk.PublicID,
 	})

@@ -394,7 +394,7 @@ func TestAgentWS_NoTokenRegisterAndFollowUpsAreNotTokenGated(t *testing.T) {
 		t.Fatalf("expected agent_register to bind trunk 170, resolved=%v id=%d", client.trunkResolved, client.resolvedTrunkID)
 	}
 	regMsgs := readWSMessages(t, client.send)
-	if len(regMsgs) != 1 || regMsgs[0].Type != "trunk_resolved" || !regMsgs[0].PrepareOffer {
+	if len(regMsgs) != 1 || regMsgs[0].Type != "trunk_resolved" {
 		t.Fatalf("expected trunk_resolved, got %+v", regMsgs)
 	}
 

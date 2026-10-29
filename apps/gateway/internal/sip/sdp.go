@@ -357,7 +357,22 @@ func (s *Server) createSDPAnswerForInvite(rtpPort int, sess *session.Session, in
 }
 
 func sipVideoPacketizationMode(sdp []byte) uint8 {
-	return session.SIPVideoPacketizationMode(sdp)
+	currentMedia := ""
+	for _, rawLine := range strings.Split(string(sdp), "\n") {
+		line := strings.TrimSpace(rawLine)
+		if strings.HasPrefix(line, "m=video ") {
+			currentMedia = "video"
+			continue
+		}
+		if strings.HasPrefix(line, "m=") {
+			currentMedia = "other"
+			continue
+		}
+		if currentMedia == "video" && sdpFmtpHasParameter(line, "packetization-mode", "1") {
+			return 1
+		}
+	}
+	return 0
 }
 
 func sdpFmtpHasParameter(line, key, value string) bool {

@@ -322,9 +322,6 @@ func TestHandleWSTrunkResolve_ResolvedWhenOwnedByInstance(t *testing.T) {
 	if msgs[0].Type != "trunk_resolved" {
 		t.Fatalf("expected trunk_resolved, got %s", msgs[0].Type)
 	}
-	if !msgs[0].PrepareOffer {
-		t.Fatal("expected trunk_resolved to advertise prepareOffer")
-	}
 	if msgs[0].TrunkID != 42 {
 		t.Fatalf("expected trunkID=42, got %d", msgs[0].TrunkID)
 	}

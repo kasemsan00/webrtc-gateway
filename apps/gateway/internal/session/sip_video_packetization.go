@@ -1,7 +1,5 @@
 package session
 
-import "strings"
-
 const defaultSIPVideoPayloadType uint8 = 96
 
 // SetSIPVideoPayloadType stores the H.264 RTP payload type negotiated with the
@@ -73,39 +71,4 @@ func (s *Session) GetSIPVideoPacketizationMode() uint8 {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.SIPVideoPacketizationMode
-}
-
-// SIPVideoPacketizationMode mirrors the incoming SIP offer; RFC 6184 defaults
-// an omitted packetization-mode to zero. Shared by prepared PCs and SIP answers.
-func SIPVideoPacketizationMode(sdp []byte) uint8 {
-	currentMedia := ""
-	for _, rawLine := range strings.Split(string(sdp), "\n") {
-		line := strings.TrimSpace(rawLine)
-		if strings.HasPrefix(line, "m=video ") {
-			currentMedia = "video"
-			continue
-		}
-		if strings.HasPrefix(line, "m=") {
-			currentMedia = "other"
-			continue
-		}
-		if currentMedia == "video" && sipSDPFmtpModeOne(line) {
-			return 1
-		}
-	}
-	return 0
-}
-
-func sipSDPFmtpModeOne(line string) bool {
-	fields := strings.Fields(strings.TrimSpace(line))
-	if len(fields) < 2 || !strings.HasPrefix(strings.ToLower(fields[0]), "a=fmtp:") {
-		return false
-	}
-	for _, parameter := range strings.Split(strings.Join(fields[1:], " "), ";") {
-		parts := strings.SplitN(strings.TrimSpace(parameter), "=", 2)
-		if len(parts) == 2 && strings.EqualFold(strings.TrimSpace(parts[0]), "packetization-mode") && strings.TrimSpace(parts[1]) == "1" {
-			return true
-		}
-	}
-	return false
 }

@@ -288,7 +288,6 @@ func (s *Server) handleWSTrunkResolve(client *WSClient, msg WSMessage) {
 
 		s.sendWSMessage(client, WSMessage{
 			Type:          "trunk_resolved",
-			PrepareOffer:  true,
 			TrunkID:       trunkID,
 			TrunkPublicID: trunkPublicID,
 		})
