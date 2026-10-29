@@ -384,6 +384,10 @@ type Session struct {
 	// Incoming call claim (first-accept-wins)
 	IncomingClaimed   bool   `json:"-"` // True if this incoming call has been claimed
 	IncomingClaimedBy string `json:"-"` // WS client ID that claimed this call
+	// Prepared incoming PeerConnections keyed by WS client claim ID (offer
+	// prepare=true). Guarded by mu; see prepared_pc.go.
+	preparedPCs    map[string]*preparedPeerConnection `json:"-"`
+	preparedClosed map[string]string                  `json:"-"`
 	// Terminal signaling action guard for accept/reject/cancel/timeout/bye races.
 	TerminalAction              string                     `json:"-"`
 	TerminalActionAt            time.Time                  `json:"-"`
@@ -724,9 +728,20 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 	session.initVideoRTPHistory()
 	session.ctx, session.cancel = context.WithCancel(context.Background())
 
+	session.wirePeerConnection(peerConnection, audioSender, videoSender, cfg.API.DebugTURN, nil)
+
+	return session, nil
+}
+
+// wirePeerConnection installs the RTCP readers, ICE handlers, and OnTrack
+// forwarding for a session PeerConnection. prepared is nil for the session's
+// own PC; for a prepared incoming PC every media and state side effect is
+// held until AcceptPreparedIncoming makes it the session PC.
+func (s *Session) wirePeerConnection(pc *webrtc.PeerConnection, audioSender, videoSender *webrtc.RTPSender, debugTURN bool, prepared *preparedPeerConnection) {
+	id := s.ID
 	// Start reading RTCP packets from the audio sender
 	go func() {
-		rtcpBuf := make([]byte, session.RTPBufferSize)
+		rtcpBuf := make([]byte, s.RTPBufferSize)
 		for {
 			if _, _, err := audioSender.Read(rtcpBuf); err != nil {
 				return
@@ -736,9 +751,9 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 
 	// Start reading RTCP packets from the video sender (to receive PLI/FIR)
 	go func() {
-		rtcpBuf := make([]byte, session.RTPBufferSize)
+		rtcpBuf := make([]byte, s.RTPBufferSize)
 		for {
-			if session.GetState() == StateEnded {
+			if s.GetState() == StateEnded {
 				return
 			}
 
@@ -753,31 +768,35 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 				continue
 			}
 
+			if !prepared.isLive() {
+				continue
+			}
+
 			for _, p := range packets {
 				switch pkt := p.(type) {
 				case *rtcp.PictureLossIndication:
 					fmt.Printf("[%s] 📸 Received PLI from browser for video (RTPSender)\n", id)
 					// Forward to Asterisk to request keyframe
-					session.SendBrowserRecoveryToAsterisk("browser-pli")
+					s.SendBrowserRecoveryToAsterisk("browser-pli")
 				case *rtcp.FullIntraRequest:
 					fmt.Printf("[%s] 📸 Received FIR from browser for video (RTPSender)\n", id)
 					// Forward to Asterisk to request keyframe
-					session.SendBrowserRecoveryToAsterisk("browser-fir")
+					s.SendBrowserRecoveryToAsterisk("browser-fir")
 				case *rtcp.TransportLayerNack:
 					if len(pkt.Nacks) > 0 {
 						now := time.Now()
 						sig := buildNACKSignature(pkt.Nacks)
-						if session.shouldSuppressBrowserNACK(sig, now) {
+						if s.shouldSuppressBrowserNACK(sig, now) {
 							continue
 						}
 						fmt.Printf("[%s] 🔄 Received NACK from browser for video (RTPSender) - Nacks=%v\n", id, pkt.Nacks)
-						sent, missing := session.RetransmitVideoNACK(pkt.Nacks)
+						sent, missing := s.RetransmitVideoNACK(pkt.Nacks)
 						if missing > 0 {
 							// Fallback: ask Asterisk to retransmit missing packets (if supported)
-							session.SendNACKToAsterisk(pkt.Nacks)
+							s.SendNACKToAsterisk(pkt.Nacks)
 						}
 						if sent > 0 || missing > 0 {
-							if !session.shouldSuppressNACKHandledLog(sig, sent, missing, now) {
+							if !s.shouldSuppressNACKHandledLog(sig, sent, missing, now) {
 								fmt.Printf("[%s] 🔁 NACK handled (retransmit=%d, missing=%d)\n", id, sent, missing)
 							}
 						}
@@ -788,9 +807,9 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 	}()
 
 	// Set up TURN/ICE debug logging if enabled
-	if cfg.API.DebugTURN {
+	if debugTURN {
 		// Log ICE gathering state changes
-		peerConnection.OnICEGatheringStateChange(func(state webrtc.ICEGatheringState) {
+		pc.OnICEGatheringStateChange(func(state webrtc.ICEGatheringState) {
 			fmt.Printf("[%s] 🧊 ICE Gathering State: %s\n", id, state.String())
 		})
 
@@ -799,16 +818,19 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 	// Always count candidates so terminal diagnostics remain useful even when
 	// verbose TURN logging is disabled.
 	candidateLog := newLocalCandidateLog(id, "initial")
-	peerConnection.OnICECandidate(func(candidate *webrtc.ICECandidate) {
+	pc.OnICECandidate(func(candidate *webrtc.ICECandidate) {
 		candidateLog.Observe(candidate)
 		if candidate == nil {
-			if cfg.API.DebugTURN {
+			if debugTURN {
 				fmt.Printf("[%s] 🧊 ICE Candidate gathering complete\n", id)
 			}
 			return
 		}
-		count, elapsed := session.RecordLocalICECandidate()
-		if cfg.API.DebugTURN {
+		if !prepared.isLive() {
+			return
+		}
+		count, elapsed := s.RecordLocalICECandidate()
+		if debugTURN {
 			fmt.Printf("[%s] 🧊 ICE Candidate: type=%s address=%s:%d protocol=%s count=%d elapsed=%s\n",
 				id, candidate.Typ.String(), candidate.Address, candidate.Port, candidate.Protocol.String(), count, elapsed)
 		}
@@ -816,29 +838,29 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 
 	// Set ICE connection state change handler
 	reconnectGracePeriod := 30 * time.Second
-	peerConnection.OnICEConnectionStateChange(func(connectionState webrtc.ICEConnectionState) {
+	pc.OnICEConnectionStateChange(func(connectionState webrtc.ICEConnectionState) {
 		fmt.Printf("[%s] ICE Connection State: %s\n", id, connectionState.String())
 		if connectionState == webrtc.ICEConnectionStateConnected || connectionState == webrtc.ICEConnectionStateFailed {
-			logICECandidatePairDiagnostics(id, peerConnection, connectionState.String())
+			logICECandidatePairDiagnostics(id, pc, connectionState.String())
 		}
 
-		session.mu.Lock()
-		if !iceCallbackIsForCurrentPeerConnection(session.PeerConnection, peerConnection) {
-			session.mu.Unlock()
+		s.mu.Lock()
+		if !iceCallbackIsForCurrentPeerConnection(s.PeerConnection, pc) {
+			s.mu.Unlock()
 			fmt.Printf("[%s] 🧊 ICE %s ignored on replaced PeerConnection\n", id, connectionState.String())
 			return
 		}
-		session.UpdatedAt = time.Now()
+		s.UpdatedAt = time.Now()
 		startRecoveryBurstReason := ""
 		replayIDRReason := ""
-		isTerminalCleanup := isTerminalCleanupState(session.State, session.TerminalAction)
+		isTerminalCleanup := isTerminalCleanupState(s.State, s.TerminalAction)
 
 		switch connectionState {
 		case webrtc.ICEConnectionStateConnected:
 			// Log selected candidate pair if TURN debug is enabled
-			if cfg.API.DebugTURN {
+			if debugTURN {
 				// Use GetStats to find the selected candidate pair (nominated and succeeded)
-				stats := peerConnection.GetStats()
+				stats := pc.GetStats()
 				var selectedPair *webrtc.ICECandidatePairStats
 				var localCandidate *webrtc.ICECandidateStats
 				var remoteCandidate *webrtc.ICECandidateStats
@@ -886,12 +908,12 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 
 			// Call-progress state must follow SIP answer, not ICE readiness.
 			// Only restore active when recovering from a post-answer ICE reconnect.
-			nextState, recoveryReason, stateChanged := ApplyICEConnectedCallProgress(session.State)
+			nextState, recoveryReason, stateChanged := ApplyICEConnectedCallProgress(s.State)
 			if stateChanged {
-				session.State = nextState
+				s.State = nextState
 				fmt.Printf("[%s] ✅ ICE reconnected - resuming call\n", id)
 			} else if recoveryReason == "initial-call" {
-				fmt.Printf("[%s] ✅ ICE connected - starting initial call recovery burst (call state=%s)\n", id, session.State)
+				fmt.Printf("[%s] ✅ ICE connected - starting initial call recovery burst (call state=%s)\n", id, s.State)
 			}
 			if recoveryReason != "" {
 				startRecoveryBurstReason = recoveryReason
@@ -900,65 +922,65 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 			go func() {
 				fmt.Printf("[%s] 🚀 ICE Connected - Sending conservative FIR + PLI startup recovery\n", id)
 				time.Sleep(300 * time.Millisecond)
-				if session.GetState() == StateEnded {
+				if s.GetState() == StateEnded {
 					return
 				}
-				session.RequestSIPVideoIDRReplay("ice-connected")
-				session.SendFIRToAsterisk()
+				s.RequestSIPVideoIDRReplay("ice-connected")
+				s.SendFIRToAsterisk()
 				time.Sleep(250 * time.Millisecond)
-				if session.GetState() == StateEnded {
+				if s.GetState() == StateEnded {
 					return
 				}
-				session.SendPLIToAsteriskForced("ice-connected")
-				if skip, _ := session.SkipUplinkKeyframeRequest("startup", time.Now()); !skip {
-					session.SendPLItoWebRTC()
+				s.SendPLIToAsteriskForced("ice-connected")
+				if skip, _ := s.SkipUplinkKeyframeRequest("startup", time.Now()); !skip {
+					s.SendPLItoWebRTC()
 				}
 			}()
 
 		case webrtc.ICEConnectionStateDisconnected, webrtc.ICEConnectionStateClosed:
 			if isTerminalCleanup {
-				fmt.Printf("[%s] 🧊 ICE %s ignored during terminal cleanup (state=%s action=%s)\n", id, connectionState.String(), session.State, session.TerminalAction)
+				fmt.Printf("[%s] 🧊 ICE %s ignored during terminal cleanup (state=%s action=%s)\n", id, connectionState.String(), s.State, s.TerminalAction)
 				break
 			}
 
 			// Keep session/media endpoints alive during transient ICE transitions.
 			// This allows WS resume + renegotiation to recover without losing SIP RTP sockets.
-			if session.State != StateReconnecting {
-				session.State = StateReconnecting
+			if s.State != StateReconnecting {
+				s.State = StateReconnecting
 				fmt.Printf("[%s] 📡 ICE %s - entering reconnection grace period (%s)\n", id, connectionState.String(), reconnectGracePeriod)
 				startRecoveryBurstReason = "ice-reconnecting"
 
 				go func() {
 					select {
 					case <-time.After(reconnectGracePeriod):
-					case <-session.ctx.Done():
+					case <-s.ctx.Done():
 						return
 					}
-					session.mu.Lock()
-					defer session.mu.Unlock()
+					s.mu.Lock()
+					defer s.mu.Unlock()
 
 					// If still reconnecting after grace period, treat as terminal.
-					if session.State == StateReconnecting {
+					if s.State == StateReconnecting {
 						fmt.Printf("[%s] ⏰ Grace period expired - ending session\n", id)
-						session.State = StateEnded
-						if session.cancel != nil {
-							session.cancel()
+						s.State = StateEnded
+						if s.cancel != nil {
+							s.cancel()
 						}
-						if session.RTPConn != nil {
-							session.RTPConn.Close()
-							session.RTPConn = nil
+						if s.RTPConn != nil {
+							s.RTPConn.Close()
+							s.RTPConn = nil
 						}
-						if session.VideoRTPConn != nil {
-							session.VideoRTPConn.Close()
-							session.VideoRTPConn = nil
+						if s.VideoRTPConn != nil {
+							s.VideoRTPConn.Close()
+							s.VideoRTPConn = nil
 						}
-						if session.AudioRTCPConn != nil {
-							session.AudioRTCPConn.Close()
-							session.AudioRTCPConn = nil
+						if s.AudioRTCPConn != nil {
+							s.AudioRTCPConn.Close()
+							s.AudioRTCPConn = nil
 						}
-						if session.VideoRTCPConn != nil {
-							session.VideoRTCPConn.Close()
-							session.VideoRTCPConn = nil
+						if s.VideoRTCPConn != nil {
+							s.VideoRTCPConn.Close()
+							s.VideoRTCPConn = nil
 						}
 					}
 				}()
@@ -966,135 +988,145 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 
 		case webrtc.ICEConnectionStateFailed:
 			if isTerminalCleanup {
-				fmt.Printf("[%s] 🧊 ICE failed ignored during terminal cleanup (state=%s action=%s)\n", id, session.State, session.TerminalAction)
+				fmt.Printf("[%s] 🧊 ICE failed ignored during terminal cleanup (state=%s action=%s)\n", id, s.State, s.TerminalAction)
 				break
 			}
 			// ICE failed is truly terminal - end immediately. Preserve the
 			// machine-readable cause so the API can distinguish pre-SIP failure
 			// from SIP cancellation after an INVITE has started.
-			session.TerminalReason = "ice_failed"
-			session.State = StateEnded
-			if session.cancel != nil {
-				session.cancel()
+			s.TerminalReason = "ice_failed"
+			s.State = StateEnded
+			if s.cancel != nil {
+				s.cancel()
 			}
-			if session.RTPConn != nil {
-				session.RTPConn.Close()
-				session.RTPConn = nil
+			if s.RTPConn != nil {
+				s.RTPConn.Close()
+				s.RTPConn = nil
 			}
-			if session.VideoRTPConn != nil {
-				session.VideoRTPConn.Close()
-				session.VideoRTPConn = nil
+			if s.VideoRTPConn != nil {
+				s.VideoRTPConn.Close()
+				s.VideoRTPConn = nil
 			}
-			if session.AudioRTCPConn != nil {
-				session.AudioRTCPConn.Close()
-				session.AudioRTCPConn = nil
+			if s.AudioRTCPConn != nil {
+				s.AudioRTCPConn.Close()
+				s.AudioRTCPConn = nil
 			}
-			if session.VideoRTCPConn != nil {
-				session.VideoRTCPConn.Close()
-				session.VideoRTCPConn = nil
+			if s.VideoRTCPConn != nil {
+				s.VideoRTCPConn.Close()
+				s.VideoRTCPConn = nil
 			}
 		}
-		session.mu.Unlock()
+		s.mu.Unlock()
 		if replayIDRReason != "" {
-			session.RequestSIPVideoIDRReplay(replayIDRReason)
+			s.RequestSIPVideoIDRReplay(replayIDRReason)
 		}
 		if startRecoveryBurstReason != "" {
-			session.StartVideoRecoveryBurst(startRecoveryBurstReason)
+			s.StartVideoRecoveryBurst(startRecoveryBurstReason)
 		}
 	})
 
 	// Set OnTrack handler to forward WebRTC RTP → Asterisk
-	peerConnection.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
-		kind := track.Kind().String()
-		codec := track.Codec()
-		fmt.Printf("[%s] 🎬 OnTrack: kind=%s mime=%s pt=%d ssrc=%d clockRate=%d fmtp=%q\n",
-			id, kind, codec.MimeType, track.PayloadType(), track.SSRC(), codec.ClockRate, codec.SDPFmtpLine)
-
-		// Extra logging for video codec
-		if kind == "video" {
-			fmt.Printf("[%s] 🎬 WebRTC video codec details: %s (fmtp: %s)\n", id, codec.MimeType, codec.SDPFmtpLine)
+	pc.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
+		if !prepared.isLive() {
+			// A prepared PC must not feed the SIP leg before accept wins.
+			go s.holdPreparedTrack(prepared, track, func() { s.handleWebRTCTrack(track, receiver) })
+			return
 		}
-
-		// Cache SPS/PPS if available (for Video)
-		if kind == "video" {
-			params := track.Codec().SDPFmtpLine
-			if strings.Contains(params, "sprop-parameter-sets") {
-				for _, param := range strings.Split(params, ";") {
-					param = strings.TrimSpace(param)
-					if strings.HasPrefix(param, "sprop-parameter-sets=") {
-						sets := strings.Split(strings.TrimPrefix(param, "sprop-parameter-sets="), ",")
-						if len(sets) >= 1 {
-							sps, err := base64.StdEncoding.DecodeString(sets[0])
-							if err == nil {
-								session.mu.Lock()
-								session.CachedSPS = sps
-								session.mu.Unlock()
-								fmt.Printf("[%s] 💾 Cached SPS from SDP (%d bytes)\n", id, len(sps))
-							}
-						}
-						if len(sets) >= 2 {
-							pps, err := base64.StdEncoding.DecodeString(sets[1])
-							if err == nil {
-								session.mu.Lock()
-								session.CachedPPS = pps
-								session.mu.Unlock()
-								fmt.Printf("[%s] 💾 Cached PPS from SDP (%d bytes)\n", id, len(pps))
-							}
-						}
-					}
-				}
-			}
-		}
-
-		// 1. Handle RTCP (PLI/FIR) from WebRTC (Sender Reports & Feedback)
-		go func() {
-			rtcpBuf := make([]byte, session.RTPBufferSize)
-			for {
-				if session.GetState() == StateEnded {
-					return
-				}
-
-				n, _, rtcpErr := receiver.Read(rtcpBuf)
-				if rtcpErr != nil {
-					return
-				}
-
-				// Parse RTCP
-				packets, err := rtcp.Unmarshal(rtcpBuf[:n])
-				if err != nil {
-					continue
-				}
-
-				for _, p := range packets {
-					switch pkt := p.(type) {
-					case *rtcp.PictureLossIndication:
-						fmt.Printf("[%s] 📸 Received PLI from browser for %s\n", id, kind)
-						// Forward PLI to Asterisk (video only)
-						if kind == "video" {
-							session.SendBrowserRecoveryToAsterisk("browser-pli")
-						}
-
-					case *rtcp.FullIntraRequest:
-						fmt.Printf("[%s] 📸 Received FIR from browser for %s\n", id, kind)
-						if kind == "video" {
-							session.SendBrowserRecoveryToAsterisk("browser-fir")
-						}
-
-					case *rtcp.TransportLayerNack:
-						fmt.Printf("[%s] 🔄 Received NACK from browser for %s - Nacks=%v\n", id, kind, pkt.Nacks)
-						if kind == "video" {
-							session.SendNACKToAsterisk(pkt.Nacks)
-						}
-					}
-				}
-			}
-		}()
-
-		// 2. Start goroutine to forward RTP packets to Asterisk
-		go session.forwardRTPToAsterisk(track, kind)
+		s.handleWebRTCTrack(track, receiver)
 	})
+}
 
-	return session, nil
+// handleWebRTCTrack caches parameter sets, reads browser RTCP, and forwards
+// the remote WebRTC track to the SIP leg.
+func (s *Session) handleWebRTCTrack(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
+	id := s.ID
+	kind := track.Kind().String()
+	codec := track.Codec()
+	fmt.Printf("[%s] 🎬 OnTrack: kind=%s mime=%s pt=%d ssrc=%d clockRate=%d fmtp=%q\n",
+		id, kind, codec.MimeType, track.PayloadType(), track.SSRC(), codec.ClockRate, codec.SDPFmtpLine)
+
+	// Extra logging for video codec
+	if kind == "video" {
+		fmt.Printf("[%s] 🎬 WebRTC video codec details: %s (fmtp: %s)\n", id, codec.MimeType, codec.SDPFmtpLine)
+	}
+
+	// Cache SPS/PPS if available (for Video)
+	if kind == "video" {
+		params := track.Codec().SDPFmtpLine
+		if strings.Contains(params, "sprop-parameter-sets") {
+			for _, param := range strings.Split(params, ";") {
+				param = strings.TrimSpace(param)
+				if strings.HasPrefix(param, "sprop-parameter-sets=") {
+					sets := strings.Split(strings.TrimPrefix(param, "sprop-parameter-sets="), ",")
+					if len(sets) >= 1 {
+						sps, err := base64.StdEncoding.DecodeString(sets[0])
+						if err == nil {
+							s.mu.Lock()
+							s.CachedSPS = sps
+							s.mu.Unlock()
+							fmt.Printf("[%s] 💾 Cached SPS from SDP (%d bytes)\n", id, len(sps))
+						}
+					}
+					if len(sets) >= 2 {
+						pps, err := base64.StdEncoding.DecodeString(sets[1])
+						if err == nil {
+							s.mu.Lock()
+							s.CachedPPS = pps
+							s.mu.Unlock()
+							fmt.Printf("[%s] 💾 Cached PPS from SDP (%d bytes)\n", id, len(pps))
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// 1. Handle RTCP (PLI/FIR) from WebRTC (Sender Reports & Feedback)
+	go func() {
+		rtcpBuf := make([]byte, s.RTPBufferSize)
+		for {
+			if s.GetState() == StateEnded {
+				return
+			}
+
+			n, _, rtcpErr := receiver.Read(rtcpBuf)
+			if rtcpErr != nil {
+				return
+			}
+
+			// Parse RTCP
+			packets, err := rtcp.Unmarshal(rtcpBuf[:n])
+			if err != nil {
+				continue
+			}
+
+			for _, p := range packets {
+				switch pkt := p.(type) {
+				case *rtcp.PictureLossIndication:
+					fmt.Printf("[%s] 📸 Received PLI from browser for %s\n", id, kind)
+					// Forward PLI to Asterisk (video only)
+					if kind == "video" {
+						s.SendBrowserRecoveryToAsterisk("browser-pli")
+					}
+
+				case *rtcp.FullIntraRequest:
+					fmt.Printf("[%s] 📸 Received FIR from browser for %s\n", id, kind)
+					if kind == "video" {
+						s.SendBrowserRecoveryToAsterisk("browser-fir")
+					}
+
+				case *rtcp.TransportLayerNack:
+					fmt.Printf("[%s] 🔄 Received NACK from browser for %s - Nacks=%v\n", id, kind, pkt.Nacks)
+					if kind == "video" {
+						s.SendNACKToAsterisk(pkt.Nacks)
+					}
+				}
+			}
+		}
+	}()
+
+	// 2. Start goroutine to forward RTP packets to Asterisk
+	go s.forwardRTPToAsterisk(track, kind)
 }
 
 // SetCallInfo sets call information for a session
@@ -1249,6 +1281,24 @@ func (s *Session) TryBeginTerminalAction(action string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.TerminalAction != "" {
+		return false
+	}
+	now := time.Now()
+	s.TerminalAction = action
+	s.TerminalActionAt = now
+	s.PendingMidCallRenegotiation = nil
+	s.UpdatedAt = now
+	return true
+}
+
+// TryBeginIncomingTerminalAction is TryBeginTerminalAction for a ringing
+// incoming call: it also requires StateIncoming under the same lock, so a
+// caller cancel or ring timeout that read StateIncoming earlier cannot end a
+// call that an accept has since answered.
+func (s *Session) TryBeginIncomingTerminalAction(action string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.State != StateIncoming || s.TerminalAction != "" {
 		return false
 	}
 	now := time.Now()

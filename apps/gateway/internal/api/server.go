@@ -205,6 +205,11 @@ type WSMessage struct {
 	IsFinal        *bool  `json:"isFinal,omitempty"`
 	// Session resume redirect
 	RedirectURL string `json:"redirectUrl,omitempty"` // Server response: resume_redirect with new WS URL
+	// Prepare is set on a client offer for a ringing incoming sessionId to
+	// pre-establish WebRTC without claiming the call; echoed on its answer.
+	Prepare bool `json:"prepare,omitempty"`
+	// PrepareOffer advertises offer prepare=true support on trunk_resolved.
+	PrepareOffer bool `json:"prepareOffer,omitempty"`
 }
 
 // NewServer creates a new API server

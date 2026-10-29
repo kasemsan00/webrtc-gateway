@@ -251,6 +251,12 @@ health instead of interrupting calls.
 ## Incoming-call admission
 
 - `SIP_INCOMING_RING_TIMEOUT_SECONDS` (default `30`)
+- `WEBRTC_PREPARE_TTL` (default `60s`) — how long a prepared PeerConnection
+  (`offer` with `prepare: true`) may stay unclaimed while a call rings before
+  the gateway closes it. Accepts a Go duration (`45s`, `2m`) or whole seconds
+  (`45`); zero, negative, or invalid values use the default. Prepared
+  PeerConnections are also closed when the call stops ringing (accept
+  elsewhere, caller cancel, ring timeout) or their WebSocket disconnects.
 - `SIP_INCOMING_OFFLINE_POLICY` (default `push_then_480`)
 
 ## Mid-call SIP behavior

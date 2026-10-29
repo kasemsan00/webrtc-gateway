@@ -307,7 +307,7 @@ func TestWebSocketAuthProvisionsMobileUserTrunk(t *testing.T) {
 	if err := conn.ReadJSON(&resolved); err != nil {
 		t.Fatalf("expected trunk_resolved message: %v", err)
 	}
-	if resolved.Type != "trunk_resolved" || resolved.TrunkID != 42 || resolved.TrunkPublicID != "public-42" {
+	if resolved.Type != "trunk_resolved" || !resolved.PrepareOffer || resolved.TrunkID != 42 || resolved.TrunkPublicID != "public-42" {
 		t.Fatalf("unexpected trunk_resolved message: %+v", resolved)
 	}
 

@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/joho/godotenv"
 )
@@ -103,9 +104,16 @@ type APIConfig struct {
 	TrunkPNAppID               string // SIP Contact push app-id accepted for trunk PushKit tokens
 	MobileSIPAuthRegisterURL   string // External auth endpoint for mobile SIP credential provisioning
 	MobileSIPAuthTimeoutMS     int    // Timeout for mobile SIP auth register requests
+
+	// WebRTCPrepareTTL bounds how long a prepared (offer prepare=true)
+	// PeerConnection for a ringing call may stay unclaimed (WEBRTC_PREPARE_TTL, default 60s).
+	WebRTCPrepareTTL time.Duration
 }
 
 const DefaultTrunkPNAppID = "th.or.ttrs.video.prod"
+
+// DefaultWebRTCPrepareTTL is the WEBRTC_PREPARE_TTL default.
+const DefaultWebRTCPrepareTTL = 60 * time.Second
 
 // AuthConfig holds JWT/JWKS authentication settings.
 type AuthConfig struct {
@@ -412,6 +420,7 @@ func Load() (*Config, error) {
 			DebugTURN:                  getEnvAsBool("DEBUG_TURN", false),
 			IncomingRingTimeoutSeconds: getEnvAsInt("SIP_INCOMING_RING_TIMEOUT_SECONDS", 30),
 			IncomingOfflinePolicy:      getEnvWithDefault("SIP_INCOMING_OFFLINE_POLICY", "push_then_480"),
+			WebRTCPrepareTTL:           getEnvAsDurationSeconds("WEBRTC_PREPARE_TTL", DefaultWebRTCPrepareTTL),
 			TrunkPNAppID:               trunkPNAppID,
 			MobileSIPAuthRegisterURL:   os.Getenv("SIPCLIENT_AUTH_REGISTER_URL"),
 			MobileSIPAuthTimeoutMS:     getEnvAsInt("SIPCLIENT_AUTH_TIMEOUT_MS", 5000),
@@ -935,6 +944,28 @@ func getEnvAsInt(key string, defaultValue int) int {
 	value, err := strconv.Atoi(valueStr)
 	if err != nil {
 		fmt.Printf("Warning: Invalid value for %s: %s, using default: %d\n", key, valueStr, defaultValue)
+		return defaultValue
+	}
+	return value
+}
+
+// getEnvAsDurationSeconds reads a Go duration ("45s", "2m") or a plain number
+// of seconds. Zero, negative, and invalid values fall back to the default.
+func getEnvAsDurationSeconds(key string, defaultValue time.Duration) time.Duration {
+	valueStr := strings.TrimSpace(os.Getenv(key))
+	if valueStr == "" {
+		return defaultValue
+	}
+	if seconds, err := strconv.Atoi(valueStr); err == nil {
+		if seconds <= 0 {
+			fmt.Printf("Warning: Invalid value for %s: %s, using default: %s\n", key, valueStr, defaultValue)
+			return defaultValue
+		}
+		return time.Duration(seconds) * time.Second
+	}
+	value, err := time.ParseDuration(valueStr)
+	if err != nil || value <= 0 {
+		fmt.Printf("Warning: Invalid value for %s: %s, using default: %s\n", key, valueStr, defaultValue)
 		return defaultValue
 	}
 	return value

@@ -340,7 +340,7 @@ func (s *Server) startIncomingRingTimeout(sessionID string, trunkID int64) {
 		if !ok || sess == nil || sess.GetState() != session.StateIncoming {
 			return
 		}
-		if !sess.TryBeginTerminalAction("timeout") {
+		if !sess.TryBeginIncomingTerminalAction("timeout") {
 			return
 		}
 		log.Printf("⏱️ Incoming call timed out: sessionID=%s trunkID=%d timeout=%s", sessionID, trunkID, timeout)
@@ -454,11 +454,11 @@ func (s *Server) NotifyIncomingCall(sessionID, from, to string, trunkID int64) {
 
 // NotifyIncomingCancel notifies connected WebSocket clients that an incoming call was cancelled by caller.
 func (s *Server) NotifyIncomingCancel(sessionID string, trunkID int64, reason string) {
-	s.fanoutIncomingCancel(sessionID, trunkID, reason, nil)
+	s.fanoutIncomingCancel(sessionID, trunkID, reason, nil, nil)
 }
 
-func (s *Server) notifyIncomingAnsweredElsewhere(sessionID string, trunkID int64, winner *WSClient) {
-	s.fanoutIncomingCancel(sessionID, trunkID, incomingCancelAnsweredElsewhere, winner)
+func (s *Server) notifyIncomingAnsweredElsewhere(sessionID string, trunkID int64, winner *WSClient, skipOwners []string) {
+	s.fanoutIncomingCancel(sessionID, trunkID, incomingCancelAnsweredElsewhere, winner, skipOwners)
 }
 
 func (s *Server) sendIncomingAnsweredElsewhere(client *WSClient, sessionID string) {
@@ -484,7 +484,23 @@ func (s *Server) incomingClaimedByOther(sess *session.Session, client *WSClient)
 	return owner != "" && owner != wsClientClaimID(client)
 }
 
-func (s *Server) fanoutIncomingCancel(sessionID string, trunkID int64, reason string, skip *WSClient) {
+// fanoutIncomingCancel sends cancel to every client resolved on the trunk
+// except skip. Prepared PCs still open on the session are closed first; their
+// owners get the cancel from that close and are not sent a second one, nor
+// are skipOwners (claim IDs already notified by the caller).
+func (s *Server) fanoutIncomingCancel(sessionID string, trunkID int64, reason string, skip *WSClient, skipOwners []string) {
+	notified := make(map[string]struct{}, len(skipOwners))
+	for _, owner := range skipOwners {
+		notified[owner] = struct{}{}
+	}
+	if s.sessionMgr != nil {
+		if sess, ok := s.sessionMgr.GetSession(sessionID); ok && sess != nil {
+			for _, owner := range sess.ClosePreparedIncoming(reason) {
+				notified[owner] = struct{}{}
+			}
+		}
+	}
+
 	s.mu.RLock()
 
 	if trunkID <= 0 {
@@ -504,6 +520,9 @@ func (s *Server) fanoutIncomingCancel(sessionID string, trunkID int64, reason st
 			continue
 		}
 		if _, ok := targetIDs[client.resolvedTrunkID]; !ok {
+			continue
+		}
+		if _, ok := notified[wsClientClaimID(client)]; ok {
 			continue
 		}
 		recipients++
@@ -548,6 +567,19 @@ func (s *Server) handleWSAccept(client *WSClient, msg WSMessage) {
 	}
 	if incomingSess.GetState() != session.StateIncoming {
 		s.sendWSMessage(client, WSMessage{Type: "state", SessionID: msg.SessionID, State: string(incomingSess.GetState())})
+		return
+	}
+
+	// A client that prepared a PC (offer prepare=true) accepts through the
+	// atomic prepared path. If its prepared PC was already closed (TTL), do
+	// not fall back to binding some other session of this client.
+	if incomingSess.HasPreparedPeerConnection(wsClientClaimID(client)) {
+		s.acceptPreparedIncoming(client, incomingSess, msg)
+		return
+	}
+	if reason, had := incomingSess.PreparedClosedReason(wsClientClaimID(client)); had && !s.clientOwnsSession(client, msg.SessionID) {
+		log.Printf("⚠️ [Accept] prepared PC already closed session=%s client=%s reason=%s", msg.SessionID, client.clientID, reason)
+		s.sendWSError(client, msg.SessionID, "Prepared WebRTC session closed; send a new offer with prepare=true")
 		return
 	}
 
@@ -633,6 +665,17 @@ func (s *Server) handleWSAccept(client *WSClient, msg WSMessage) {
 		return
 	}
 
+	// Other clients may hold prepared PCs for this call; close them now and
+	// leave them out of the fanout below (they were just sent the cancel).
+	preparedLosers := incomingSess.ClosePreparedIncoming(session.PreparedCloseAnsweredElsewhere)
+	s.completeIncomingAccept(client, incomingSess, webrtcSess, msg, preparedLosers)
+}
+
+// completeIncomingAccept runs after this client won the incoming claim: it
+// binds the SIP leg to webrtcSess, sends 200 OK, and fans out
+// answered_elsewhere to every other ringer except skipOwners.
+func (s *Server) completeIncomingAccept(client *WSClient, incomingSess, webrtcSess *session.Session, msg WSMessage, skipOwners []string) {
+	clientID := wsClientClaimID(client)
 	log.Printf("✅ [Accept] Session %s claimed by client %s", msg.SessionID, clientID)
 
 	ctx := context.Background()
@@ -725,7 +768,7 @@ func (s *Server) handleWSAccept(client *WSClient, msg WSMessage) {
 	if trunkID <= 0 {
 		trunkID = client.resolvedTrunkID
 	}
-	s.notifyIncomingAnsweredElsewhere(incomingSessionID, trunkID, client)
+	s.notifyIncomingAnsweredElsewhere(incomingSessionID, trunkID, client, skipOwners)
 	s.incrementIncomingCounter("incoming_accepted")
 	s.kickBridgedCallerUplinkOnAccept(callSession)
 }
@@ -802,7 +845,7 @@ func (s *Server) handleWSReject(client *WSClient, msg WSMessage) {
 		reasonSource = "client_unspecified"
 	}
 	log.Printf("📴 [Reject] Received incoming reject via WS (session=%s, reason=%s, source=%s)", msg.SessionID, reason, reasonSource)
-	if !sess.TryBeginTerminalAction("reject") {
+	if !sess.TryBeginIncomingTerminalAction("reject") {
 		log.Printf("📴 [Reject] Duplicate incoming reject ignored (session=%s winner=%s)", msg.SessionID, sess.GetTerminalAction())
 		s.sendWSMessage(client, WSMessage{Type: "state", SessionID: msg.SessionID, State: string(session.StateEnded)})
 		return

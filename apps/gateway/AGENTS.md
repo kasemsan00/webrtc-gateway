@@ -100,6 +100,7 @@ apps/gateway/
 | `ws_unregister.go` | explicit logout `unregister` |
 | `ws_call.go` | `offer`, `ice`, `call`, `hangup`, `dtmf` |
 | `ws_incoming.go` | `accept`, `reject`, push dispatch, ring timeout |
+| `ws_prepare.go` | `offer` with `prepare: true` (prepared PC while ringing), prepared `accept`, disconnect cleanup; session side in `internal/session/prepared_pc.go` |
 | `ws_resume.go` | `resume`, SDP diagnostics |
 | `ws_trunk.go` | `trunk_resolve`, `trunk_push_token` |
 | `ws_midcall.go` | `renegotiate_answer`, `client_state`, `ping`, `request_keyframe` (SIP→browser recovery, `SendBrowserRecoveryToAsterisk`), `request-keyframe` (browser IDR toward SIP, `HandleSwitchKeyframeRequest`) |
@@ -157,6 +158,7 @@ Full WS message types: [`docs/gateway/ws-contract.md`](../../docs/gateway/ws-con
 - **Video:** H.264 only. Preserve SPS/PPS cache/reinject (`h264_paramsets.go`, `keyframe.go`, `sip/sdp.go`).
 - **Uplink (WebRTC→SIP) video:** written directly, no pacer or IDR pacing. Held until the first IDR; mid-call picture-size changes are accepted by default and held until the new IDR (`uplink_picture_size.go`, `SIP_UPLINK_PICTURE_SIZE_CHANGE`). Browser IDR requests are gated in `uplink_keyframe_gate.go`; IDRs forwarded before the SIP far end was seen do not suppress the `remote-ssrc-learn`/`sip-rtcp-first` kicks.
 - **Recovery:** Session resume is first-class; session directory enables cross-instance redirect; incoming uses first-accept-wins.
+- **Prepared incoming PCs:** `offer` with `prepare: true` builds an inert PeerConnection per presented client while ringing (`session/prepared_pc.go`). It never carries SIP media or forwards agent media until `AcceptPreparedIncoming` atomically claims the call and installs it as the session PC; every other prepared PC is closed on the first transition out of `StateIncoming` (also enforced in `SetState`).
 
 ---
 

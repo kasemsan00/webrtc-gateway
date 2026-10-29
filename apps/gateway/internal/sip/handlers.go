@@ -903,7 +903,7 @@ func (s *Server) applyIncomingCallerCancel(sess *session.Session, cancelReq *sip
 		log.Printf("[SIP-CANCEL] cancel ignored for non-incoming session=%s state=%s source=%s", sess.ID, sess.GetState(), source)
 		return
 	}
-	if !sess.TryBeginTerminalAction("caller_cancel") {
+	if !sess.TryBeginIncomingTerminalAction("caller_cancel") {
 		log.Printf("[SIP-CANCEL] cancel ignored; terminal action already claimed: session=%s winner=%s source=%s", sess.ID, sess.GetTerminalAction(), source)
 		return
 	}

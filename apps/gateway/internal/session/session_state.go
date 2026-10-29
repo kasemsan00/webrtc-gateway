@@ -58,7 +58,18 @@ func (s *Session) SetState(state SessionState) {
 			s.cancel()
 		}
 	}
+	// Safety net: prepared PCs exist only while ringing. Any transition out of
+	// StateIncoming that the API layer did not already handle closes them here.
+	var prepared []*preparedPeerConnection
+	preparedReason := ""
+	if state != StateIncoming && len(s.preparedPCs) > 0 {
+		preparedReason = s.preparedCloseReasonLocked()
+		prepared = s.takePreparedLocked(preparedReason)
+	}
 	s.mu.Unlock()
+	if len(prepared) > 0 {
+		s.closePreparedEntries(prepared, preparedReason, true)
+	}
 	if started {
 		s.emitCallStartedTelemetry(direction, startedAt)
 	}
