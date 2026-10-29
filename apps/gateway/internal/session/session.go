@@ -281,20 +281,20 @@ type Session struct {
 	CachedPPS               []byte    `json:"-"`
 	LastSPSPPSInjectionTime time.Time `json:"-"` // Track last SPS/PPS injection for periodic re-injection
 	// Chrome packetization-mode 0 sends every IDR slice as its own NAL type 5.
-	// Inject parameter sets once per RTP timestamp, and skip that injection when
+	// Inject parameter sets once per access unit, and skip that injection when
 	// this access unit already forwarded SPS and PPS. A second in-band copy
 	// resets TTRS OpenH264 and the old GL uploader reads past the YUV buffer.
-	uplinkSPSPPSTimestamp     uint32 `json:"-"`
-	uplinkSPSPPSTimestampSet  bool   `json:"-"`
-	uplinkSPSPPSWarmupDone    bool   `json:"-"`
-	uplinkInBandTimestamp     uint32 `json:"-"`
-	uplinkInBandTimestampSet  bool   `json:"-"`
-	uplinkInBandSPS           bool   `json:"-"`
-	uplinkInBandPPS           bool   `json:"-"`
-	uplinkSPSWidth            int    `json:"-"`
-	uplinkSPSHeight           int    `json:"-"`
-	uplinkSPSDimensionBlocked bool   `json:"-"`
-	uplinkSPSDimensionLogged  bool   `json:"-"`
+	uplinkSPSPPSTimestamp      uint32 `json:"-"`
+	uplinkSPSPPSTimestampSet   bool   `json:"-"`
+	uplinkParameterObservation uplinkParameterObservation
+	uplinkInBandTimestamp      uint32 `json:"-"`
+	uplinkInBandTimestampSet   bool   `json:"-"`
+	uplinkInBandSPS            bool   `json:"-"`
+	uplinkInBandPPS            bool   `json:"-"`
+	uplinkSPSWidth             int    `json:"-"`
+	uplinkSPSHeight            int    `json:"-"`
+	uplinkSPSDimensionBlocked  bool   `json:"-"`
+	uplinkSPSDimensionLogged   bool   `json:"-"`
 	// uplinkPictureSizeChange is SIP_UPLINK_PICTURE_SIZE_CHANGE. Empty means
 	// accept. In accept mode a mid-call size change holds non-IDR video until
 	// the first IDR of the new size, which gets the new SPS/PPS in front of it.

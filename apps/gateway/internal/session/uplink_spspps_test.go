@@ -5,8 +5,8 @@ import "testing"
 func TestUplinkKeyframeParameterSetsOncePerAccessUnit(t *testing.T) {
 	sess := &Session{ID: "spspps"}
 
-	if got := sess.uplinkKeyframeParameterSetCopiesLocked(90000); got != 2 {
-		t.Fatalf("first access unit copies=%d, want 2", got)
+	if got := sess.uplinkKeyframeParameterSetCopiesLocked(90000); got != 1 {
+		t.Fatalf("first access unit copies=%d, want 1", got)
 	}
 	if got := sess.uplinkKeyframeParameterSetCopiesLocked(90000); got != 0 {
 		t.Fatalf("same timestamp copies=%d, want 0", got)
@@ -16,8 +16,8 @@ func TestUplinkKeyframeParameterSetsOncePerAccessUnit(t *testing.T) {
 	}
 
 	sess.ResetMediaState()
-	if got := sess.uplinkKeyframeParameterSetCopiesLocked(90000); got != 2 {
-		t.Fatalf("after media reset copies=%d, want 2", got)
+	if got := sess.uplinkKeyframeParameterSetCopiesLocked(90000); got != 1 {
+		t.Fatalf("after media reset copies=%d, want 1", got)
 	}
 }
 
@@ -28,8 +28,8 @@ func TestHeldParameterSetDoesNotCountAsInBand(t *testing.T) {
 	}
 	sess.recordUplinkParameterSetIfForwarded(true, 90000, true, false)
 	sess.recordUplinkParameterSetIfForwarded(true, 90000, false, true)
-	if got := sess.uplinkKeyframeParameterSetCopiesLocked(90000); got != 2 {
-		t.Fatalf("IDR copies=%d, want 2 after a dropped SPS/PPS", got)
+	if got := sess.uplinkKeyframeParameterSetCopiesLocked(90000); got != 1 {
+		t.Fatalf("IDR copies=%d, want 1 after a dropped SPS/PPS", got)
 	}
 }
 

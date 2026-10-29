@@ -1,5 +1,10 @@
 ## 2026-10-29
 
+- **แก้ IDR ฝั่ง browser→SIP ขาด SPS/PPS หลังรับสาย โดยเฉพาะ prepared PC**: รอ parameter sets ให้ครบก่อนเปิด startup/recovery gate และทิ้งทั้ง AU ที่เริ่มด้วย IDR ก่อน SPS/PPS พร้อมขอ keyframe ใหม่ (จำกัดหนึ่งครั้งต่อวินาที) เพื่อไม่ส่งเฉพาะท้ายภาพไปยัง OpenH264
+  - ส่ง SPS/PPS ล่าสุดเป็น single-NAL นำหน้า IDR ทุก AU ทั้ง packetization-mode 0 และ mode 1/STAP-A โดยใช้ timestamp เดียวกับ IDR, sequence ต่อเนื่อง และ marker เฉพาะท้ายภาพ ไม่ส่งชุดซ้ำเมื่อ encoder ส่งครบแล้วใน AU นั้น และรองรับ timestamp ซ้ำหลัง marker
+  - prepared answer อ่าน packetization mode จาก pending INVITE SDP ด้วย parser เดียวกับ SIP answer จึงไม่เลือกผิดจากค่า session ที่ยังไม่อัปเดตก่อน Accept
+  - เพิ่ม `uplink_idr_wait_parameter_sets` และ `uplink_idr_parameter_sets` ซึ่งตรวจการเขียน UDP สำเร็จ พร้อมจำนวน IDR/ชุดที่ขาดสะสมและ sequence ของ SPS/PPS/IDR โดยจำกัด log หนึ่งครั้งต่อวินาทีตลอดสาย
+  - แก้ `h264_au_normalized` ฝั่ง SIP→browser: `response_time` เป็นศูนย์สำหรับ IDR ที่ไม่ได้ตอบคำขอ SIP ภายในสองวินาที นับหนึ่ง response ต่อคำขอ และไม่จับคู่กับ FIR ที่ส่งไป browser; `injected_parameter_sets` ยังหมายถึงการเติมชุดข้อมูลฝั่ง SIP→browser
 - **เตรียม WebRTC ล่วงหน้าระหว่างสายเรียกเข้ากำลังดัง (prepared offer)**: agent ส่ง `offer` ที่มี `prepare: true` และ `sessionId` เป็นของสายเรียกเข้า เพื่อเชื่อม ICE + DTLS ไว้ก่อนรับสาย ภาพและเสียงจึงเริ่มแทบทันทีเมื่อกด `accept`
   - gateway ประกาศความสามารถนี้ด้วย `prepareOffer: true` ในทุกข้อความ `trunk_resolved` และตอบ `answer` ที่มี `prepare: true` (ใช้ `sessionId` เดิม)
   - การ prepare **ไม่** claim สาย ไม่ผูก session กับ connection และไม่ส่ง 200 OK ไปฝั่ง SIP ก่อนรับสายจะไม่มีสื่อจาก SIP ไปถึง PeerConnection ที่เตรียมไว้ และสื่อจาก agent จะถูกทิ้งไม่ส่งไปฝั่ง SIP หลาย agent เตรียม PeerConnection ของตัวเองไว้พร้อมกันกับสายเดียวได้

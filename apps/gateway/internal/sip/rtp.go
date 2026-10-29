@@ -568,7 +568,7 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 				isPLIResponse, responseTime, pliSent, pliResponse := sess.RecordKeyframe()
 				sess.MarkSwitchVideoKeyframe(now)
 				sess.MarkSwitchVideoProgress(now, false)
-				fmt.Printf("[%s] h264_au_normalized status=complete-idr packets=%d injected_parameter_sets=%v source_timestamp=%d pli_response=%v response_time=%v pli_sent=%d pli_responses=%d\n",
+				fmt.Printf("[%s] h264_au_normalized direction=sip-to-browser status=complete-idr packets=%d injected_parameter_sets=%v source_timestamp=%d pli_response=%v response_time=%v pli_sent=%d pli_responses=%d\n",
 					sess.ID, len(au.Packets), au.InjectedParameterSets, au.SourceTimestamp,
 					isPLIResponse, responseTime, pliSent, pliResponse)
 				_, _, hasCachedSets := sess.GetSIPCachedSPSPPS()
@@ -982,7 +982,7 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 			if isKeyframe && auNormalizer == nil {
 				isPLIResponse, responseTime, pliSent, pliResponse := sess.RecordKeyframe()
 				sess.MarkSwitchVideoKeyframe(time.Now())
-				fmt.Printf("[%s] h264_au_normalized status=legacy-keyframe-start packet=%d pli_response=%v response_time=%v pli_sent=%d pli_responses=%d\n",
+				fmt.Printf("[%s] h264_au_normalized direction=sip-to-browser status=legacy-keyframe-start packet=%d pli_response=%v response_time=%v pli_sent=%d pli_responses=%d\n",
 					sess.ID, packetCount, isPLIResponse, responseTime, pliSent, pliResponse)
 				_, _, hasCachedSets := sess.GetSIPCachedSPSPPS()
 				if sess.TryMarkRemoteVideoReady(hasCachedSets) {

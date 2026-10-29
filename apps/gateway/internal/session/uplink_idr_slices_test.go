@@ -175,7 +175,10 @@ func forwardUplinkVideoForTest(t *testing.T, packets [][]byte, delays []time.Dur
 	readDone := make(chan struct{})
 	go func() {
 		defer close(readDone)
-		buf := make([]byte, 2048)
+		// Mode 0 can reassemble FU-A into a single UDP datagram larger than
+		// the browser's MTU. A short receive buffer returns WSAEMSGSIZE on
+		// Windows and ends this collector before the IDR is inspected.
+		buf := make([]byte, 65535)
 		for {
 			_ = recv.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
 			n, _, err := recv.ReadFromUDP(buf)

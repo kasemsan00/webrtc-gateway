@@ -42,6 +42,7 @@ func (s *Session) forwardRTPToAsteriskFrom(track rtpByteReader, kind string) {
 	packetCount := 0
 	heldUntilIDR := 0
 	mode0Reassembler := h264Mode0Reassembler{}
+	uplinkAU := uplinkH264AU{}
 	mode0Reassembled := 0
 	mode0Dropped := 0
 	browserRTP := 0
@@ -128,9 +129,10 @@ func (s *Session) forwardRTPToAsteriskFrom(track rtpByteReader, kind string) {
 					curLen := len(s.CachedSPS)
 					shouldUpdate := len(packet.Payload) > 1 && (curLen == 0 || !bytes.Equal(s.CachedSPS, packet.Payload))
 					if shouldUpdate {
+						s.uplinkParameterSetsChangedLocked(true, false)
 						s.CachedSPS = make([]byte, len(packet.Payload))
 						copy(s.CachedSPS, packet.Payload)
-						fmt.Printf("[%s] 💾 Cached SPS from RTP stream (packet #%d, %d bytes)\\n", s.ID, packetCount, len(packet.Payload))
+						fmt.Printf("[%s] 💾 Cached SPS from RTP stream (packet #%d, %d bytes)\n", s.ID, packetCount, len(packet.Payload))
 					}
 				}
 				s.mu.Unlock()
@@ -141,9 +143,10 @@ func (s *Session) forwardRTPToAsteriskFrom(track rtpByteReader, kind string) {
 				curLen := len(s.CachedPPS)
 				shouldUpdate := len(packet.Payload) > 1 && (curLen == 0 || !bytes.Equal(s.CachedPPS, packet.Payload))
 				if shouldUpdate {
+					s.uplinkParameterSetsChangedLocked(false, true)
 					s.CachedPPS = make([]byte, len(packet.Payload))
 					copy(s.CachedPPS, packet.Payload)
-					fmt.Printf("[%s] 💾 Cached PPS from RTP stream (packet #%d, %d bytes)\\n", s.ID, packetCount, len(packet.Payload))
+					fmt.Printf("[%s] 💾 Cached PPS from RTP stream (packet #%d, %d bytes)\n", s.ID, packetCount, len(packet.Payload))
 				}
 				s.mu.Unlock()
 			} else if nalType == 5 {
@@ -163,16 +166,6 @@ func (s *Session) forwardRTPToAsteriskFrom(track rtpByteReader, kind string) {
 				if fuInnerNalType == 5 && fuStartBit == 1 {
 					isKeyframe = true
 				}
-			}
-		}
-		// Log SPS/PPS forwarding
-		if isSPS || isPPS {
-			nalName := "SPS"
-			if isPPS {
-				nalName = "PPS"
-			}
-			if packetCount <= 50 {
-				fmt.Printf("[%s] 📦 Forwarding %s from browser to Asterisk (packet #%d)\\n", s.ID, nalName, packetCount)
 			}
 		}
 
@@ -257,6 +250,7 @@ func (s *Session) forwardRTPToAsteriskFrom(track rtpByteReader, kind string) {
 			packet.Header.CSRC = nil
 			packet.Header.Padding = false
 		} else {
+			uplinkAU.beginLocked(s, packet)
 			if s.rejectUplinkPictureSizeChangeLocked(packet.Payload) {
 				s.mu.Unlock()
 				s.MaybeLogUplinkVideoStall(time.Now(), browserRTPPerSec)
@@ -339,13 +333,20 @@ func (s *Session) forwardRTPToAsteriskFrom(track rtpByteReader, kind string) {
 			held := false
 			pictureSizePLI := false
 			if !isSTAPA {
+				if hold, requestPLI := uplinkAU.holdLocked(s, isKeyframe, time.Now()); hold && !isSPS && !isPPS {
+					s.mu.Unlock()
+					if requestPLI {
+						go s.SendBrowserPLIImmediate("missing_parameter_sets")
+					}
+					continue
+				}
 				var sizeHeld bool
 				sizeHeld, pictureSizePLI = s.holdUplinkForPictureSizeLocked(isKeyframe, isSPS || isPPS, nalType, time.Now())
 				held = s.holdUplinkForMode0Locked(isKeyframe) || holdUplinkVideoUntilIDR(uplinkOpen, isKeyframe || isSPS || isPPS)
 				held = held || sizeHeld
 			}
 			if isSPS || isPPS {
-				s.recordUplinkParameterSetIfForwarded(held, packet.Header.Timestamp, isSPS, isPPS)
+				s.recordUplinkParameterSetIfForwarded(held || destAddr == nil || conn == nil, packet.Header.Timestamp, isSPS, isPPS)
 			}
 
 			// Handle STAP-A: de-aggregate into multiple single-NAL RTP packets
@@ -375,6 +376,7 @@ func (s *Session) forwardRTPToAsteriskFrom(track rtpByteReader, kind string) {
 							curLen := len(s.CachedSPS)
 							shouldUpdate := len(nalUnit) > 0 && (curLen == 0 || !bytes.Equal(s.CachedSPS, nalUnit))
 							if shouldUpdate {
+								s.uplinkParameterSetsChangedLocked(true, false)
 								s.CachedSPS = make([]byte, len(nalUnit))
 								copy(s.CachedSPS, nalUnit)
 								if packetCount <= 50 {
@@ -386,6 +388,7 @@ func (s *Session) forwardRTPToAsteriskFrom(track rtpByteReader, kind string) {
 							curLen := len(s.CachedPPS)
 							shouldUpdate := len(nalUnit) > 0 && (curLen == 0 || !bytes.Equal(s.CachedPPS, nalUnit))
 							if shouldUpdate {
+								s.uplinkParameterSetsChangedLocked(false, true)
 								s.CachedPPS = make([]byte, len(nalUnit))
 								copy(s.CachedPPS, nalUnit)
 								if packetCount <= 50 {
@@ -399,6 +402,13 @@ func (s *Session) forwardRTPToAsteriskFrom(track rtpByteReader, kind string) {
 					}
 				}
 
+				if hold, requestPLI := uplinkAU.holdLocked(s, containsIDR, time.Now()); hold {
+					s.mu.Unlock()
+					if requestPLI {
+						go s.SendBrowserPLIImmediate("missing_parameter_sets")
+					}
+					continue
+				}
 				sizeHeld, sizePLI := s.holdUplinkForPictureSizeLocked(containsIDR, containsSPS || containsPPS, nalType, time.Now())
 				if s.holdUplinkForMode0Locked(containsIDR) || holdUplinkVideoUntilIDR(uplinkOpen, containsIDR || containsSPS || containsPPS) || sizeHeld {
 					s.mu.Unlock()
@@ -418,74 +428,16 @@ func (s *Session) forwardRTPToAsteriskFrom(track rtpByteReader, kind string) {
 				// de-aggregated NAL of this STAP-A (SIP_VIDEO_TS_REBASE).
 				stapaTS := s.uplinkVideoOutboundTSLocked(packet.Header.Timestamp, packet.Header.SSRC, time.Now())
 
-				// Inject SPS/PPS before STAP-A IDR only when STAP-A does not already carry both.
-				// This avoids duplicate SPS/PPS bursts at call startup that can destabilize decoders.
-				shouldInjectBeforeSTAPA := containsIDR && len(s.CachedSPS) > 0 && len(s.CachedPPS) > 0 && !(containsSPS && containsPPS)
-				if shouldInjectBeforeSTAPA {
-					injectReason := "keyframe"
-					redundancyCount := 1
+				if containsIDR {
+					payload = s.prefixSTAPAIDRLocked(payload, packet.Timestamp)
+					if !containsSPS || !containsPPS {
+						s.LastSPSPPSInjectionTime = time.Now()
+					}
 					if s.SwitchSPSPPSInjectRemaining > 0 {
-						injectReason = "@switch"
-						redundancyCount = 2
-					}
-
-					s.LastSPSPPSInjectionTime = time.Now()
-					fmt.Printf("[%s] 💉 STAP-A contains IDR - injecting Separate SPS/PPS (NRI=3) (%s, %dx) before de-aggregation (stapaHasSPS=%v, stapaHasPPS=%v)\n",
-						s.ID, injectReason, redundancyCount, containsSPS, containsPPS)
-
-					for i := 0; i < redundancyCount; i++ {
-						// 1. Send SPS (with forced NRI=3)
-						s.VideoSeq++
-						spsPacket := &rtp.Packet{
-							Header: rtp.Header{
-								Version:        2,
-								PayloadType:    videoPT,
-								SequenceNumber: s.VideoSeq,
-								Timestamp:      stapaTS,
-								SSRC:           s.VideoSSRC,
-								Marker:         false,
-							},
-							Payload: forceNRI(s.CachedSPS),
-						}
-						if out, err := spsPacket.Marshal(); err == nil {
-							if destAddr != nil && conn != nil {
-								pendingWrites = append(pendingWrites, out)
-								if injectReason == "@switch" {
-									fmt.Printf("[%s] 💉 @switch STAP-A: Injected SPS (NRI=3) copy %d/%d (Seq=%d, Size=%d)\n",
-										s.ID, i+1, redundancyCount, spsPacket.Header.SequenceNumber, len(out))
-								}
-							}
-						}
-
-						// 2. Send PPS (with forced NRI=3)
-						s.VideoSeq++
-						ppsPacket := &rtp.Packet{
-							Header: rtp.Header{
-								Version:        2,
-								PayloadType:    videoPT,
-								SequenceNumber: s.VideoSeq,
-								Timestamp:      stapaTS,
-								SSRC:           s.VideoSSRC,
-								Marker:         false,
-							},
-							Payload: forceNRI(s.CachedPPS),
-						}
-						if out, err := ppsPacket.Marshal(); err == nil {
-							if destAddr != nil && conn != nil {
-								pendingWrites = append(pendingWrites, out)
-								if injectReason == "@switch" {
-									fmt.Printf("[%s] 💉 @switch STAP-A: Injected PPS (NRI=3) copy %d/%d (Seq=%d, Size=%d)\n",
-										s.ID, i+1, redundancyCount, ppsPacket.Header.SequenceNumber, len(out))
-								}
-							}
-						}
-					}
-
-					if injectReason == "@switch" {
-						// Decrement remaining count (one IDR handled)
 						s.SwitchSPSPPSInjectRemaining--
-						fmt.Printf("[%s] 🔀 @switch STAP-A: Injected for IDR (remaining: %d)\n", s.ID, s.SwitchSPSPPSInjectRemaining)
 					}
+				} else {
+					s.noteUplinkInBandParameterSetLocked(packet.Timestamp, containsSPS, containsPPS)
 				}
 
 				// Second pass: send all NALs as separate RTP packets
@@ -582,60 +534,8 @@ func (s *Session) forwardRTPToAsteriskFrom(track rtpByteReader, kind string) {
 				redundancyCount = s.uplinkKeyframeParameterSetCopiesLocked(packet.Header.Timestamp)
 			}
 
-			if redundancyCount > 0 {
-				s.LastSPSPPSInjectionTime = time.Now()
-
-				for i := 0; i < redundancyCount; i++ {
-					// 1. Send SPS (with forced NRI=3)
-					// Marker=false (same as Linphone Mobile)
-					s.VideoSeq++
-					spsPacket := &rtp.Packet{
-						Header: rtp.Header{
-							Version:        2,
-							PayloadType:    videoPT,
-							SequenceNumber: s.VideoSeq,
-							Timestamp:      outTS,
-							SSRC:           s.VideoSSRC,
-							Marker:         false,
-						},
-						Payload: forceNRI(s.CachedSPS),
-					}
-
-					if out, err := spsPacket.Marshal(); err == nil {
-						if destAddr != nil && conn != nil {
-							pendingWrites = append(pendingWrites, out)
-							if (isKeyframe && i == 0) || packetCount <= 100 {
-								fmt.Printf("[%s] 💉 Injected SPS (NRI=3) copy %d/%d (Seq=%d, Size=%d, Keyframe=%v)\n",
-									s.ID, i+1, redundancyCount, spsPacket.Header.SequenceNumber, len(out), isKeyframe)
-							}
-						}
-					}
-
-					// 2. Send PPS (with forced NRI=3)
-					// Marker=false (same as Linphone Mobile)
-					s.VideoSeq++
-					ppsPacket := &rtp.Packet{
-						Header: rtp.Header{
-							Version:        2,
-							PayloadType:    videoPT,
-							SequenceNumber: s.VideoSeq,
-							Timestamp:      outTS,
-							SSRC:           s.VideoSSRC,
-							Marker:         false,
-						},
-						Payload: forceNRI(s.CachedPPS),
-					}
-
-					if out, err := ppsPacket.Marshal(); err == nil {
-						if destAddr != nil && conn != nil {
-							pendingWrites = append(pendingWrites, out)
-							if (isKeyframe && i == 0) || packetCount <= 100 {
-								fmt.Printf("[%s] 💉 Injected PPS (NRI=3) copy %d/%d (Seq=%d, Size=%d, Keyframe=%v)\n",
-									s.ID, i+1, redundancyCount, ppsPacket.Header.SequenceNumber, len(out), isKeyframe)
-							}
-						}
-					}
-				}
+			if redundancyCount > 0 && destAddr != nil && conn != nil {
+				pendingWrites = append(pendingWrites, s.uplinkIDRParameterSetPacketsLocked(videoPT, packet.Timestamp, outTS)...)
 			}
 
 			// Rewrite Header of the Keyframe (or regular packet)
@@ -787,8 +687,8 @@ func (s *Session) noteUplinkInBandParameterSetLocked(timestamp uint32, sps, pps 
 // uplinkKeyframeParameterSetCopiesLocked reports how many SPS+PPS pairs to
 // send before this IDR packet. The caller holds s.mu. Zero means this packet
 // continues an access unit that already received parameter sets, or the
-// browser already sent SPS and PPS for this timestamp. The first access unit
-// that arrives without in-band sets gets two pairs; later ones get one.
+// browser already sent SPS and PPS for this access unit. One pair is enough;
+// repeating it can reset strict decoders between slices.
 func (s *Session) uplinkKeyframeParameterSetCopiesLocked(timestamp uint32) int {
 	if s.uplinkSPSPPSTimestampSet && s.uplinkSPSPPSTimestamp == timestamp {
 		return 0
@@ -799,12 +699,7 @@ func (s *Session) uplinkKeyframeParameterSetCopiesLocked(timestamp uint32) int {
 		// Chrome mode 0 already emitted SPS and PPS as their own NALs. Another
 		// pair in front of each IDR restarts TTRS OpenH264; the GL upload then
 		// reads past the previous YUV allocation.
-		s.uplinkSPSPPSWarmupDone = true
 		return 0
-	}
-	if !s.uplinkSPSPPSWarmupDone {
-		s.uplinkSPSPPSWarmupDone = true
-		return 2
 	}
 	return 1
 }
@@ -825,6 +720,7 @@ func (s *Session) cacheSTAPAParameterSetsLocked(payload []byte, packetCount int)
 		switch nalUnit[0] & 0x1F {
 		case 7:
 			if len(s.CachedSPS) == 0 || !bytes.Equal(s.CachedSPS, nalUnit) {
+				s.uplinkParameterSetsChangedLocked(true, false)
 				s.CachedSPS = append([]byte(nil), nalUnit...)
 				if packetCount <= 50 {
 					fmt.Printf("[%s] 💾 Cached SPS from STAP-A (%d bytes)\n", s.ID, len(nalUnit))
@@ -832,6 +728,7 @@ func (s *Session) cacheSTAPAParameterSetsLocked(payload []byte, packetCount int)
 			}
 		case 8:
 			if len(s.CachedPPS) == 0 || !bytes.Equal(s.CachedPPS, nalUnit) {
+				s.uplinkParameterSetsChangedLocked(false, true)
 				s.CachedPPS = append([]byte(nil), nalUnit...)
 				if packetCount <= 50 {
 					fmt.Printf("[%s] 💾 Cached PPS from STAP-A (%d bytes)\n", s.ID, len(nalUnit))

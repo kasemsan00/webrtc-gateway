@@ -502,7 +502,7 @@ func (s *Session) ResetMediaState() {
 	s.LastSPSPPSInjectionTime = time.Time{}
 	s.uplinkSPSPPSTimestamp = 0
 	s.uplinkSPSPPSTimestampSet = false
-	s.uplinkSPSPPSWarmupDone = false
+	s.uplinkParameterObservation = uplinkParameterObservation{}
 	s.uplinkInBandTimestamp = 0
 	s.uplinkInBandTimestampSet = false
 	s.uplinkInBandSPS = false
@@ -599,13 +599,20 @@ func (s *Session) RecordKeyframe() (bool, time.Duration, int, int) {
 	var pliResponse int
 
 	s.mu.Lock()
+	previousKeyframe := s.LastKeyframe
 	s.LastKeyframe = now
-	isPLIResponse := now.Sub(s.LastPLISent) < 2*time.Second && s.PLISent > 0
+	elapsed := now.Sub(s.LastSipPLISent)
+	// An unsolicited/late IDR has no measured PLI response latency. Returning
+	// time since the last (possibly zero) request made this grow for the call's
+	// lifetime and falsely suggested a slow repair on the opposite media leg.
+	// Browser-directed FIR also updates LastPLISent. Only a SIP-directed
+	// request can be answered by this inbound SIP keyframe, once per request.
+	isPLIResponse := !s.LastSipPLISent.IsZero() && previousKeyframe.Before(s.LastSipPLISent) && elapsed >= 0 && elapsed < 2*time.Second && s.PLISent > 0
 
 	if isPLIResponse {
 		s.PLIResponse++
+		responseTime = elapsed
 	}
-	responseTime = now.Sub(s.LastPLISent)
 	pliSent = s.PLISent
 	pliResponse = s.PLIResponse
 	s.mu.Unlock()

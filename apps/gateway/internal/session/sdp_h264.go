@@ -1,6 +1,7 @@
 package session
 
 import (
+	"bytes"
 	"encoding/base64"
 	"fmt"
 	"strings"
@@ -104,6 +105,9 @@ func (s *Session) SetCachedSPSPPS(sps, pps []byte, source string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if !bytes.Equal(s.CachedSPS, sps) || !bytes.Equal(s.CachedPPS, pps) {
+		s.uplinkParameterSetsChangedLocked(!bytes.Equal(s.CachedSPS, sps), !bytes.Equal(s.CachedPPS, pps))
+	}
 	s.CachedSPS = make([]byte, len(sps))
 	s.CachedPPS = make([]byte, len(pps))
 	copy(s.CachedSPS, sps)

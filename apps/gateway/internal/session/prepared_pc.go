@@ -116,10 +116,18 @@ func (s *Session) PrepareIncomingAnswer(owner, offerSDP string, turnConfig confi
 	if err := entry.pc.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeOffer, SDP: offerSDP}); err != nil {
 		return fail(fmt.Errorf("failed to set offer: %w", err))
 	}
+	// The SIP answer is not built until accept. Derive its mode from the
+	// pending INVITE instead of depending on earlier session initialization.
 	videoPacketizationMode := s.GetSIPVideoPacketizationMode()
+	modeSource := "session"
+	if _, _, invite, _, _ := s.GetIncomingInvite(); len(invite) > 0 {
+		videoPacketizationMode = SIPVideoPacketizationMode(invite)
+		modeSource = "pending-invite"
+	}
 	if err := PreferWebRTCH264PacketizationMode(entry.pc, offerSDP, videoPacketizationMode); err != nil {
 		return fail(fmt.Errorf("failed to select H264 packetization mode: %w", err))
 	}
+	fmt.Printf("[%s] prepared_pc_h264 packetization_mode=%d source=%s owner=%s\n", s.ID, videoPacketizationMode, modeSource, owner)
 	answer, err := entry.pc.CreateAnswer(nil)
 	if err != nil {
 		return fail(fmt.Errorf("failed to create answer: %w", err))

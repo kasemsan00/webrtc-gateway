@@ -234,6 +234,7 @@ func (s *Session) deliverUplinkVideo(pkt heldUplinkVideo) {
 		}
 		return
 	}
+	s.observeUplinkParameterSets(pkt.data, payload, pkt.rtpTS, pkt.marker, keyframe, time.Now())
 	if keyframe {
 		s.RecordUplinkKeyframe()
 		if pkt.marker {
