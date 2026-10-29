@@ -43,7 +43,7 @@ func (s *Session) createReplacementPeerConnection(
 	}
 
 	iceServers := pkg_webrtc.BuildICEServers(turnConfig)
-	api, err := newGatewayWebRTCAPI(s.WebRTCTWCCEnabled, s.ID)
+	api, err := newGatewayWebRTCAPI(s.WebRTCTWCCEnabled, s.ID, s.WebRTCICE)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create WebRTC API: %w", err)
 	}
@@ -130,25 +130,30 @@ func (s *Session) createReplacementPeerConnection(
 		newPC.OnICEGatheringStateChange(func(state webrtc.ICEGatheringState) {
 			fmt.Printf("[%s] 🧊 ICE Gathering State (renegotiated): %s\n", s.ID, state.String())
 		})
-		newPC.OnICECandidate(func(candidate *webrtc.ICECandidate) {
-			if candidate == nil {
-				fmt.Printf("[%s] 🧊 ICE Candidate gathering complete (renegotiated)\n", s.ID)
-				return
-			}
-			candidateType := "unknown"
-			switch candidate.Typ {
-			case webrtc.ICECandidateTypeHost:
-				candidateType = "host"
-			case webrtc.ICECandidateTypeSrflx:
-				candidateType = "srflx"
-			case webrtc.ICECandidateTypePrflx:
-				candidateType = "prflx"
-			case webrtc.ICECandidateTypeRelay:
-				candidateType = "relay"
-			}
-			fmt.Printf("[%s] 🧊 ICE Candidate (renegotiated): type=%s address=%s:%d protocol=%s\n", s.ID, candidateType, candidate.Address, candidate.Port, candidate.Protocol.String())
-		})
 	}
+	candidateLog := newLocalCandidateLog(s.ID, "replacement")
+	newPC.OnICECandidate(func(candidate *webrtc.ICECandidate) {
+		candidateLog.Observe(candidate)
+		if !debugTURN {
+			return
+		}
+		if candidate == nil {
+			fmt.Printf("[%s] 🧊 ICE Candidate gathering complete (renegotiated)\n", s.ID)
+			return
+		}
+		candidateType := "unknown"
+		switch candidate.Typ {
+		case webrtc.ICECandidateTypeHost:
+			candidateType = "host"
+		case webrtc.ICECandidateTypeSrflx:
+			candidateType = "srflx"
+		case webrtc.ICECandidateTypePrflx:
+			candidateType = "prflx"
+		case webrtc.ICECandidateTypeRelay:
+			candidateType = "relay"
+		}
+		fmt.Printf("[%s] 🧊 ICE Candidate (renegotiated): type=%s address=%s:%d protocol=%s\n", s.ID, candidateType, candidate.Address, candidate.Port, candidate.Protocol.String())
+	})
 
 	id := s.ID
 	newPC.OnICEConnectionStateChange(func(connectionState webrtc.ICEConnectionState) {

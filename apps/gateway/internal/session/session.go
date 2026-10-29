@@ -442,6 +442,8 @@ type Session struct {
 	InboundTranslatorTgtLang  string                    `json:"-"`
 	InboundTranslatorTTSVoice string                    `json:"-"`
 	TranslationCaptionHandler TranslationCaptionHandler `json:"-"`
+	// ICE gathering limits, reused when a replacement PeerConnection is built
+	WebRTCICE config.WebRTCICEConfig `json:"-"`
 	// Inbound audio gain (SIP → WebRTC)
 	InboundGainEnabled bool                        `json:"-"`
 	InboundGain        float32                     `json:"-"`
@@ -584,11 +586,11 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 	// Build ICE servers configuration
 	iceServers := pkg_webrtc.BuildICEServers(turnConfig)
 
-	api, err := newGatewayWebRTCAPI(cfg.SIP.WebRTCTWCCEnabled, id)
+	api, err := newGatewayWebRTCAPI(cfg.SIP.WebRTCTWCCEnabled, id, cfg.SIP.WebRTCICE)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create WebRTC API: %w", err)
 	}
-	fmt.Printf("[%s] webrtc_api twcc=%v\n", id, cfg.SIP.WebRTCTWCCEnabled)
+	fmt.Printf("[%s] webrtc_api twcc=%v %s\n", id, cfg.SIP.WebRTCTWCCEnabled, cfg.SIP.WebRTCICE.Summary())
 
 	// Create WebRTC peer connection using custom API
 	webrtcConfig := webrtc.Configuration{
@@ -714,6 +716,7 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 		sipVideoTSBase:                       cfg.SIP.VideoTSBase,
 		VideoSuppressEarlyMedia:              cfg.SIP.VideoSuppressEarlyMedia,
 		WebRTCTWCCEnabled:                    cfg.SIP.WebRTCTWCCEnabled,
+		WebRTCICE:                            cfg.SIP.WebRTCICE,
 		SwitchVideoGateFailOpen:              time.Duration(cfg.SIP.SwitchVideoGateFailOpenMS) * time.Millisecond,
 		SwitchVideoGateFailOpenCap:           time.Duration(cfg.SIP.SwitchVideoGateFailOpenCapMS) * time.Millisecond,
 		sipVideoIDRReplayNotify:              make(chan struct{}, 1),
@@ -795,7 +798,9 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 
 	// Always count candidates so terminal diagnostics remain useful even when
 	// verbose TURN logging is disabled.
+	candidateLog := newLocalCandidateLog(id, "initial")
 	peerConnection.OnICECandidate(func(candidate *webrtc.ICECandidate) {
+		candidateLog.Observe(candidate)
 		if candidate == nil {
 			if cfg.API.DebugTURN {
 				fmt.Printf("[%s] 🧊 ICE Candidate gathering complete\n", id)

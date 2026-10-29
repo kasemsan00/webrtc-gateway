@@ -7,6 +7,8 @@ import (
 
 	"github.com/pion/interceptor"
 	"github.com/pion/webrtc/v4"
+
+	"webrtc-sip-gateway/internal/config"
 )
 
 const (
@@ -96,8 +98,10 @@ func createCustomMediaEngineWithTWCC(twccEnabled bool) (*webrtc.MediaEngine, err
 // newGatewayWebRTCAPI builds the PeerConnection API used for a new call and for
 // a replacement PeerConnection. NACK retransmission stays on the gateway's
 // own cache. RTCP SR/RR come from ConfigureRTCPReports. TWCC sender feedback
-// is what lets the phone's availableOutgoingBitrate move.
-func newGatewayWebRTCAPI(twccEnabled bool, sessionID string) (*webrtc.API, error) {
+// is what lets the phone's availableOutgoingBitrate move. The SettingEngine
+// carries the ICE gathering limits (interface/IP filters, NAT1To1, network
+// types) so every PeerConnection advertises only reachable candidates.
+func newGatewayWebRTCAPI(twccEnabled bool, sessionID string, ice config.WebRTCICEConfig) (*webrtc.API, error) {
 	mediaEngine, err := createCustomMediaEngineWithTWCC(twccEnabled)
 	if err != nil {
 		return nil, err
@@ -111,9 +115,14 @@ func newGatewayWebRTCAPI(twccEnabled bool, sessionID string) (*webrtc.API, error
 			return nil, err
 		}
 	}
+	settingEngine, err := gatewaySettingEngine(ice)
+	if err != nil {
+		return nil, err
+	}
 	return webrtc.NewAPI(
 		webrtc.WithMediaEngine(mediaEngine),
 		webrtc.WithInterceptorRegistry(registry),
+		webrtc.WithSettingEngine(settingEngine),
 	), nil
 }
 

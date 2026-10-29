@@ -215,6 +215,8 @@ type SIPConfig struct {
 	AudioInboundGainEnable bool    // Enable inbound gain processing (default: false)
 	AudioInboundGain       float32 // Linear gain multiplier (default: 1.0)
 	AudioInboundGainMax    float32 // Maximum allowed gain (default: 3.0)
+	// ICE candidate gathering limits for every gateway PeerConnection (WEBRTC_ICE_*)
+	WebRTCICE WebRTCICEConfig
 }
 
 const (
@@ -375,6 +377,7 @@ func Load() (*Config, error) {
 			VideoTSBase:                          sipVideoTSBaseFromEnv(),
 			VideoSuppressEarlyMedia:              !getEnvAsBool("SIP_VIDEO_FORWARD_EARLY_MEDIA", true),
 			WebRTCTWCCEnabled:                    getEnvAsBool("WEBRTC_TWCC_ENABLE", true),
+			WebRTCICE:                            webrtcICEConfigFromEnv(),
 			SwitchVideoGateFailOpenMS:            getEnvAsInt("SIP_SWITCH_VIDEO_GATE_FAIL_OPEN_MS", 3000),
 			SwitchVideoGateFailOpenCapMS:         getEnvAsInt("SIP_SWITCH_VIDEO_GATE_FAIL_OPEN_CAP_MS", 5000),
 			SwitchVideoInfoFIREnable:             getEnvAsBool("SIP_SWITCH_VIDEO_INFO_FIR_ENABLE", false),
@@ -718,6 +721,7 @@ func (c *Config) Display() {
 	fmt.Printf("  SIP Video TS Rebase: enabled=%v base=%d\n", c.SIP.VideoTSRebase, c.SIP.VideoTSBase)
 	fmt.Printf("  SIP Video Forward Early Media: %v\n", !c.SIP.VideoSuppressEarlyMedia)
 	fmt.Printf("  WebRTC TWCC: %v\n", c.SIP.WebRTCTWCCEnabled)
+	fmt.Printf("  WebRTC ICE: %s\n", c.SIP.WebRTCICE.Summary())
 	fmt.Printf("  @switch Gate Fail-Open: sameStream=%dms cap=%dms infoFIR=%v\n",
 		c.SIP.SwitchVideoGateFailOpenMS, c.SIP.SwitchVideoGateFailOpenCapMS, c.SIP.SwitchVideoInfoFIREnable)
 

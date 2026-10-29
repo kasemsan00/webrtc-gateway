@@ -5,11 +5,13 @@ import (
 	"testing"
 
 	"github.com/pion/webrtc/v4"
+
+	"webrtc-sip-gateway/internal/config"
 )
 
 func offerSDP(t *testing.T, twccEnabled bool) string {
 	t.Helper()
-	api, err := newGatewayWebRTCAPI(twccEnabled, "")
+	api, err := newGatewayWebRTCAPI(twccEnabled, "", config.WebRTCICEConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
