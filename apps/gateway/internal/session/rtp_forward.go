@@ -28,6 +28,34 @@ func (r trackRTPReader) Read(b []byte) (int, error) {
 	return n, err
 }
 
+// webRTCVideoPacketDebugLine formats the per-packet WebRTC NAL dump.
+// Empty unless DEBUG_VIDEO_PACKETS is on, and only for the first 100 packets.
+// SPS/PPS cache and keyframe logs are separate and stay on without this flag.
+func webRTCVideoPacketDebugLine(enabled bool, sessionID string, packetCount int, payload []byte) string {
+	if !enabled || packetCount <= 0 || packetCount > 100 || len(payload) == 0 {
+		return ""
+	}
+	nalType := payload[0] & 0x1F
+	nri := (payload[0] >> 5) & 0x03
+	nalTypeName := "Unknown"
+	switch nalType {
+	case 1:
+		nalTypeName = "P-slice"
+	case 5:
+		nalTypeName = "IDR (Keyframe)"
+	case 7:
+		nalTypeName = "SPS"
+	case 8:
+		nalTypeName = "PPS"
+	case 24:
+		nalTypeName = "STAP-A"
+	case 28:
+		nalTypeName = "FU-A"
+	}
+	return fmt.Sprintf("[%s] 🔍 WebRTC Video Packet #%d: NAL Type=%d (%s), NRI=%d, Size=%d bytes\n",
+		sessionID, packetCount, nalType, nalTypeName, nri, len(payload))
+}
+
 // forwardRTPToAsterisk forwards RTP packets from WebRTC track to Asterisk
 // This is extracted to be reusable for both initial connection and renegotiation
 func (s *Session) forwardRTPToAsterisk(track *webrtc.TrackRemote, kind string) {
@@ -273,27 +301,10 @@ func (s *Session) forwardRTPToAsteriskFrom(track rtpByteReader, kind string) {
 				continue
 			}
 
-			// PHASE 4 DEBUG: Log NAL types from first 100 WebRTC packets to diagnose SPS/PPS timing
-			if packetCount <= 100 && len(packet.Payload) > 0 {
-				nalType := packet.Payload[0] & 0x1F
-				nri := (packet.Payload[0] >> 5) & 0x03
-				nalTypeName := "Unknown"
-				switch nalType {
-				case 1:
-					nalTypeName = "P-slice"
-				case 5:
-					nalTypeName = "IDR (Keyframe)"
-				case 7:
-					nalTypeName = "SPS"
-				case 8:
-					nalTypeName = "PPS"
-				case 24:
-					nalTypeName = "STAP-A"
-				case 28:
-					nalTypeName = "FU-A"
-				}
-				fmt.Printf("[%s] 🔍 WebRTC Video Packet #%d: NAL Type=%d (%s), NRI=%d, Size=%d bytes\n",
-					s.ID, packetCount, nalType, nalTypeName, nri, len(packet.Payload))
+			// Per-packet NAL dump is debug-only (DEBUG_VIDEO_PACKETS, first 100 packets).
+			// SPS/PPS caching and keyframe logs below are unchanged.
+			if line := webRTCVideoPacketDebugLine(s.debugVideoPackets, s.ID, packetCount, packet.Payload); line != "" {
+				fmt.Print(line)
 			}
 
 			// Initialize SSRC if needed

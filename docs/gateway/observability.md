@@ -50,9 +50,11 @@ has an explicit disposition below.
 | HTTP/WS URLs and errors | API/dependency paths | **redact** | Use route templates and dependency name. Strip query strings and normalize errors to catalog reasons. |
 | Private keys, APNs/FCM files and credentials | config/push initialization | **exclude** | Emit configured/enabled state only. |
 
-`DB_LOG_FULL_SIP`, `DEBUG_SIP_MESSAGE`, `DEBUG_SIP_INVITE`, `DEBUG_TURN`, and
-`PUSH_DEBUG_TTRS_TOKEN` must remain `false` in production examples. Enabling them creates residual local
-exposure and does not authorize centralized export.
+`DB_LOG_FULL_SIP`, `DEBUG_SIP_MESSAGE`, `DEBUG_SIP_INVITE`, `DEBUG_TURN`,
+`DEBUG_VIDEO_PACKETS`, `DEBUG_SIP_TRUNK`, and `PUSH_DEBUG_TTRS_TOKEN` must remain
+`false` in production examples. Enabling them creates residual local
+exposure and does not authorize centralized export. `DEBUG_SIP_TRUNK` includes
+the REGISTER contact URI. `DEBUG_VIDEO_PACKETS` is a per-packet NAL dump.
 
 ## Stable schema
 

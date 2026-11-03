@@ -132,18 +132,20 @@ type TURNConfig struct {
 
 // SIPConfig holds SIP server configuration
 type SIPConfig struct {
-	Domain           string
-	Username         string
-	Password         string
-	Port             int
-	LocalPort        int
-	LocalIP          string // Local IP to bind listeners (prevents IPv6, default: 0.0.0.0)
-	PublicIP         string // Public IP address for NAT traversal (optional)
-	ListenTCP        bool   // Enable SIP TCP listener (default: true)
-	ListenUDP        bool   // Enable SIP UDP listener (default: false)
-	DebugSIPMessage  bool   // Enable verbose SIP MESSAGE logging
-	DebugSIPInvite   bool   // Enable verbose SIP INVITE logging (header dump)
-	SwitchPLIDelayMS int    // Delay in milliseconds before sending PLI on @switch message (default: 0)
+	Domain            string
+	Username          string
+	Password          string
+	Port              int
+	LocalPort         int
+	LocalIP           string // Local IP to bind listeners (prevents IPv6, default: 0.0.0.0)
+	PublicIP          string // Public IP address for NAT traversal (optional)
+	ListenTCP         bool   // Enable SIP TCP listener (default: true)
+	ListenUDP         bool   // Enable SIP UDP listener (default: false)
+	DebugSIPMessage   bool   // Enable verbose SIP MESSAGE logging
+	DebugSIPInvite    bool   // Enable verbose SIP INVITE logging (header dump)
+	DebugVideoPackets bool   // DEBUG_VIDEO_PACKETS: per-packet WebRTC video NAL dump (first 100 packets)
+	DebugSIPTrunk     bool   // DEBUG_SIP_TRUNK: routine trunk lease/REGISTER cycle logs
+	SwitchPLIDelayMS  int    // Delay in milliseconds before sending PLI on @switch message (default: 0)
 	// @switch video transition hold (SIP->WebRTC): preserve keeps the previous
 	// rendered frame by holding unsafe non-keyframe packets; blackout is legacy.
 	SwitchVideoTransitionMode            string // @switch transition mode: preserve|blackout (default: preserve)
@@ -336,6 +338,8 @@ func Load() (*Config, error) {
 			ListenUDP:                            getEnvAsBool("SIP_LISTEN_UDP", false),
 			DebugSIPMessage:                      getEnvAsBool("DEBUG_SIP_MESSAGE", false),
 			DebugSIPInvite:                       getEnvAsBool("DEBUG_SIP_INVITE", false),
+			DebugVideoPackets:                    getEnvAsBool("DEBUG_VIDEO_PACKETS", false),
+			DebugSIPTrunk:                        getEnvAsBool("DEBUG_SIP_TRUNK", false),
 			SwitchPLIDelayMS:                     getEnvAsInt("SWITCH_PLI_DELAY_MS", 0),
 			SwitchVideoTransitionMode:            normalizeSwitchVideoTransitionMode(getEnvWithDefault("SIP_SWITCH_VIDEO_TRANSITION_MODE", SIPSwitchVideoTransitionBlackout)),
 			SwitchVideoBlackoutEnabled:           getEnvAsBool("SIP_SWITCH_VIDEO_BLACKOUT_ENABLED", true),
@@ -644,6 +648,8 @@ func (c *Config) Display() {
 	}
 	fmt.Printf("  Debug SIP MESSAGE: %v\n", c.SIP.DebugSIPMessage)
 	fmt.Printf("  Debug SIP INVITE: %v\n", c.SIP.DebugSIPInvite)
+	fmt.Printf("  Debug Video Packets: %v\n", c.SIP.DebugVideoPackets)
+	fmt.Printf("  Debug SIP Trunk: %v\n", c.SIP.DebugSIPTrunk)
 	fmt.Printf("  SIP Listen TCP: %v\n", c.SIP.ListenTCP)
 	fmt.Printf("  SIP Listen UDP: %v\n", c.SIP.ListenUDP)
 	fmt.Printf("  Audio Use AVPF: %v\n", c.SIP.AudioUseAVPF)

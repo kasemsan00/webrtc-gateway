@@ -65,6 +65,8 @@ When `FRONTEND_PASSWORD` is set and `AUTH_ENABLE=false`, authenticated `/api/*` 
 - `DEBUG_TURN` (default `false`)
 - `DEBUG_SIP_MESSAGE` (default `false`)
 - `DEBUG_SIP_INVITE` (default `false`)
+- `DEBUG_VIDEO_PACKETS` (default `false`; per-packet WebRTC→SIP H.264 NAL line for the first 100 video packets of a call: `WebRTC Video Packet #N: NAL Type=...`. SPS/PPS cache logs and keyframe/IDR logs stay on without this flag.)
+- `DEBUG_SIP_TRUNK` (default `false`; routine trunk lease renew of an already-owned lease, re-REGISTER target / expected 401 / success, and refresh-worker stop. INFO stays on for first registration, lease acquired by a new owner, lease loss, registration failure and recovery, and trunk add/remove. WARN and ERROR paths are unchanged.)
 - `SWITCH_PLI_DELAY_MS` (default `0`; delayed `@switch` FIR/PLI retries abort if a complete IDR already arrived)
 - `SIP_AUDIO_USE_AVPF` (default `false`)
 - `SIP_AUDIO_INBOUND_GAIN_ENABLE` (default `false`; requires CGO + libopus in Docker build)
@@ -152,8 +154,9 @@ When `FRONTEND_PASSWORD` is set and `AUTH_ENABLE=false`, authenticated `/api/*` 
 - `SIP_VIDEO_RTP_DISORDER_CONTAINMENT_ENABLED` (default `false`)
 - `SIP_VIDEO_RTP_DISORDER_CONTAINMENT_MS` (default `10000`)
 
-`DEBUG_TURN`, `DEBUG_SIP_MESSAGE`, `DEBUG_SIP_INVITE`, `DB_LOG_FULL_SIP`, and
-`PUSH_DEBUG_TTRS_TOKEN` must remain `false` in production. They can expose addresses, identities,
+`DEBUG_TURN`, `DEBUG_SIP_MESSAGE`, `DEBUG_SIP_INVITE`, `DEBUG_VIDEO_PACKETS`,
+`DEBUG_SIP_TRUNK`, `DB_LOG_FULL_SIP`, and `PUSH_DEBUG_TTRS_TOKEN` must remain
+`false` in production. They can expose addresses, identities, trunk contacts,
 authorization headers, SIP/SDP or message bodies in local logs or LogStore.
 Enabling a local diagnostic does not authorize exporting its raw content.
 

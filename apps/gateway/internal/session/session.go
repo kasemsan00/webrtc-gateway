@@ -204,6 +204,7 @@ type Session struct {
 	uplinkTSRebaser                       uplinkVideoTSRebaser `json:"-"` // under s.mu; reset per call
 	VideoSuppressEarlyMedia               bool                 `json:"-"`
 	WebRTCTWCCEnabled                     bool                 `json:"-"`
+	debugVideoPackets                     bool                 `json:"-"` // DEBUG_VIDEO_PACKETS
 	videoDiscontinuityIDRAt               time.Time            `json:"-"`
 	switchUplinkKeyframeKickAt            time.Time            `json:"-"`
 	postSwitchSIPKeyframePending          bool                 `json:"-"`
@@ -716,6 +717,7 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 		sipVideoTSBase:                       cfg.SIP.VideoTSBase,
 		VideoSuppressEarlyMedia:              cfg.SIP.VideoSuppressEarlyMedia,
 		WebRTCTWCCEnabled:                    cfg.SIP.WebRTCTWCCEnabled,
+		debugVideoPackets:                    cfg.SIP.DebugVideoPackets,
 		WebRTCICE:                            cfg.SIP.WebRTCICE,
 		SwitchVideoGateFailOpen:              time.Duration(cfg.SIP.SwitchVideoGateFailOpenMS) * time.Millisecond,
 		SwitchVideoGateFailOpenCap:           time.Duration(cfg.SIP.SwitchVideoGateFailOpenCapMS) * time.Millisecond,
