@@ -55,6 +55,7 @@ type Server struct {
 	diagnosticLimits   map[string]*diagnosticRateState
 	chatImageStore     *chatimage.Store
 	chatImageLimits    map[string]*chatImageRateState
+	bridgedChatEcho    bridgedChatEchoGuard // drops the PBX copy of a body just relayed to a bridged session
 	healthProviders    map[string]OperationalHealthProvider
 	mediaTelemetry     map[string]mediaRecoveryCounters
 	startTime          time.Time
