@@ -18,7 +18,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { ServerPaginationControls } from '@/components/ui/server-pagination-controls'
-import { formatThaiDateTime } from '@/lib/date-time'
+import { formatPreciseDateTime } from '@/lib/date-time'
 import {
   fetchClientDiagnosticPayload,
   fetchClientDiagnosticSessionEvents,
@@ -27,8 +27,7 @@ import {
 
 const DEFAULT_PAGE_SIZE = 50
 
-const formatTimestamp = (iso: string) =>
-  formatThaiDateTime(iso, { fractionalSecondDigits: 3 })
+const formatTimestamp = (iso: string) => formatPreciseDateTime(iso)
 
 type SubTab = 'events' | 'payloads'
 

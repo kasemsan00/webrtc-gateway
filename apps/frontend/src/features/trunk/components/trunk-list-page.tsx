@@ -3,16 +3,14 @@ import {
   RiLayoutColumnLine,
   RiListCheck,
   RiLoader4Line,
-  RiMoonLine,
   RiMore2Fill,
   RiNodeTree,
   RiRefreshLine,
   RiServerLine,
-  RiSunLine,
 } from '@remixicon/react'
 import { debounce } from '@tanstack/pacer'
 import { useStore } from '@tanstack/react-store'
-import { useSearch } from '@tanstack/react-router'
+import { Link, useSearch } from '@tanstack/react-router'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import type {
@@ -64,7 +62,6 @@ import { Separator } from '@/components/ui/separator'
 import Header from '@/components/Header'
 import { formatThaiDateTime } from '@/lib/date-time'
 import { cn } from '@/lib/utils'
-import { useTheme } from '@/lib/theme'
 import { useVisibilityRealtimeReload } from '@/lib/use-visibility-realtime-reload'
 import {
   createTrunk,
@@ -103,9 +100,11 @@ const TRUNK_TABLE_COLUMN_TOGGLES = [
   { id: 'id', label: 'ID' },
   { id: 'name', label: 'Name', locked: true },
   { id: 'inUseBy', label: 'In Use By' },
-  { id: 'register', label: 'Register' },
+  { id: 'register', label: 'Registration' },
+  { id: 'lastError', label: 'Last error' },
   { id: 'pushContact', label: 'Push Contact' },
-  { id: 'status', label: 'Status' },
+  { id: 'status', label: 'Enabled' },
+  { id: 'owner', label: 'Owner instance' },
   { id: 'domain', label: 'Domain' },
   { id: 'port', label: 'Port' },
   { id: 'username', label: 'Username' },
@@ -230,6 +229,56 @@ export function isRegisterActionDisabled(trunk: Trunk) {
   return trunk.isRegistered || !trunk.enabled
 }
 
+export type TrunkRegistrationTone = 'success' | 'destructive' | 'secondary'
+
+/**
+ * Registration state shown to operators. A trunk that is enabled, not
+ * registered and has a `lastError` is "Failed" (red) rather than a neutral
+ * "Unregistered", so broken trunks stand out.
+ */
+export function getTrunkRegistrationView(
+  trunk: Pick<Trunk, 'enabled' | 'isRegistered' | 'lastError'>,
+): { label: string; tone: TrunkRegistrationTone; hint: string } {
+  if (!trunk.enabled) {
+    return {
+      label: 'Disabled',
+      tone: 'secondary',
+      hint: 'Trunk is disabled (soft-deleted); the gateway does not register it.',
+    }
+  }
+  if (trunk.isRegistered) {
+    return {
+      label: 'Registered',
+      tone: 'success',
+      hint: 'SIP REGISTER succeeded; the trunk can place and receive calls.',
+    }
+  }
+  const error = trunk.lastError.trim()
+  if (error) {
+    return {
+      label: 'Failed',
+      tone: 'destructive',
+      hint: `Last registration error: ${error}`,
+    }
+  }
+  return {
+    label: 'Unregistered',
+    tone: 'secondary',
+    hint: 'Not registered. Registration happens on demand when a client uses this trunk, or use Register.',
+  }
+}
+
+/** Lease owner with expiry, for multi-instance deployments. */
+export function getTrunkLeaseView(
+  trunk: Pick<Trunk, 'leaseOwner' | 'leaseUntil'>,
+  now: number = Date.now(),
+): { owner: string; expired: boolean } | null {
+  const owner = trunk.leaseOwner.trim()
+  if (!owner) return null
+  const until = Date.parse(trunk.leaseUntil)
+  return { owner, expired: !Number.isNaN(until) && until < now }
+}
+
 export function getTrunkStatusLabel(enabled: boolean) {
   return enabled ? 'Enabled' : 'Deleted'
 }
@@ -287,7 +336,6 @@ function createEditForm(trunk: Trunk): TrunkEditForm {
 }
 
 export function TrunkListPage() {
-  const { theme, toggleTheme } = useTheme()
   const routeSearch = useSearch({ from: '/trunks' })
   const [trunks, setTrunks] = useState<Array<Trunk>>([])
   const [total, setTotal] = useState(0)
@@ -901,23 +949,6 @@ export function TrunkListPage() {
             />
             <span className="hidden sm:inline">Refresh</span>
           </Button>
-          <Separator orientation="vertical" className="hidden h-4 sm:block" />
-          {/* Theme toggle */}
-          <Button
-            size="icon"
-            variant="ghost"
-            className="size-7"
-            onClick={toggleTheme}
-            aria-label={
-              theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'
-            }
-          >
-            {theme === 'dark' ? (
-              <RiSunLine className="size-3.5" />
-            ) : (
-              <RiMoonLine className="size-3.5" />
-            )}
-          </Button>
         </div>
       </Header>
 
@@ -1512,17 +1543,37 @@ function TrunkTable({
       },
       {
         id: 'register',
-        header: 'Register',
-        cell: ({ row }) => (
-          <div className="space-y-0.5">
+        header: 'Registration',
+        cell: ({ row }) => {
+          const view = getTrunkRegistrationView(row.original)
+          return (
             <Badge
-              variant={row.original.isRegistered ? 'success' : 'secondary'}
+              variant={view.tone}
               className="text-[10px]"
+              title={view.hint}
             >
-              {row.original.isRegistered ? 'Registered' : 'Unregistered'}
+              {view.label}
             </Badge>
-          </div>
-        ),
+          )
+        },
+      },
+      {
+        id: 'lastError',
+        header: 'Last error',
+        cell: ({ row }) => {
+          const error = row.original.lastError.trim()
+          if (!error) {
+            return <span className="text-muted-foreground">-</span>
+          }
+          return (
+            <span
+              className="inline-block max-w-[220px] truncate font-mono text-[11px] text-rose-600 dark:text-rose-400"
+              title={error}
+            >
+              {error}
+            </span>
+          )
+        },
       },
       {
         id: 'pushContact',
@@ -1538,7 +1589,7 @@ function TrunkTable({
       },
       {
         id: 'status',
-        header: 'Status',
+        header: 'Enabled',
         cell: ({ row }) => (
           <div className="flex items-center gap-1.5">
             {row.original.isDefault ? (
@@ -1585,6 +1636,29 @@ function TrunkTable({
         ),
       },
       {
+        id: 'owner',
+        header: 'Owner instance',
+        cell: ({ row }) => {
+          const lease = getTrunkLeaseView(row.original)
+          if (!lease) return <span className="text-muted-foreground">-</span>
+          return (
+            <Link
+              to="/instances"
+              search={{ search: lease.owner }}
+              className={cn(
+                'inline-block max-w-[140px] truncate font-mono text-[11px] hover:underline',
+                lease.expired
+                  ? 'text-muted-foreground line-through'
+                  : 'text-cyan-700 dark:text-cyan-400',
+              )}
+              title={`Lease held by ${lease.owner} until ${formatThaiDateTime(row.original.leaseUntil)}${lease.expired ? ' (expired)' : ''}`}
+            >
+              {lease.owner}
+            </Link>
+          )
+        },
+      },
+      {
         accessorKey: 'lastRegisteredAt',
         header: 'Last Registered',
         cell: ({ row }) => (
@@ -1627,61 +1701,16 @@ function TrunkTable({
         header: () => <div className="text-right">Actions</div>,
         enableHiding: false,
         cell: ({ row }) => (
-          <div className="flex justify-end gap-1">
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-6 px-2 text-[10px]"
-              onClick={() => onEdit(row.original)}
-            >
-              Edit
-            </Button>
-            <Button
-              size="sm"
-              variant="secondary"
-              className="h-6 px-2 text-[10px]"
-              onClick={() => onRegister(row.original)}
-              disabled={isRegisterActionDisabled(row.original)}
-            >
-              Register
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-6 px-2 text-[10px]"
-              onClick={() => onUnregister(row.original)}
-              disabled={!row.original.isRegistered}
-            >
-              Unregister
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-6 px-2 text-[10px]"
-              onClick={() => onTestPush(row.original)}
-              disabled={!canTestIncomingPush(row.original)}
-            >
-              Test push
-            </Button>
-            {row.original.enabled ? (
-              <Button
-                size="sm"
-                variant="destructive"
-                className="h-6 px-2 text-[10px]"
-                onClick={() => onSoftDelete(row.original)}
-              >
-                {getTrunkLifecycleActionLabel(row.original.enabled)}
-              </Button>
-            ) : (
-              <Button
-                size="sm"
-                variant="default"
-                className="h-6 px-2 text-[10px]"
-                onClick={() => onRestore(row.original)}
-              >
-                {getTrunkLifecycleActionLabel(row.original.enabled)}
-              </Button>
-            )}
+          <div className="flex justify-end">
+            <TrunkActionsMenu
+              trunk={row.original}
+              onEdit={onEdit}
+              onRegister={onRegister}
+              onUnregister={onUnregister}
+              onTestPush={onTestPush}
+              onSoftDelete={onSoftDelete}
+              onRestore={onRestore}
+            />
           </div>
         ),
       },
@@ -1767,6 +1796,11 @@ function TrunkActionsMenu({
             onSelect={() => onTestPush(trunk)}
           >
             Test push
+          </DropdownMenuItem>
+          <DropdownMenuItem asChild>
+            <Link to="/logs" search={{ q: trunk.username }}>
+              Logs for {trunk.username}
+            </Link>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           {trunk.enabled ? (
