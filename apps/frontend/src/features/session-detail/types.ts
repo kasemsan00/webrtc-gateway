@@ -79,28 +79,28 @@ export interface SessionStatsListResponse {
 }
 
 export interface SessionOverview {
-  SessionId: string
-  CreatedAt?: string
-  UpdatedAt?: string
-  EndedAt?: string
-  Direction?: string
-  FromUri?: string
-  ToUri?: string
-  SipCallId?: string
-  FinalState?: string
-  EndReason?: string
-  AuthMode?: string
-  TrunkId?: number
-  TrunkName?: string
-  SipUsername?: string
-  RtpAudioPort?: number
-  RtpVideoPort?: number
-  RtcpAudioPort?: number
-  RtcpVideoPort?: number
-  SipOpusPt?: number
-  AudioProfile?: string
-  VideoProfile?: string
-  VideoRejected: boolean
-  LiveState?: string
-  LiveDurationSec?: number
+  sessionId: string
+  createdAt?: string
+  updatedAt?: string
+  endedAt?: string
+  direction?: string
+  fromUri?: string
+  toUri?: string
+  sipCallId?: string
+  finalState?: string
+  endReason?: string
+  authMode?: string
+  trunkId?: number
+  trunkName?: string
+  sipUsername?: string
+  rtpAudioPort?: number
+  rtpVideoPort?: number
+  rtcpAudioPort?: number
+  rtcpVideoPort?: number
+  sipOpusPt?: number
+  audioProfile?: string
+  videoProfile?: string
+  videoRejected: boolean
+  liveState?: string
+  liveDurationSec?: number
 }

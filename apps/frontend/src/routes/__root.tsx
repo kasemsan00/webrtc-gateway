@@ -5,9 +5,11 @@ import {
   Scripts,
   createRootRoute,
 } from '@tanstack/react-router'
+import { AppSidebar } from '@/components/app-sidebar'
 import { Toaster } from '@/components/ui/sonner'
 import { PasswordAuthProvider } from '@/features/auth/password-provider'
 import { verifyFrontendPassword } from '@/features/auth/verify-password'
+import { APP_TITLE } from '@/lib/navigation'
 
 import '../styles.css'
 
@@ -22,7 +24,7 @@ export const Route = createRootRoute({
         content: 'width=device-width, initial-scale=1',
       },
       {
-        title: 'WebRTC-SIP Gateway Console — Dashboard',
+        title: APP_TITLE,
       },
       {
         name: 'description',
@@ -59,7 +61,12 @@ function RootDocument({ children }: { children: React.ReactNode }) {
 function RootLayout() {
   return (
     <PasswordAuthProvider verifyPassword={verifyAdminPassword}>
-      <Outlet />
+      <div className="flex h-screen overflow-hidden bg-background text-foreground">
+        <AppSidebar className="hidden lg:flex" />
+        <div className="min-w-0 flex-1">
+          <Outlet />
+        </div>
+      </div>
       <Toaster />
     </PasswordAuthProvider>
   )

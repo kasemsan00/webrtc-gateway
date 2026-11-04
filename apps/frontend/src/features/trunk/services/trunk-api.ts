@@ -142,11 +142,13 @@ export async function createTrunk(payload: CreateTrunkPayload): Promise<Trunk> {
 export function subscribeTrunkEvents(
   onEvent: (event: TrunkStreamEvent) => void,
   onError?: (event: Event) => void,
+  onOpen?: () => void,
 ) {
   return subscribeAuthenticatedSse<TrunkStreamEvent>({
     url: `${API_BASE}/trunks/stream`,
     eventName: 'trunk',
     onEvent,
     onError,
+    onOpen,
   })
 }

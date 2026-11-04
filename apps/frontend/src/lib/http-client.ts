@@ -40,6 +40,37 @@ export function resolveGatewayApiBaseUrl(
   return `${normalizedOrigin.replace(/\/+$/, '')}/api`
 }
 
+/** Error thrown for non-2xx responses; keeps status and path for debugging. */
+export class HttpError extends Error {
+  readonly status: number
+  readonly path: string
+
+  constructor(message: string, status: number, path: string) {
+    super(message)
+    this.name = 'HttpError'
+    this.status = status
+    this.path = path
+  }
+}
+
+function pathOf(url: string): string {
+  try {
+    const parsed = new URL(url)
+    return parsed.pathname
+  } catch {
+    return url.split('?')[0] ?? url
+  }
+}
+
+const STATUS_HINT: Partial<Record<number, string>> = {
+  401: 'not authorised: sign out and sign in again, or check FRONTEND_PASSWORD on the gateway',
+  403: 'forbidden',
+  404: 'not found',
+  502: 'bad gateway: the reverse proxy cannot reach the gateway',
+  503: 'service unavailable',
+  504: 'gateway timeout',
+}
+
 type FetchJsonOptions = {
   method?: string
   headers?: HeadersInit
@@ -97,15 +128,28 @@ export async function fetchJson<T>(
 
     if (!res.ok) {
       const body = await res.json().catch(() => ({}))
-      throw new Error(
-        (body as { error?: string }).error ?? `HTTP ${res.status}`,
+      const path = pathOf(url)
+      const detail =
+        (body as { error?: string }).error ?? STATUS_HINT[res.status] ?? ''
+      throw new HttpError(
+        `${detail ? `${detail} ` : ''}(HTTP ${res.status} ${options.method ?? 'GET'} ${path})`,
+        res.status,
+        path,
       )
     }
 
     return res.json() as Promise<T>
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') {
-      throw new Error(`Request timed out after ${timeoutMs}ms`)
+      throw new Error(
+        `Request timed out after ${timeoutMs}ms (${options.method ?? 'GET'} ${pathOf(url)})`,
+      )
+    }
+    if (error instanceof TypeError) {
+      // fetch() network failure: DNS, CORS, TLS or the gateway is down.
+      throw new Error(
+        `Cannot reach the gateway (${options.method ?? 'GET'} ${pathOf(url)}): ${error.message}`,
+      )
     }
     throw error
   } finally {

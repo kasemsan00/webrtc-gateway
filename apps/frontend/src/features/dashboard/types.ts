@@ -11,6 +11,7 @@ export interface OperationalHealthComponent {
   state: OperationalHealthState
   reason?: string
   lastSuccessAt?: string
+  lastFailureAt?: string
   details?: Record<string, number>
 }
 

@@ -17,11 +17,13 @@ export async function fetchActiveSessions(): Promise<Array<ActiveSession>> {
 export function subscribeSessionEvents(
   onEvent: (event: SessionStreamEvent) => void,
   onError?: (event: Event) => void,
+  onOpen?: () => void,
 ) {
   return subscribeAuthenticatedSse<SessionStreamEvent>({
     url: `${API_BASE}/sessions/stream`,
     eventName: 'session',
     onEvent,
     onError,
+    onOpen,
   })
 }

@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest'
 
 import {
   canTestIncomingPush,
+  getTrunkLeaseView,
   getTrunkLifecycleActionLabel,
+  getTrunkRegistrationView,
   getTrunkStatusLabel,
   getPushContactDetailText,
   isPushContactReady,
@@ -113,9 +115,9 @@ describe('getPushContactDetailText', () => {
   })
 
   it('notes FCM when SIP PN contact is absent', () => {
-    expect(
-      getPushContactDetailText(makeTrunk({ fcmTokenReady: true })),
-    ).toBe('Uses FCM (no SIP PN contact)')
+    expect(getPushContactDetailText(makeTrunk({ fcmTokenReady: true }))).toBe(
+      'Uses FCM (no SIP PN contact)',
+    )
   })
 
   it('notes no push paths when nothing is bound', () => {
@@ -147,5 +149,49 @@ describe('canTestIncomingPush', () => {
 
   it('disables when the trunk has no push target', () => {
     expect(canTestIncomingPush(makeTrunk())).toBe(false)
+  })
+})
+
+describe('getTrunkRegistrationView', () => {
+  it('shows a failed registration in red with the last error', () => {
+    const view = getTrunkRegistrationView(
+      makeTrunk({ isRegistered: false, lastError: '403 Forbidden' }),
+    )
+    expect(view).toMatchObject({ label: 'Failed', tone: 'destructive' })
+    expect(view.hint).toContain('403 Forbidden')
+  })
+
+  it('distinguishes registered, idle and disabled trunks', () => {
+    expect(
+      getTrunkRegistrationView(makeTrunk({ isRegistered: true })).label,
+    ).toBe('Registered')
+    expect(getTrunkRegistrationView(makeTrunk()).label).toBe('Unregistered')
+    expect(
+      getTrunkRegistrationView(makeTrunk({ enabled: false, lastError: 'x' }))
+        .label,
+    ).toBe('Disabled')
+  })
+})
+
+describe('getTrunkLeaseView', () => {
+  const now = Date.parse('2026-11-04T10:00:00Z')
+
+  it('returns null without an owner', () => {
+    expect(getTrunkLeaseView(makeTrunk(), now)).toBeNull()
+  })
+
+  it('marks an expired lease', () => {
+    expect(
+      getTrunkLeaseView(
+        makeTrunk({ leaseOwner: 'gw-a', leaseUntil: '2026-11-04T09:00:00Z' }),
+        now,
+      ),
+    ).toEqual({ owner: 'gw-a', expired: true })
+    expect(
+      getTrunkLeaseView(
+        makeTrunk({ leaseOwner: 'gw-a', leaseUntil: '2026-11-04T11:00:00Z' }),
+        now,
+      ),
+    ).toEqual({ owner: 'gw-a', expired: false })
   })
 })
