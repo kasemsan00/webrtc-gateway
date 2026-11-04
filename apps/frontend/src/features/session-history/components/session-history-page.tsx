@@ -1,228 +1,218 @@
 import {
   RiArrowDownLine,
   RiArrowUpLine,
+  RiCloseLine,
   RiHistoryLine,
   RiLoader4Line,
-  RiMoonLine,
   RiRefreshLine,
-  RiSunLine,
 } from '@remixicon/react'
-import { useNavigate } from '@tanstack/react-router'
+import { Link, useNavigate, useSearch } from '@tanstack/react-router'
 import { debounce } from '@tanstack/pacer'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ColumnDef } from '@tanstack/react-table'
 
-import type {
-  SessionHistory,
-  SessionHistoryListParams,
-} from '@/features/session-history/types'
+import type { SessionHistory } from '@/features/session-history/types'
+import type { SessionsSearch } from '@/lib/search-params'
 
+import Header from '@/components/Header'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { DataTable } from '@/components/ui/data-table'
 import { Input } from '@/components/ui/input'
 import { ServerPaginationControls } from '@/components/ui/server-pagination-controls'
-import { Separator } from '@/components/ui/separator'
-import Header from '@/components/Header'
-import { formatThaiDateTime } from '@/lib/date-time'
-import { useTheme } from '@/lib/theme'
-import { useVisibilityRealtimeReload } from '@/lib/use-visibility-realtime-reload'
-import { fetchSessionHistory } from '@/features/session-history/services/session-history-api'
+import {
+  IdCell,
+  SessionIdLink,
+  TimestampCell,
+} from '@/components/ui/table-cells'
 import { subscribeSessionEvents } from '@/features/active-sessions/services/active-sessions-api'
+import { fetchSessionHistory } from '@/features/session-history/services/session-history-api'
+import {
+  bangkokDayBoundsIso,
+  formatDurationSec,
+  formatThaiDateTime,
+  secondsBetween,
+} from '@/lib/date-time'
+import { trunkSearchFrom } from '@/lib/operations-navigation'
+import { useVisibilityRealtimeReload } from '@/lib/use-visibility-realtime-reload'
+import { cn } from '@/lib/utils'
 
 const DEFAULT_PAGE_SIZE = 20
 
-function formatDuration(createdAt: string, endedAt: string) {
-  if (!createdAt || !endedAt) return '-'
-  try {
-    const start = new Date(createdAt).getTime()
-    const end = new Date(endedAt).getTime()
-    const diff = Math.max(0, Math.floor((end - start) / 1000))
-    const m = Math.floor(diff / 60)
-    const s = diff % 60
-    return m > 0 ? `${m}m ${s}s` : `${s}s`
-  } catch {
-    return '-'
-  }
-}
+/** Final states recorded for a call, with the meaning shown to operators. */
+export const SESSION_STATE_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: 'ended', label: 'ended: finished normally' },
+  { value: 'failed', label: 'failed: setup or media failed' },
+  { value: 'unknown', label: 'unknown: gateway lost track' },
+  { value: 'active', label: 'active: still in progress' },
+  { value: 'ringing', label: 'ringing' },
+  { value: 'connecting', label: 'connecting' },
+  { value: 'incoming', label: 'incoming' },
+  { value: 'reconnecting', label: 'reconnecting' },
+]
+
+export const END_REASON_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: 'hangup', label: 'BYE / hangup (normal end)' },
+  { value: 'busy', label: '486 busy' },
+  { value: 'decline', label: '486 declined by user' },
+  { value: 'no_answer', label: '480 no answer / offline' },
+  { value: 'caller_cancelled', label: 'caller cancelled (CANCEL)' },
+  { value: 'outgoing_cancelled', label: 'outgoing cancelled' },
+]
 
 function DirectionBadge({ direction }: { direction: string }) {
   if (direction === 'inbound') {
     return (
       <Badge variant="secondary" className="gap-1 text-[10px]">
         <RiArrowDownLine className="size-2.5" />
-        Inbound
+        In
+      </Badge>
+    )
+  }
+  if (direction === 'outbound') {
+    return (
+      <Badge variant="outline" className="gap-1 text-[10px]">
+        <RiArrowUpLine className="size-2.5" />
+        Out
       </Badge>
     )
   }
   return (
-    <Badge variant="default" className="gap-1 text-[10px]">
-      <RiArrowUpLine className="size-2.5" />
-      Outbound
+    <Badge variant="outline" className="text-[10px]">
+      {direction || '-'}
     </Badge>
   )
 }
 
-function StateBadge({ state }: { state: string }) {
-  switch (state) {
-    case 'active':
-      return (
-        <Badge variant="success" className="text-[10px]">
-          Active
-        </Badge>
-      )
-    case 'ended':
-      return (
-        <Badge variant="secondary" className="text-[10px]">
-          Ended
-        </Badge>
-      )
-    case 'connecting':
-      return (
-        <Badge
-          variant="default"
-          className="bg-amber-600/20 text-[10px] text-amber-400"
-        >
-          Connecting
-        </Badge>
-      )
-    case 'reconnecting':
-      return (
-        <Badge
-          variant="default"
-          className="bg-amber-600/20 text-[10px] text-amber-400"
-        >
-          Reconnecting
-        </Badge>
-      )
-    case 'incoming':
-      return (
-        <Badge
-          variant="default"
-          className="bg-blue-600/20 text-[10px] text-blue-400"
-        >
-          Incoming
-        </Badge>
-      )
-    default:
-      return (
-        <Badge variant="outline" className="text-[10px]">
-          {state || 'Unknown'}
-        </Badge>
-      )
-  }
+export function StateBadge({ state }: { state: string }) {
+  const variant =
+    state === 'ended'
+      ? 'secondary'
+      : state === 'active'
+        ? 'success'
+        : state === 'failed' || state === 'unknown'
+          ? 'destructive'
+          : 'warning'
+  return (
+    <Badge variant={variant} className="text-[10px]">
+      {state || 'unknown'}
+    </Badge>
+  )
 }
 
-function EndReasonBadge({ reason }: { reason: string }) {
+export function endReasonView(reason: string): {
+  label: string
+  variant: 'success' | 'warning' | 'destructive' | 'secondary' | 'outline'
+} {
   switch (reason) {
     case 'busy':
+      return { label: '486 Busy', variant: 'warning' }
     case 'decline':
-      return (
-        <Badge
-          variant="default"
-          className="bg-amber-600/20 text-[10px] text-amber-400"
-        >
-          486 Busy
-        </Badge>
-      )
+      return { label: '486 Declined', variant: 'warning' }
     case 'no_answer':
     case 'offline':
-      return (
-        <Badge variant="destructive" className="text-[10px]">
-          480 No Answer
-        </Badge>
-      )
+      return { label: '480 No answer', variant: 'destructive' }
     case 'caller_cancelled':
-      return (
-        <Badge variant="secondary" className="text-[10px]">
-          Caller Cancelled
-        </Badge>
-      )
+      return { label: 'Caller cancelled', variant: 'secondary' }
     case 'outgoing_cancelled':
-      return (
-        <Badge
-          variant="default"
-          className="bg-purple-600/20 text-[10px] text-purple-400"
-        >
-          Outgoing Cancelled
-        </Badge>
-      )
+      return { label: 'Outgoing cancelled', variant: 'secondary' }
     case 'hangup':
     case 'bye':
-      return (
-        <Badge variant="success" className="text-[10px]">
-          BYE / Hangup
-        </Badge>
-      )
+      return { label: 'BYE / hangup', variant: 'success' }
     default:
-      return (
-        <Badge variant="outline" className="text-[10px]">
-          {reason || '-'}
-        </Badge>
-      )
+      return { label: reason || '-', variant: 'outline' }
   }
 }
 
+export function EndReasonBadge({ reason }: { reason: string }) {
+  const view = endReasonView(reason)
+  return (
+    <Badge
+      variant={view.variant}
+      className="text-[10px]"
+      title={reason || undefined}
+    >
+      {view.label}
+    </Badge>
+  )
+}
+
+const SELECT_CLASS =
+  'h-7 rounded-md border border-border bg-background px-2 text-xs text-foreground'
+
 export function SessionHistoryPage() {
-  const { theme, toggleTheme } = useTheme()
-  const navigate = useNavigate()
+  const search = useSearch({ from: '/sessions/' })
+  const navigate = useNavigate({ from: '/sessions/' })
   const [sessions, setSessions] = useState<Array<SessionHistory>>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE)
-  const [search, setSearch] = useState('')
-  const [directionFilter, setDirectionFilter] = useState('')
-  const [stateFilter, setStateFilter] = useState('')
-  const [endReasonFilter, setEndReasonFilter] = useState('')
-  const [loading, setLoading] = useState(false)
+  const [queryInput, setQueryInput] = useState(search.q ?? '')
+  const [initialLoading, setInitialLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
+  const filterKey = JSON.stringify(search)
 
-  const searchRef = useRef(search)
-  searchRef.current = search
+  // Keep the input in sync when the URL changes (back/forward, drill-down links).
+  useEffect(() => {
+    setQueryInput(search.q ?? '')
+  }, [search.q])
 
-  const directionRef = useRef(directionFilter)
-  directionRef.current = directionFilter
+  // Any filter change starts from page 1.
+  const prevFilterKey = useRef(filterKey)
+  useEffect(() => {
+    if (prevFilterKey.current !== filterKey) {
+      prevFilterKey.current = filterKey
+      setPage(1)
+    }
+  }, [filterKey])
 
-  const stateRef = useRef(stateFilter)
-  stateRef.current = stateFilter
-
-  const endReasonRef = useRef(endReasonFilter)
-  endReasonRef.current = endReasonFilter
-
-  const load = useCallback(
-    async (
-      params?: Partial<SessionHistoryListParams>,
-      options?: { silent?: boolean },
-    ) => {
-      if (!options?.silent) {
-        setLoading(true)
-      }
-      setError(null)
-      try {
-        const res = await fetchSessionHistory({
-          page: params?.page ?? page,
-          pageSize: params?.pageSize ?? pageSize,
-          search: (params?.search ?? searchRef.current) || undefined,
-          direction: (params?.direction ?? directionRef.current) || undefined,
-          state: (params?.state ?? stateRef.current) || undefined,
-          endReason: (params?.endReason ?? endReasonRef.current) || undefined,
-        })
-        setSessions(res.items)
-        setTotal(res.total)
-      } catch (err) {
-        setError(
-          err instanceof Error ? err.message : 'Failed to fetch sessions',
-        )
-      } finally {
-        if (!options?.silent) {
-          setLoading(false)
-        }
-      }
+  const updateSearch = useCallback(
+    (patch: Partial<SessionsSearch>) => {
+      void navigate({
+        search: (prev: SessionsSearch) => {
+          const next: SessionsSearch = { ...prev, ...patch }
+          for (const key of Object.keys(next) as Array<keyof SessionsSearch>) {
+            if (!next[key]) delete next[key]
+          }
+          return next
+        },
+        replace: true,
+      })
     },
-    [page, pageSize],
+    [navigate],
   )
+
+  const load = useCallback(async () => {
+    setRefreshing(true)
+    try {
+      const res = await fetchSessionHistory({
+        page,
+        pageSize,
+        search: search.q,
+        direction: search.direction,
+        state: search.state,
+        endReason: search.endReason,
+        createdAfter: search.from
+          ? bangkokDayBoundsIso(search.from, 'start')
+          : undefined,
+        createdBefore: search.to
+          ? bangkokDayBoundsIso(search.to, 'end')
+          : undefined,
+      })
+      setSessions(res.items)
+      setTotal(res.total)
+      setError(null)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to fetch sessions')
+    } finally {
+      setRefreshing(false)
+      setInitialLoading(false)
+    }
+    // filterKey captures every field of `search`.
+  }, [page, pageSize, filterKey])
 
   useEffect(() => {
     void load()
@@ -232,99 +222,38 @@ export function SessionHistoryPage() {
   loadRef.current = load
 
   const handleSilentReload = useCallback(() => {
-    void loadRef.current(undefined, { silent: true })
+    void loadRef.current()
   }, [])
 
   useVisibilityRealtimeReload({
-    subscribe: (onEvent, onError) =>
-      subscribeSessionEvents(() => onEvent(), onError),
+    name: 'sessions',
+    subscribe: subscribeSessionEvents,
     onReload: handleSilentReload,
   })
 
-  const debouncedSearch = useMemo(
+  const debouncedQuery = useMemo(
     () =>
       debounce(
-        (value: string) => {
-          setPage(1)
-          void loadRef.current({ page: 1, search: value })
+        (value: string) => updateSearch({ q: value.trim() || undefined }),
+        {
+          wait: 350,
         },
-        { wait: 300 },
       ),
-    [],
+    [updateSearch],
   )
 
-  const handleDirectionChange = useCallback((dir: string) => {
-    setDirectionFilter(dir)
-    setPage(1)
-    void loadRef.current({ page: 1, direction: dir })
-  }, [])
-
-  const handleStateChange = useCallback((state: string) => {
-    setStateFilter(state)
-    setPage(1)
-    void loadRef.current({ page: 1, state })
-  }, [])
-
-  const handleEndReasonChange = useCallback((endReason: string) => {
-    setEndReasonFilter(endReason)
-    setPage(1)
-    void loadRef.current({ page: 1, endReason })
-  }, [])
-
-  const handleRefresh = useCallback(async () => {
-    await loadRef.current()
-  }, [])
-
-  const handlePageChange = useCallback((nextPage: number) => {
-    setPage(nextPage)
-  }, [])
-
-  const handlePageSizeChange = useCallback((nextPageSize: number) => {
-    setPageSize(nextPageSize)
-    setPage(1)
-    void loadRef.current({ page: 1, pageSize: nextPageSize })
-  }, [])
+  const activeFilterCount = Object.values(search).filter(Boolean).length
 
   const columns = useMemo<Array<ColumnDef<SessionHistory>>>(
     () => [
       {
         accessorKey: 'sessionId',
-        header: 'Session ID',
+        header: 'Session',
         cell: ({ row }) => (
-          <span className="font-mono text-xs text-muted-foreground">
-            {row.original.sessionId}
-          </span>
-        ),
-      },
-      {
-        accessorKey: 'direction',
-        header: 'Direction',
-        cell: ({ row }) => (
-          <DirectionBadge direction={row.original.direction} />
-        ),
-      },
-      {
-        accessorKey: 'fromUri',
-        header: 'From',
-        cell: ({ row }) => (
-          <span
-            className="inline-block max-w-[180px] truncate text-xs"
-            title={row.original.fromUri}
-          >
-            {row.original.fromUri || '-'}
-          </span>
-        ),
-      },
-      {
-        accessorKey: 'toUri',
-        header: 'To',
-        cell: ({ row }) => (
-          <span
-            className="inline-block max-w-[180px] truncate text-xs"
-            title={row.original.toUri}
-          >
-            {row.original.toUri || '-'}
-          </span>
+          <SessionIdLink
+            sessionId={row.original.sessionId}
+            maxWidth="max-w-[130px]"
+          />
         ),
       },
       {
@@ -334,45 +263,94 @@ export function SessionHistoryPage() {
       },
       {
         accessorKey: 'endReason',
-        header: 'End Reason',
+        header: 'Outcome',
         cell: ({ row }) => <EndReasonBadge reason={row.original.endReason} />,
+      },
+      {
+        id: 'call',
+        header: 'Call',
+        cell: ({ row }) => (
+          <div className="flex min-w-0 max-w-[280px] items-center gap-1.5 text-xs">
+            <DirectionBadge direction={row.original.direction} />
+            <span
+              className="truncate"
+              title={`${row.original.fromUri} → ${row.original.toUri}`}
+            >
+              {row.original.fromUri || '-'}{' '}
+              <span className="text-muted-foreground">→</span>{' '}
+              {row.original.toUri || '-'}
+            </span>
+          </div>
+        ),
+      },
+      {
+        id: 'trunk',
+        header: 'Trunk / Auth',
+        cell: ({ row }) => {
+          const s = row.original
+          return (
+            <div className="text-xs">
+              {s.trunkId && s.trunkId > 0 ? (
+                <Link
+                  to="/trunks"
+                  search={trunkSearchFrom({ trunkId: s.trunkId })}
+                  onClick={(e) => e.stopPropagation()}
+                  className="text-cyan-700 hover:underline dark:text-cyan-400"
+                >
+                  {s.trunkName || `#${s.trunkId}`}
+                </Link>
+              ) : (
+                <span className="text-muted-foreground">
+                  {s.trunkName || '-'}
+                </span>
+              )}
+              <p className="text-[10px] text-muted-foreground">
+                {[s.authMode, s.sipUsername].filter(Boolean).join(' · ') || ''}
+              </p>
+            </div>
+          )
+        },
       },
       {
         id: 'duration',
         header: 'Duration',
-        cell: ({ row }) => (
-          <span className="text-xs">
-            {formatDuration(row.original.createdAt, row.original.endedAt)}
-          </span>
-        ),
+        cell: ({ row }) => {
+          const seconds = row.original.endedAt
+            ? secondsBetween(row.original.createdAt, row.original.endedAt)
+            : null
+          return (
+            <span
+              className="font-mono text-xs tabular-nums"
+              title="From call creation to end (includes ringing)"
+            >
+              {seconds === null ? '-' : formatDurationSec(seconds)}
+            </span>
+          )
+        },
       },
       {
         accessorKey: 'sipCallId',
         header: 'SIP Call-ID',
         cell: ({ row }) => (
-          <span
-            className="inline-block max-w-[140px] truncate font-mono text-[10px] text-muted-foreground"
-            title={row.original.sipCallId}
-          >
-            {row.original.sipCallId || '-'}
-          </span>
+          <IdCell
+            value={row.original.sipCallId}
+            label="SIP Call-ID"
+            maxWidth="max-w-[120px]"
+          />
         ),
       },
       {
         accessorKey: 'createdAt',
-        header: 'Created',
+        header: 'Started',
         cell: ({ row }) => (
-          <span className="text-xs text-muted-foreground">
-            {formatThaiDateTime(row.original.createdAt)}
-          </span>
-        ),
-      },
-      {
-        accessorKey: 'endedAt',
-        header: 'Ended',
-        cell: ({ row }) => (
-          <span className="text-xs text-muted-foreground">
-            {formatThaiDateTime(row.original.endedAt)}
+          <span
+            title={
+              row.original.endedAt
+                ? `Ended ${formatThaiDateTime(row.original.endedAt)}`
+                : 'Not ended'
+            }
+          >
+            <TimestampCell value={row.original.createdAt} />
           </span>
         ),
       },
@@ -380,122 +358,139 @@ export function SessionHistoryPage() {
     [],
   )
 
+  const filters = (
+    <div className="flex flex-wrap items-center gap-2 text-xs">
+      <Input
+        className="h-7 w-full text-xs sm:w-60"
+        placeholder="Search session ID, from, to, Call-ID…"
+        aria-label="Search call sessions"
+        value={queryInput}
+        onChange={(e) => {
+          setQueryInput(e.target.value)
+          debouncedQuery(e.target.value)
+        }}
+      />
+      <div
+        className="flex items-center gap-0.5"
+        role="group"
+        aria-label="Direction"
+      >
+        {(
+          [
+            [undefined, 'All'],
+            ['inbound', 'Inbound'],
+            ['outbound', 'Outbound'],
+          ] as const
+        ).map(([value, label]) => (
+          <Button
+            key={label}
+            size="sm"
+            variant={search.direction === value ? 'secondary' : 'ghost'}
+            className="h-7 px-2 text-xs"
+            aria-pressed={search.direction === value}
+            onClick={() => updateSearch({ direction: value })}
+          >
+            {label}
+          </Button>
+        ))}
+      </div>
+      <select
+        className={SELECT_CLASS}
+        value={search.state ?? ''}
+        onChange={(e) => updateSearch({ state: e.target.value || undefined })}
+        aria-label="Final state filter"
+      >
+        <option value="">Any state</option>
+        {SESSION_STATE_OPTIONS.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+      <select
+        className={SELECT_CLASS}
+        value={search.endReason ?? ''}
+        onChange={(e) =>
+          updateSearch({ endReason: e.target.value || undefined })
+        }
+        aria-label="Outcome filter"
+      >
+        <option value="">Any outcome</option>
+        {END_REASON_OPTIONS.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+      <label className="flex items-center gap-1 text-muted-foreground">
+        From
+        <Input
+          type="date"
+          className="h-7 w-36 text-xs"
+          value={search.from ?? ''}
+          onChange={(e) => updateSearch({ from: e.target.value || undefined })}
+          aria-label="Started on or after (Bangkok date)"
+        />
+      </label>
+      <label className="flex items-center gap-1 text-muted-foreground">
+        To
+        <Input
+          type="date"
+          className="h-7 w-36 text-xs"
+          value={search.to ?? ''}
+          onChange={(e) => updateSearch({ to: e.target.value || undefined })}
+          aria-label="Started on or before (Bangkok date)"
+        />
+      </label>
+      {activeFilterCount > 0 ? (
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-7 gap-1 px-2 text-xs"
+          onClick={() => {
+            setQueryInput('')
+            void navigate({ search: {}, replace: true })
+          }}
+        >
+          <RiCloseLine className="size-3.5" />
+          Clear {activeFilterCount} filter{activeFilterCount === 1 ? '' : 's'}
+        </Button>
+      ) : null}
+    </div>
+  )
+
   return (
     <div className="flex h-screen flex-col bg-background text-foreground">
-      <Header>
-        <div className="flex items-center gap-2 text-xs">
-          {/* Search */}
-          <Input
-            className="h-7 w-52 text-xs"
-            placeholder="Search session, from, to, call-id..."
-            value={search}
-            onChange={(e) => {
-              setSearch(e.target.value)
-              debouncedSearch(e.target.value)
-            }}
+      <Header subBar={filters} subBarAlways>
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7 gap-1 px-2 text-xs"
+          onClick={() => void load()}
+          disabled={refreshing}
+        >
+          <RiRefreshLine
+            className={`size-3.5 ${refreshing ? 'animate-spin' : ''}`}
           />
-          <Separator orientation="vertical" className="h-4" />
-          {/* Direction filter */}
-          <div className="flex items-center gap-0.5">
-            <Button
-              size="sm"
-              variant={directionFilter === '' ? 'secondary' : 'ghost'}
-              className="h-7 px-2 text-xs"
-              onClick={() => handleDirectionChange('')}
-            >
-              All
-            </Button>
-            <Button
-              size="sm"
-              variant={directionFilter === 'inbound' ? 'secondary' : 'ghost'}
-              className="h-7 px-2 text-xs"
-              onClick={() => handleDirectionChange('inbound')}
-            >
-              Inbound
-            </Button>
-            <Button
-              size="sm"
-              variant={directionFilter === 'outbound' ? 'secondary' : 'ghost'}
-              className="h-7 px-2 text-xs"
-              onClick={() => handleDirectionChange('outbound')}
-            >
-              Outbound
-            </Button>
-          </div>
-          <Separator orientation="vertical" className="h-4" />
-          <div className="flex items-center gap-0.5">
-            {['', 'ended', 'active', 'incoming', 'connecting', 'ringing'].map(
-              (state) => (
-                <Button
-                  key={state || 'all-state'}
-                  size="sm"
-                  variant={stateFilter === state ? 'secondary' : 'ghost'}
-                  className="h-7 px-2 text-xs"
-                  onClick={() => handleStateChange(state)}
-                >
-                  {state ? state : 'Any State'}
-                </Button>
-              ),
-            )}
-          </div>
-          <Separator orientation="vertical" className="h-4" />
-          <select
-            className="h-7 rounded-md border border-border bg-background px-2 text-xs"
-            value={endReasonFilter}
-            onChange={(event) => handleEndReasonChange(event.target.value)}
-            aria-label="End reason filter"
-          >
-            <option value="">Any Reason</option>
-            <option value="busy">486 busy</option>
-            <option value="decline">decline</option>
-            <option value="no_answer">480 no answer</option>
-            <option value="caller_cancelled">caller cancelled</option>
-            <option value="outgoing_cancelled">outgoing cancelled</option>
-            <option value="hangup">hangup / BYE</option>
-          </select>
-          <Separator orientation="vertical" className="h-4" />
-          {/* Refresh */}
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-7 gap-1 px-2 text-xs"
-            onClick={handleRefresh}
-            disabled={loading}
-          >
-            <RiRefreshLine
-              className={`size-3.5 ${loading ? 'animate-spin' : ''}`}
-            />
-            Refresh
-          </Button>
-          <Separator orientation="vertical" className="h-4" />
-          {/* Theme toggle */}
-          <Button
-            size="icon"
-            variant="ghost"
-            className="size-7"
-            onClick={toggleTheme}
-            aria-label={
-              theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'
-            }
-          >
-            {theme === 'dark' ? (
-              <RiSunLine className="size-3.5" />
-            ) : (
-              <RiMoonLine className="size-3.5" />
-            )}
-          </Button>
-        </div>
+          <span className="hidden sm:inline">Refresh</span>
+        </Button>
       </Header>
 
-      {/* Content */}
       <div className="flex-1 overflow-y-auto p-4">
+        <p className="mb-3 text-xs text-muted-foreground">
+          <strong className="text-foreground tabular-nums">{total}</strong> call
+          {total === 1 ? '' : 's'}
+          {activeFilterCount ? ' match the filters' : ''} · newest first · times
+          in Asia/Bangkok · click a row to open the SIP timeline. The filters
+          are in the URL, so you can share this view.
+        </p>
         {error ? (
-          <div className="mb-3 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400">
+          <div className="mb-3 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-600 dark:text-red-400">
             {error}
           </div>
         ) : null}
 
-        {loading ? (
+        {initialLoading ? (
           <div className="flex items-center justify-center py-20">
             <RiLoader4Line className="size-6 animate-spin text-muted-foreground" />
           </div>
@@ -503,19 +498,36 @@ export function SessionHistoryPage() {
           <div className="flex flex-col items-center justify-center gap-2 py-20 text-muted-foreground">
             <RiHistoryLine className="size-10 opacity-30" />
             <p className="text-sm">No call sessions found</p>
+            {activeFilterCount ? (
+              <p className="text-xs">Try clearing some filters.</p>
+            ) : (
+              <p className="text-xs">
+                Calls are recorded when database logging is enabled.
+              </p>
+            )}
           </div>
         ) : (
-          <DataTable
-            columns={columns}
-            data={sessions}
-            onRowClick={(sess) =>
-              navigate({
-                to: '/sessions/$sessionId',
-                params: { sessionId: sess.sessionId },
-              })
-            }
-            getRowClassName={() => 'hover:bg-muted/50'}
-          />
+          <div className={cn(refreshing && 'opacity-80 transition-opacity')}>
+            <DataTable
+              columns={columns}
+              data={sessions}
+              onRowClick={(sess) =>
+                void navigate({
+                  to: '/sessions/$sessionId',
+                  params: { sessionId: sess.sessionId },
+                  search: {},
+                })
+              }
+              getRowClassName={(sess) =>
+                cn(
+                  'hover:bg-muted/50',
+                  (sess.finalState === 'failed' ||
+                    sess.finalState === 'unknown') &&
+                    'bg-rose-500/5',
+                )
+              }
+            />
+          </div>
         )}
 
         <ServerPaginationControls
@@ -523,8 +535,11 @@ export function SessionHistoryPage() {
           totalPages={totalPages}
           total={total}
           pageSize={pageSize}
-          onPageChange={handlePageChange}
-          onPageSizeChange={handlePageSizeChange}
+          onPageChange={setPage}
+          onPageSizeChange={(next) => {
+            setPageSize(next)
+            setPage(1)
+          }}
           totalLabel="total"
         />
       </div>

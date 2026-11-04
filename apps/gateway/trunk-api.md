@@ -17,9 +17,12 @@ GET /api/trunks
 | `page`          | int    | 1       | Page number (1-based)                             |
 | `pageSize`      | int    | 20      | Items per page (max 100)                          |
 | `trunkId`       | int64  | —       | Filter by exact trunk ID                          |
+| `trunkPublicId` | UUID   | —       | Filter by trunk public ID (`400` if not a UUID)   |
 | `search`        | string | —       | Search by username or name (case-insensitive)     |
 | `createdAfter`  | string | —       | Filter trunks created after this time (RFC 3339)  |
 | `createdBefore` | string | —       | Filter trunks created before this time (RFC 3339) |
+| `sortBy`        | string | `id`    | `id`, `name`, `domain`, `port`, `username`, `enabled`, `created_at`, `updated_at`; other values sort by `id` (`activeCallCount` is not server-sortable) |
+| `sortDir`       | string | `asc`   | `asc` or `desc`                                   |
 
 ### Examples
 
@@ -211,7 +214,8 @@ POST /api/trunks/refresh
 
 ```json
 {
-  "status": "refreshed"
+  "status": "refreshed",
+  "message": "Trunk list reloaded from database"
 }
 ```
 
@@ -336,6 +340,18 @@ Request body:
 
 - When active calls exist on the trunk, disabling is rejected with `409`.
 - On successful disable, gateway performs best-effort unregister and lease release.
+
+---
+
+## Other trunk routes
+
+Not detailed here (see `internal/api/server.go` and `handlers_trunk.go`):
+
+- `POST /api/trunks` — create a trunk
+- `GET /api/trunks/stream` — SSE stream of trunk list changes
+- `PUT /api/trunk/{id}` — update fields; domain/port/username/transport changes and disabling return `409` while calls are active
+- `POST /api/trunk/{id}/test-incoming-push` — send a test incoming-call push (see `docs/gateway/ops-guide.md`)
+- `PUT /api/user/trunk` — user trunk heartbeat
 
 ---
 

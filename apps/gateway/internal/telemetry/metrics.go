@@ -364,7 +364,7 @@ func normalizeRecoveryType(value string) string {
 }
 func normalizeWSMessageType(value string) string {
 	switch value {
-	case "offer", "ice", "call", "hangup", "dtmf", "accept", "reject", "resume", "ping", "translate", "translate_stop", "request_keyframe", "renegotiate_answer", "client_state", "trunk_resolve", "trunk_push_token", "agent_register":
+	case "offer", "ice", "call", "hangup", "dtmf", "accept", "reject", "resume", "ping", "translate", "translate_stop", "request_keyframe", "request-keyframe", "renegotiate_answer", "client_state", "trunk_resolve", "trunk_push_token", "agent_register":
 		return value
 	default:
 		return "other"

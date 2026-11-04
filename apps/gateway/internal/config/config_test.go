@@ -71,6 +71,104 @@ func TestTrunkPNAppIDConfigCanBeCustomizedAndTrimmed(t *testing.T) {
 	}
 }
 
+func TestSIPKeyframeRequestConfigDefaults(t *testing.T) {
+	t.Setenv("SIP_KEYFRAME_REQUEST_MODE", "")
+	t.Setenv("SIP_RTCP_FB_MIN_INTERVAL_MS", "")
+	t.Setenv("SIP_RTCP_FB_GUARD_MS", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.SIP.KeyframeRequestMode != SIPKeyframeRequestModeInfo {
+		t.Fatalf("mode = %q, want %q", cfg.SIP.KeyframeRequestMode, SIPKeyframeRequestModeInfo)
+	}
+	if cfg.SIP.RTCPFBMinIntervalMS != 2000 {
+		t.Fatalf("minInterval = %d, want 2000", cfg.SIP.RTCPFBMinIntervalMS)
+	}
+	if cfg.SIP.RTCPFBGuardMS != 1500 {
+		t.Fatalf("guard = %d, want 1500", cfg.SIP.RTCPFBGuardMS)
+	}
+}
+
+func TestSIPKeyframeRequestConfigCanBeCustomized(t *testing.T) {
+	t.Setenv("SIP_KEYFRAME_REQUEST_MODE", "both")
+	t.Setenv("SIP_RTCP_FB_MIN_INTERVAL_MS", "2500")
+	t.Setenv("SIP_RTCP_FB_GUARD_MS", "800")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.SIP.KeyframeRequestMode != SIPKeyframeRequestModeBoth {
+		t.Fatalf("mode = %q, want both", cfg.SIP.KeyframeRequestMode)
+	}
+	if cfg.SIP.RTCPFBMinIntervalMS != 2500 {
+		t.Fatalf("minInterval = %d, want 2500", cfg.SIP.RTCPFBMinIntervalMS)
+	}
+	if cfg.SIP.RTCPFBGuardMS != 800 {
+		t.Fatalf("guard = %d, want 800", cfg.SIP.RTCPFBGuardMS)
+	}
+}
+
+func TestSIPKeyframeRequestConfigClampsAndRejectsInvalid(t *testing.T) {
+	t.Setenv("SIP_KEYFRAME_REQUEST_MODE", "pls")
+	t.Setenv("SIP_RTCP_FB_MIN_INTERVAL_MS", "50")
+	t.Setenv("SIP_RTCP_FB_GUARD_MS", "9000")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.SIP.KeyframeRequestMode != SIPKeyframeRequestModeInfo {
+		t.Fatalf("invalid mode = %q, want info", cfg.SIP.KeyframeRequestMode)
+	}
+	if cfg.SIP.RTCPFBMinIntervalMS != 500 {
+		t.Fatalf("minInterval = %d, want 500", cfg.SIP.RTCPFBMinIntervalMS)
+	}
+	if cfg.SIP.RTCPFBGuardMS != 5000 {
+		t.Fatalf("guard = %d, want 5000", cfg.SIP.RTCPFBGuardMS)
+	}
+
+	t.Setenv("SIP_RTCP_FB_GUARD_MS", "0")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.SIP.RTCPFBGuardMS != 0 {
+		t.Fatalf("guard 0 should disable, got %d", cfg.SIP.RTCPFBGuardMS)
+	}
+}
+
+func TestProactiveBrowserPLIConfigDefaults(t *testing.T) {
+	t.Setenv("SIP_PROACTIVE_BROWSER_PLI_INITIAL_MS", "")
+	t.Setenv("SIP_PROACTIVE_BROWSER_PLI_SAFETY_MS", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.SIP.ProactiveBrowserPLIInitialMS != 2000 {
+		t.Fatalf("initial = %d, want 2000", cfg.SIP.ProactiveBrowserPLIInitialMS)
+	}
+	if cfg.SIP.ProactiveBrowserPLISafetyMS != 10000 {
+		t.Fatalf("safety = %d, want 10000", cfg.SIP.ProactiveBrowserPLISafetyMS)
+	}
+}
+
+func TestProactiveBrowserPLIConfigCanBeCustomized(t *testing.T) {
+	t.Setenv("SIP_PROACTIVE_BROWSER_PLI_INITIAL_MS", "1500")
+	t.Setenv("SIP_PROACTIVE_BROWSER_PLI_SAFETY_MS", "15000")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.SIP.ProactiveBrowserPLIInitialMS != 1500 {
+		t.Fatalf("initial = %d, want 1500", cfg.SIP.ProactiveBrowserPLIInitialMS)
+	}
+	if cfg.SIP.ProactiveBrowserPLISafetyMS != 15000 {
+		t.Fatalf("safety = %d, want 15000", cfg.SIP.ProactiveBrowserPLISafetyMS)
+	}
+}
+
 func TestPublicWebSocketConfigDefaultDisabled(t *testing.T) {
 	t.Setenv("API_ENABLE_PUBLIC_WS", "")
 
@@ -340,5 +438,84 @@ func TestChatImageConfigPromotesLegacyTwoMegabyteLimit(t *testing.T) {
 	}
 	if cfg.ChatImage.MaxBytes != DefaultChatImageMaxBytes {
 		t.Fatalf("maxBytes = %d, want %d", cfg.ChatImage.MaxBytes, DefaultChatImageMaxBytes)
+	}
+}
+
+func TestSIPUplinkPictureSizeChangeConfig(t *testing.T) {
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.SIP.UplinkPictureSizeChange != SIPUplinkPictureSizeAccept {
+		t.Fatalf("default = %q, want accept", cfg.SIP.UplinkPictureSizeChange)
+	}
+	t.Setenv("SIP_UPLINK_PICTURE_SIZE_CHANGE", " Reject ")
+	if cfg, err = Load(); err != nil || cfg.SIP.UplinkPictureSizeChange != SIPUplinkPictureSizeReject {
+		t.Fatalf("reject = %q err=%v", cfg.SIP.UplinkPictureSizeChange, err)
+	}
+	t.Setenv("SIP_UPLINK_PICTURE_SIZE_CHANGE", "drop")
+	if cfg, err = Load(); err != nil || cfg.SIP.UplinkPictureSizeChange != SIPUplinkPictureSizeAccept {
+		t.Fatalf("invalid = %q err=%v, want accept", cfg.SIP.UplinkPictureSizeChange, err)
+	}
+}
+
+// Leftover k2 env for the removed pacer, IDR pace, and lossy-assist flags
+// must not fail startup. godotenv keeps unknown keys; Load only reads known ones.
+func TestRemovedUplinkMediaFlagsAreIgnored(t *testing.T) {
+	t.Setenv("SIP_LOSSY_KEYFRAME_ASSIST", "off")
+	t.Setenv("SIP_LOSSY_LOSS_THRESHOLD_PCT", "9")
+	t.Setenv("SIP_LOSSY_EXTRA_IDR_DELAY_MS", "1500")
+	t.Setenv("SIP_LOSSY_EARLY_WINDOW_MS", "8000")
+	t.Setenv("SIP_LOSSY_SAFETY_IDR_INTERVAL_MS", "2500")
+	t.Setenv("SIP_UPLINK_IDR_PACE_MS", "0")
+	t.Setenv("SIP_UPLINK_VIDEO_PACER_ENABLE", "false")
+	t.Setenv("SIP_UPLINK_VIDEO_PACER_BPS", "3500000")
+	t.Setenv("SIP_UPLINK_VIDEO_PACER_BURST_PACKETS", "4")
+	t.Setenv("SIP_UPLINK_VIDEO_PACER_MAX_QUEUE_MS", "500")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.SIP.UplinkPictureSizeChange != SIPUplinkPictureSizeAccept || !cfg.SIP.VideoTSRebase {
+		t.Fatalf("known media flags changed: picture=%q rebase=%v", cfg.SIP.UplinkPictureSizeChange, cfg.SIP.VideoTSRebase)
+	}
+}
+
+func TestSIPVideoSameTSReuseConfig(t *testing.T) {
+	for value, want := range map[string]bool{"": true, "on": true, "off": false, "false": false, "maybe": true} {
+		t.Setenv("SIP_VIDEO_SAME_TS_REUSE", value)
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+		if cfg.SIP.VideoSameTSReuse != want {
+			t.Fatalf("SIP_VIDEO_SAME_TS_REUSE=%q -> %v, want %v", value, cfg.SIP.VideoSameTSReuse, want)
+		}
+	}
+}
+
+func TestSIPVideoTSRebaseConfig(t *testing.T) {
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.SIP.VideoTSRebase || cfg.SIP.VideoTSBase != 5400000 {
+		t.Fatalf("defaults rebase=%v base=%d", cfg.SIP.VideoTSRebase, cfg.SIP.VideoTSBase)
+	}
+	t.Setenv("SIP_VIDEO_TS_REBASE", "off")
+	t.Setenv("SIP_VIDEO_TS_BASE", "691110")
+	if cfg, err = Load(); err != nil || cfg.SIP.VideoTSRebase || cfg.SIP.VideoTSBase != 691110 {
+		t.Fatalf("override rebase=%v base=%d err=%v", cfg.SIP.VideoTSRebase, cfg.SIP.VideoTSBase, err)
+	}
+	for _, bad := range []string{"691020", "0", "-1", "2147483648", "4200000000", "abc"} {
+		t.Setenv("SIP_VIDEO_TS_BASE", bad)
+		if cfg, err = Load(); err != nil || cfg.SIP.VideoTSBase != 5400000 {
+			t.Fatalf("SIP_VIDEO_TS_BASE=%s -> %d err=%v, want default", bad, cfg.SIP.VideoTSBase, err)
+		}
+	}
+	t.Setenv("SIP_VIDEO_TS_BASE", "2147483647")
+	if cfg, err = Load(); err != nil || cfg.SIP.VideoTSBase != 2147483647 {
+		t.Fatalf("max base -> %d err=%v", cfg.SIP.VideoTSBase, err)
 	}
 }

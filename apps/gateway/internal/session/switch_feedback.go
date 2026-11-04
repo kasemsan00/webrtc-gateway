@@ -182,15 +182,13 @@ func (s *Session) prepareWebRTCFeedbackLocked(kind string, force bool, authority
 		return snapshot
 	}
 	now := time.Now()
-	if !force {
-		if kind == "pli" && !s.LastWebRTCPLISent.IsZero() && now.Sub(s.LastWebRTCPLISent) < webrtcPLIMinInterval {
-			snapshot.throttled = true
-			return snapshot
-		}
-		if kind == "fir" && !s.LastWebRTCFIRSent.IsZero() && now.Sub(s.LastWebRTCFIRSent) < webrtcFIRMinInterval {
-			snapshot.throttled = true
-			return snapshot
-		}
+	if kind == "pli" && webrtcPLIThrottled(force, s.LastWebRTCPLISent, now) {
+		snapshot.throttled = true
+		return snapshot
+	}
+	if !force && kind == "fir" && !s.LastWebRTCFIRSent.IsZero() && now.Sub(s.LastWebRTCFIRSent) < webrtcFIRMinInterval {
+		snapshot.throttled = true
+		return snapshot
 	}
 	for _, receiver := range pc.GetReceivers() {
 		track := receiver.Track()
@@ -216,9 +214,9 @@ func (s *Session) prepareWebRTCFeedbackLocked(kind string, force bool, authority
 	return snapshot
 }
 
-func sendPreparedWebRTCFeedback(id string, snapshot webRTCFeedbackSnapshot) {
+func sendPreparedWebRTCFeedback(id string, snapshot webRTCFeedbackSnapshot) bool {
 	if !snapshot.ready {
-		return
+		return false
 	}
 	var packet rtcp.Packet
 	if snapshot.kind == "fir" {
@@ -229,17 +227,41 @@ func sendPreparedWebRTCFeedback(id string, snapshot webRTCFeedbackSnapshot) {
 	} else {
 		packet = &rtcp.PictureLossIndication{MediaSSRC: snapshot.ssrc}
 	}
-	if err := snapshot.pc.WriteRTCP([]rtcp.Packet{packet}); err != nil &&
-		!strings.Contains(err.Error(), "DTLS transport has not started yet") &&
-		!strings.Contains(err.Error(), "read/write on closed pipe") {
-		fmt.Printf("[%s] error sending switch %s to WebRTC: %v\n", id, snapshot.kind, err)
+	if err := snapshot.pc.WriteRTCP([]rtcp.Packet{packet}); err != nil {
+		if !strings.Contains(err.Error(), "DTLS transport has not started yet") &&
+			!strings.Contains(err.Error(), "read/write on closed pipe") {
+			fmt.Printf("[%s] error sending switch %s to WebRTC: %v\n", id, snapshot.kind, err)
+		}
+		return false
 	}
+	return true
 }
 
 func (s *Session) sendSIPFeedback(kind string, force bool, trigger string, authority *switchFeedbackAuthority) bool {
+	now := time.Now()
+	if strings.TrimSpace(trigger) == "" {
+		trigger = kind
+	}
 	s.mu.Lock()
-	snapshot := s.prepareSIPFeedbackLocked(kind, force, trigger, time.Now(), authority)
+	decision := DecideSIPKeyframeFeedback(s.sipKeyframeFeedbackInputLocked(kind, now))
+	if decision.PendingRTCP {
+		s.queuePendingSIPRTCPLocked(kind, trigger, force, authority)
+	}
 	id := s.ID
+	s.mu.Unlock()
+
+	if decision.SendINFO {
+		s.requestSIPKeyframeINFO(trigger)
+	}
+	if !decision.SendRTCP {
+		if decision.Reason != "" {
+			fmt.Printf("[%s] sip_rtcp_fb_skipped kind=%s trigger=%s reason=%s\n", id, kind, trigger, decision.Reason)
+		}
+		return true
+	}
+
+	s.mu.Lock()
+	snapshot := s.prepareSIPFeedbackLocked(kind, force, trigger, now, authority)
 	s.mu.Unlock()
 	if !snapshot.authorized {
 		return false
@@ -266,6 +288,21 @@ func (s *Session) sendWebRTCFeedbackWithForce(kind string, force bool, authority
 	}
 	sendPreparedWebRTCFeedback(id, snapshot)
 	return true
+}
+
+// webrtcPLIThrottled reports whether a browser PLI must be dropped.
+// Forced sends, including the proactive schedule, skip the 400ms generic
+// window and use the 1s overall cap. Unforced sends, including a real SIP
+// PLI/FIR forwarded to the browser, keep the 400ms window.
+func webrtcPLIThrottled(force bool, lastSent, now time.Time) bool {
+	if lastSent.IsZero() {
+		return false
+	}
+	age := now.Sub(lastSent)
+	if force {
+		return age < webrtcPLIOverallMinInterval
+	}
+	return age < webrtcPLIMinInterval
 }
 
 func (s *Session) SendSwitchFIRToAsterisk(generation int, mediaEpoch uint64) bool {
@@ -297,11 +334,9 @@ func (s *Session) FlushPendingBrowserKeyframeRequestForSwitch(generation int, me
 		return true
 	}
 	s.clearPendingBrowserKeyframeRequestLocked()
-	snapshot := s.prepareSIPFeedbackLocked("pli", true, "ws-request_keyframe", time.Now(), &switchFeedbackAuthority{generation, mediaEpoch})
-	id := s.ID
 	s.mu.Unlock()
 
-	sendPreparedSIPFeedback(id, snapshot)
-	fmt.Printf("[%s] request_keyframe_flushed reason=%s tokenGeneration=%d mediaEpoch=%d\n", id, reason, generation, mediaEpoch)
+	s.sendSIPFeedback("pli", true, "ws-request_keyframe", &switchFeedbackAuthority{generation, mediaEpoch})
+	fmt.Printf("[%s] request_keyframe_flushed reason=%s tokenGeneration=%d mediaEpoch=%d\n", s.ID, reason, generation, mediaEpoch)
 	return true
 }

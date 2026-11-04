@@ -39,6 +39,15 @@ func (s *Server) maybeSendSwitchVideoInfoFIR(sess *session.Session, reason strin
 	go s.sendSwitchVideoInfoFIR(sess, reason)
 }
 
+// RequestSIPVideoKeyframeINFO sends in-dialog picture_fast_update regardless of
+// SIP_SWITCH_VIDEO_INFO_FIR_ENABLE. Used when SIP_KEYFRAME_REQUEST_MODE is info or both.
+func (s *Server) RequestSIPVideoKeyframeINFO(sess *session.Session, reason string) {
+	if s == nil || sess == nil {
+		return
+	}
+	s.sendSwitchVideoInfoFIR(sess, reason)
+}
+
 func (s *Server) sendSwitchVideoInfoFIR(sess *session.Session, reason string) {
 	err := s.SendInfoToSession(sess, switchVideoPictureFastUpdate, "application/media_control+xml")
 	if err != nil {

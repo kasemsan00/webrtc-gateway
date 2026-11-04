@@ -7,6 +7,8 @@ import (
 
 	"github.com/pion/interceptor"
 	"github.com/pion/webrtc/v4"
+
+	"webrtc-sip-gateway/internal/config"
 )
 
 const (
@@ -96,25 +98,57 @@ func createCustomMediaEngineWithTWCC(twccEnabled bool) (*webrtc.MediaEngine, err
 // newGatewayWebRTCAPI builds the PeerConnection API used for a new call and for
 // a replacement PeerConnection. NACK retransmission stays on the gateway's
 // own cache. RTCP SR/RR come from ConfigureRTCPReports. TWCC sender feedback
-// is what lets the phone's availableOutgoingBitrate move.
-func newGatewayWebRTCAPI(twccEnabled bool) (*webrtc.API, error) {
+// is what lets the phone's availableOutgoingBitrate move. The SettingEngine
+// carries the ICE gathering limits (interface/IP filters, NAT1To1, network
+// types) so every PeerConnection advertises only reachable candidates.
+func newGatewayWebRTCAPI(twccEnabled bool, sessionID string, ice config.WebRTCICEConfig) (*webrtc.API, error) {
 	mediaEngine, err := createCustomMediaEngineWithTWCC(twccEnabled)
 	if err != nil {
 		return nil, err
 	}
-	registry := &interceptor.Registry{}
-	if err := webrtc.ConfigureRTCPReports(registry); err != nil {
+	registry, err := gatewayInterceptorRegistry(twccEnabled, sessionID)
+	if err != nil {
 		return nil, err
 	}
 	if twccEnabled {
-		if err := webrtc.ConfigureTWCCSender(mediaEngine, registry); err != nil {
+		if err := registerTransportCC(mediaEngine); err != nil {
 			return nil, err
 		}
+	}
+	settingEngine, err := gatewaySettingEngine(ice)
+	if err != nil {
+		return nil, err
 	}
 	return webrtc.NewAPI(
 		webrtc.WithMediaEngine(mediaEngine),
 		webrtc.WithInterceptorRegistry(registry),
+		webrtc.WithSettingEngine(settingEngine),
 	), nil
+}
+
+// gatewayInterceptorRegistry is the interceptor chain installed on every
+// gateway PeerConnection. browserFeedback is first so it sees RTP before the
+// report interceptor and so RR writes pass through its accounting wrapper.
+func gatewayInterceptorRegistry(twccEnabled bool, sessionID string) (*interceptor.Registry, error) {
+	registry := &interceptor.Registry{}
+	registry.Add(&browserFeedbackFactory{sessionID: sessionID, twcc: twccEnabled})
+	if err := webrtc.ConfigureRTCPReports(registry); err != nil {
+		return nil, err
+	}
+	return registry, nil
+}
+
+func registerTransportCC(mediaEngine *webrtc.MediaEngine) error {
+	mediaEngine.RegisterFeedback(webrtc.RTCPFeedback{Type: webrtc.TypeRTCPFBTransportCC}, webrtc.RTPCodecTypeVideo)
+	if err := mediaEngine.RegisterHeaderExtension(
+		webrtc.RTPHeaderExtensionCapability{URI: transportCCURI}, webrtc.RTPCodecTypeVideo,
+	); err != nil {
+		return err
+	}
+	mediaEngine.RegisterFeedback(webrtc.RTCPFeedback{Type: webrtc.TypeRTCPFBTransportCC}, webrtc.RTPCodecTypeAudio)
+	return mediaEngine.RegisterHeaderExtension(
+		webrtc.RTPHeaderExtensionCapability{URI: transportCCURI}, webrtc.RTPCodecTypeAudio,
+	)
 }
 
 func offeredH264CodecForPacketizationMode(offerSDP string, mode uint8) (webrtc.RTPCodecParameters, error) {

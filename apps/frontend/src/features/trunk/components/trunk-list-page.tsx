@@ -1,18 +1,16 @@
 import {
   RiAddLine,
-  RiGridLine,
   RiLayoutColumnLine,
   RiListCheck,
   RiLoader4Line,
-  RiMoonLine,
+  RiMore2Fill,
+  RiNodeTree,
   RiRefreshLine,
   RiServerLine,
-  RiSunLine,
 } from '@remixicon/react'
 import { debounce } from '@tanstack/pacer'
 import { useStore } from '@tanstack/react-store'
-import { useSearch } from '@tanstack/react-router'
-import { motion } from 'motion/react'
+import { Link, useSearch } from '@tanstack/react-router'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import type {
@@ -21,6 +19,7 @@ import type {
   VisibilityState,
 } from '@tanstack/react-table'
 
+import type { LiveFilter } from '@/features/trunk/live-board'
 import type {
   CreateTrunkPayload,
   TestIncomingPushStyle,
@@ -32,7 +31,6 @@ import { normalizeTrunkUid } from '@/features/trunk/types'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent } from '@/components/ui/card'
 import { DataTable } from '@/components/ui/data-table'
 import {
   Dialog,
@@ -46,6 +44,7 @@ import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
+  DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
@@ -63,10 +62,10 @@ import { Separator } from '@/components/ui/separator'
 import Header from '@/components/Header'
 import { formatThaiDateTime } from '@/lib/date-time'
 import { cn } from '@/lib/utils'
-import { useTheme } from '@/lib/theme'
 import { useVisibilityRealtimeReload } from '@/lib/use-visibility-realtime-reload'
 import {
   createTrunk,
+  fetchAllTrunks,
   fetchTrunks,
   refreshTrunks,
   registerTrunk,
@@ -86,13 +85,14 @@ import {
 } from '@/features/trunk/store/trunk-prefs-store'
 import {
   ActiveCallsDisplay,
-  ActiveDestinationDetailValue,
   isTrunkOnCall,
   PageActiveCallsChip,
-  TrunkOnCallCardShell,
-  TrunkOnCallHeaderBadge,
   trunkTableRowClassName,
 } from '@/features/trunk/components/trunk-active-visuals'
+import { TrunkLiveBoard } from '@/features/trunk/components/trunk-live-board'
+import { LiveBoardErrorBoundary } from '@/features/trunk/components/live-board-error-boundary'
+import { normalizeTrunks } from '@/features/trunk/live-normalize'
+import { useTrunkLiveData } from '@/features/trunk/use-trunk-live-data'
 
 const DEFAULT_PAGE_SIZE = 20
 
@@ -100,9 +100,11 @@ const TRUNK_TABLE_COLUMN_TOGGLES = [
   { id: 'id', label: 'ID' },
   { id: 'name', label: 'Name', locked: true },
   { id: 'inUseBy', label: 'In Use By' },
-  { id: 'register', label: 'Register' },
+  { id: 'register', label: 'Registration' },
+  { id: 'lastError', label: 'Last error' },
   { id: 'pushContact', label: 'Push Contact' },
-  { id: 'status', label: 'Status' },
+  { id: 'status', label: 'Enabled' },
+  { id: 'owner', label: 'Owner instance' },
   { id: 'domain', label: 'Domain' },
   { id: 'port', label: 'Port' },
   { id: 'username', label: 'Username' },
@@ -111,6 +113,7 @@ const TRUNK_TABLE_COLUMN_TOGGLES = [
   { id: 'calls', label: 'Calls' },
   { id: 'lastRegisteredAt', label: 'Last Registered' },
   { id: 'lastUnregisteredAt', label: 'Last Unregistered' },
+  { id: 'lastOnline', label: 'Last Online' },
   { id: 'uid', label: 'UID' },
 ] as const
 
@@ -154,9 +157,7 @@ export function isPushContactReady(trunk: Trunk) {
 
 export function canTestIncomingPush(trunk: Trunk) {
   return Boolean(
-    trunk.fcmTokenReady ||
-      trunk.notifyUserBound ||
-      isPushContactReady(trunk),
+    trunk.fcmTokenReady || trunk.notifyUserBound || isPushContactReady(trunk),
   )
 }
 
@@ -228,6 +229,56 @@ export function isRegisterActionDisabled(trunk: Trunk) {
   return trunk.isRegistered || !trunk.enabled
 }
 
+export type TrunkRegistrationTone = 'success' | 'destructive' | 'secondary'
+
+/**
+ * Registration state shown to operators. A trunk that is enabled, not
+ * registered and has a `lastError` is "Failed" (red) rather than a neutral
+ * "Unregistered", so broken trunks stand out.
+ */
+export function getTrunkRegistrationView(
+  trunk: Pick<Trunk, 'enabled' | 'isRegistered' | 'lastError'>,
+): { label: string; tone: TrunkRegistrationTone; hint: string } {
+  if (!trunk.enabled) {
+    return {
+      label: 'Disabled',
+      tone: 'secondary',
+      hint: 'Trunk is disabled (soft-deleted); the gateway does not register it.',
+    }
+  }
+  if (trunk.isRegistered) {
+    return {
+      label: 'Registered',
+      tone: 'success',
+      hint: 'SIP REGISTER succeeded; the trunk can place and receive calls.',
+    }
+  }
+  const error = trunk.lastError.trim()
+  if (error) {
+    return {
+      label: 'Failed',
+      tone: 'destructive',
+      hint: `Last registration error: ${error}`,
+    }
+  }
+  return {
+    label: 'Unregistered',
+    tone: 'secondary',
+    hint: 'Not registered. Registration happens on demand when a client uses this trunk, or use Register.',
+  }
+}
+
+/** Lease owner with expiry, for multi-instance deployments. */
+export function getTrunkLeaseView(
+  trunk: Pick<Trunk, 'leaseOwner' | 'leaseUntil'>,
+  now: number = Date.now(),
+): { owner: string; expired: boolean } | null {
+  const owner = trunk.leaseOwner.trim()
+  if (!owner) return null
+  const until = Date.parse(trunk.leaseUntil)
+  return { owner, expired: !Number.isNaN(until) && until < now }
+}
+
 export function getTrunkStatusLabel(enabled: boolean) {
   return enabled ? 'Enabled' : 'Deleted'
 }
@@ -285,7 +336,6 @@ function createEditForm(trunk: Trunk): TrunkEditForm {
 }
 
 export function TrunkListPage() {
-  const { theme, toggleTheme } = useTheme()
   const routeSearch = useSearch({ from: '/trunks' })
   const [trunks, setTrunks] = useState<Array<Trunk>>([])
   const [total, setTotal] = useState(0)
@@ -333,6 +383,14 @@ export function TrunkListPage() {
   const [savingCreate, setSavingCreate] = useState(false)
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
+
+  const liveData = useTrunkLiveData()
+  const [liveFilter, setLiveFilter] = useState<LiveFilter>('all')
+  const liveWarning = liveData.sessionsError
+    ? `Live calls unavailable: ${liveData.sessionsError}`
+    : liveData.clientsError
+      ? `Connected apps unavailable: ${liveData.clientsError}`
+      : null
 
   const { pageActiveCalls, pageTrunksOnCall } = useMemo(() => {
     let calls = 0
@@ -382,16 +440,24 @@ export function TrunkListPage() {
       setError(null)
       try {
         const sortParams = getSortParams()
-        const res = await fetchTrunks({
-          page: params?.page ?? page,
-          pageSize: params?.pageSize ?? pageSize,
+        const filters = {
           search: (params?.search ?? searchRef.current) || undefined,
           trunkId: params?.trunkId ?? routeSearch.trunkId,
           trunkPublicId: params?.trunkPublicId ?? routeSearch.trunkPublicId,
           sortBy: sortParams.sortBy,
           sortDir: sortParams.sortDir,
-        })
-        let items = res.items
+        }
+        // The live board shows every trunk; only the table is paginated.
+        const res =
+          viewMode === 'card'
+            ? await fetchAllTrunks(filters)
+            : await fetchTrunks({
+                ...filters,
+                page: params?.page ?? page,
+                pageSize: params?.pageSize ?? pageSize,
+              })
+        // Normalise once here: the API omits empty fields and may send nulls.
+        let items = normalizeTrunks(res.items)
         if (sortMode === 'activeCallsDesc' || sortMode === 'activeCallsAsc') {
           items = [...items].sort((left, right) => {
             const diff = left.activeCallCount - right.activeCallCount
@@ -399,7 +465,7 @@ export function TrunkListPage() {
           })
         }
         setTrunks(items)
-        setTotal(res.total)
+        setTotal(typeof res.total === 'number' ? res.total : items.length)
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to fetch trunks')
       } finally {
@@ -413,6 +479,7 @@ export function TrunkListPage() {
       pageSize,
       getSortParams,
       sortMode,
+      viewMode,
       routeSearch.trunkId,
       routeSearch.trunkPublicId,
     ],
@@ -718,121 +785,156 @@ export function TrunkListPage() {
     }
   }, [createForm, load])
 
+  const renderSearch = (className: string) => (
+    <Input
+      className={className}
+      placeholder="Search username or name..."
+      aria-label="Search trunks"
+      value={search}
+      onChange={(e) => {
+        setSearch(e.target.value)
+        debouncedSearch(e.target.value)
+      }}
+    />
+  )
+  const sortSelect =
+    viewMode === 'table' ? (
+      <Select
+        value={sortMode}
+        onValueChange={(value) => setSortMode(value as TrunkSortMode)}
+      >
+        <SelectTrigger
+          className="h-7 px-2 text-xs"
+          size="sm"
+          aria-label="Sort trunks"
+        >
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="activeCallsDesc">
+            Active Calls (High-Low)
+          </SelectItem>
+          <SelectItem value="activeCallsAsc">
+            Active Calls (Low-High)
+          </SelectItem>
+          <SelectItem value="idAsc">ID (Low-High)</SelectItem>
+          <SelectItem value="idDesc">ID (High-Low)</SelectItem>
+          <SelectItem value="nameAsc">Name (A-Z)</SelectItem>
+          <SelectItem value="nameDesc">Name (Z-A)</SelectItem>
+        </SelectContent>
+      </Select>
+    ) : null
+  const viewToggle = (
+    <div
+      className="flex items-center gap-0.5 rounded-md border p-0.5"
+      role="group"
+      aria-label="View mode"
+    >
+      <Button
+        size="sm"
+        variant={viewMode === 'card' ? 'secondary' : 'ghost'}
+        className="h-6 gap-1 px-2 text-xs"
+        onClick={() => setPersistedViewMode('card')}
+        aria-pressed={viewMode === 'card'}
+      >
+        <RiNodeTree className="size-3.5" />
+        Live
+      </Button>
+      <Button
+        size="sm"
+        variant={viewMode === 'table' ? 'secondary' : 'ghost'}
+        className="h-6 gap-1 px-2 text-xs"
+        onClick={() => setPersistedViewMode('table')}
+        aria-pressed={viewMode === 'table'}
+      >
+        <RiListCheck className="size-3.5" />
+        Table
+      </Button>
+    </div>
+  )
+  const columnsMenu =
+    viewMode === 'table' ? (
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 gap-1 px-2 text-xs"
+            aria-label="Toggle columns"
+          >
+            <RiLayoutColumnLine className="size-3.5" />
+            Columns
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-48">
+          <DropdownMenuLabel>Toggle columns</DropdownMenuLabel>
+          <DropdownMenuSeparator />
+          {TRUNK_TABLE_COLUMN_TOGGLES.map((column) => {
+            const locked = 'locked' in column && column.locked
+            return (
+              <DropdownMenuCheckboxItem
+                key={column.id}
+                checked={isColumnVisible(columnVisibility, column.id)}
+                disabled={locked}
+                onCheckedChange={(checked) => {
+                  if (locked) return
+                  toggleColumnVisibility(column.id, checked === true)
+                }}
+                onSelect={(event) => event.preventDefault()}
+              >
+                {column.label}
+              </DropdownMenuCheckboxItem>
+            )
+          })}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    ) : null
+
   return (
     <div className="flex h-screen flex-col bg-background text-foreground">
-      <Header>
+      <Header
+        subBar={
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            {viewToggle}
+            {renderSearch('h-8 min-w-0 flex-1 text-xs')}
+            {sortSelect}
+            {columnsMenu}
+          </div>
+        }
+      >
         <div className="flex items-center gap-2 text-xs">
-          {/* Search */}
-          <Input
-            className="h-8 w-48 text-xs"
-            placeholder="Search username or name..."
-            value={search}
-            onChange={(e) => {
-              setSearch(e.target.value)
-              debouncedSearch(e.target.value)
-            }}
-          />
-          <Select
-            value={sortMode}
-            onValueChange={(value) => setSortMode(value as TrunkSortMode)}
-          >
-            <SelectTrigger
-              className="h-7 px-2 text-xs"
-              size="sm"
-              aria-label="Sort trunks"
-            >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="activeCallsDesc">
-                Active Calls (High-Low)
-              </SelectItem>
-              <SelectItem value="activeCallsAsc">
-                Active Calls (Low-High)
-              </SelectItem>
-              <SelectItem value="idAsc">ID (Low-High)</SelectItem>
-              <SelectItem value="idDesc">ID (High-Low)</SelectItem>
-              <SelectItem value="nameAsc">Name (A-Z)</SelectItem>
-              <SelectItem value="nameDesc">Name (Z-A)</SelectItem>
-            </SelectContent>
-          </Select>
-          <PageActiveCallsChip
-            totalCalls={pageActiveCalls}
-            trunksOnCall={pageTrunksOnCall}
-          />
-          <Separator orientation="vertical" className="h-4" />
-          {/* View mode toggle */}
-          <div className="flex items-center gap-0.5">
-            <Button
-              size="icon"
-              variant={viewMode === 'card' ? 'secondary' : 'ghost'}
-              className="size-7"
-              onClick={() => setPersistedViewMode('card')}
-              aria-label="Card view"
-            >
-              <RiGridLine className="size-3.5" />
-            </Button>
-            <Button
-              size="icon"
-              variant={viewMode === 'table' ? 'secondary' : 'ghost'}
-              className="size-7"
-              onClick={() => setPersistedViewMode('table')}
-              aria-label="Table view"
-            >
-              <RiListCheck className="size-3.5" />
-            </Button>
+          {/* Search, sort, view and columns move to the mobile sub bar. */}
+          <div className="hidden sm:contents">
+            {renderSearch('h-8 w-48 text-xs')}
+            {sortSelect}
           </div>
           {viewMode === 'table' ? (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="h-7 gap-1 px-2 text-xs"
-                  aria-label="Toggle columns"
-                >
-                  <RiLayoutColumnLine className="size-3.5" />
-                  Columns
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-48">
-                <DropdownMenuLabel>Toggle columns</DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                {TRUNK_TABLE_COLUMN_TOGGLES.map((column) => {
-                  const locked = 'locked' in column && column.locked
-                  return (
-                    <DropdownMenuCheckboxItem
-                      key={column.id}
-                      checked={isColumnVisible(columnVisibility, column.id)}
-                      disabled={locked}
-                      onCheckedChange={(checked) => {
-                        if (locked) return
-                        toggleColumnVisibility(column.id, checked === true)
-                      }}
-                      onSelect={(event) => event.preventDefault()}
-                    >
-                      {column.label}
-                    </DropdownMenuCheckboxItem>
-                  )
-                })}
-              </DropdownMenuContent>
-            </DropdownMenu>
+            <PageActiveCallsChip
+              totalCalls={pageActiveCalls}
+              trunksOnCall={pageTrunksOnCall}
+            />
           ) : null}
-          <Separator orientation="vertical" className="h-4" />
+          <div className="hidden sm:contents">
+            <Separator orientation="vertical" className="h-4" />
+            {viewToggle}
+            {columnsMenu}
+          </div>
+          <Separator orientation="vertical" className="hidden h-4 sm:block" />
           {/* Add Trunk */}
           <Button
             size="sm"
             variant="default"
-            className="h-7 gap-1 px-2 text-xs"
+            className="h-7 gap-1 bg-cyan-600 px-2 text-xs text-white hover:bg-cyan-700 dark:bg-cyan-500 dark:text-cyan-950 dark:hover:bg-cyan-400"
             onClick={() => {
               setCreateForm(newCreateForm())
               setCreateOpen(true)
             }}
+            aria-label="Add trunk"
           >
             <RiAddLine className="size-3.5" />
-            Add Trunk
+            <span className="hidden sm:inline">Add Trunk</span>
           </Button>
-          <Separator orientation="vertical" className="h-4" />
+          <Separator orientation="vertical" className="hidden h-4 sm:block" />
           {/* Refresh */}
           <Button
             size="sm"
@@ -840,28 +942,12 @@ export function TrunkListPage() {
             className="h-7 gap-1 px-2 text-xs"
             onClick={handleRefresh}
             disabled={refreshing}
+            aria-label="Refresh trunks"
           >
             <RiRefreshLine
               className={`size-3.5 ${refreshing ? 'animate-spin' : ''}`}
             />
-            Refresh
-          </Button>
-          <Separator orientation="vertical" className="h-4" />
-          {/* Theme toggle */}
-          <Button
-            size="icon"
-            variant="ghost"
-            className="size-7"
-            onClick={toggleTheme}
-            aria-label={
-              theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'
-            }
-          >
-            {theme === 'dark' ? (
-              <RiSunLine className="size-3.5" />
-            ) : (
-              <RiMoonLine className="size-3.5" />
-            )}
+            <span className="hidden sm:inline">Refresh</span>
           </Button>
         </div>
       </Header>
@@ -884,20 +970,20 @@ export function TrunkListPage() {
             <p className="text-sm">No trunks found</p>
           </div>
         ) : viewMode === 'card' ? (
-          <div className="grid items-stretch gap-3 sm:grid-cols-1 md:grid-cols-2 xl:grid-cols-3">
-            {trunks.map((trunk, index) => (
-              <motion.div
-                key={trunk.id}
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{
-                  duration: 0.25,
-                  delay: Math.min(index * 0.04, 0.32),
-                }}
-                className="h-full motion-reduce:transform-none motion-reduce:opacity-100"
-              >
-                <TrunkCard
-                  trunk={trunk}
+          <LiveBoardErrorBoundary
+            onSwitchToTable={() => setPersistedViewMode('table')}
+          >
+            <TrunkLiveBoard
+              trunks={trunks}
+              sessions={liveData.sessions}
+              clients={liveData.clients}
+              filter={liveFilter}
+              onFilterChange={setLiveFilter}
+              sessionsFetchedAt={liveData.sessionsFetchedAt}
+              liveWarning={liveWarning}
+              renderActions={(row) => (
+                <TrunkActionsMenu
+                  trunk={row.trunk}
                   onEdit={openEditModal}
                   onRegister={openRegisterModal}
                   onUnregister={openUnregisterModal}
@@ -905,9 +991,9 @@ export function TrunkListPage() {
                   onSoftDelete={openSoftDeleteModal}
                   onRestore={openRestoreModal}
                 />
-              </motion.div>
-            ))}
-          </div>
+              )}
+            />
+          </LiveBoardErrorBoundary>
         ) : (
           <TrunkTable
             trunks={trunks}
@@ -922,15 +1008,17 @@ export function TrunkListPage() {
           />
         )}
 
-        <ServerPaginationControls
-          page={page}
-          totalPages={totalPages}
-          total={total}
-          pageSize={pageSize}
-          onPageChange={handlePageChange}
-          onPageSizeChange={handlePageSizeChange}
-          totalLabel="total"
-        />
+        {viewMode === 'table' ? (
+          <ServerPaginationControls
+            page={page}
+            totalPages={totalPages}
+            total={total}
+            pageSize={pageSize}
+            onPageChange={handlePageChange}
+            onPageSizeChange={handlePageSizeChange}
+            totalLabel="total"
+          />
+        ) : null}
       </div>
       {/* Register confirmation modal */}
       <Dialog
@@ -1455,17 +1543,37 @@ function TrunkTable({
       },
       {
         id: 'register',
-        header: 'Register',
-        cell: ({ row }) => (
-          <div className="space-y-0.5">
+        header: 'Registration',
+        cell: ({ row }) => {
+          const view = getTrunkRegistrationView(row.original)
+          return (
             <Badge
-              variant={row.original.isRegistered ? 'success' : 'secondary'}
+              variant={view.tone}
               className="text-[10px]"
+              title={view.hint}
             >
-              {row.original.isRegistered ? 'Registered' : 'Unregistered'}
+              {view.label}
             </Badge>
-          </div>
-        ),
+          )
+        },
+      },
+      {
+        id: 'lastError',
+        header: 'Last error',
+        cell: ({ row }) => {
+          const error = row.original.lastError.trim()
+          if (!error) {
+            return <span className="text-muted-foreground">-</span>
+          }
+          return (
+            <span
+              className="inline-block max-w-[220px] truncate font-mono text-[11px] text-rose-600 dark:text-rose-400"
+              title={error}
+            >
+              {error}
+            </span>
+          )
+        },
       },
       {
         id: 'pushContact',
@@ -1481,7 +1589,7 @@ function TrunkTable({
       },
       {
         id: 'status',
-        header: 'Status',
+        header: 'Enabled',
         cell: ({ row }) => (
           <div className="flex items-center gap-1.5">
             {row.original.isDefault ? (
@@ -1528,6 +1636,29 @@ function TrunkTable({
         ),
       },
       {
+        id: 'owner',
+        header: 'Owner instance',
+        cell: ({ row }) => {
+          const lease = getTrunkLeaseView(row.original)
+          if (!lease) return <span className="text-muted-foreground">-</span>
+          return (
+            <Link
+              to="/instances"
+              search={{ search: lease.owner }}
+              className={cn(
+                'inline-block max-w-[140px] truncate font-mono text-[11px] hover:underline',
+                lease.expired
+                  ? 'text-muted-foreground line-through'
+                  : 'text-cyan-700 dark:text-cyan-400',
+              )}
+              title={`Lease held by ${lease.owner} until ${formatThaiDateTime(row.original.leaseUntil)}${lease.expired ? ' (expired)' : ''}`}
+            >
+              {lease.owner}
+            </Link>
+          )
+        },
+      },
+      {
         accessorKey: 'lastRegisteredAt',
         header: 'Last Registered',
         cell: ({ row }) => (
@@ -1546,6 +1677,17 @@ function TrunkTable({
         ),
       },
       {
+        id: 'lastOnline',
+        header: 'Last Online',
+        cell: ({ row }) => (
+          <span className="text-muted-foreground">
+            {row.original.lastOnlinePlatform
+              ? `${row.original.lastOnlinePlatform} · ${formatThaiDateTime(row.original.lastOnlineAt || '')}`
+              : '-'}
+          </span>
+        ),
+      },
+      {
         id: 'uid',
         header: 'UID',
         cell: ({ row }) => (
@@ -1559,61 +1701,16 @@ function TrunkTable({
         header: () => <div className="text-right">Actions</div>,
         enableHiding: false,
         cell: ({ row }) => (
-          <div className="flex justify-end gap-1">
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-6 px-2 text-[10px]"
-              onClick={() => onEdit(row.original)}
-            >
-              Edit
-            </Button>
-            <Button
-              size="sm"
-              variant="secondary"
-              className="h-6 px-2 text-[10px]"
-              onClick={() => onRegister(row.original)}
-              disabled={isRegisterActionDisabled(row.original)}
-            >
-              Register
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-6 px-2 text-[10px]"
-              onClick={() => onUnregister(row.original)}
-              disabled={!row.original.isRegistered}
-            >
-              Unregister
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-6 px-2 text-[10px]"
-              onClick={() => onTestPush(row.original)}
-              disabled={!canTestIncomingPush(row.original)}
-            >
-              Test push
-            </Button>
-            {row.original.enabled ? (
-              <Button
-                size="sm"
-                variant="destructive"
-                className="h-6 px-2 text-[10px]"
-                onClick={() => onSoftDelete(row.original)}
-              >
-                {getTrunkLifecycleActionLabel(row.original.enabled)}
-              </Button>
-            ) : (
-              <Button
-                size="sm"
-                variant="default"
-                className="h-6 px-2 text-[10px]"
-                onClick={() => onRestore(row.original)}
-              >
-                {getTrunkLifecycleActionLabel(row.original.enabled)}
-              </Button>
-            )}
+          <div className="flex justify-end">
+            <TrunkActionsMenu
+              trunk={row.original}
+              onEdit={onEdit}
+              onRegister={onRegister}
+              onUnregister={onUnregister}
+              onTestPush={onTestPush}
+              onSoftDelete={onSoftDelete}
+              onRestore={onRestore}
+            />
           </div>
         ),
       },
@@ -1632,7 +1729,16 @@ function TrunkTable({
   )
 }
 
-function TrunkCard({
+type TrunkActionHandlers = {
+  onEdit: (trunk: Trunk) => void
+  onRegister: (trunk: Trunk) => void
+  onUnregister: (trunk: Trunk) => void
+  onTestPush: (trunk: Trunk) => void
+  onSoftDelete: (trunk: Trunk) => void
+  onRestore: (trunk: Trunk) => void
+}
+
+function TrunkActionsMenu({
   trunk,
   onEdit,
   onRegister,
@@ -1640,217 +1746,77 @@ function TrunkCard({
   onTestPush,
   onSoftDelete,
   onRestore,
-}: {
-  trunk: Trunk
-  onEdit: (trunk: Trunk) => void
-  onRegister: (trunk: Trunk) => void
-  onUnregister: (trunk: Trunk) => void
-  onTestPush: (trunk: Trunk) => void
-  onSoftDelete: (trunk: Trunk) => void
-  onRestore: (trunk: Trunk) => void
-}) {
-  const onCall = isTrunkOnCall(trunk)
-
+}: TrunkActionHandlers & { trunk: Trunk }) {
+  const showRegister = !isRegisterActionDisabled(trunk)
   return (
-    <TrunkOnCallCardShell trunk={trunk}>
-      <Card
-        className={cn(
-          'h-full border-border/60 ring-0',
-          onCall &&
-            'animate-trunk-card-shimmer bg-size-[200%_200%] bg-linear-to-br from-cyan-500/12 via-emerald-500/6 to-cyan-500/10 dark:from-cyan-500/16 dark:via-emerald-500/8 dark:to-cyan-500/12 motion-reduce:animate-none',
-        )}
-      >
-        <CardContent className="flex flex-1 flex-col space-y-2 p-3">
-          {/* Header row */}
-          <div className="flex min-h-[2.75rem] shrink-0 items-center justify-between">
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-1.5">
-                <span className="text-sm font-semibold">{trunk.name}</span>
-                <TrunkOnCallHeaderBadge trunk={trunk} />
-              </div>
-              <p className="truncate font-mono text-[11px] text-muted-foreground">
-                #{trunk.id} · uid: {formatUid(normalizeTrunkUid(trunk))}
-              </p>
-            </div>
-          <div className="flex items-center gap-1.5">
-            {trunk.isDefault ? (
-              <Badge variant="default" className="text-[10px]">
-                Default
-              </Badge>
-            ) : null}
-            <Badge
-              variant={trunk.enabled ? 'success' : 'destructive'}
-              className="text-[10px]"
+    <div className="flex shrink-0 items-center gap-1">
+      {showRegister ? (
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7 px-2 text-xs"
+          onClick={() => onRegister(trunk)}
+        >
+          Register
+        </Button>
+      ) : null}
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            size="icon"
+            variant="ghost"
+            className="size-7"
+            aria-label={`Actions for ${trunk.name}`}
+          >
+            <RiMore2Fill className="size-4" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-44">
+          <DropdownMenuLabel className="truncate">
+            {trunk.name}
+          </DropdownMenuLabel>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            disabled={isRegisterActionDisabled(trunk)}
+            onSelect={() => onRegister(trunk)}
+          >
+            Register
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            disabled={!trunk.isRegistered}
+            onSelect={() => onUnregister(trunk)}
+          >
+            Unregister
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => onEdit(trunk)}>
+            Edit
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            disabled={!canTestIncomingPush(trunk)}
+            onSelect={() => onTestPush(trunk)}
+          >
+            Test push
+          </DropdownMenuItem>
+          <DropdownMenuItem asChild>
+            <Link to="/logs" search={{ q: trunk.username }}>
+              Logs for {trunk.username}
+            </Link>
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          {trunk.enabled ? (
+            <DropdownMenuItem
+              variant="destructive"
+              onSelect={() => onSoftDelete(trunk)}
             >
-              {getTrunkStatusLabel(trunk.enabled)}
-            </Badge>
-          </div>
-        </div>
-
-        <Separator className="shrink-0" />
-
-        {/* Details */}
-        <div className="grid min-h-0 flex-1 grid-cols-2 gap-x-4 gap-y-1 text-xs">
-          <Detail label="Domain" value={trunk.domain} />
-          <Detail label="Port" value={String(trunk.port)} />
-          <Detail label="Username" value={trunk.username} />
-          <Detail label="Transport" value={trunk.transport.toUpperCase()} />
-          <Detail
-            label="Destination"
-            value={
-              <ActiveDestinationDetailValue
-                destinations={trunk.activeDestinations}
-                onCall={onCall}
-              />
-            }
-          />
-          <Detail
-            label="Active Calls"
-            value={<ActiveCallsDisplay count={trunk.activeCallCount} />}
-          />
-          <Detail label="In Use By" value={formatInUseBy(trunk)} />
-          <Detail label="Lease Owner" value={trunk.leaseOwner || '-'} />
-          <Detail
-            label="Register"
-            value={
-              <div className="space-y-0.5">
-                <Badge
-                  variant={trunk.isRegistered ? 'success' : 'secondary'}
-                  className="text-[10px]"
-                >
-                  {trunk.isRegistered ? 'Registered' : 'Unregistered'}
-                </Badge>
-              </div>
-            }
-          />
-          <Detail
-            label="Push Contact"
-            value={
-              <div className="space-y-0.5">
-                <PushContactBadge trunk={trunk} />
-                <PushContactDetails trunk={trunk} compact />
-              </div>
-            }
-          />
-          <Detail label="PN App ID" value={trunk.pnAppId || '-'} />
-          <Detail label="PN Type" value={trunk.pnType || '-'} />
-          <Detail
-            label="PN Token"
-            value={trunk.pnTokenMasked ? trunk.pnTokenMasked : '-'}
-          />
-          <Detail
-            label="PN Updated"
-            value={formatThaiDateTime(trunk.pnUpdatedAt || '')}
-          />
-          <Detail
-            label="Last Registered"
-            value={formatThaiDateTime(trunk.lastRegisteredAt)}
-          />
-          <Detail
-            label="Last Unregistered"
-            value={formatThaiDateTime(trunk.lastUnregisteredAt || '')}
-          />
-          <Detail
-            label="Last Online"
-            value={
-              trunk.lastOnlinePlatform
-                ? `${trunk.lastOnlinePlatform} · ${formatThaiDateTime(trunk.lastOnlineAt || '')}`
-                : '-'
-            }
-          />
-          <Detail label="Updated" value={formatThaiDateTime(trunk.updatedAt)} />
-          <Detail
-            label="Lease Until"
-            value={formatThaiDateTime(trunk.leaseUntil)}
-          />
-        </div>
-
-        <div className="min-h-9 shrink-0">
-          {trunk.lastError ? (
-            <div
-              className="line-clamp-2 rounded bg-red-500/10 px-2 py-1 text-[11px] text-red-400"
-              title={trunk.lastError}
-            >
-              {trunk.lastError}
-            </div>
-          ) : null}
-        </div>
-
-        <Separator className="shrink-0" />
-
-        {/* Footer */}
-        <div className="flex shrink-0 items-center justify-between">
-          <span className="text-[10px] text-muted-foreground">
-            Created {formatThaiDateTime(trunk.createdAt)}
-          </span>
-          <div className="flex gap-1">
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-6 px-2 text-[10px]"
-              onClick={() => onEdit(trunk)}
-            >
-              Edit
-            </Button>
-            <Button
-              size="sm"
-              variant="secondary"
-              className="h-6 px-2 text-[10px]"
-              onClick={() => onRegister(trunk)}
-              disabled={isRegisterActionDisabled(trunk)}
-            >
-              Register
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-6 px-2 text-[10px]"
-              onClick={() => onUnregister(trunk)}
-              disabled={!trunk.isRegistered}
-            >
-              Unregister
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-6 px-2 text-[10px]"
-              onClick={() => onTestPush(trunk)}
-              disabled={!canTestIncomingPush(trunk)}
-            >
-              Test push
-            </Button>
-            {trunk.enabled ? (
-              <Button
-                size="sm"
-                variant="destructive"
-                className="h-6 px-2 text-[10px]"
-                onClick={() => onSoftDelete(trunk)}
-              >
-                {getTrunkLifecycleActionLabel(trunk.enabled)}
-              </Button>
-            ) : (
-              <Button
-                size="sm"
-                variant="default"
-                className="h-6 px-2 text-[10px]"
-                onClick={() => onRestore(trunk)}
-              >
-                {getTrunkLifecycleActionLabel(trunk.enabled)}
-              </Button>
-            )}
-          </div>
-        </div>
-      </CardContent>
-    </Card>
-    </TrunkOnCallCardShell>
-  )
-}
-
-function Detail({ label, value }: { label: string; value: React.ReactNode }) {
-  return (
-    <div className="flex items-baseline justify-between gap-1">
-      <span className="text-muted-foreground">{label}</span>
-      <span className="font-medium">{value}</span>
+              {getTrunkLifecycleActionLabel(trunk.enabled)}
+            </DropdownMenuItem>
+          ) : (
+            <DropdownMenuItem onSelect={() => onRestore(trunk)}>
+              {getTrunkLifecycleActionLabel(trunk.enabled)}
+            </DropdownMenuItem>
+          )}
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   )
 }

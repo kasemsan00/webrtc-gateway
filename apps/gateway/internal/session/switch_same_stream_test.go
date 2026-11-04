@@ -60,7 +60,7 @@ func TestStalledGateFailsOpen(t *testing.T) {
 	stuck := VideoRecoverySummary{Packets: 300, ReorderPending: 20}
 
 	t.Run("same stream", func(t *testing.T) {
-		sess := armedGate(t, "fail-open-same", 2081251329, "203.150.245.39:24800")
+		sess := armedGate(t, "fail-open-same", 2081251329, "203.150.245.39:24800", now)
 		if released, _ := sess.MaybeFailOpenSwitchVideoGate(now.Add(2999*time.Millisecond), healthy); released {
 			t.Fatal("released before the same-stream limit")
 		}
@@ -78,7 +78,7 @@ func TestStalledGateFailsOpen(t *testing.T) {
 	})
 
 	t.Run("other stream waits for cap", func(t *testing.T) {
-		sess := armedGate(t, "fail-open-cap", 1111, "203.0.113.10:4000")
+		sess := armedGate(t, "fail-open-cap", 1111, "203.0.113.10:4000", now)
 		sess.RemoteVideoSSRC = 2222
 		if released, _ := sess.MaybeFailOpenSwitchVideoGate(now.Add(3*time.Second), healthy); released {
 			t.Fatal("different stream must not fail open at 3s")
@@ -90,7 +90,7 @@ func TestStalledGateFailsOpen(t *testing.T) {
 	})
 }
 
-func armedGate(t *testing.T, id string, ssrc uint32, source string) *Session {
+func armedGate(t *testing.T, id string, ssrc uint32, source string, now time.Time) *Session {
 	t.Helper()
 	sess := newBurstTestSession(id)
 	sess.VideoAUNormalizeEnabled = true
@@ -98,7 +98,6 @@ func armedGate(t *testing.T, id string, ssrc uint32, source string) *Session {
 	sess.SwitchVideoGateFailOpenCap = 5 * time.Second
 	sess.RemoteVideoSSRC = ssrc
 	sess.SIPVideoRTPSource = source
-	now := time.Now()
 	sess.NoteOpenedVideoStream(ssrc, now)
 	if !sess.StartSwitchVideoGate(sess.GetSwitchGeneration(), now, "timestamp-jump") {
 		t.Fatal("expected implicit gate to arm")

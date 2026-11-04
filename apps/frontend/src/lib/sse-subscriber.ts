@@ -7,6 +7,8 @@ export type SubscribeAuthenticatedSseOptions<T> = {
   eventName: string
   onEvent: SseEventHandler<T>
   onError?: (event: Event) => void
+  /** Called once the stream responded 2xx and is being read. */
+  onOpen?: () => void
   headers?: HeadersInit
 }
 
@@ -68,12 +70,17 @@ export function subscribeAuthenticatedSse<T>(
         throw new Error(`Failed to subscribe SSE: HTTP ${response.status}`)
       }
 
+      options.onOpen?.()
       const reader = response.body.getReader()
       for (;;) {
         const { done, value } = await reader.read()
         if (done) break
 
         handleChunk(decoder.decode(value, { stream: true }))
+      }
+      // The server closed the stream: report it so callers can reconnect.
+      if (!controller.signal.aborted && options.onError) {
+        options.onError(new Event('close'))
       }
     } catch {
       if (!controller.signal.aborted && options.onError) {

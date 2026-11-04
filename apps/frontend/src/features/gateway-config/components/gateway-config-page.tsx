@@ -7,11 +7,9 @@ import {
   RiGridLine,
   RiLoader4Line,
   RiLockLine,
-  RiMoonLine,
   RiRefreshLine,
   RiSearchLine,
   RiSettings3Line,
-  RiSunLine,
   RiTableLine,
 } from '@remixicon/react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -35,7 +33,6 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import Header from '@/components/Header'
-import { useTheme } from '@/lib/theme'
 import { cn } from '@/lib/utils'
 import { fetchGatewayConfig } from '@/features/gateway-config/services/gateway-config-api'
 import {
@@ -139,7 +136,6 @@ function ConfigValueCell({
 }
 
 export function GatewayConfigPage() {
-  const { theme, toggleTheme } = useTheme()
   const [config, setConfig] = useState<GatewayConfigResponse | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -229,19 +225,6 @@ export function GatewayConfigPage() {
             variant="outline"
             size="sm"
             className="h-7 gap-1 px-2 text-xs"
-            onClick={() => toggleTheme()}
-          >
-            {theme === 'dark' ? (
-              <RiSunLine className="size-3.5" />
-            ) : (
-              <RiMoonLine className="size-3.5" />
-            )}
-            <span className="hidden sm:inline">Theme</span>
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-7 gap-1 px-2 text-xs"
             onClick={() => {
               void load()
             }}
@@ -262,30 +245,32 @@ export function GatewayConfigPage() {
           {/* Top Developer Bar: Title, Metadata, Export Actions */}
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/60 pb-2">
             <div className="flex flex-wrap items-center gap-2">
-              <div className="flex items-center gap-2">
-                <RiSettings3Line className="size-5 text-cyan-600 dark:text-cyan-300" />
-                <h1 className="text-base font-semibold tracking-tight">
-                  Settings
-                </h1>
-              </div>
+              <Badge variant="outline" className="h-5 gap-1 px-1.5 text-[10px]">
+                <RiSettings3Line className="size-3" />
+                read-only
+              </Badge>
 
               {config ? (
                 <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                  <Separator orientation="vertical" className="h-3.5" />
                   <span>
-                    Instance: <span className="font-mono font-medium text-foreground">{config.instanceId}</span>
+                    Instance:{' '}
+                    <span className="font-mono font-medium text-foreground">
+                      {config.instanceId}
+                    </span>
                   </span>
                   <Separator orientation="vertical" className="h-3.5" />
-                  <Badge variant="secondary" className="h-4 px-1.5 text-[10px]">
-                    {config.source}
+                  <Badge
+                    variant="secondary"
+                    className="h-4 px-1.5 text-[10px]"
+                    title="Where these values were loaded from"
+                  >
+                    source: {config.source}
                   </Badge>
                   <Separator orientation="vertical" className="h-3.5" />
                   <span className="font-mono text-muted-foreground">
-                    {filteredItems.length === allItems.length ? (
-                      `${allItems.length} keys`
-                    ) : (
-                      `${filteredItems.length} of ${allItems.length} keys`
-                    )}
+                    {filteredItems.length === allItems.length
+                      ? `${allItems.length} keys`
+                      : `${filteredItems.length} of ${allItems.length} keys`}
                   </span>
                 </div>
               ) : null}
@@ -297,7 +282,9 @@ export function GatewayConfigPage() {
                 variant="outline"
                 size="sm"
                 className="h-7 px-2 text-xs gap-1"
-                onClick={() => void copyToClipboard(toEnvText(filteredItems), 'all-env')}
+                onClick={() =>
+                  void copyToClipboard(toEnvText(filteredItems), 'all-env')
+                }
                 disabled={filteredItems.length === 0}
                 title="Copy all filtered configuration as .env"
               >
@@ -308,7 +295,9 @@ export function GatewayConfigPage() {
                 variant="outline"
                 size="sm"
                 className="h-7 px-2 text-xs gap-1"
-                onClick={() => void copyToClipboard(toJsonText(filteredItems), 'all-json')}
+                onClick={() =>
+                  void copyToClipboard(toJsonText(filteredItems), 'all-json')
+                }
                 disabled={filteredItems.length === 0}
                 title="Copy all filtered configuration as JSON"
               >
@@ -438,7 +427,9 @@ export function GatewayConfigPage() {
           <div className="min-h-0 flex-1 overflow-y-auto">
             {filteredItems.length === 0 && !loading ? (
               <div className="flex flex-col items-center justify-center gap-2 py-16 text-muted-foreground">
-                <p className="text-sm">No settings found matching your filter.</p>
+                <p className="text-sm">
+                  No settings found matching your filter.
+                </p>
                 {(search || selectedSubsystem !== 'all') && (
                   <Button
                     variant="outline"
@@ -523,11 +514,21 @@ export function GatewayConfigPage() {
                 <Table className="text-xs font-mono">
                   <TableHeader className="sticky top-0 bg-muted/80 backdrop-blur z-10">
                     <TableRow className="h-7 border-b border-border/70">
-                      <TableHead className="py-1 px-2 font-semibold">Key</TableHead>
-                      <TableHead className="py-1 px-2 font-semibold w-24">Subsystem</TableHead>
-                      <TableHead className="py-1 px-2 font-semibold w-20">Type</TableHead>
-                      <TableHead className="py-1 px-2 font-semibold">Value</TableHead>
-                      <TableHead className="py-1 px-2 font-semibold w-16 text-right">Copy</TableHead>
+                      <TableHead className="py-1 px-2 font-semibold">
+                        Key
+                      </TableHead>
+                      <TableHead className="py-1 px-2 font-semibold w-24">
+                        Subsystem
+                      </TableHead>
+                      <TableHead className="py-1 px-2 font-semibold w-20">
+                        Type
+                      </TableHead>
+                      <TableHead className="py-1 px-2 font-semibold">
+                        Value
+                      </TableHead>
+                      <TableHead className="py-1 px-2 font-semibold w-16 text-right">
+                        Copy
+                      </TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -539,15 +540,22 @@ export function GatewayConfigPage() {
                         <TableCell className="py-1 px-2 font-medium">
                           <span
                             className="hover:underline cursor-pointer"
-                            onClick={() => void copyToClipboard(item.fullKey, item.fullKey)}
+                            onClick={() =>
+                              void copyToClipboard(item.fullKey, item.fullKey)
+                            }
                             title="Click to copy key name"
                           >
-                            <span className="text-cyan-600/80 dark:text-cyan-400/80">{item.subsystem}.</span>
+                            <span className="text-cyan-600/80 dark:text-cyan-400/80">
+                              {item.subsystem}.
+                            </span>
                             <span className="text-foreground">{item.key}</span>
                           </span>
                         </TableCell>
                         <TableCell className="py-1 px-2">
-                          <Badge variant="outline" className="h-4 px-1 text-[10px]">
+                          <Badge
+                            variant="outline"
+                            className="h-4 px-1 text-[10px]"
+                          >
                             {item.subsystem}
                           </Badge>
                         </TableCell>
@@ -559,7 +567,10 @@ export function GatewayConfigPage() {
                             value={item.value}
                             type={item.type}
                             onCopy={() =>
-                              void copyToClipboard(formatConfigValue(item.value), item.fullKey)
+                              void copyToClipboard(
+                                formatConfigValue(item.value),
+                                item.fullKey,
+                              )
                             }
                           />
                         </TableCell>

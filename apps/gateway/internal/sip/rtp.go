@@ -55,6 +55,7 @@ func writeNormalizedVideoAccessUnit(
 
 	sess.NumberSIPVideoAccessUnit(&au)
 	logVideoTimestampDiscontinuity(sess.ID, au.Discontinuity)
+	logVideoSameTimestampSplit(sess.ID, au.SameTimestampSplit)
 
 	for _, packet := range au.Packets {
 		data, err := packet.Marshal()
@@ -112,6 +113,17 @@ func logVideoTimestampDiscontinuity(sessionID string, d *session.H264TimestampDi
 	}
 	fmt.Printf("[%s] sip_video_ts_discontinuity reason=%s in_prev=%d in=%d out_prev=%d out=%d wall_ms=%d\n",
 		sessionID, d.Reason, d.PreviousIncoming, d.Incoming, d.PreviousOutgoing, d.Outgoing, d.Wall.Milliseconds())
+}
+
+// logVideoSameTimestampSplit logs the first five reused-timestamp access
+// units of a stream, then every 50th. first_mb=0 means a separate picture
+// that shares the timestamp; >0 means the tail of one split picture.
+func logVideoSameTimestampSplit(sessionID string, d *session.H264SameTimestampSplit) {
+	if d == nil || (d.Count > 5 && d.Count%50 != 0) {
+		return
+	}
+	fmt.Printf("[%s] sip_video_ts_discontinuity reason=same-picture-split in=%d out=%d reused=true first_mb=%d packets=%d prev_packets=%d count=%d wall_ms=%d\n",
+		sessionID, d.Incoming, d.Outgoing, d.FirstMB, d.Packets, d.PreviousPackets, d.Count, d.Wall.Milliseconds())
 }
 
 // startRTPListener starts an RTP listener and returns the port
@@ -249,6 +261,9 @@ func (s *Server) startRTPListenerForSession(sess *session.Session) (int, error) 
 
 		// Start periodic PLI sender for fast video start
 		go s.startPeriodicPLIForSession(sess)
+		// Ask the browser for an IDR until one is forwarded, then only as a
+		// long safety net. Linphone recovery is SIP INFO FIR / RTCP FIR/PLI.
+		go s.startProactiveBrowserPLIForSession(sess)
 		// Start keyframe watchdog to recover from stalled decoders (iOS VideoToolbox)
 		go s.startKeyframeWatchdogForSession(sess)
 
@@ -534,7 +549,9 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 	// FU-A chain even though RTP bytes continue to arrive.
 	var auNormalizer *session.H264AccessUnitNormalizer
 	if sess.VideoAUNormalizeEnabled {
-		auNormalizer = session.NewH264AccessUnitNormalizer(session.H264AccessUnitNormalizerConfig{}, func(au session.NormalizedH264AccessUnit) {
+		auNormalizer = session.NewH264AccessUnitNormalizer(session.H264AccessUnitNormalizerConfig{
+			ReuseSameSourceTimestamp: sess.VideoSameTSReuse,
+		}, func(au session.NormalizedH264AccessUnit) {
 			if sess.VideoTrack == nil {
 				if au.IsIDR {
 					sess.RememberSIPVideoIDR(au, false)
@@ -551,7 +568,7 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 				isPLIResponse, responseTime, pliSent, pliResponse := sess.RecordKeyframe()
 				sess.MarkSwitchVideoKeyframe(now)
 				sess.MarkSwitchVideoProgress(now, false)
-				fmt.Printf("[%s] h264_au_normalized status=complete-idr packets=%d injected_parameter_sets=%v source_timestamp=%d pli_response=%v response_time=%v pli_sent=%d pli_responses=%d\n",
+				fmt.Printf("[%s] h264_au_normalized direction=sip-to-browser status=complete-idr packets=%d injected_parameter_sets=%v source_timestamp=%d pli_response=%v response_time=%v pli_sent=%d pli_responses=%d\n",
 					sess.ID, len(au.Packets), au.InjectedParameterSets, au.SourceTimestamp,
 					isPLIResponse, responseTime, pliSent, pliResponse)
 				_, _, hasCachedSets := sess.GetSIPCachedSPSPPS()
@@ -796,10 +813,13 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 								if sess.GetState() == session.StateEnded {
 									return
 								}
-								if sess.HasUplinkKeyframeSince(kickAt) {
+								if sess.HasUplinkKeyframeSince(kickAt) || sess.ShouldStopStartupBrowserPLI() {
 									return
 								}
 								time.Sleep(startupPLIInterval)
+								if skip, _ := sess.SkipUplinkKeyframeRequest("startup", time.Now()); skip {
+									return
+								}
 								sess.SendPLItoWebRTC()
 							}
 						}()
@@ -962,7 +982,7 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 			if isKeyframe && auNormalizer == nil {
 				isPLIResponse, responseTime, pliSent, pliResponse := sess.RecordKeyframe()
 				sess.MarkSwitchVideoKeyframe(time.Now())
-				fmt.Printf("[%s] h264_au_normalized status=legacy-keyframe-start packet=%d pli_response=%v response_time=%v pli_sent=%d pli_responses=%d\n",
+				fmt.Printf("[%s] h264_au_normalized direction=sip-to-browser status=legacy-keyframe-start packet=%d pli_response=%v response_time=%v pli_sent=%d pli_responses=%d\n",
 					sess.ID, packetCount, isPLIResponse, responseTime, pliSent, pliResponse)
 				_, _, hasCachedSets := sess.GetSIPCachedSPSPPS()
 				if sess.TryMarkRemoteVideoReady(hasCachedSets) {
@@ -1069,6 +1089,7 @@ func (s *Server) handleRTCPFromSIP(data []byte, sess *session.Session, rtcpCount
 	for _, pkt := range packets {
 		switch p := pkt.(type) {
 		case *rtcp.PictureLossIndication:
+			sess.NoteSIPKeyframeRequest("pli")
 			if allow, reason := sess.AllowSIPOriginatedBrowserKeyframe("pli"); !allow {
 				fmt.Printf("[%s] sip_keyframe_request_suppressed kind=pli reason=%s\n", sess.ID, reason)
 				continue
@@ -1077,6 +1098,7 @@ func (s *Server) handleRTCPFromSIP(data []byte, sess *session.Session, rtcpCount
 			sess.SendPLItoWebRTC()
 
 		case *rtcp.FullIntraRequest:
+			sess.NoteSIPKeyframeRequest("fir")
 			if allow, reason := sess.AllowSIPOriginatedBrowserKeyframe("fir"); !allow {
 				fmt.Printf("[%s] sip_keyframe_request_suppressed kind=fir reason=%s\n", sess.ID, reason)
 				continue
@@ -1111,7 +1133,68 @@ func (s *Server) handleRTCPFromSIP(data []byte, sess *session.Session, rtcpCount
 		}
 	}
 	if sawSIPVideoReport {
+		sess.NoteSIPFarEndVideoSeen(time.Now())
 		sess.KickUplinkKeyframeOnFirstSIPRTCPIfNeeded()
+	}
+}
+
+// startProactiveBrowserPLIForSession asks the browser for an IDR until the
+// first one is forwarded to SIP, then only if none has been forwarded for
+// the safety-net interval and SIP has never asked, or the last SIP FIR/PLI
+// is still unanswered. SIP INFO FIR and RTCP FIR/PLI handle recovery in
+// between. RTP already flowing does not cancel it. After a skip the wait
+// is lastIDR+safety, not a short retry.
+func (s *Server) startProactiveBrowserPLIForSession(sess *session.Session) {
+	fmt.Printf("[%s] proactive_browser_pli_start initial=%s safety=%s\n",
+		sess.ID,
+		sess.ProactiveBrowserPLIInitial(),
+		sess.ProactiveBrowserPLISafety())
+	started := time.Now()
+	wake := sess.ProactivePLIWakeChan()
+	timer := time.NewTimer(time.Hour)
+	if !timer.Stop() {
+		select {
+		case <-timer.C:
+		default:
+		}
+	}
+	for {
+		now := time.Now()
+		wait := sess.ProactiveBrowserPLIWait(now)
+		if wait < time.Millisecond {
+			wait = time.Millisecond
+		}
+		timer.Reset(wait)
+		select {
+		case <-timer.C:
+		case <-wake:
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			continue
+		}
+		if sess.GetState() == session.StateEnded {
+			fmt.Printf("[%s] proactive_browser_pli_stop reason=session-ended\n", sess.ID)
+			return
+		}
+		now = time.Now()
+		decision := sess.DecideSessionProactiveBrowserPLI(now)
+		callAge := time.Since(started).Round(time.Millisecond)
+		if !decision.Send {
+			fmt.Printf("[%s] proactive_browser_pli skipped reason=%s interval=%s call_age=%s\n",
+				sess.ID, decision.Reason, wait, callAge)
+			continue
+		}
+		if sess.SendProactivePLIToWebRTC() {
+			fmt.Printf("[%s] proactive_browser_pli sent reason=%s interval=%s call_age=%s\n",
+				sess.ID, decision.Reason, wait, callAge)
+		} else {
+			fmt.Printf("[%s] proactive_browser_pli throttled reason=%s interval=%s call_age=%s\n",
+				sess.ID, decision.Reason, wait, callAge)
+		}
 	}
 }
 
@@ -1137,7 +1220,8 @@ func (s *Server) startPeriodicPLIForSession(sess *session.Session) {
 		return true
 	}
 	stopIfReady := func() bool {
-		stop, reason := session.DecidePeriodicBrowserPLI(sess.HasUplinkKeyframe(), time.Now(), pliDeadline)
+		hasIDR := sess.HasUplinkKeyframe() || sess.UplinkIDRInFlight() || sess.HasCompleteUplinkIDR()
+		stop, reason := session.DecidePeriodicBrowserPLI(hasIDR, time.Now(), pliDeadline)
 		if !stop {
 			return false
 		}
@@ -1151,6 +1235,10 @@ func (s *Server) startPeriodicPLIForSession(sess *session.Session) {
 			return
 		}
 		if superseded() || stopIfReady() {
+			return
+		}
+		if skip, _ := sess.SkipUplinkKeyframeRequest("startup", time.Now()); skip {
+			fmt.Printf("[%s] periodic_pli_stop reason=uplink-idr-forwarded epoch=%d sent=%d\n", sess.ID, epoch, pliCount)
 			return
 		}
 		sess.SendPLItoWebRTC()
@@ -1169,6 +1257,10 @@ func (s *Server) startPeriodicPLIForSession(sess *session.Session) {
 			return
 		}
 		if superseded() || stopIfReady() {
+			return
+		}
+		if skip, _ := sess.SkipUplinkKeyframeRequest("startup", time.Now()); skip {
+			fmt.Printf("[%s] periodic_pli_stop reason=uplink-idr-forwarded epoch=%d sent=%d\n", sess.ID, epoch, pliCount)
 			return
 		}
 		pliCount++

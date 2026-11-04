@@ -62,6 +62,12 @@ func (s *Server) setupHandlers() {
 		s.handleMESSAGE(req, tx)
 	})
 
+	// Handle INFO (picture_fast_update, DTMF). sipgo otherwise logs
+	// "SIP request handler not found" and never answers the dialog.
+	s.sipServer.OnInfo(func(req *sip.Request, tx sip.ServerTransaction) {
+		s.handleINFO(req, tx)
+	})
+
 	// Handle UPDATE requests (mid-dialog session refresh / SDP update)
 	s.sipServer.OnUpdate(func(req *sip.Request, tx sip.ServerTransaction) {
 		s.handleUPDATE(req, tx)
@@ -501,7 +507,12 @@ func (s *Server) handleActiveReINVITE(req *sip.Request, tx sip.ServerTransaction
 	if rtpPort <= 0 {
 		rtpPort = 4000
 	}
-	answerSDP := s.createSDPAnswerForInvite(rtpPort, sess, req.Body())
+	answerSDP := sess.SIPAnswerSDP()
+	if len(answerSDP) == 0 {
+		answerSDP = s.createSDPAnswerForInvite(rtpPort, sess, req.Body())
+		sess.RememberSIPAnswer(answerSDP)
+	}
+	fmt.Printf("[%s] sip_reinvite answered sdp=unchanged bytes=%d\n", sess.ID, len(answerSDP))
 	res := sip.NewResponseFromRequest(req, 200, "OK", answerSDP)
 	res.AppendHeader(&sip.ContactHeader{
 		Address: sip.Uri{Host: s.publicAddress, Port: s.sipPort},
@@ -511,6 +522,7 @@ func (s *Server) handleActiveReINVITE(req *sip.Request, tx sip.ServerTransaction
 		_ = sess.FailMidCallRenegotiation(started.ID, 500, err.Error())
 		return
 	}
+	sess.HandleSIPReinviteKeyframe(time.Now())
 	if !requiresClientRenegotiation {
 		_ = sess.CompleteMidCallRenegotiation(started.ID, string(answerSDP))
 	}
@@ -891,7 +903,7 @@ func (s *Server) applyIncomingCallerCancel(sess *session.Session, cancelReq *sip
 		log.Printf("[SIP-CANCEL] cancel ignored for non-incoming session=%s state=%s source=%s", sess.ID, sess.GetState(), source)
 		return
 	}
-	if !sess.TryBeginTerminalAction("caller_cancel") {
+	if !sess.TryBeginIncomingTerminalAction("caller_cancel") {
 		log.Printf("[SIP-CANCEL] cancel ignored; terminal action already claimed: session=%s winner=%s source=%s", sess.ID, sess.GetTerminalAction(), source)
 		return
 	}

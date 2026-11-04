@@ -377,10 +377,14 @@ func (s *Session) SetRemoteAudioSSRC(ssrc uint32) {
 	s.RemoteAudioSSRC = ssrc
 }
 
-// SetRemoteVideoSSRC sets the remote video SSRC
+// SetRemoteVideoSSRC sets the remote video SSRC.
+// The first transition from 0 records when the SIP decoder's SSRC was learned.
 func (s *Session) SetRemoteVideoSSRC(ssrc uint32) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.RemoteVideoSSRC == 0 && ssrc != 0 && s.remoteVideoSSRCLearnedAt.IsZero() {
+		s.remoteVideoSSRCLearnedAt = time.Now()
+	}
 	s.RemoteVideoSSRC = ssrc
 }
 
@@ -403,16 +407,29 @@ func (s *Session) ResetMediaState() {
 	// Reset video RTP state
 	s.VideoSeq = 0
 	s.VideoSSRC = 0
+	s.uplinkTSRebaser = uplinkVideoTSRebaser{}
 	s.RemoteVideoSSRC = 0
 	s.remoteVideoReadyNotified = false
 	s.uplinkKeyframeKickOnRemoteJoinDone = false
 	s.uplinkKeyframeKickOnFirstSIPRTCP = false
+	s.remoteVideoSSRCLearnedAt = time.Time{}
+	s.sipFarEndVideoSeenUnixNano.Store(0)
 	s.sipVideoDestReadyAt = time.Time{}
 	s.bridgedPeerAnsweredAt = time.Time{}
 	s.PendingBrowserKeyframeRequest = false
 	s.PendingBrowserKeyframeRequestAt = time.Time{}
 	s.PendingBrowserKeyframeRequestEpoch = 0
 	s.LastUplinkKeyframe = time.Time{}
+	s.uplinkIDRAccepted = false
+	s.uplinkIDRInFlight = false
+	s.uplinkIDRInFlightTS = 0
+	s.uplinkIDRCompleteAt = time.Time{}
+	s.uplinkVideoPackets = 0
+	s.uplinkVideoWindowStart = time.Time{}
+	s.uplinkVideoLastIDR = time.Time{}
+	s.uplinkVideoLastIDRTimestamp = 0
+	s.uplinkVideoIDRTimestampSeen = false
+	s.lastUplinkPacketsPerSec = 0
 	s.LastWebRTCPLISent = time.Time{}
 	s.LastWebRTCFIRSent = time.Time{}
 	s.switchUplinkKeyframeKickAt = time.Time{}
@@ -421,6 +438,14 @@ func (s *Session) ResetMediaState() {
 	s.openedVideoSource = ""
 	s.bridgedKeyframeAt = time.Time{}
 	s.switchVideoInfoFIRAt = time.Time{}
+	s.uplinkVideoPacketSeen = false
+	s.lastUplinkPacketMarker = false
+	s.pendingSIPRTCPKind = ""
+	s.pendingSIPRTCPTrigger = ""
+	s.pendingSIPRTCPForce = false
+	s.pendingSIPRTCPHasAuthority = false
+	s.pendingSIPRTCPGeneration = 0
+	s.pendingSIPRTCPMediaEpoch = 0
 	s.SwitchFeedbackBurstSatisfied = false
 
 	// Reset learned RTCP routing info
@@ -475,6 +500,45 @@ func (s *Session) ResetMediaState() {
 	// We keep Offer/SDP-derived SPS/PPS as a fallback so SIP SDP can include sprop-parameter-sets
 	// even before RTP starts flowing. Early RTP parsing will still overwrite within the first packets.
 	s.LastSPSPPSInjectionTime = time.Time{}
+	s.uplinkSPSPPSTimestamp = 0
+	s.uplinkSPSPPSTimestampSet = false
+	s.uplinkParameterObservation = uplinkParameterObservation{}
+	s.uplinkInBandTimestamp = 0
+	s.uplinkInBandTimestampSet = false
+	s.uplinkInBandSPS = false
+	s.uplinkInBandPPS = false
+	s.uplinkSPSWidth = 0
+	s.uplinkSPSHeight = 0
+	s.uplinkSPSDimensionBlocked = false
+	s.uplinkSPSDimensionLogged = false
+	s.uplinkPictureSizeIDRPending = false
+	s.uplinkPictureSizeChangedAt = time.Time{}
+	s.uplinkPictureSizeHeld = 0
+	s.uplinkPictureSizePLIAt = time.Time{}
+	s.uplinkPictureSizePLIs = 0
+	s.allowNextUplinkPictureSize = false
+	s.switchKeyframeRequestedAt = time.Time{}
+	s.switchKeyframeIDRPending = false
+	s.switchKeyframeBurstGen++
+	s.switchEpochAt = time.Time{}
+	s.proactivePLINotBefore = time.Time{}
+	s.sipInfoFIRAt = time.Time{}
+	s.sipAnswerSDP = nil
+	s.lastBrowserPLIReason = ""
+	s.mode0NeedsIDR = false
+	s.mode0PLIAt = time.Time{}
+	s.uplinkStallSince = time.Time{}
+	s.uplinkStallReason = ""
+	s.uplinkStallLogAt = time.Time{}
+	s.lastBrowserIDRRequest = time.Time{}
+	s.sipInfoFIRRetryGen++
+	s.sipInfoFIRRetryActive = false
+	s.firIDRSliceLog = false
+	s.firIDRSliceTS = 0
+	s.firIDRSliceTSSet = false
+	s.uplinkPictureMu.Lock()
+	s.uplinkPicture = uplinkPictureHold{}
+	s.uplinkPictureMu.Unlock()
 
 	s.mediaForwardReady = false
 	s.UpdatedAt = time.Now()
@@ -535,13 +599,20 @@ func (s *Session) RecordKeyframe() (bool, time.Duration, int, int) {
 	var pliResponse int
 
 	s.mu.Lock()
+	previousKeyframe := s.LastKeyframe
 	s.LastKeyframe = now
-	isPLIResponse := now.Sub(s.LastPLISent) < 2*time.Second && s.PLISent > 0
+	elapsed := now.Sub(s.LastSipPLISent)
+	// An unsolicited/late IDR has no measured PLI response latency. Returning
+	// time since the last (possibly zero) request made this grow for the call's
+	// lifetime and falsely suggested a slow repair on the opposite media leg.
+	// Browser-directed FIR also updates LastPLISent. Only a SIP-directed
+	// request can be answered by this inbound SIP keyframe, once per request.
+	isPLIResponse := !s.LastSipPLISent.IsZero() && previousKeyframe.Before(s.LastSipPLISent) && elapsed >= 0 && elapsed < 2*time.Second && s.PLISent > 0
 
 	if isPLIResponse {
 		s.PLIResponse++
+		responseTime = elapsed
 	}
-	responseTime = now.Sub(s.LastPLISent)
 	pliSent = s.PLISent
 	pliResponse = s.PLIResponse
 	s.mu.Unlock()
@@ -556,6 +627,27 @@ func (s *Session) NoteSIPVideoRTP(now time.Time) {
 		return
 	}
 	s.sipVideoRTPUnixNano.Store(now.UnixNano())
+	s.NoteSIPFarEndVideoSeen(now)
+}
+
+// NoteSIPFarEndVideoSeen records the first SIP video RTP packet or RTCP
+// SR/RR from the far end. Later calls keep the original timestamp.
+func (s *Session) NoteSIPFarEndVideoSeen(now time.Time) {
+	if s == nil || now.IsZero() {
+		return
+	}
+	s.sipFarEndVideoSeenUnixNano.CompareAndSwap(0, now.UnixNano())
+}
+
+func (s *Session) sipFarEndVideoSeenAt() time.Time {
+	if s == nil {
+		return time.Time{}
+	}
+	n := s.sipFarEndVideoSeenUnixNano.Load()
+	if n == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, n)
 }
 
 // LastSIPVideoRTPAt returns the last SIP video RTP arrival time.

@@ -1,6 +1,15 @@
 # Gateway Configuration Reference
 
-From `internal/config/config.go`.
+From `internal/config/config.go` (plus the few keys noted as read elsewhere).
+
+Removed keys: `SIP_UPLINK_VIDEO_PACER_ENABLE`, `SIP_UPLINK_VIDEO_PACER_BPS`,
+`SIP_UPLINK_VIDEO_PACER_BURST_PACKETS`, `SIP_UPLINK_VIDEO_PACER_MAX_QUEUE_MS`,
+`SIP_UPLINK_IDR_PACE_MS`, and `SIP_LOSSY_*` (`SIP_LOSSY_KEYFRAME_ASSIST`,
+`SIP_LOSSY_LOSS_THRESHOLD_PCT`, `SIP_LOSSY_EXTRA_IDR_DELAY_MS`,
+`SIP_LOSSY_EARLY_WINDOW_MS`, `SIP_LOSSY_SAFETY_IDR_INTERVAL_MS`) are no longer
+read. The uplink video pacer, IDR pacing, and lossy keyframe assist were
+removed; WebRTC→SIP video is written directly (`internal/session/uplink_picture.go`).
+Setting them has no effect.
 
 ---
 
@@ -15,7 +24,7 @@ From `internal/config/config.go`.
 - `API_PORT` (default `8080`)
 - `API_ENABLE_WS` (default `true`)
 - `API_ENABLE_PUBLIC_WS` (default `false`; enables unauthenticated `/ws-public` for public SIP per-call credentials only)
-- `API_ENABLE_AGENT_WS` (default `false`; enables unauthenticated `/ws-agent` for PC agent SIP REGISTER presence with client-provided credentials)
+- `API_ENABLE_AGENT_WS` (default `false`; enables `/ws-agent` for PC agent SIP REGISTER presence with client-provided credentials; `access_token` is optional and verified when present)
 - `API_ENABLE_AGENT_DEVICE_WS` (default `false`; enables JWT `/ws-agent-device` for sticky agent-device SIP REGISTER, stored FCM, and logout unregister)
 - `API_ENABLE_REST` (default `true`)
 - `API_CORS_ORIGINS` (default `*`; for single-domain deploy use e.g. `https://gateway.example.com` — see [`deploy/README.md`](../../deploy/README.md))
@@ -46,6 +55,7 @@ When `AUTH_ENABLE=true`:
   `POST /api/chat-images`, and `GET /api/chat-images/{id}` are intentionally
   public. Chat-image POST still requires a live call `sessionId`.
 - `/ws` requires `?access_token=<jwt>`. The admin password is not accepted on `/ws`.
+- `/ws-agent` still accepts a connection with no token. When `access_token` is present it is verified and stored on the connection. A call may then use the trunk from `agent_register`, or omit the token and send `sipDomain`, `sipUsername`, and `sipPassword` on `agent_register` or on `call`. Trunk calls on `/ws` and `/ws-agent-device` still require claims while this verifier is enabled.
 
 When `FRONTEND_PASSWORD` is set and `AUTH_ENABLE=false`, authenticated `/api/*` routes still require the matching bearer. Set the same `FRONTEND_PASSWORD` on the frontend process. Do not use a `VITE_` prefix; the frontend server reads it from process env and never injects it into the browser bundle.
 
@@ -55,6 +65,8 @@ When `FRONTEND_PASSWORD` is set and `AUTH_ENABLE=false`, authenticated `/api/*` 
 - `DEBUG_TURN` (default `false`)
 - `DEBUG_SIP_MESSAGE` (default `false`)
 - `DEBUG_SIP_INVITE` (default `false`)
+- `DEBUG_VIDEO_PACKETS` (default `false`; per-packet WebRTC→SIP H.264 NAL line for the first 100 video packets of a call: `WebRTC Video Packet #N: NAL Type=...`. SPS/PPS cache logs and keyframe/IDR logs stay on without this flag.)
+- `DEBUG_SIP_TRUNK` (default `false`; routine trunk lease renew of an already-owned lease, re-REGISTER target / expected 401 / success, and refresh-worker stop. INFO stays on for first registration, lease acquired by a new owner, lease loss, registration failure and recovery, and trunk add/remove. WARN and ERROR paths are unchanged.)
 - `SWITCH_PLI_DELAY_MS` (default `0`; delayed `@switch` FIR/PLI retries abort if a complete IDR already arrived)
 - `SIP_AUDIO_USE_AVPF` (default `false`)
 - `SIP_AUDIO_INBOUND_GAIN_ENABLE` (default `false`; requires CGO + libopus in Docker build)
@@ -67,11 +79,24 @@ When `FRONTEND_PASSWORD` is set and `AUTH_ENABLE=false`, authenticated `/api/*` 
 - `SIP_SWITCH_VIDEO_GATE_MIN_IDR_PACKETS` (default `1`; smallest complete post-switch IDR the gate will release before the 2s stall timeout. Completeness is SPS/PPS + IDR with a closed FU-A/marker. Raise toward `24` only if a specific encoder's tiny flush IDRs still poison the decoder.)
 - `SIP_SWITCH_VIDEO_GATE_FAIL_OPEN_MS` (default `3000`; release a stalled gate when RTP is still healthy and the SSRC and source match the stream the gate already opened)
 - `SIP_SWITCH_VIDEO_GATE_FAIL_OPEN_CAP_MS` (default `5000`; release any stalled gate after this long)
-- `SIP_SWITCH_VIDEO_INFO_FIR_ENABLE` (default `false`; send an in-dialog SIP INFO `picture_fast_update` on `@switch`, keyframe-stale, and gate stall. Bridged gateway sessions also get a direct browser PLI, which does not depend on this knob.)
+- `SIP_SWITCH_VIDEO_INFO_FIR_ENABLE` (default `false`; extra INFO on `@switch`/stall when that flag is on. The default keyframe path is `SIP_KEYFRAME_REQUEST_MODE=info`, which does not depend on this knob.)
+- `SIP_KEYFRAME_REQUEST_MODE` (default `info`; `info|rtcp|both`). How the gateway asks the SIP/Asterisk video leg for a keyframe. `info` sends SIP INFO `picture_fast_update` only. Asterisk stamps `marker=1` on the next packet it forwards after each RTCP PLI/FIR, which splits Linphone packetization-mode=0 IDRs, so RTCP feedback toward SIP is off by default. `rtcp` is the legacy PLI/FIR path (still skipped while an uplink IDR is in flight, for `SIP_RTCP_FB_GUARD_MS` after it, at most once per `SIP_RTCP_FB_MIN_INTERVAL_MS`, and only right after a forwarded marker bit). `both` sends INFO plus that gated RTCP.
+- `SIP_RTCP_FB_MIN_INTERVAL_MS` (default `2000`; clamped `500..10000`). Minimum gap between SIP-leg RTCP PLI/FIR.
+- `SIP_RTCP_FB_GUARD_MS` (default `1500`; `0` disables; clamped `0..5000`). Skip SIP-leg RTCP PLI/FIR this long after a complete uplink IDR.
+- `SIP_UPLINK_PICTURE_SIZE_CHANGE` (default `accept`; `accept|reject`, invalid values fall back to `accept`). What the WebRTC→SIP video path does when the browser's H.264 SPS changes picture size mid-call, e.g. Chrome `degradationPreference=balanced` scaling down under low bandwidth. `accept` forwards the new size: once an uplink IDR has been forwarded, every non-IDR packet of the new size (including its in-band SPS/PPS) is held until the first IDR, and that IDR gets exactly one pair of the new SPS/PPS in front of it. Same SSRC, contiguous sequence numbers, and the browser's RTP timestamps are kept. If the new size arrives without an IDR, the browser (not Asterisk) gets a PLI, at most once per second. Before the first uplink IDR the normal startup gate applies. `reject` is the old lock: the first size is kept, and all uplink video after a change is dropped for the rest of the call unless an `@switch` keyframe request allows one change. It protects a TTRS build whose GL uploader overflowed on a mid-call resolution change. Log lines: `uplink_sps_dimension_change accepted|dropped`, `uplink_picture_size_hold`, `uplink_picture_size_idr released`, `browser_pli sent reason=picture_size_change`.
+- `SIP_VIDEO_SAME_TS_REUSE` (default `on`; `on|off`, also `true|false|1|0|yes|no`; invalid values use `on`). SIP→WebRTC video (phone → agent browser), with `SIP_VIDEO_AU_NORMALIZE_ENABLE=true`. Linphone stamps video on a 10ms ticker, so the phone sometimes sends two marker-terminated access units with the same RTP timestamp. `on`: the second one keeps the first one's outbound timestamp, as the source sent it. That is not a discontinuity and does not count as a discontinuity IDR. It is logged as `sip_video_ts_discontinuity reason=same-picture-split in= out= reused=true first_mb= packets= prev_packets= count= wall_ms=` (first 5 per stream, then every 50th). `first_mb=0` means a separate picture sharing the timestamp, `>0` means the tail of one picture split by a mid-picture marker. Backward timestamps, jumps over 10s, stream switches, and the first AU after a cached-IDR replay still step by wall clock (`reason=source-gap`, `switch`, ...). `off`: the old behaviour, where a repeated timestamp steps by wall clock (+1..+186 ticks) and logs `reason=source-gap`. This flag does not affect the agent→phone (WebRTC→SIP) video.
+- `SIP_VIDEO_TS_REBASE` (default `on`; `on|off`, also `true|false|1|0|yes|no`; invalid values use `on`). WebRTC→SIP video (agent → phone). Each call's first forwarded video packet gets RTP timestamp `SIP_VIDEO_TS_BASE`, and every later one gets `base + (browserTs − firstBrowserTs)` in uint32 arithmetic. That keeps the browser's frame deltas, same-timestamp slices, and wrap-around exactly. SPS/PPS injected before an IDR and all de-aggregated STAP-A NALs carry the rebased timestamp of the packet they come from. Why: Asterisk's waiting video uses RTP ts `0..691020`, and on bridge it keeps that SSRC/sequence but passes our timestamp through. A random browser timestamp is "older" mod 2^32 in about half of calls, so Android Linphone's oRTP drops the agent's first packet (the new SPS) and decodes the IDR with the stale 640x480 SPS, which freezes or crashes OpenH264. Held packets (startup gate, mode-0 recovery, picture-size hold) do not seed the base. A browser SSRC change, a backward step of more than 1s, or a forward jump of more than 10s continues from the newest outbound timestamp by the wall time since the last packet, so the outbound timestamp never goes backward within a call. A late packet up to 1s old keeps its frame's mapping. Reset per call (`ResetMediaState`). Audio and SIP→WebRTC are not affected. Log lines: `uplink_video_ts_rebase start browser_ts= base= browser_ssrc=` (once per call) and `uplink_video_ts_rebase discontinuity reason=ssrc-change|ts-backward|ts-jump browser_ts_prev= browser_ts= out_prev= out= wall_ms= count=` (first 10, then every 100th). `off` passes the browser timestamp through as before.
+- `SIP_VIDEO_TS_BASE` (default `5400000`, 60s at 90 kHz; valid `691110..2147483647`, else default with a warning). First outbound WebRTC→SIP video RTP timestamp of each call. It must be past Asterisk's waiting-video range (ends at 691020) and inside the positive int32 range so it is "newer" mod 2^32.
+- `SIP_VIDEO_REORDER_TIMEOUT_MS` (default `60`; clamped `20..200`; non-numeric values use the default. How long the SIP video reorder buffer waits for a missing packet before releasing what it has. Read once at process start in `internal/session/reorder_buffer.go`, not in `config.go`.)
 - `SIP_VIDEO_REORDER_PACING_MS` (default `1`; sleep between consecutive packets released from a filled reorder gap so a recovered burst does not arrive as one UDP clump. `0` disables. Clamped to `0..10`.)
 - `SIP_VIDEO_TIMESTAMP_JUMP_PLI` (default `true`; send a forced SIP PLI when SIP video RTP timestamps jump by more than 10s, e.g. Asterisk pre-answer stills at ts≈2700 then the endpoint clock at ~1e9). The same jump, and an SSRC change, is treated as a stream switch: the normalizer resets, the keyframe gate re-arms, and the outbound timestamp steps by wall-clock time since the previous forwarded frame instead of a fixed +33ms or +1s.
 - `SIP_VIDEO_FORWARD_EARLY_MEDIA` (default `true`). Set `false` to drop SIP video until the call is answered (`state=active`). That avoids locking the phone's jitter buffer onto Asterisk early-media stills, at the cost of no queue/ringback picture — the caller stays on black video until the answered stream. Leave it `true` when the queue picture should stay visible; timestamp repair still covers the handoff.
 - `WEBRTC_TWCC_ENABLE` (default `true`). Installs Pion's transport-cc sender (header extension plus feedback) on both the initial and replacement PeerConnection so the phone's `availableOutgoingBitrate` can move. Set `false` to omit `transport-cc` and the sender interceptor. `goog-remb` is not advertised. NACK retransmission stays on the gateway cache.
+- `WEBRTC_ICE_INTERFACE_EXCLUDE` (default `docker,br-,veth,virbr,vnet,vmnet,vboxnet,lxcbr,lxdbr,podman,cni,flannel,cali,cilium,weave,kube-`; comma list of case-insensitive interface-name prefixes; `none` disables). Interfaces matching a prefix get no host candidate. Applies to the initial and the replacement (`resume`/`@switch`) PeerConnection. With `network_mode: host` the gateway otherwise advertised every Docker bridge (`172.17.0.1`, `192.168.x.1`, ...); each one adds dead candidate pairs that Chrome checks before the real address, which delayed ICE by 3–5 s. A real bridge named `br-lan`/`br-ex` matches `br-`: list the prefixes you want explicitly in that case. While any interface or IP filter is active, Pion binds the srflx and TURN sockets to each kept address instead of `0.0.0.0`, so a host with two real interfaces makes one TURN allocation per address.
+- `WEBRTC_ICE_IP_ALLOWLIST` (default unset = no IP filter; comma list of IPs or CIDRs, invalid entries are dropped with a warning). Only local addresses inside the list get host candidates. This matches the interface address before any NAT1To1 rewrite. With any interface or IP filter active, Pion binds srflx/TURN sockets to each kept address instead of `0.0.0.0`, so the list must include an address that can reach the TURN server or no relay candidate is gathered.
+- `WEBRTC_ICE_NAT1TO1_IPS` (default unset; comma list of `public` or `public/local`). Host candidates advertise the public IP instead of the local one (Pion address rewrite, host/replace mode, same as the legacy `SetNAT1To1IPs(ips, host)`). Use it when the gateway sits behind a 1:1 NAT; not needed when the public IP is on an interface.
+- `WEBRTC_ICE_NETWORK_TYPES` (default `udp4`; comma list of `udp4|udp6|tcp4|tcp6`, or `all` for Pion's default of all four). Network types for host and srflx gathering. TURN relay endpoints are UDP, and the client-to-TURN transport (`turn:?transport=tcp`, `turns:`) is not limited by this list, so TURN keeps working with `udp4`. A list without `udp4`/`udp6` gathers no relay candidates (logged as a warning). The gateway has no ICE-TCP listener, so `tcp4`/`tcp6` add no host candidates today.
+- Each PeerConnection logs its gathered candidates once, when gathering first completes: `[<session>] ice_local_candidates pc=initial|replacement count=N candidates=host/udp/203.150.245.39:50123,srflx/udp/...,relay/udp/203.150.245.38:...`. The `webrtc_api` line shows the effective settings (`iface_exclude= ip_allow= nat1to1= networks=`), and so does the startup config dump (`WebRTC ICE:`).
 - `SIP_SWITCH_VIDEO_TRANSITION_MODE` (default `blackout`; `blackout` drops SIP→WebRTC video until the complete-IDR gate releases; `preserve` is rollback that keeps the last rendered frame visible while holding unsafe packets)
 - `SIP_SWITCH_VIDEO_BLACKOUT_ENABLED` (default `true`)
 - `SIP_SWITCH_VIDEO_BLACKOUT_MS` (default `300`; minimum blackout before gate may release in `blackout` mode)
@@ -106,6 +131,9 @@ When `FRONTEND_PASSWORD` is set and `AUTH_ENABLE=false`, authenticated `/api/*` 
   connected. No switch renegotiation is attempted, and no `switch_renegotiate_*`
   log is emitted, while this flag is `false`. Configuration changes require a
   gateway process restart.)
+- `SIP_PROACTIVE_BROWSER_PLI_INITIAL_MS` (default `2000`; browser PLI interval until the first WebRTC→SIP IDR is forwarded)
+- `SIP_PROACTIVE_BROWSER_PLI_SAFETY_MS` (default `10000`; after the first IDR, send a browser PLI only if none has been forwarded in this window. SIP INFO FIR and RTCP FIR/PLI handle recovery in between.)
+- Decoder-join kicks (no env knob): when the SIP far end becomes reachable (`sip-video-dest-ready`, `sip-video-rtp-learn`, `remote-ssrc-learn`, `sip-rtcp-first`, `bridged-*`), the gateway sends the browser a forced FIR + PLI (`uplink_keyframe_kick reason=...`). It skips the kick when an uplink IDR is in flight or a complete one was forwarded in the last 10s (`uplink_keyframe_kick_skipped ... skip=idr-in-flight|idr-fresh`). For `remote-ssrc-learn` and `sip-rtcp-first`, an IDR forwarded before the remote video SSRC was learned or before the first SIP video RTP/RTCP arrived does not count as fresh: the kick runs, logs `pre_learn_idr=ignored`, and sends one follow-up PLI after 1s unless an IDR from after the kick is forwarded first. Other kicks keep up to three follow-up PLIs 300ms apart. See `internal/session/uplink_keyframe_gate.go` and `keyframe.go`.
 - `SIP_VIDEO_KEYFRAME_WATCHDOG` (default `true`)
 - `SIP_VIDEO_KEYFRAME_WATCHDOG_INTERVAL_MS` (default `2000`)
 - `SIP_VIDEO_KEYFRAME_STALE_MS` (default `4000`; must stay above a healthy SIP GOP or watchdog PLI never stops)
@@ -126,8 +154,9 @@ When `FRONTEND_PASSWORD` is set and `AUTH_ENABLE=false`, authenticated `/api/*` 
 - `SIP_VIDEO_RTP_DISORDER_CONTAINMENT_ENABLED` (default `false`)
 - `SIP_VIDEO_RTP_DISORDER_CONTAINMENT_MS` (default `10000`)
 
-`DEBUG_TURN`, `DEBUG_SIP_MESSAGE`, `DEBUG_SIP_INVITE`, `DB_LOG_FULL_SIP`, and
-`PUSH_DEBUG_TTRS_TOKEN` must remain `false` in production. They can expose addresses, identities,
+`DEBUG_TURN`, `DEBUG_SIP_MESSAGE`, `DEBUG_SIP_INVITE`, `DEBUG_VIDEO_PACKETS`,
+`DEBUG_SIP_TRUNK`, `DB_LOG_FULL_SIP`, and `PUSH_DEBUG_TTRS_TOKEN` must remain
+`false` in production. They can expose addresses, identities, trunk contacts,
 authorization headers, SIP/SDP or message bodies in local logs or LogStore.
 Enabling a local diagnostic does not authorize exporting its raw content.
 

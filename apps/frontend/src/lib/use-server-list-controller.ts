@@ -8,6 +8,8 @@ export interface ServerListState<T> {
   pageSize: number
   search: string
   loading: boolean
+  /** True only until the first response; use it for the full-page spinner. */
+  initialLoading: boolean
   error: string | null
   totalPages: number
 }
@@ -53,6 +55,7 @@ export function useServerListController<
   const [pageSize, setPageSize] = useState(defaultPageSize)
   const [search, setSearch] = useState(initialSearch)
   const [loading, setLoading] = useState(false)
+  const [hasLoaded, setHasLoaded] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
@@ -81,6 +84,7 @@ export function useServerListController<
         setError(err instanceof Error ? err.message : 'Failed to fetch data')
       } finally {
         setLoading(false)
+        setHasLoaded(true)
       }
     },
     [page, pageSize, fetchFn],
@@ -126,6 +130,7 @@ export function useServerListController<
     pageSize,
     search,
     loading,
+    initialLoading: !hasLoaded,
     error,
     totalPages,
     setPage,

@@ -6,15 +6,15 @@ React + TypeScript + TanStack Start frontend for gateway operations UI inside th
 
 ## Project Structure
 
-- `src/routes/`: TanStack file-based routes (`index.tsx`, `trunks.tsx`, `instances.tsx`, `sessions*.tsx`, `session-directory.tsx`).
-- `src/features/`: domain modules (`auth`, `gateway-instances`, `trunk`, `session-history`, `session-detail`, `session-directory`).
+- `src/routes/`: TanStack file-based routes (`index.tsx`, `dashboard.tsx`, `active-sessions.tsx`, `trunks.tsx`, `instances.tsx`, `sessions*.tsx`, `session-directory.tsx`, `public-accounts.tsx`, `ws-clients.tsx`, `client-diagnostics.tsx`, `logs.tsx`, `settings.tsx`).
+- `src/features/`: domain modules (`auth`, `dashboard`, `active-sessions`, `gateway-instances`, `gateway-config`, `gateway-logs`, `trunk`, `session-history`, `session-detail`, `session-directory`, `public-accounts`, `ws-clients`, `client-diagnostics`, `smoke`).
 - `src/components/` and `src/components/ui/`: shared UI and primitives.
 - `src/lib/`: shared utilities, store helpers, theme/provider utilities.
 - Generated file: `src/routeTree.gen.ts` (do not edit manually).
 
 ## Commands
 
-Run from `E:\dev\webrtc-sip-gateway` unless a command explicitly says it is frontend-local.
+Run from the repo root unless a command explicitly says it is frontend-local.
 
 - Install: `pnpm install`
 - Dev: `pnpm dev:frontend` (port `3150`)
@@ -29,7 +29,7 @@ Single-test examples:
 
 - `pnpm --filter frontend run test -- src/features/trunk/types.test.ts`
 - `pnpm --filter frontend run test -- -t "isRegisterActionDisabled" src/features/trunk/components/trunk-list-page.test.ts`
-- `pnpm --filter frontend exec vitest run src/features/gateway/config.test.ts -t "normalizes gateway URL"`
+- `pnpm --filter frontend exec vitest run src/lib/http-client.test.ts`
 
 ## Conventions
 

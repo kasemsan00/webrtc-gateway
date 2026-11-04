@@ -31,10 +31,34 @@ if ($env:LEGACY_IMAGE_NAMES) {
   }
 }
 
+function Get-GitValue([string[]]$GitArgs) {
+  try {
+    $out = & git @GitArgs 2>$null
+    if ($LASTEXITCODE -eq 0 -and $out) { return ($out | Select-Object -First 1).Trim() }
+  } catch {}
+  return "unknown"
+}
+
+$gitCommit = Get-GitValue @("rev-parse", "HEAD")
+$gitBranch = Get-GitValue @("rev-parse", "--abbrev-ref", "HEAD")
+$gitVersion = Get-GitValue @("describe", "--tags", "--always", "--dirty")
+$buildTime = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
+$gitDirty = "unknown"
+try {
+  $porcelain = & git status --porcelain 2>$null
+  if ($LASTEXITCODE -eq 0) { $gitDirty = if ($porcelain) { "true" } else { "false" } }
+} catch {}
+Write-Host "gateway build: commit=$gitCommit branch=$gitBranch version=$gitVersion dirty=$gitDirty time=$buildTime"
+
 docker buildx build --push `
   --platform $platforms `
   @tags `
   --build-arg VITE_GATEWAY_URL=$env:VITE_GATEWAY_URL `
   --build-arg VITE_CONFIG_AUTORECORD=$env:VITE_CONFIG_AUTORECORD `
   --build-arg VITE_BASE_PATH=$viteBasePath `
+  --build-arg GIT_COMMIT=$gitCommit `
+  --build-arg GIT_BRANCH=$gitBranch `
+  --build-arg GIT_VERSION=$gitVersion `
+  --build-arg BUILD_TIME=$buildTime `
+  --build-arg GIT_DIRTY=$gitDirty `
   -f deploy/Dockerfile.unified .

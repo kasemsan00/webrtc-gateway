@@ -1,6 +1,6 @@
 # Gateway Frontend
 
-React + TypeScript + Vite operations UI for the WebRTC gateway.
+React + TypeScript + TanStack Start (Vite) operations UI for the WebRTC-SIP gateway.
 
 ## Run
 
@@ -43,5 +43,5 @@ pnpm test
 
 ## References
 
-- Dual-flow architecture: `../gateway/docs/dual-flow.md`
-- Backend WS contract: `../gateway/AGENTS.md`
+- Backend WS contract: [`../../docs/gateway/ws-contract.md`](../../docs/gateway/ws-contract.md)
+- Gateway guide: [`../gateway/AGENTS.md`](../gateway/AGENTS.md)

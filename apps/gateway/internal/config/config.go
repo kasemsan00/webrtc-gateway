@@ -132,18 +132,20 @@ type TURNConfig struct {
 
 // SIPConfig holds SIP server configuration
 type SIPConfig struct {
-	Domain           string
-	Username         string
-	Password         string
-	Port             int
-	LocalPort        int
-	LocalIP          string // Local IP to bind listeners (prevents IPv6, default: 0.0.0.0)
-	PublicIP         string // Public IP address for NAT traversal (optional)
-	ListenTCP        bool   // Enable SIP TCP listener (default: true)
-	ListenUDP        bool   // Enable SIP UDP listener (default: false)
-	DebugSIPMessage  bool   // Enable verbose SIP MESSAGE logging
-	DebugSIPInvite   bool   // Enable verbose SIP INVITE logging (header dump)
-	SwitchPLIDelayMS int    // Delay in milliseconds before sending PLI on @switch message (default: 0)
+	Domain            string
+	Username          string
+	Password          string
+	Port              int
+	LocalPort         int
+	LocalIP           string // Local IP to bind listeners (prevents IPv6, default: 0.0.0.0)
+	PublicIP          string // Public IP address for NAT traversal (optional)
+	ListenTCP         bool   // Enable SIP TCP listener (default: true)
+	ListenUDP         bool   // Enable SIP UDP listener (default: false)
+	DebugSIPMessage   bool   // Enable verbose SIP MESSAGE logging
+	DebugSIPInvite    bool   // Enable verbose SIP INVITE logging (header dump)
+	DebugVideoPackets bool   // DEBUG_VIDEO_PACKETS: per-packet WebRTC video NAL dump (first 100 packets)
+	DebugSIPTrunk     bool   // DEBUG_SIP_TRUNK: routine trunk lease/REGISTER cycle logs
+	SwitchPLIDelayMS  int    // Delay in milliseconds before sending PLI on @switch message (default: 0)
 	// @switch video transition hold (SIP->WebRTC): preserve keeps the previous
 	// rendered frame by holding unsafe non-keyframe packets; blackout is legacy.
 	SwitchVideoTransitionMode            string // @switch transition mode: preserve|blackout (default: preserve)
@@ -174,7 +176,16 @@ type SIPConfig struct {
 	VideoAUNormalizeEnabled              bool   // Normalize SIP->WebRTC H.264 into complete access units (default: true)
 	SwitchVideoGateMinIDRPackets         int    // Min packets in a post-switch IDR before stall timeout (default: 1)
 	VideoReorderPacingMS                 int    // Sleep between consecutive reorder-burst packet writes (default: 1; 0 disables)
+	KeyframeRequestMode                  string // How to ask the SIP peer for a keyframe: info|rtcp|both (default: info)
+	RTCPFBMinIntervalMS                  int    // Minimum gap between SIP-leg RTCP PLI/FIR (default: 2000)
+	RTCPFBGuardMS                        int    // Skip SIP-leg RTCP PLI/FIR this long after an uplink IDR (default: 1500)
+	UplinkPictureSizeChange              string // Mid-call browser SPS picture-size change: accept|reject (default: accept)
+	ProactiveBrowserPLIInitialMS         int    // Browser PLI interval until the first uplink IDR (default: 2000)
+	ProactiveBrowserPLISafetyMS          int    // Browser PLI only if no uplink IDR in this window (default: 10000)
 	VideoTimestampJumpPLI                bool   // Request a SIP keyframe when SIP video RTP timestamps jump (default: true)
+	VideoSameTSReuse                     bool   // Same SIP video source timestamp keeps the same outbound timestamp (default: on)
+	VideoTSRebase                        bool   // Rebase WebRTC→SIP video RTP timestamps per call (default: on)
+	VideoTSBase                          uint32 // First outbound WebRTC→SIP video timestamp per call (default: 5400000)
 	VideoSuppressEarlyMedia              bool   // Drop SIP video until the call is answered (default: false; SIP_VIDEO_FORWARD_EARLY_MEDIA=true)
 	WebRTCTWCCEnabled                    bool   // Send transport-cc feedback to the phone (default: true; WEBRTC_TWCC_ENABLE)
 	SwitchVideoGateFailOpenMS            int    // Fail open a stalled same-stream gate after this many ms (default: 3000)
@@ -206,6 +217,8 @@ type SIPConfig struct {
 	AudioInboundGainEnable bool    // Enable inbound gain processing (default: false)
 	AudioInboundGain       float32 // Linear gain multiplier (default: 1.0)
 	AudioInboundGainMax    float32 // Maximum allowed gain (default: 3.0)
+	// ICE candidate gathering limits for every gateway PeerConnection (WEBRTC_ICE_*)
+	WebRTCICE WebRTCICEConfig
 }
 
 const (
@@ -213,6 +226,13 @@ const (
 	SIPVideoFeedbackTransportRTP  = "rtp"
 	SIPVideoFeedbackTransportRTCP = "rtcp"
 	SIPVideoFeedbackTransportDual = "dual"
+
+	SIPKeyframeRequestModeInfo = "info"
+	SIPKeyframeRequestModeRTCP = "rtcp"
+	SIPKeyframeRequestModeBoth = "both"
+
+	SIPUplinkPictureSizeAccept = "accept"
+	SIPUplinkPictureSizeReject = "reject"
 
 	SIPSwitchVideoTransitionPreserve = "preserve"
 	SIPSwitchVideoTransitionBlackout = "blackout" // default: blackout-until-safe-IDR on normalize path
@@ -318,6 +338,8 @@ func Load() (*Config, error) {
 			ListenUDP:                            getEnvAsBool("SIP_LISTEN_UDP", false),
 			DebugSIPMessage:                      getEnvAsBool("DEBUG_SIP_MESSAGE", false),
 			DebugSIPInvite:                       getEnvAsBool("DEBUG_SIP_INVITE", false),
+			DebugVideoPackets:                    getEnvAsBool("DEBUG_VIDEO_PACKETS", false),
+			DebugSIPTrunk:                        getEnvAsBool("DEBUG_SIP_TRUNK", false),
 			SwitchPLIDelayMS:                     getEnvAsInt("SWITCH_PLI_DELAY_MS", 0),
 			SwitchVideoTransitionMode:            normalizeSwitchVideoTransitionMode(getEnvWithDefault("SIP_SWITCH_VIDEO_TRANSITION_MODE", SIPSwitchVideoTransitionBlackout)),
 			SwitchVideoBlackoutEnabled:           getEnvAsBool("SIP_SWITCH_VIDEO_BLACKOUT_ENABLED", true),
@@ -347,9 +369,19 @@ func Load() (*Config, error) {
 			VideoAUNormalizeEnabled:              getEnvAsBool("SIP_VIDEO_AU_NORMALIZE_ENABLE", true),
 			SwitchVideoGateMinIDRPackets:         clampInt(getEnvAsInt("SIP_SWITCH_VIDEO_GATE_MIN_IDR_PACKETS", 1), 1, 64),
 			VideoReorderPacingMS:                 clampInt(getEnvAsInt("SIP_VIDEO_REORDER_PACING_MS", 1), 0, 10),
+			KeyframeRequestMode:                  sipKeyframeRequestModeFromEnv(),
+			RTCPFBMinIntervalMS:                  sipRTCPFBMinIntervalMSFromEnv(),
+			RTCPFBGuardMS:                        sipRTCPFBGuardMSFromEnv(),
+			UplinkPictureSizeChange:              sipUplinkPictureSizeChangeFromEnv(),
+			ProactiveBrowserPLIInitialMS:         clampInt(getEnvAsInt("SIP_PROACTIVE_BROWSER_PLI_INITIAL_MS", 2000), 500, 10000),
+			ProactiveBrowserPLISafetyMS:          clampInt(getEnvAsInt("SIP_PROACTIVE_BROWSER_PLI_SAFETY_MS", 10000), 2000, 60000),
 			VideoTimestampJumpPLI:                getEnvAsBool("SIP_VIDEO_TIMESTAMP_JUMP_PLI", true),
+			VideoSameTSReuse:                     envOnOff("SIP_VIDEO_SAME_TS_REUSE", true),
+			VideoTSRebase:                        envOnOff("SIP_VIDEO_TS_REBASE", true),
+			VideoTSBase:                          sipVideoTSBaseFromEnv(),
 			VideoSuppressEarlyMedia:              !getEnvAsBool("SIP_VIDEO_FORWARD_EARLY_MEDIA", true),
 			WebRTCTWCCEnabled:                    getEnvAsBool("WEBRTC_TWCC_ENABLE", true),
+			WebRTCICE:                            webrtcICEConfigFromEnv(),
 			SwitchVideoGateFailOpenMS:            getEnvAsInt("SIP_SWITCH_VIDEO_GATE_FAIL_OPEN_MS", 3000),
 			SwitchVideoGateFailOpenCapMS:         getEnvAsInt("SIP_SWITCH_VIDEO_GATE_FAIL_OPEN_CAP_MS", 5000),
 			SwitchVideoInfoFIREnable:             getEnvAsBool("SIP_SWITCH_VIDEO_INFO_FIR_ENABLE", false),
@@ -616,6 +648,8 @@ func (c *Config) Display() {
 	}
 	fmt.Printf("  Debug SIP MESSAGE: %v\n", c.SIP.DebugSIPMessage)
 	fmt.Printf("  Debug SIP INVITE: %v\n", c.SIP.DebugSIPInvite)
+	fmt.Printf("  Debug Video Packets: %v\n", c.SIP.DebugVideoPackets)
+	fmt.Printf("  Debug SIP Trunk: %v\n", c.SIP.DebugSIPTrunk)
 	fmt.Printf("  SIP Listen TCP: %v\n", c.SIP.ListenTCP)
 	fmt.Printf("  SIP Listen UDP: %v\n", c.SIP.ListenUDP)
 	fmt.Printf("  Audio Use AVPF: %v\n", c.SIP.AudioUseAVPF)
@@ -678,9 +712,22 @@ func (c *Config) Display() {
 	fmt.Printf("  SIP Video H264 AU Normalization: %v\n", c.SIP.VideoAUNormalizeEnabled)
 	fmt.Printf("  @switch Video Gate Min IDR Packets: %d\n", c.SIP.SwitchVideoGateMinIDRPackets)
 	fmt.Printf("  SIP Video Reorder Pacing: %dms\n", c.SIP.VideoReorderPacingMS)
+	fmt.Printf("  SIP Keyframe Request: mode=%s rtcpMinInterval=%dms guard=%dms\n",
+		c.SIP.KeyframeRequestMode,
+		c.SIP.RTCPFBMinIntervalMS,
+		c.SIP.RTCPFBGuardMS,
+	)
+	fmt.Printf("  SIP Uplink Picture Size Change: %s\n", c.SIP.UplinkPictureSizeChange)
+	fmt.Printf("  Proactive Browser PLI: initial=%dms safety=%dms\n",
+		c.SIP.ProactiveBrowserPLIInitialMS,
+		c.SIP.ProactiveBrowserPLISafetyMS,
+	)
 	fmt.Printf("  SIP Video Timestamp-Jump PLI: %v\n", c.SIP.VideoTimestampJumpPLI)
+	fmt.Printf("  SIP Video Same-Timestamp Reuse: %v\n", c.SIP.VideoSameTSReuse)
+	fmt.Printf("  SIP Video TS Rebase: enabled=%v base=%d\n", c.SIP.VideoTSRebase, c.SIP.VideoTSBase)
 	fmt.Printf("  SIP Video Forward Early Media: %v\n", !c.SIP.VideoSuppressEarlyMedia)
 	fmt.Printf("  WebRTC TWCC: %v\n", c.SIP.WebRTCTWCCEnabled)
+	fmt.Printf("  WebRTC ICE: %s\n", c.SIP.WebRTCICE.Summary())
 	fmt.Printf("  @switch Gate Fail-Open: sameStream=%dms cap=%dms infoFIR=%v\n",
 		c.SIP.SwitchVideoGateFailOpenMS, c.SIP.SwitchVideoGateFailOpenCapMS, c.SIP.SwitchVideoInfoFIREnable)
 
@@ -897,6 +944,84 @@ func getEnvAsInt(key string, defaultValue int) int {
 		return defaultValue
 	}
 	return value
+}
+
+func sipKeyframeRequestModeFromEnv() string {
+	value := strings.ToLower(strings.TrimSpace(getEnvWithDefault("SIP_KEYFRAME_REQUEST_MODE", SIPKeyframeRequestModeInfo)))
+	switch value {
+	case SIPKeyframeRequestModeInfo, SIPKeyframeRequestModeRTCP, SIPKeyframeRequestModeBoth:
+		return value
+	default:
+		fmt.Printf("Warning: invalid SIP_KEYFRAME_REQUEST_MODE=%q, using %q\n", value, SIPKeyframeRequestModeInfo)
+		return SIPKeyframeRequestModeInfo
+	}
+}
+
+// Asterisk's waiting video ends at RTP ts 691020; the outbound base must be
+// past it and stay in the positive int32 range so it is "newer" mod 2^32.
+const (
+	SIPVideoTSBaseDefault = 5400000
+	SIPVideoTSBaseMin     = 691110
+	SIPVideoTSBaseMax     = 2147483647
+)
+
+func sipVideoTSBaseFromEnv() uint32 {
+	return uint32(envIntInRangeOrDefault("SIP_VIDEO_TS_BASE", SIPVideoTSBaseDefault, SIPVideoTSBaseMin, SIPVideoTSBaseMax))
+}
+
+// envOnOff reads an on|off flag (also true|false|1|0|yes|no). Unset or
+// invalid values use the default; invalid ones print a warning.
+func envOnOff(key string, defaultValue bool) bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	switch value {
+	case "":
+		return defaultValue
+	case "on", "true", "1", "yes":
+		return true
+	case "off", "false", "0", "no":
+		return false
+	default:
+		name := "off"
+		if defaultValue {
+			name = "on"
+		}
+		fmt.Printf("Warning: invalid %s=%q, using \"%s\"\n", key, value, name)
+		return defaultValue
+	}
+}
+
+// envIntInRangeOrDefault returns the default for a missing, non-numeric, or
+// out-of-range value instead of clamping it to the nearest bound.
+func envIntInRangeOrDefault(key string, defaultValue, min, max int) int {
+	v := getEnvAsInt(key, defaultValue)
+	if v < min || v > max {
+		fmt.Printf("Warning: %s=%d outside %d..%d, using default: %d\n", key, v, min, max, defaultValue)
+		return defaultValue
+	}
+	return v
+}
+
+func sipUplinkPictureSizeChangeFromEnv() string {
+	value := strings.ToLower(strings.TrimSpace(getEnvWithDefault("SIP_UPLINK_PICTURE_SIZE_CHANGE", SIPUplinkPictureSizeAccept)))
+	switch value {
+	case SIPUplinkPictureSizeAccept, SIPUplinkPictureSizeReject:
+		return value
+	default:
+		fmt.Printf("Warning: invalid SIP_UPLINK_PICTURE_SIZE_CHANGE=%q, using %q\n", value, SIPUplinkPictureSizeAccept)
+		return SIPUplinkPictureSizeAccept
+	}
+}
+
+func sipRTCPFBMinIntervalMSFromEnv() int {
+	return clampInt(getEnvAsInt("SIP_RTCP_FB_MIN_INTERVAL_MS", 2000), 500, 10000)
+}
+
+func sipRTCPFBGuardMSFromEnv() int {
+	v := getEnvAsInt("SIP_RTCP_FB_GUARD_MS", 1500)
+	if v <= 0 {
+		return 0
+	}
+	return clampInt(v, 0, 5000)
 }
 
 func clampInt(value, min, max int) int {

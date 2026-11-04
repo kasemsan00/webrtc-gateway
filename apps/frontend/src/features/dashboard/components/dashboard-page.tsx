@@ -1,4 +1,4 @@
-import { Link } from '@tanstack/react-router'
+import { Link, useNavigate } from '@tanstack/react-router'
 import {
   RiArrowDownLine,
   RiArrowRightLine,
@@ -7,16 +7,16 @@ import {
   RiBarChartGroupedLine,
   RiCheckboxCircleLine,
   RiDatabaseLine,
+  RiErrorWarningLine,
   RiFileTextLine,
   RiHistoryLine,
   RiInboxLine,
   RiInformationLine,
-  RiMoonLine,
   RiPulseLine,
   RiRefreshLine,
   RiRouteLine,
   RiServerLine,
-  RiSunLine,
+  RiShieldCheckLine,
   RiTimeLine,
 } from '@remixicon/react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -44,6 +44,8 @@ import type {
 } from '@/features/dashboard/types'
 
 import type { GatewayDashboard } from '@/features/gateway-instances/types'
+import type { OverallHealth } from '@/features/gateway-status/health'
+import type { SessionsSearch } from '@/lib/search-params'
 import Header from '@/components/Header'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -59,17 +61,24 @@ import {
   TooltipTrigger,
   Tooltip as UITooltip,
 } from '@/components/ui/tooltip'
+import { fetchDashboardSummary } from '@/features/dashboard/services/dashboard-api'
 import {
-  fetchDashboardSummary,
-  fetchGatewayHealth,
-} from '@/features/dashboard/services/dashboard-api'
+  refreshGatewayStatus,
+  useGatewayStatus,
+} from '@/features/gateway-status/gateway-status-store'
+import {
+  TONE_CLASSES,
+  describeComponents,
+  overallHealth,
+} from '@/features/gateway-status/health'
 import {
   buildTerminalOutcomeChartData,
   buildTerminalTrunkRows,
   summarizeTerminalOutcomes,
 } from '@/features/dashboard/terminal-outcomes'
+import { DISPLAY_TIME_ZONE_LABEL, formatRelativeTime } from '@/lib/date-time'
+import { useNow } from '@/lib/use-now'
 import { cn } from '@/lib/utils'
-import { useTheme } from '@/lib/theme'
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
@@ -197,23 +206,104 @@ function computeSuccessRate(success: number, failure: number): number | null {
   return (success / total) * 100
 }
 
-function computeSystemStatus(m: DashboardSummaryMetrics | undefined): {
+export function computeSystemStatus(
+  m: DashboardSummaryMetrics | undefined,
+  health: OverallHealth = 'unknown',
+): {
   label: string
+  detail: string
   tone: 'success' | 'warning' | 'danger' | 'muted'
   pulse: boolean
 } {
-  if (!m) return { label: 'Loading', tone: 'muted', pulse: false }
+  if (!m) {
+    return { label: 'Loading', detail: '', tone: 'muted', pulse: false }
+  }
+  if (health === 'down') {
+    return {
+      label: 'Component down',
+      detail: 'A gateway component is unavailable. See Gateway Health below.',
+      tone: 'danger',
+      pulse: true,
+    }
+  }
+  if (health === 'degraded') {
+    return {
+      label: 'Degraded',
+      detail: 'A component is degraded (for example a queue dropping writes).',
+      tone: 'warning',
+      pulse: false,
+    }
+  }
   if (m.totalTrunks === 0 && m.publicAccounts === 0) {
-    return { label: 'Unconfigured', tone: 'danger', pulse: false }
+    return {
+      label: 'Not configured',
+      detail:
+        'No SIP trunk or public account exists, so no call can be placed.',
+      tone: 'warning',
+      pulse: false,
+    }
   }
   if (m.activeSessions > 0) {
-    return { label: 'Active', tone: 'success', pulse: true }
+    return {
+      label: 'Handling calls',
+      detail: `${m.activeSessions} call(s) in progress.`,
+      tone: 'success',
+      pulse: true,
+    }
   }
   if (m.registeredTrunks > 0 || m.publicAccounts > 0) {
-    return { label: 'Operational', tone: 'success', pulse: false }
+    return {
+      label: 'Ready',
+      detail: `${m.registeredTrunks} trunk(s) registered. Waiting for calls.`,
+      tone: 'success',
+      pulse: false,
+    }
   }
-  return { label: 'Idle', tone: 'warning', pulse: false }
+  return {
+    label: 'No trunk registered',
+    detail: `${m.enabledTrunks} trunk(s) enabled but none registered. Check Trunks for the last error.`,
+    tone: 'warning',
+    pulse: false,
+  }
 }
+
+/** Bangkok calendar date (YYYY-MM-DD) of an ISO timestamp. */
+function bangkokDate(iso: string): string | undefined {
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return undefined
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Bangkok',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(date)
+}
+
+/** Call Sessions filters covering the dashboard's selected range. */
+export function sessionsRangeSearch(
+  summary: Pick<DashboardSummaryResponse, 'rangeStart' | 'rangeEnd'> | null,
+  extra: SessionsSearch = {},
+): SessionsSearch {
+  if (!summary) return extra
+  // rangeEnd is exclusive in the API; step back 1ms to stay in the last day.
+  const endMs = new Date(summary.rangeEnd).getTime() - 1
+  return {
+    from: bangkokDate(summary.rangeStart),
+    to: Number.isNaN(endMs)
+      ? undefined
+      : bangkokDate(new Date(endMs).toISOString()),
+    ...extra,
+  }
+}
+
+const END_REASON_FILTERS = new Set([
+  'busy',
+  'decline',
+  'no_answer',
+  'caller_cancelled',
+  'outgoing_cancelled',
+  'hangup',
+])
 
 const TONE: Record<
   'success' | 'warning' | 'danger' | 'muted',
@@ -309,7 +399,7 @@ function KpiCard({
   accent = 'slate',
   trend,
   progress,
-  to,
+  link,
   hint,
 }: {
   icon: React.ReactNode
@@ -324,7 +414,8 @@ function KpiCard({
     neutral?: boolean
   }
   progress?: number
-  to?: string
+  /** Wraps the card in a typed <Link>, e.g. (card) => <Link to=...>{card}</Link>. */
+  link?: (card: React.ReactNode) => React.ReactNode
   hint?: string
 }) {
   const card = (
@@ -332,7 +423,7 @@ function KpiCard({
       className={cn(
         'h-full min-h-36 border-l-2 transition-all hover:-translate-y-0.5 hover:shadow-sm',
         ACCENT_BORDER[accent],
-        to && 'cursor-pointer hover:border-l-opacity-80',
+        link && 'cursor-pointer hover:border-l-opacity-80',
       )}
     >
       <CardContent className="p-4">
@@ -381,27 +472,20 @@ function KpiCard({
     </Card>
   )
 
-  if (to) {
-    return (
-      <Link to={to} className="block h-full">
-        {card}
-      </Link>
-    )
-  }
-
-  return card
+  return link ? link(card) : card
 }
 
 function SectionHeading({
   icon,
   title,
-  actionTo,
-  actionLabel,
+  hint,
+  action,
 }: {
   icon: React.ReactNode
   title: string
-  actionTo?: string
-  actionLabel?: string
+  hint?: string
+  /** A typed <Link> rendered as the section action. */
+  action?: React.ReactNode
 }) {
   return (
     <div className="flex items-center gap-3">
@@ -409,18 +493,20 @@ function SectionHeading({
       <h2 className="text-sm font-semibold uppercase tracking-wide text-foreground">
         {title}
       </h2>
+      {hint ? (
+        <span className="hidden text-[11px] text-muted-foreground md:inline">
+          {hint}
+        </span>
+      ) : null}
       <div className="h-px flex-1 bg-border/60" />
-      {actionTo && actionLabel ? (
+      {action ? (
         <Button
           asChild
           variant="ghost"
           size="xs"
           className="shrink-0 gap-1 text-xs text-muted-foreground"
         >
-          <Link to={actionTo}>
-            <span>{actionLabel}</span>
-            <RiArrowRightLine className="size-3" />
-          </Link>
+          {action}
         </Button>
       ) : null}
     </div>
@@ -488,13 +574,23 @@ function HealthStripSkeleton() {
   )
 }
 
-function HealthStrip({ health }: { health: GatewayDashboard }) {
+function HealthStrip({
+  health,
+  version,
+}: {
+  health: GatewayDashboard
+  version?: string
+}) {
   return (
     <div className="flex flex-col gap-3 text-xs sm:flex-row sm:items-center sm:justify-between">
-      <div className="grid flex-1 gap-3 sm:grid-cols-3">
+      <div className="grid flex-1 gap-3 sm:grid-cols-4">
         <div>
           <p className="text-muted-foreground">Instance</p>
           <p className="font-mono">{health.instanceId}</p>
+        </div>
+        <div>
+          <p className="text-muted-foreground">Version</p>
+          <p className="font-mono">{version ?? '-'}</p>
         </div>
         <div>
           <p className="text-muted-foreground">Uptime</p>
@@ -507,8 +603,15 @@ function HealthStrip({ health }: { health: GatewayDashboard }) {
           </Badge>
         </div>
       </div>
-      <Button asChild variant="outline" size="sm" className="h-7 shrink-0 text-xs">
-        <Link to="/instances">View instances</Link>
+      <Button
+        asChild
+        variant="outline"
+        size="sm"
+        className="h-7 shrink-0 text-xs"
+      >
+        <Link to="/instances" search={{ search: health.instanceId }}>
+          View instances
+        </Link>
       </Button>
     </div>
   )
@@ -521,13 +624,17 @@ function SystemStatusHero({
   prevSummary,
   health,
   healthLoading,
+  overall,
+  version,
 }: {
   summary: DashboardSummaryResponse | null
   prevSummary: DashboardSummaryResponse | null
   health: GatewayDashboard | null
   healthLoading: boolean
+  overall: OverallHealth
+  version?: string
 }) {
-  const status = computeSystemStatus(summary?.metrics)
+  const status = computeSystemStatus(summary?.metrics, overall)
   const tone = TONE[status.tone]
   const active = summary?.metrics.activeSessions ?? 0
   const period = summary?.metrics.periodSessions ?? 0
@@ -562,6 +669,11 @@ function SystemStatusHero({
                 <p className={cn('text-base font-semibold', tone.text)}>
                   {status.label}
                 </p>
+                {status.detail ? (
+                  <p className="max-w-[260px] text-[11px] text-muted-foreground">
+                    {status.detail}
+                  </p>
+                ) : null}
               </div>
             </div>
 
@@ -594,7 +706,7 @@ function SystemStatusHero({
 
             <div>
               <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
-                Period Sessions
+                Calls in period
               </p>
               <div className="flex items-center gap-2">
                 <p className="text-3xl font-bold tabular-nums leading-none">
@@ -623,7 +735,7 @@ function SystemStatusHero({
               size="sm"
               className="h-8 gap-1.5 text-xs"
             >
-              <Link to="/trunks">
+              <Link to="/trunks" search={{}}>
                 <RiServerLine className="size-3.5" />
                 Trunks
               </Link>
@@ -634,7 +746,7 @@ function SystemStatusHero({
               size="sm"
               className="h-8 gap-1.5 text-xs"
             >
-              <Link to="/sessions">
+              <Link to="/sessions" search={sessionsRangeSearch(summary)}>
                 <RiHistoryLine className="size-3.5" />
                 History
               </Link>
@@ -645,7 +757,7 @@ function SystemStatusHero({
               size="sm"
               className="h-8 gap-1.5 text-xs"
             >
-              <Link to="/logs">
+              <Link to="/logs" search={{}}>
                 <RiFileTextLine className="size-3.5" />
                 Logs
               </Link>
@@ -658,11 +770,106 @@ function SystemStatusHero({
           {healthLoading && !health ? (
             <HealthStripSkeleton />
           ) : health ? (
-            <HealthStrip health={health} />
+            <HealthStrip health={health} version={version} />
           ) : null}
         </div>
       ) : null}
     </Card>
+  )
+}
+
+// ── Gateway Health Panel ────────────────────────────────────────────────────
+
+function GatewayHealthPanel() {
+  const { health, error, updatedAt, loading } = useGatewayStatus()
+  const now = useNow(5000)
+  const components = describeComponents(health?.components)
+
+  return (
+    <section className="mb-8 space-y-3">
+      <div className="flex items-center gap-3">
+        <span className="text-muted-foreground">
+          <RiShieldCheckLine className="size-4" />
+        </span>
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-foreground">
+          Gateway Health
+        </h2>
+        <span className="text-[11px] text-muted-foreground">
+          {updatedAt
+            ? `checked ${formatRelativeTime(updatedAt, now)} · every 15s`
+            : 'checking…'}
+        </span>
+        <div className="h-px flex-1 bg-border/60" />
+        <Button
+          variant="ghost"
+          size="xs"
+          className="shrink-0 gap-1 text-xs text-muted-foreground"
+          onClick={() => void refreshGatewayStatus()}
+          disabled={loading}
+        >
+          <RiRefreshLine className={cn('size-3', loading && 'animate-spin')} />
+          Re-check
+        </Button>
+      </div>
+      {error ? (
+        <div className="flex items-start gap-2 rounded-md border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-600 dark:text-rose-400">
+          <RiErrorWarningLine className="mt-0.5 size-4 shrink-0" />
+          <span>
+            Health check failed: {error}
+            {health ? ' (showing last known state)' : ''}
+          </span>
+        </div>
+      ) : null}
+      {components.length === 0 && !error ? (
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Skeleton key={i} className="h-20 w-full" />
+          ))}
+        </div>
+      ) : (
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          {components.map((component) => {
+            const tone = TONE_CLASSES[component.tone]
+            return (
+              <div
+                key={component.key}
+                className={cn(
+                  'rounded-lg border p-3 text-xs',
+                  component.tone === 'muted' ? 'border-border' : tone.border,
+                  component.tone === 'danger' || component.tone === 'warning'
+                    ? tone.bg
+                    : undefined,
+                )}
+                title={component.purpose}
+              >
+                <div className="flex items-center gap-2">
+                  <span
+                    className={cn('size-2 shrink-0 rounded-full', tone.dot)}
+                  />
+                  <span className="font-medium">{component.label}</span>
+                  <span className={cn('ml-auto font-semibold', tone.text)}>
+                    {component.stateLabel}
+                  </span>
+                </div>
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  {component.reasonText ?? component.purpose}
+                </p>
+                {component.detailText ? (
+                  <p className="mt-1 font-mono text-[10px] text-muted-foreground">
+                    {component.detailText}
+                  </p>
+                ) : null}
+                {component.lastSuccessAt ? (
+                  <p className="mt-0.5 text-[10px] text-muted-foreground">
+                    last OK {formatRelativeTime(component.lastSuccessAt, now)}
+                  </p>
+                ) : null}
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </section>
   )
 }
 
@@ -744,7 +951,6 @@ function BarTooltip({
 // ── Main Dashboard Component ───────────────────────────────────────────────
 
 export function DashboardPage() {
-  const { theme, toggleTheme } = useTheme()
   const [period, setPeriod] = useState<DashboardPeriod>('day')
   const [anchorDate, setAnchorDate] = useState(getTodayBangkokDate)
   const [summary, setSummary] = useState<DashboardSummaryResponse | null>(null)
@@ -753,35 +959,13 @@ export function DashboardPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [lastUpdated, setLastUpdated] = useState<number | null>(null)
-  const [health, setHealth] = useState<GatewayDashboard | null>(null)
-  const [healthLoading, setHealthLoading] = useState(true)
-  const [healthError, setHealthError] = useState<string | null>(null)
+  const gatewayStatus = useGatewayStatus()
+  const health = gatewayStatus.dashboard
+  const healthLoading = gatewayStatus.loading && !health
+  const healthError = health ? null : gatewayStatus.error
+  const overall = overallHealth(gatewayStatus.health?.components)
+  const navigate = useNavigate()
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
-
-  const loadHealth = useCallback(async () => {
-    setHealthLoading(true)
-    try {
-      const data = await fetchGatewayHealth()
-      setHealth(data)
-      setHealthError(null)
-    } catch (err) {
-      setHealthError(
-        err instanceof Error ? err.message : 'Failed to load gateway health',
-      )
-    } finally {
-      setHealthLoading(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    void loadHealth()
-    const timer = setInterval(() => {
-      if (document.visibilityState === 'visible') {
-        void loadHealth()
-      }
-    }, 30000)
-    return () => clearInterval(timer)
-  }, [loadHealth])
 
   const doLoad = useCallback(
     async (signal?: AbortSignal) => {
@@ -880,6 +1064,14 @@ export function DashboardPage() {
     [prevSuccessFailure],
   )
 
+  const failedCount =
+    stateChartData.find((s) => s.state === 'failed')?.count ?? 0
+  const unknownCount =
+    stateChartData.find((s) => s.state === 'unknown')?.count ?? 0
+  const prevFailedCount = prevSummary
+    ? (prevSummary.states.find((s) => s.state === 'failed')?.count ?? 0)
+    : undefined
+
   const inboundCount = useMemo(
     () => directionData.find((d) => d.direction === 'inbound')?.count ?? 0,
     [directionData],
@@ -907,12 +1099,30 @@ export function DashboardPage() {
 
   const showSkeletons = loading && !summary
   const lastUpdatedLabel = lastUpdated
-    ? new Date(lastUpdated).toLocaleTimeString()
+    ? new Date(lastUpdated).toLocaleTimeString('th-TH', { hour12: false })
     : null
+  const rangeSearch = (extra: SessionsSearch = {}) =>
+    sessionsRangeSearch(summary, extra)
+  const openSessions = (extra: SessionsSearch) => {
+    void navigate({ to: '/sessions', search: rangeSearch(extra) })
+  }
 
   return (
     <div className="flex h-screen flex-col bg-background text-foreground">
-      <Header>
+      <Header
+        subBar={
+          <div className="flex items-center gap-2 text-xs">
+            <span className="text-muted-foreground">Anchor date</span>
+            <Input
+              className="h-8 flex-1 text-xs"
+              type="date"
+              value={anchorDate}
+              onChange={(event) => setAnchorDate(event.target.value)}
+              aria-label="Anchor date"
+            />
+          </div>
+        }
+      >
         <div className="flex flex-wrap items-center justify-end gap-2 text-xs">
           <Tabs
             value={period}
@@ -934,6 +1144,8 @@ export function DashboardPage() {
           <Input
             className="hidden h-7 w-36 text-xs sm:block md:w-40"
             type="date"
+            aria-label="Anchor date"
+            title="Day/month/year containing this date (Asia/Bangkok)"
             value={anchorDate}
             onChange={(event) => setAnchorDate(event.target.value)}
           />
@@ -953,24 +1165,6 @@ export function DashboardPage() {
               className={`size-3.5 ${loading ? 'animate-spin' : ''}`}
             />
             <span className="hidden sm:inline">Refresh</span>
-          </Button>
-
-          <Separator orientation="vertical" className="hidden h-4 sm:block" />
-
-          <Button
-            size="icon"
-            variant="ghost"
-            className="size-7"
-            onClick={toggleTheme}
-            aria-label={
-              theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'
-            }
-          >
-            {theme === 'dark' ? (
-              <RiSunLine className="size-3.5" />
-            ) : (
-              <RiMoonLine className="size-3.5" />
-            )}
           </Button>
         </div>
       </Header>
@@ -993,11 +1187,14 @@ export function DashboardPage() {
           {/* Range + last updated indicator */}
           {summary ? (
             <p className="mb-4 text-[11px] text-muted-foreground">
-              Range: {formatBangkokDateTime(summary.rangeStart)} —{' '}
+              Showing {summary.period}:{' '}
+              {formatBangkokDateTime(summary.rangeStart)} —{' '}
               {formatBangkokDateTime(summary.rangeEnd)}
-              {' · Asia/Bangkok (ICT)'}
+              {` · ${DISPLAY_TIME_ZONE_LABEL}`}
               {lastUpdatedLabel ? ` · Updated ${lastUpdatedLabel}` : ''}
-              {' · Auto-refresh every 30s'}
+              {
+                ' · Auto-refresh every 30s · Click a chart or card to open the matching calls'
+              }
             </p>
           ) : null}
 
@@ -1008,625 +1205,734 @@ export function DashboardPage() {
           ) : null}
 
           {error && !summary && !showSkeletons ? (
-            <div className="flex flex-col items-center justify-center gap-4 py-20 text-center">
-              <RiInboxLine className="size-10 text-muted-foreground/40" />
-              <div className="space-y-1">
-                <p className="text-sm font-medium">Failed to load dashboard</p>
-                <p className="max-w-md text-xs text-muted-foreground">{error}</p>
+            <>
+              <GatewayHealthPanel />
+              <div className="flex flex-col items-center justify-center gap-4 py-12 text-center">
+                <RiInboxLine className="size-10 text-muted-foreground/40" />
+                <div className="space-y-1">
+                  <p className="text-sm font-medium">
+                    Failed to load dashboard
+                  </p>
+                  <p className="max-w-md text-xs text-muted-foreground">
+                    {error}
+                  </p>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="gap-1.5"
+                  onClick={() => {
+                    void loadSummary()
+                  }}
+                  disabled={loading}
+                >
+                  <RiRefreshLine
+                    className={`size-3.5 ${loading ? 'animate-spin' : ''}`}
+                  />
+                  Retry
+                </Button>
+                <p className="max-w-md text-[11px] text-muted-foreground">
+                  Call analytics come from the database. If the Database
+                  component above is down, analytics stay unavailable until it
+                  recovers.
+                </p>
               </div>
-              <Button
-                size="sm"
-                variant="outline"
-                className="gap-1.5"
-                onClick={() => {
-                  void loadSummary()
-                }}
-                disabled={loading}
-              >
-                <RiRefreshLine
-                  className={`size-3.5 ${loading ? 'animate-spin' : ''}`}
-                />
-                Retry
-              </Button>
-            </div>
+            </>
           ) : (
             <>
-          {/* System Status Hero */}
-          {showSkeletons ? (
-            <Card className="mb-6 overflow-hidden">
-              <CardContent className="p-5">
-                <div className="flex items-center gap-5">
-                  <Skeleton className="h-10 w-40" />
-                  <Skeleton className="h-10 w-32" />
-                  <Skeleton className="h-10 w-32" />
-                </div>
-                <div className="mt-4 border-t border-border/60 pt-3">
-                  <HealthStripSkeleton />
-                </div>
-              </CardContent>
-            </Card>
-          ) : (
-            <div className="mb-6">
-              <SystemStatusHero
-                summary={summary}
-                prevSummary={prevSummary}
-                health={health}
-                healthLoading={healthLoading}
-              />
-            </div>
-          )}
-
-          {/* ── Overview Section ── */}
-          <section className="mb-8 space-y-3">
-            <SectionHeading
-              icon={<RiBarChartGroupedLine className="size-4" />}
-              title="Overview"
-            />
-
-            {showSkeletons ? (
-              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
-                {Array.from({ length: 5 }).map((_, i) => (
-                  <KpiSkeleton key={i} />
-                ))}
-              </div>
-            ) : summary ? (
-              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
-                <KpiCard
-                  icon={<RiHistoryLine className="size-4" />}
-                  label="Call Sessions"
-                  accent="cyan"
-                  to="/sessions"
-                  value={formatNumber(summary.metrics.periodSessions)}
-                  trend={{
-                    current: summary.metrics.periodSessions,
-                    previous: prevSummary?.metrics.periodSessions,
-                  }}
-                />
-                <KpiCard
-                  icon={<RiPulseLine className="size-4" />}
-                  label="Active Sessions"
-                  accent="emerald"
-                  to="/active-sessions"
-                  value={formatNumber(summary.metrics.activeSessions)}
-                  sub="live right now"
-                />
-                <KpiCard
-                  icon={<RiServerLine className="size-4" />}
-                  label="Trunks"
-                  accent="sky"
-                  to="/trunks"
-                  value={formatNumber(summary.metrics.registeredTrunks)}
-                  sub={
-                    <>
-                      Registered · {formatNumber(summary.metrics.enabledTrunks)}{' '}
-                      / {formatNumber(summary.metrics.totalTrunks)} enabled
-                    </>
-                  }
-                />
-                <KpiCard
-                  icon={<RiCheckboxCircleLine className="size-4" />}
-                  label="Public Accounts"
-                  accent="violet"
-                  to="/public-accounts"
-                  value={formatNumber(summary.metrics.publicAccounts)}
-                />
-                <KpiCard
-                  icon={<RiRouteLine className="size-4" />}
-                  label="Session Directory"
-                  accent="amber"
-                  to="/session-directory"
-                  value={formatNumber(summary.metrics.sessionDirectoryNow)}
-                  sub={
-                    <>
-                      WS Clients:{' '}
-                      <Link
-                        to="/ws-clients"
-                        className="underline-offset-2 hover:underline"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        {formatNumber(summary.metrics.wsClients)}
-                      </Link>
-                    </>
-                  }
-                />
-              </div>
-            ) : null}
-
-            {/* KPI row 2 */}
-            {showSkeletons ? (
-              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                {Array.from({ length: 4 }).map((_, i) => (
-                  <KpiSkeleton key={i} />
-                ))}
-              </div>
-            ) : summary ? (
-              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                <KpiCard
-                  icon={<RiTimeLine className="size-4" />}
-                  label="Avg Call Duration"
-                  accent="slate"
-                  value={formatDuration(summary.metrics.avgDurationSec)}
-                  sub={`Max: ${formatDuration(summary.metrics.maxDurationSec)}`}
-                  trend={{
-                    current: summary.metrics.avgDurationSec,
-                    previous: prevSummary?.metrics.avgDurationSec,
-                    neutral: true,
-                  }}
-                />
-                <KpiCard
-                  icon={<RiArrowUpDownLine className="size-4" />}
-                  label="Direction"
-                  accent="sky"
-                  value={`${formatNumber(inboundCount)} / ${formatNumber(outboundCount)}`}
-                  sub={
-                    <span className="inline-flex items-center gap-3">
-                      <span className="inline-flex items-center gap-1.5">
-                        <span className="size-2 rounded-full bg-sky-500" />
-                        inbound
-                      </span>
-                      <span className="inline-flex items-center gap-1.5">
-                        <span className="size-2 rounded-full bg-violet-500" />
-                        outbound
-                      </span>
-                    </span>
-                  }
-                />
-                <KpiCard
-                  icon={<RiCheckboxCircleLine className="size-4" />}
-                  label="Completed Rate"
-                  accent="emerald"
-                  hint="Share of completed sessions (ended or active) versus failed or unknown. In-progress states are excluded."
-                  value={
-                    successRate != null ? `${successRate.toFixed(1)}%` : 'N/A'
-                  }
-                  sub={
-                    <>
-                      Completed: {formatNumber(successFailure.success)} ·
-                      Failed: {formatNumber(successFailure.failure)}
-                    </>
-                  }
-                  progress={successRate ?? undefined}
-                  trend={{
-                    current: successRate ?? 0,
-                    previous: prevSuccessRate ?? undefined,
-                  }}
-                />
-                <Card className="h-full min-h-36 border-l-2 border-l-slate-500/50 transition-all hover:-translate-y-0.5 hover:shadow-sm">
-                  <CardContent className="p-4">
-                    <div className="flex items-start justify-between gap-2">
-                      <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
-                        vs Previous Period
-                      </p>
-                      <span className="text-slate-500 dark:text-slate-400">
-                        <RiArrowUpDownLine className="size-4" />
-                      </span>
+              {/* System Status Hero */}
+              {showSkeletons ? (
+                <Card className="mb-6 overflow-hidden">
+                  <CardContent className="p-5">
+                    <div className="flex items-center gap-5">
+                      <Skeleton className="h-10 w-40" />
+                      <Skeleton className="h-10 w-32" />
+                      <Skeleton className="h-10 w-32" />
                     </div>
-                    {prevSummary ? (
-                      <>
-                        <p className="mt-2 text-2xl font-semibold tabular-nums leading-none">
-                          {formatNumber(prevSummary.metrics.periodSessions)}
-                        </p>
-                        <p className="mt-1.5 text-xs text-muted-foreground">
-                          previous period sessions
-                        </p>
-                        <div className="mt-2">
-                          <TrendBadge
-                            current={summary.metrics.periodSessions}
-                            previous={prevSummary.metrics.periodSessions}
-                          />
-                        </div>
-                      </>
-                    ) : (
-                      <p className="mt-2 text-sm text-muted-foreground">
-                        No data
-                      </p>
-                    )}
-                  </CardContent>
-                </Card>
-              </div>
-            ) : null}
-          </section>
-
-          {/* ── Call Analytics Section ── */}
-          <section className="mb-8 space-y-3">
-            <SectionHeading
-              icon={<RiBarChartGroupedLine className="size-4" />}
-              title="Call Analytics"
-              actionTo="/sessions"
-              actionLabel="View sessions"
-            />
-
-            {showSkeletons ? (
-              <div className="grid gap-4 xl:grid-cols-2">
-                <ChartSkeleton />
-                <ChartSkeleton />
-                <ChartSkeleton />
-              </div>
-            ) : summary ? (
-              <div className="grid gap-4 xl:grid-cols-2">
-                {/* Sessions Over Time + Previous Period Comparison */}
-                <Card>
-                  <CardHeader className="pb-0">
-                    <CardTitle className="flex items-center gap-2 text-sm">
-                      <RiBarChartGroupedLine className="size-4" />
-                      Sessions Over Time
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="pt-3">
-                    {summary.series.length === 0 ? (
-                      <EmptyState
-                        icon={<RiInboxLine className="size-8" />}
-                        message="No sessions in selected range"
-                      />
-                    ) : (
-                      <div className="h-64 w-full">
-                        <ResponsiveContainer width="100%" height="100%">
-                          <LineChart data={comparisonSeries}>
-                            <CartesianGrid
-                              strokeDasharray="3 3"
-                              strokeOpacity={0.25}
-                            />
-                            <XAxis dataKey="bucket" tick={{ fontSize: 11 }} />
-                            <YAxis
-                              allowDecimals={false}
-                              tick={{ fontSize: 11 }}
-                            />
-                            <Tooltip content={<LineTooltip />} />
-                            <Legend
-                              formatter={(value: string) => (
-                                <span className="text-xs text-muted-foreground">
-                                  {value}
-                                </span>
-                              )}
-                            />
-                            <Line
-                              type="monotone"
-                              dataKey="current"
-                              name="Current"
-                              stroke={LINE_COLOR}
-                              strokeWidth={2}
-                              dot={false}
-                            />
-                            <Line
-                              type="monotone"
-                              dataKey="previous"
-                              name="Previous"
-                              stroke={PREV_LINE_COLOR}
-                              strokeWidth={1.5}
-                              strokeDasharray="4 3"
-                              dot={false}
-                            />
-                          </LineChart>
-                        </ResponsiveContainer>
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
-
-                {/* Session State Breakdown */}
-                <Card>
-                  <CardHeader className="pb-0">
-                    <CardTitle className="text-sm">
-                      Session State Breakdown
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="pt-3">
-                    {stateChartData.length === 0 ? (
-                      <EmptyState
-                        icon={<RiDatabaseLine className="size-8" />}
-                        message="No state data in selected range"
-                      />
-                    ) : (
-                      <div className="h-64 w-full">
-                        <ResponsiveContainer width="100%" height="100%">
-                          <PieChart>
-                            <Pie
-                              data={stateChartData}
-                              dataKey="count"
-                              nameKey="state"
-                              cx="50%"
-                              cy="50%"
-                              outerRadius={80}
-                              label={({
-                                name,
-                                value,
-                              }: {
-                                name?: string
-                                value?: number
-                              }) => `${name} (${value})`}
-                            >
-                              {stateChartData.map((entry) => (
-                                <Cell
-                                  key={`${entry.state}-${entry.count}`}
-                                  fill={
-                                    STATE_COLORS[entry.state] ??
-                                    STATE_COLORS.unknown
-                                  }
-                                />
-                              ))}
-                            </Pie>
-                            <Tooltip content={<StateTooltip />} />
-                          </PieChart>
-                        </ResponsiveContainer>
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
-
-                {/* Session outcome by state */}
-                <Card className="xl:col-span-2">
-                  <CardHeader className="pb-0">
-                    <CardTitle className="text-sm">
-                      Session Outcome by State
-                    </CardTitle>
-                    <p className="text-[11px] text-muted-foreground">
-                      Green = completed · Red = failed · Amber = in progress
-                    </p>
-                  </CardHeader>
-                  <CardContent className="pt-3">
-                    {stateChartData.length === 0 ? (
-                      <EmptyState
-                        icon={<RiCheckboxCircleLine className="size-8" />}
-                        message="No state data in selected range"
-                      />
-                    ) : (
-                      <div className="h-64 w-full">
-                        <ResponsiveContainer width="100%" height="100%">
-                          <BarChart
-                            data={stateChartData.map((s) => ({
-                              name: s.state,
-                              count: s.count,
-                              fill: getStateOutcomeColor(s.state),
-                            }))}
-                            layout="vertical"
-                          >
-                            <CartesianGrid
-                              strokeDasharray="3 3"
-                              strokeOpacity={0.25}
-                              horizontal={false}
-                            />
-                            <XAxis type="number" tick={{ fontSize: 11 }} />
-                            <YAxis
-                              type="category"
-                              dataKey="name"
-                              tick={{ fontSize: 11 }}
-                              width={90}
-                            />
-                            <Tooltip content={<BarTooltip />} />
-                            <Bar dataKey="count" radius={[0, 4, 4, 0]}>
-                              {stateChartData.map((entry) => (
-                                <Cell
-                                  key={`sf-${entry.state}`}
-                                  fill={getStateOutcomeColor(entry.state)}
-                                />
-                              ))}
-                            </Bar>
-                          </BarChart>
-                        </ResponsiveContainer>
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
-              </div>
-            ) : null}
-          </section>
-
-          {/* ── SIP & Trunks Section ── */}
-          <section className="space-y-3">
-            <SectionHeading
-              icon={<RiServerLine className="size-4" />}
-              title="SIP & Trunks"
-              actionTo="/trunks"
-              actionLabel="Manage trunks"
-            />
-
-            {/* Terminal outcome KPIs */}
-            {showSkeletons ? (
-              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
-                {Array.from({ length: 6 }).map((_, i) => (
-                  <KpiSkeleton key={i} />
-                ))}
-              </div>
-            ) : summary ? (
-              terminalOutcomeSummary.length === 0 ? (
-                <Card className="xl:col-span-6">
-                  <CardContent className="p-4">
-                    <EmptyState
-                      icon={<RiServerLine className="size-8" />}
-                      message="No terminal action data in selected range"
-                    />
+                    <div className="mt-4 border-t border-border/60 pt-3">
+                      <HealthStripSkeleton />
+                    </div>
                   </CardContent>
                 </Card>
               ) : (
-                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
-                  {terminalOutcomeSummary.slice(0, 6).map((item) => {
-                    const accent: Accent =
-                      item.key === 'accepted'
-                        ? 'emerald'
-                        : item.key === 'no_answer'
-                          ? 'rose'
-                          : item.key === 'busy' ||
-                              item.key === 'caller_cancelled'
-                            ? 'amber'
-                            : item.key === 'outgoing_cancelled'
-                              ? 'violet'
-                              : 'slate'
-                    return (
-                      <Card
-                        key={item.key}
-                        className={cn(
-                          'border-l-2 transition-all hover:-translate-y-0.5 hover:shadow-sm',
-                          ACCENT_BORDER[accent],
-                        )}
-                      >
-                        <CardContent className="p-4">
-                          <div className="flex items-start justify-between gap-2">
-                            <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
-                              {item.label}
-                            </p>
-                            <span
-                              className="size-2.5 shrink-0 rounded-full"
-                              style={{ backgroundColor: item.color }}
-                            />
-                          </div>
-                          <p className="mt-2 text-2xl font-semibold tabular-nums leading-none">
-                            {formatNumber(item.count)}
-                          </p>
-                          <p className="mt-1.5 text-xs text-muted-foreground">
-                            {item.sipStatusCode
-                              ? `SIP ${item.sipStatusCode}`
-                              : 'WS/SIP terminal action'}
-                          </p>
-                        </CardContent>
-                      </Card>
-                    )
-                  })}
+                <div className="mb-6">
+                  <SystemStatusHero
+                    summary={summary}
+                    prevSummary={prevSummary}
+                    health={health}
+                    healthLoading={healthLoading}
+                    overall={overall}
+                    version={gatewayStatus.build?.version}
+                  />
                 </div>
-              )
-            ) : null}
+              )}
 
-            {/* SIP & Trunks charts */}
-            {showSkeletons ? (
-              <div className="grid gap-4 xl:grid-cols-2">
-                <ChartSkeleton />
-                <ChartSkeleton />
-                <ChartSkeleton />
-              </div>
-            ) : summary ? (
-              <div className="grid gap-4 xl:grid-cols-2">
-                {/* SIP Terminal Outcomes by Direction */}
-                <Card>
-                  <CardHeader className="pb-0">
-                    <CardTitle className="text-sm">
-                      SIP Terminal Outcomes by Direction
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="pt-3">
-                    {terminalOutcomeChartData.length === 0 ? (
-                      <EmptyState
-                        icon={<RiServerLine className="size-8" />}
-                        message="No terminal outcome data in selected range"
-                      />
-                    ) : (
-                      <div className="h-64 w-full">
-                        <ResponsiveContainer width="100%" height="100%">
-                          <BarChart data={terminalOutcomeChartData}>
-                            <CartesianGrid
-                              strokeDasharray="3 3"
-                              strokeOpacity={0.25}
-                            />
-                            <XAxis
-                              dataKey="outcomeLabel"
-                              tick={{ fontSize: 10 }}
-                            />
-                            <YAxis
-                              allowDecimals={false}
-                              tick={{ fontSize: 11 }}
-                            />
-                            <Tooltip content={<BarTooltip />} />
-                            <Bar
-                              dataKey="count"
-                              name="Count"
-                              radius={[4, 4, 0, 0]}
+              <GatewayHealthPanel />
+
+              {/* ── Overview Section ── */}
+              <section className="mb-8 space-y-3">
+                <SectionHeading
+                  icon={<RiBarChartGroupedLine className="size-4" />}
+                  title="Overview"
+                />
+
+                {showSkeletons ? (
+                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+                    {Array.from({ length: 5 }).map((_, i) => (
+                      <KpiSkeleton key={i} />
+                    ))}
+                  </div>
+                ) : summary ? (
+                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+                    <KpiCard
+                      icon={<RiHistoryLine className="size-4" />}
+                      label="Call Sessions"
+                      accent="cyan"
+                      link={(card) => (
+                        <Link
+                          to="/sessions"
+                          search={rangeSearch()}
+                          className="block h-full"
+                        >
+                          {card}
+                        </Link>
+                      )}
+                      sub="calls started in the selected range"
+                      value={formatNumber(summary.metrics.periodSessions)}
+                      trend={{
+                        current: summary.metrics.periodSessions,
+                        previous: prevSummary?.metrics.periodSessions,
+                      }}
+                    />
+                    <KpiCard
+                      icon={<RiPulseLine className="size-4" />}
+                      label="Active Sessions"
+                      accent="emerald"
+                      link={(card) => (
+                        <Link
+                          to="/active-sessions"
+                          search={{}}
+                          className="block h-full"
+                        >
+                          {card}
+                        </Link>
+                      )}
+                      value={formatNumber(summary.metrics.activeSessions)}
+                      sub="live right now"
+                    />
+                    <KpiCard
+                      icon={<RiServerLine className="size-4" />}
+                      label="Trunks"
+                      accent="sky"
+                      link={(card) => (
+                        <Link to="/trunks" search={{}} className="block h-full">
+                          {card}
+                        </Link>
+                      )}
+                      value={`${formatNumber(summary.metrics.registeredTrunks)} / ${formatNumber(summary.metrics.enabledTrunks)}`}
+                      hint="Registered trunks out of enabled trunks. A gap means some enabled trunks failed to register: open Trunks to see the last SIP error."
+                      sub={
+                        <>
+                          registered / enabled ·{' '}
+                          {formatNumber(summary.metrics.totalTrunks)} total
+                        </>
+                      }
+                    />
+                    <KpiCard
+                      icon={<RiCheckboxCircleLine className="size-4" />}
+                      label="Public Accounts"
+                      accent="violet"
+                      link={(card) => (
+                        <Link
+                          to="/public-accounts"
+                          search={{}}
+                          className="block h-full"
+                        >
+                          {card}
+                        </Link>
+                      )}
+                      value={formatNumber(summary.metrics.publicAccounts)}
+                      sub="shared guest SIP registrations"
+                    />
+                    <KpiCard
+                      icon={<RiRouteLine className="size-4" />}
+                      label="Session Directory"
+                      accent="amber"
+                      link={(card) => (
+                        <Link
+                          to="/session-directory"
+                          search={{}}
+                          className="block h-full"
+                        >
+                          {card}
+                        </Link>
+                      )}
+                      hint="Live sessions recorded in the cross-instance directory (used to route resume/control to the owning instance)."
+                      value={formatNumber(summary.metrics.sessionDirectoryNow)}
+                      sub={`live sessions routed · WS clients: ${formatNumber(summary.metrics.wsClients)}`}
+                    />
+                  </div>
+                ) : null}
+
+                {/* KPI row 2 */}
+                {showSkeletons ? (
+                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                    {Array.from({ length: 4 }).map((_, i) => (
+                      <KpiSkeleton key={i} />
+                    ))}
+                  </div>
+                ) : summary ? (
+                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                    <KpiCard
+                      icon={<RiTimeLine className="size-4" />}
+                      label="Avg Call Duration"
+                      accent="slate"
+                      value={formatDuration(summary.metrics.avgDurationSec)}
+                      sub={`Max: ${formatDuration(summary.metrics.maxDurationSec)}`}
+                      trend={{
+                        current: summary.metrics.avgDurationSec,
+                        previous: prevSummary?.metrics.avgDurationSec,
+                        neutral: true,
+                      }}
+                    />
+                    <KpiCard
+                      icon={<RiArrowUpDownLine className="size-4" />}
+                      label="Inbound / Outbound"
+                      accent="sky"
+                      value={`${formatNumber(inboundCount)} / ${formatNumber(outboundCount)}`}
+                      sub={
+                        <span className="inline-flex items-center gap-3">
+                          <span className="inline-flex items-center gap-1.5">
+                            <span className="size-2 rounded-full bg-sky-500" />
+                            <Link
+                              to="/sessions"
+                              search={rangeSearch({ direction: 'inbound' })}
+                              className="hover:underline"
                             >
-                              {terminalOutcomeChartData.map((entry) => (
-                                <Cell
-                                  key={`${entry.outcome}-${entry.direction}-${entry.sipStatusCode}`}
-                                  fill={entry.color}
+                              inbound
+                            </Link>
+                          </span>
+                          <span className="inline-flex items-center gap-1.5">
+                            <span className="size-2 rounded-full bg-violet-500" />
+                            <Link
+                              to="/sessions"
+                              search={rangeSearch({ direction: 'outbound' })}
+                              className="hover:underline"
+                            >
+                              outbound
+                            </Link>
+                          </span>
+                        </span>
+                      }
+                    />
+                    <KpiCard
+                      icon={<RiCheckboxCircleLine className="size-4" />}
+                      label="Completed Rate"
+                      accent="emerald"
+                      hint="Share of completed sessions (ended or active) versus failed or unknown. In-progress states are excluded."
+                      value={
+                        successRate != null
+                          ? `${successRate.toFixed(1)}%`
+                          : 'N/A'
+                      }
+                      sub={
+                        <>
+                          Completed: {formatNumber(successFailure.success)} ·
+                          Failed: {formatNumber(successFailure.failure)}
+                        </>
+                      }
+                      progress={successRate ?? undefined}
+                      trend={{
+                        current: successRate ?? 0,
+                        previous: prevSuccessRate ?? undefined,
+                      }}
+                    />
+                    <KpiCard
+                      icon={<RiErrorWarningLine className="size-4" />}
+                      label="Failed Calls"
+                      accent="rose"
+                      hint="Calls whose final state is failed. Click to list them with their end reason and SIP Call-ID."
+                      value={formatNumber(failedCount)}
+                      sub={<>unknown state: {formatNumber(unknownCount)}</>}
+                      trend={{
+                        current: failedCount,
+                        previous: prevFailedCount,
+                        invert: true,
+                      }}
+                      link={(card) => (
+                        <Link
+                          to="/sessions"
+                          search={rangeSearch({ state: 'failed' })}
+                          className="block h-full"
+                        >
+                          {card}
+                        </Link>
+                      )}
+                    />
+                  </div>
+                ) : null}
+              </section>
+
+              {/* ── Call Analytics Section ── */}
+              <section className="mb-8 space-y-3">
+                <SectionHeading
+                  icon={<RiBarChartGroupedLine className="size-4" />}
+                  title="Call Analytics"
+                  hint="Click a slice or bar to list those calls"
+                  action={
+                    <Link to="/sessions" search={rangeSearch()}>
+                      <span>View sessions</span>
+                      <RiArrowRightLine className="size-3" />
+                    </Link>
+                  }
+                />
+
+                {showSkeletons ? (
+                  <div className="grid gap-4 xl:grid-cols-2">
+                    <ChartSkeleton />
+                    <ChartSkeleton />
+                    <ChartSkeleton />
+                  </div>
+                ) : summary ? (
+                  <div className="grid gap-4 xl:grid-cols-2">
+                    {/* Sessions Over Time + Previous Period Comparison */}
+                    <Card>
+                      <CardHeader className="pb-0">
+                        <CardTitle className="flex items-center gap-2 text-sm">
+                          <RiBarChartGroupedLine className="size-4" />
+                          Sessions Over Time
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent className="pt-3">
+                        {summary.series.length === 0 ? (
+                          <EmptyState
+                            icon={<RiInboxLine className="size-8" />}
+                            message="No sessions in selected range"
+                          />
+                        ) : (
+                          <div className="h-64 w-full">
+                            <ResponsiveContainer width="100%" height="100%">
+                              <LineChart data={comparisonSeries}>
+                                <CartesianGrid
+                                  strokeDasharray="3 3"
+                                  strokeOpacity={0.25}
                                 />
-                              ))}
-                            </Bar>
-                          </BarChart>
-                        </ResponsiveContainer>
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
-
-                {/* Top Trunks by SIP Terminal Reason */}
-                <Card>
-                  <CardHeader className="pb-0">
-                    <CardTitle className="text-sm">
-                      Top Trunks by Terminal Reason
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="pt-3">
-                    {terminalTrunkRows.length === 0 ? (
-                      <EmptyState
-                        icon={<RiServerLine className="size-8" />}
-                        message="No terminal trunk data in selected range"
-                      />
-                    ) : (
-                      <div className="space-y-2">
-                        {terminalTrunkRows.slice(0, 8).map((row) => (
-                          <div
-                            key={`${row.trunkKey}-${row.outcome}`}
-                            className="flex items-center justify-between gap-3 rounded-md border border-border/60 px-3 py-2 text-xs"
-                          >
-                            <div className="min-w-0">
-                              <p className="truncate font-medium">
-                                {row.trunkName ||
-                                  row.trunkKey ||
-                                  'Unknown trunk'}
-                              </p>
-                              <p className="text-muted-foreground">
-                                {row.outcomeLabel}
-                              </p>
-                            </div>
-                            <span className="font-semibold tabular-nums">
-                              {formatNumber(row.count)}
-                            </span>
+                                <XAxis
+                                  dataKey="bucket"
+                                  tick={{ fontSize: 11 }}
+                                />
+                                <YAxis
+                                  allowDecimals={false}
+                                  tick={{ fontSize: 11 }}
+                                />
+                                <Tooltip content={<LineTooltip />} />
+                                <Legend
+                                  formatter={(value: string) => (
+                                    <span className="text-xs text-muted-foreground">
+                                      {value}
+                                    </span>
+                                  )}
+                                />
+                                <Line
+                                  type="monotone"
+                                  dataKey="current"
+                                  name="Current"
+                                  stroke={LINE_COLOR}
+                                  strokeWidth={2}
+                                  dot={false}
+                                />
+                                <Line
+                                  type="monotone"
+                                  dataKey="previous"
+                                  name="Previous"
+                                  stroke={PREV_LINE_COLOR}
+                                  strokeWidth={1.5}
+                                  strokeDasharray="4 3"
+                                  dot={false}
+                                />
+                              </LineChart>
+                            </ResponsiveContainer>
                           </div>
-                        ))}
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
+                        )}
+                      </CardContent>
+                    </Card>
 
-                {/* Top Trunks by Call Volume */}
-                <Card className="xl:col-span-2">
-                  <CardHeader className="pb-0">
-                    <CardTitle className="text-sm">
-                      Top Trunks by Call Volume
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="pt-3">
-                    {trunkChartData.length === 0 ? (
-                      <EmptyState
-                        icon={<RiServerLine className="size-8" />}
-                        message="No trunk volume data in selected range"
-                      />
-                    ) : (
-                      <div className="h-64 w-full">
-                        <ResponsiveContainer width="100%" height="100%">
-                          <BarChart data={trunkChartData} layout="vertical">
-                            <CartesianGrid
-                              strokeDasharray="3 3"
-                              strokeOpacity={0.25}
-                              horizontal={false}
-                            />
-                            <XAxis type="number" tick={{ fontSize: 11 }} />
-                            <YAxis
-                              type="category"
-                              dataKey="trunkName"
-                              tick={{ fontSize: 11 }}
-                              width={100}
-                            />
-                            <Tooltip content={<BarTooltip />} />
-                            <Bar
-                              dataKey="count"
-                              fill={BAR_COLOR}
-                              radius={[0, 4, 4, 0]}
-                            />
-                          </BarChart>
-                        </ResponsiveContainer>
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
-              </div>
-            ) : null}
-          </section>
+                    {/* Session State Breakdown */}
+                    <Card>
+                      <CardHeader className="pb-0">
+                        <CardTitle className="text-sm">
+                          Session State Breakdown
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent className="pt-3">
+                        {stateChartData.length === 0 ? (
+                          <EmptyState
+                            icon={<RiDatabaseLine className="size-8" />}
+                            message="No state data in selected range"
+                          />
+                        ) : (
+                          <div className="h-64 w-full">
+                            <ResponsiveContainer width="100%" height="100%">
+                              <PieChart>
+                                <Pie
+                                  data={stateChartData}
+                                  dataKey="count"
+                                  nameKey="state"
+                                  cx="50%"
+                                  cy="50%"
+                                  outerRadius={80}
+                                  className="cursor-pointer"
+                                  onClick={(_data: unknown, index: number) => {
+                                    const state = stateChartData[index]?.state
+                                    if (state) openSessions({ state })
+                                  }}
+                                  label={({
+                                    name,
+                                    value,
+                                  }: {
+                                    name?: string
+                                    value?: number
+                                  }) => `${name} (${value})`}
+                                >
+                                  {stateChartData.map((entry) => (
+                                    <Cell
+                                      key={`${entry.state}-${entry.count}`}
+                                      fill={
+                                        STATE_COLORS[entry.state] ??
+                                        STATE_COLORS.unknown
+                                      }
+                                    />
+                                  ))}
+                                </Pie>
+                                <Tooltip content={<StateTooltip />} />
+                              </PieChart>
+                            </ResponsiveContainer>
+                          </div>
+                        )}
+                      </CardContent>
+                    </Card>
+
+                    {/* Session outcome by state */}
+                    <Card className="xl:col-span-2">
+                      <CardHeader className="pb-0">
+                        <CardTitle className="text-sm">
+                          Session Outcome by State
+                        </CardTitle>
+                        <p className="text-[11px] text-muted-foreground">
+                          Green = completed · Red = failed · Amber = in progress
+                        </p>
+                      </CardHeader>
+                      <CardContent className="pt-3">
+                        {stateChartData.length === 0 ? (
+                          <EmptyState
+                            icon={<RiCheckboxCircleLine className="size-8" />}
+                            message="No state data in selected range"
+                          />
+                        ) : (
+                          <div className="h-64 w-full">
+                            <ResponsiveContainer width="100%" height="100%">
+                              <BarChart
+                                data={stateChartData.map((s) => ({
+                                  name: s.state,
+                                  count: s.count,
+                                  fill: getStateOutcomeColor(s.state),
+                                }))}
+                                layout="vertical"
+                              >
+                                <CartesianGrid
+                                  strokeDasharray="3 3"
+                                  strokeOpacity={0.25}
+                                  horizontal={false}
+                                />
+                                <XAxis type="number" tick={{ fontSize: 11 }} />
+                                <YAxis
+                                  type="category"
+                                  dataKey="name"
+                                  tick={{ fontSize: 11 }}
+                                  width={90}
+                                />
+                                <Tooltip content={<BarTooltip />} />
+                                <Bar
+                                  dataKey="count"
+                                  radius={[0, 4, 4, 0]}
+                                  className="cursor-pointer"
+                                  onClick={(_data: unknown, index: number) => {
+                                    const state = stateChartData[index]?.state
+                                    if (state) openSessions({ state })
+                                  }}
+                                >
+                                  {stateChartData.map((entry) => (
+                                    <Cell
+                                      key={`sf-${entry.state}`}
+                                      fill={getStateOutcomeColor(entry.state)}
+                                    />
+                                  ))}
+                                </Bar>
+                              </BarChart>
+                            </ResponsiveContainer>
+                          </div>
+                        )}
+                      </CardContent>
+                    </Card>
+                  </div>
+                ) : null}
+              </section>
+
+              {/* ── SIP & Trunks Section ── */}
+              <section className="space-y-3">
+                <SectionHeading
+                  icon={<RiServerLine className="size-4" />}
+                  title="SIP & Trunks"
+                  hint="Final SIP outcome of each call"
+                  action={
+                    <Link to="/trunks" search={{}}>
+                      <span>Manage trunks</span>
+                      <RiArrowRightLine className="size-3" />
+                    </Link>
+                  }
+                />
+
+                {/* Terminal outcome KPIs */}
+                {showSkeletons ? (
+                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
+                    {Array.from({ length: 6 }).map((_, i) => (
+                      <KpiSkeleton key={i} />
+                    ))}
+                  </div>
+                ) : summary ? (
+                  terminalOutcomeSummary.length === 0 ? (
+                    <Card className="xl:col-span-6">
+                      <CardContent className="p-4">
+                        <EmptyState
+                          icon={<RiServerLine className="size-8" />}
+                          message="No terminal action data in selected range"
+                        />
+                      </CardContent>
+                    </Card>
+                  ) : (
+                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
+                      {terminalOutcomeSummary.slice(0, 6).map((item) => {
+                        const accent: Accent =
+                          item.key === 'accepted'
+                            ? 'emerald'
+                            : item.key === 'no_answer'
+                              ? 'rose'
+                              : item.key === 'busy' ||
+                                  item.key === 'caller_cancelled'
+                                ? 'amber'
+                                : item.key === 'outgoing_cancelled'
+                                  ? 'violet'
+                                  : 'slate'
+                        return (
+                          <Link
+                            key={item.key}
+                            to="/sessions"
+                            search={rangeSearch(
+                              END_REASON_FILTERS.has(item.key)
+                                ? { endReason: item.key }
+                                : {},
+                            )}
+                            className="block"
+                            title={`List ${item.label} calls`}
+                          >
+                            <Card
+                              className={cn(
+                                'h-full border-l-2 transition-all hover:-translate-y-0.5 hover:shadow-sm',
+                                ACCENT_BORDER[accent],
+                              )}
+                            >
+                              <CardContent className="p-4">
+                                <div className="flex items-start justify-between gap-2">
+                                  <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                                    {item.label}
+                                  </p>
+                                  <span
+                                    className="size-2.5 shrink-0 rounded-full"
+                                    style={{ backgroundColor: item.color }}
+                                  />
+                                </div>
+                                <p className="mt-2 text-2xl font-semibold tabular-nums leading-none">
+                                  {formatNumber(item.count)}
+                                </p>
+                                <p className="mt-1.5 text-xs text-muted-foreground">
+                                  {item.sipStatusCode
+                                    ? `SIP ${item.sipStatusCode}`
+                                    : 'WS/SIP terminal action'}
+                                </p>
+                              </CardContent>
+                            </Card>
+                          </Link>
+                        )
+                      })}
+                    </div>
+                  )
+                ) : null}
+
+                {/* SIP & Trunks charts */}
+                {showSkeletons ? (
+                  <div className="grid gap-4 xl:grid-cols-2">
+                    <ChartSkeleton />
+                    <ChartSkeleton />
+                    <ChartSkeleton />
+                  </div>
+                ) : summary ? (
+                  <div className="grid gap-4 xl:grid-cols-2">
+                    {/* SIP Terminal Outcomes by Direction */}
+                    <Card>
+                      <CardHeader className="pb-0">
+                        <CardTitle className="text-sm">
+                          SIP Terminal Outcomes by Direction
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent className="pt-3">
+                        {terminalOutcomeChartData.length === 0 ? (
+                          <EmptyState
+                            icon={<RiServerLine className="size-8" />}
+                            message="No terminal outcome data in selected range"
+                          />
+                        ) : (
+                          <div className="h-64 w-full">
+                            <ResponsiveContainer width="100%" height="100%">
+                              <BarChart data={terminalOutcomeChartData}>
+                                <CartesianGrid
+                                  strokeDasharray="3 3"
+                                  strokeOpacity={0.25}
+                                />
+                                <XAxis
+                                  dataKey="outcomeLabel"
+                                  tick={{ fontSize: 10 }}
+                                />
+                                <YAxis
+                                  allowDecimals={false}
+                                  tick={{ fontSize: 11 }}
+                                />
+                                <Tooltip content={<BarTooltip />} />
+                                <Bar
+                                  dataKey="count"
+                                  name="Count"
+                                  radius={[4, 4, 0, 0]}
+                                  className="cursor-pointer"
+                                  onClick={(_data: unknown, index: number) => {
+                                    const entry = terminalOutcomeChartData[
+                                      index
+                                    ] as
+                                      | { outcome?: string; direction?: string }
+                                      | undefined
+                                    if (!entry) return
+                                    const reason = entry.outcome?.toLowerCase()
+                                    openSessions({
+                                      endReason:
+                                        reason && END_REASON_FILTERS.has(reason)
+                                          ? reason
+                                          : undefined,
+                                      direction:
+                                        entry.direction === 'inbound' ||
+                                        entry.direction === 'outbound'
+                                          ? entry.direction
+                                          : undefined,
+                                    })
+                                  }}
+                                >
+                                  {terminalOutcomeChartData.map((entry) => (
+                                    <Cell
+                                      key={`${entry.outcome}-${entry.direction}-${entry.sipStatusCode}`}
+                                      fill={entry.color}
+                                    />
+                                  ))}
+                                </Bar>
+                              </BarChart>
+                            </ResponsiveContainer>
+                          </div>
+                        )}
+                      </CardContent>
+                    </Card>
+
+                    {/* Top Trunks by SIP Terminal Reason */}
+                    <Card>
+                      <CardHeader className="pb-0">
+                        <CardTitle className="text-sm">
+                          Top Trunks by Terminal Reason
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent className="pt-3">
+                        {terminalTrunkRows.length === 0 ? (
+                          <EmptyState
+                            icon={<RiServerLine className="size-8" />}
+                            message="No terminal trunk data in selected range"
+                          />
+                        ) : (
+                          <div className="space-y-2">
+                            {terminalTrunkRows.slice(0, 8).map((row) => (
+                              <Link
+                                key={`${row.trunkKey}-${row.outcome}`}
+                                to="/trunks"
+                                search={{ search: row.trunkName || undefined }}
+                                className="flex items-center justify-between gap-3 rounded-md border border-border/60 px-3 py-2 text-xs transition-colors hover:bg-muted/50"
+                              >
+                                <div className="min-w-0">
+                                  <p className="truncate font-medium">
+                                    {row.trunkName ||
+                                      row.trunkKey ||
+                                      'Unknown trunk'}
+                                  </p>
+                                  <p className="text-muted-foreground">
+                                    {row.outcomeLabel}
+                                  </p>
+                                </div>
+                                <span className="font-semibold tabular-nums">
+                                  {formatNumber(row.count)}
+                                </span>
+                              </Link>
+                            ))}
+                          </div>
+                        )}
+                      </CardContent>
+                    </Card>
+
+                    {/* Top Trunks by Call Volume */}
+                    <Card className="xl:col-span-2">
+                      <CardHeader className="pb-0">
+                        <CardTitle className="text-sm">
+                          Top Trunks by Call Volume
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent className="pt-3">
+                        {trunkChartData.length === 0 ? (
+                          <EmptyState
+                            icon={<RiServerLine className="size-8" />}
+                            message="No trunk volume data in selected range"
+                          />
+                        ) : (
+                          <div className="h-64 w-full">
+                            <ResponsiveContainer width="100%" height="100%">
+                              <BarChart data={trunkChartData} layout="vertical">
+                                <CartesianGrid
+                                  strokeDasharray="3 3"
+                                  strokeOpacity={0.25}
+                                  horizontal={false}
+                                />
+                                <XAxis type="number" tick={{ fontSize: 11 }} />
+                                <YAxis
+                                  type="category"
+                                  dataKey="trunkName"
+                                  tick={{ fontSize: 11 }}
+                                  width={100}
+                                />
+                                <Tooltip content={<BarTooltip />} />
+                                <Bar
+                                  dataKey="count"
+                                  fill={BAR_COLOR}
+                                  radius={[0, 4, 4, 0]}
+                                />
+                              </BarChart>
+                            </ResponsiveContainer>
+                          </div>
+                        )}
+                      </CardContent>
+                    </Card>
+                  </div>
+                ) : null}
+              </section>
             </>
           )}
         </div>

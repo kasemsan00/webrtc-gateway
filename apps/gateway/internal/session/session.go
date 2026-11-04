@@ -82,6 +82,10 @@ type Session struct {
 	uplinkKeyframeKickOnRemoteJoinDone bool `json:"-"`
 	// One-shot WebRTC→SIP keyframe kick on the first SIP video SR/RR.
 	uplinkKeyframeKickOnFirstSIPRTCP bool `json:"-"`
+	// First time SIP remote video SSRC went from 0 to a real SSRC.
+	// An uplink IDR forwarded before this was sent to a decoder that was
+	// not receiving yet, so remote-ssrc-learn must not treat it as fresh.
+	remoteVideoSSRCLearnedAt time.Time `json:"-"`
 	// When SIP video dest first became reachable (200 OK / first RTP dest).
 	sipVideoDestReadyAt time.Time `json:"-"`
 	// Queue-bridged callee answered after this outbound session already sent
@@ -106,24 +110,43 @@ type Session struct {
 	telemetryTransferred   bool      `json:"-"`
 	telemetryCallStartedAt time.Time `json:"-"`
 	telemetryCallActiveAt  time.Time `json:"-"`
+	// First time the call reached StateActive (either direction); zero until answered.
+	// Read-only for admin APIs; never cleared by ICE reconnects.
+	answeredAt time.Time `json:"-"`
 	// ICE-lite credentials for SIP side
 	ICEUfrag string `json:"-"`
 	ICEPwd   string `json:"-"`
 	// Asterisk RTP endpoints for forwarding WebRTC → Asterisk
-	AsteriskAudioAddr            *net.UDPAddr  `json:"-"`
-	AsteriskVideoAddr            *net.UDPAddr  `json:"-"`
-	AsteriskVideoRTCPAddr        *net.UDPAddr  `json:"-"`
-	VideoRTCPLearnedAt           time.Time     `json:"-"`
-	VideoRTCPSource              string        `json:"-"`
-	VideoFeedbackTransport       string        `json:"-"`
-	VideoRTCPFallbackUntil       time.Time     `json:"-"`
-	SymmetricRTPTrustUntil       time.Time     `json:"-"`
-	PLIBurstUntil                time.Time     `json:"-"`
-	LastSipPLISent               time.Time     `json:"-"`
-	LastSipFIRSent               time.Time     `json:"-"`
-	LastWebRTCPLISent            time.Time     `json:"-"`
-	LastWebRTCFIRSent            time.Time     `json:"-"`
-	LastUplinkKeyframe           time.Time     `json:"-"`
+	AsteriskAudioAddr      *net.UDPAddr `json:"-"`
+	AsteriskVideoAddr      *net.UDPAddr `json:"-"`
+	AsteriskVideoRTCPAddr  *net.UDPAddr `json:"-"`
+	VideoRTCPLearnedAt     time.Time    `json:"-"`
+	VideoRTCPSource        string       `json:"-"`
+	VideoFeedbackTransport string       `json:"-"`
+	VideoRTCPFallbackUntil time.Time    `json:"-"`
+	SymmetricRTPTrustUntil time.Time    `json:"-"`
+	PLIBurstUntil          time.Time    `json:"-"`
+	LastSipPLISent         time.Time    `json:"-"`
+	LastSipFIRSent         time.Time    `json:"-"`
+	LastWebRTCPLISent      time.Time    `json:"-"`
+	LastWebRTCFIRSent      time.Time    `json:"-"`
+	LastUplinkKeyframe     time.Time    `json:"-"`
+	// uplinkIDRAccepted is set when an IDR is handed to the picture hold,
+	// before that packet is written. The hold delays RecordUplinkKeyframe,
+	// and FU-A continuations plus the following P-frames are not keyframes;
+	// without this flag they are dropped and the flush marks one incomplete slice.
+	uplinkIDRAccepted            bool          `json:"-"`
+	uplinkIDRInFlight            bool          `json:"-"`
+	uplinkIDRInFlightTS          uint32        `json:"-"`
+	uplinkIDRCompleteAt          time.Time     `json:"-"`
+	sipKeyframeRequestSeen       bool          `json:"-"`
+	sipKeyframeRequestAt         time.Time     `json:"-"`
+	uplinkVideoPackets           int           `json:"-"`
+	uplinkVideoWindowStart       time.Time     `json:"-"`
+	uplinkVideoLastIDR           time.Time     `json:"-"`
+	uplinkVideoLastIDRTimestamp  uint32        `json:"-"`
+	uplinkVideoIDRTimestampSeen  bool          `json:"-"`
+	lastUplinkPacketsPerSec      int           `json:"-"`
 	SwitchFeedbackBurstSatisfied bool          `json:"-"`
 	VideoRecoveryBurstEnabled    bool          `json:"-"`
 	VideoRecoveryBurstWindow     time.Duration `json:"-"`
@@ -175,8 +198,13 @@ type Session struct {
 	SwitchVideoGateMinIDRPackets          int                  `json:"-"`
 	VideoReorderPacing                    time.Duration        `json:"-"`
 	VideoTimestampJumpPLI                 bool                 `json:"-"`
+	VideoSameTSReuse                      bool                 `json:"-"`
+	sipVideoTSRebase                      bool                 `json:"-"` // SIP_VIDEO_TS_REBASE
+	sipVideoTSBase                        uint32               `json:"-"` // SIP_VIDEO_TS_BASE
+	uplinkTSRebaser                       uplinkVideoTSRebaser `json:"-"` // under s.mu; reset per call
 	VideoSuppressEarlyMedia               bool                 `json:"-"`
 	WebRTCTWCCEnabled                     bool                 `json:"-"`
+	debugVideoPackets                     bool                 `json:"-"` // DEBUG_VIDEO_PACKETS
 	videoDiscontinuityIDRAt               time.Time            `json:"-"`
 	switchUplinkKeyframeKickAt            time.Time            `json:"-"`
 	postSwitchSIPKeyframePending          bool                 `json:"-"`
@@ -184,6 +212,18 @@ type Session struct {
 	openedVideoSource                     string               `json:"-"`
 	bridgedKeyframeAt                     time.Time            `json:"-"`
 	switchVideoInfoFIRAt                  time.Time            `json:"-"`
+	sipKeyframeRequestMode                string               `json:"-"`
+	sipRTCPFBMinInterval                  time.Duration        `json:"-"`
+	sipRTCPFBGuard                        time.Duration        `json:"-"`
+	sipKeyframeINFO                       func(reason string)  `json:"-"`
+	uplinkVideoPacketSeen                 bool                 `json:"-"`
+	lastUplinkPacketMarker                bool                 `json:"-"`
+	pendingSIPRTCPKind                    string               `json:"-"`
+	pendingSIPRTCPTrigger                 string               `json:"-"`
+	pendingSIPRTCPForce                   bool                 `json:"-"`
+	pendingSIPRTCPHasAuthority            bool                 `json:"-"`
+	pendingSIPRTCPGeneration              int                  `json:"-"`
+	pendingSIPRTCPMediaEpoch              uint64               `json:"-"`
 	SwitchVideoGateFailOpen               time.Duration        `json:"-"`
 	SwitchVideoGateFailOpenCap            time.Duration        `json:"-"`
 	SwitchVideoGateActive                 bool                 `json:"-"`
@@ -241,6 +281,60 @@ type Session struct {
 	CachedSPS               []byte    `json:"-"`
 	CachedPPS               []byte    `json:"-"`
 	LastSPSPPSInjectionTime time.Time `json:"-"` // Track last SPS/PPS injection for periodic re-injection
+	// Chrome packetization-mode 0 sends every IDR slice as its own NAL type 5.
+	// Inject parameter sets once per access unit, and skip that injection when
+	// this access unit already forwarded SPS and PPS. A second in-band copy
+	// resets TTRS OpenH264 and the old GL uploader reads past the YUV buffer.
+	uplinkSPSPPSTimestamp      uint32 `json:"-"`
+	uplinkSPSPPSTimestampSet   bool   `json:"-"`
+	uplinkParameterObservation uplinkParameterObservation
+	uplinkInBandTimestamp      uint32 `json:"-"`
+	uplinkInBandTimestampSet   bool   `json:"-"`
+	uplinkInBandSPS            bool   `json:"-"`
+	uplinkInBandPPS            bool   `json:"-"`
+	uplinkSPSWidth             int    `json:"-"`
+	uplinkSPSHeight            int    `json:"-"`
+	uplinkSPSDimensionBlocked  bool   `json:"-"`
+	uplinkSPSDimensionLogged   bool   `json:"-"`
+	// uplinkPictureSizeChange is SIP_UPLINK_PICTURE_SIZE_CHANGE. Empty means
+	// accept. In accept mode a mid-call size change holds non-IDR video until
+	// the first IDR of the new size, which gets the new SPS/PPS in front of it.
+	uplinkPictureSizeChange     string    `json:"-"`
+	uplinkPictureSizeIDRPending bool      `json:"-"`
+	uplinkPictureSizeChangedAt  time.Time `json:"-"`
+	uplinkPictureSizeHeld       int       `json:"-"`
+	uplinkPictureSizePLIAt      time.Time `json:"-"`
+	uplinkPictureSizePLIs       int       `json:"-"`
+	// allowNextUplinkPictureSize accepts one SPS size change after an explicit
+	// switch/source replacement, then locks that size again.
+	allowNextUplinkPictureSize bool      `json:"-"`
+	switchKeyframeRequestedAt  time.Time `json:"-"`
+	switchKeyframeIDRPending   bool      `json:"-"`
+	switchKeyframeBurstGen     uint64    `json:"-"`
+	// switchEpochAt is the start of the current source-switch epoch.
+	// Only an IDR whose first slice is forwarded at or after this time
+	// satisfies the switch. Leftover slices of a pre-switch picture do not.
+	switchEpochAt              time.Time         `json:"-"`
+	proactivePLINotBefore      time.Time         `json:"-"`
+	proactivePLIWake           chan struct{}     `json:"-"`
+	proactiveBrowserPLIInitial time.Duration     `json:"-"`
+	proactiveBrowserPLISafety  time.Duration     `json:"-"`
+	sipInfoFIRAt               time.Time         `json:"-"`
+	sipAnswerSDP               []byte            `json:"-"`
+	lastBrowserPLIReason       string            `json:"-"`
+	mode0NeedsIDR              bool              `json:"-"`
+	mode0PLIAt                 time.Time         `json:"-"`
+	uplinkStallSince           time.Time         `json:"-"`
+	uplinkStallReason          string            `json:"-"`
+	uplinkStallLogAt           time.Time         `json:"-"`
+	lastBrowserIDRRequest      time.Time         `json:"-"`
+	sipInfoFIRRetryGen         uint64            `json:"-"`
+	sipInfoFIRRetryActive      bool              `json:"-"`
+	firIDRSliceLog             bool              `json:"-"`
+	firIDRSliceTS              uint32            `json:"-"`
+	firIDRSliceTSSet           bool              `json:"-"`
+	uplinkPictureMu            sync.Mutex        `json:"-"`
+	uplinkPicture              uplinkPictureHold `json:"-"`
 	// SIP-side cached SPS/PPS (SIP→WebRTC direction, from SIP endpoint's encoder)
 	// Used to inject parameter sets before keyframes forwarded to browser for decoder recovery.
 	SIPCachedSPS             []byte                `json:"-"`
@@ -310,19 +404,22 @@ type Session struct {
 	// keep advertising video.
 	sipOfferIncludeVideo *bool
 	// PLI (Picture Loss Indication) tracking
-	PLISent                   int           `json:"pliSent"`
-	PLIResponse               int           `json:"pliResponse"`
-	LastPLISent               time.Time     `json:"-"`
-	LastKeyframe              time.Time     `json:"-"`
-	AudioRTCPRRCount          atomic.Uint64 `json:"-"`
-	AudioRTCPSRCount          atomic.Uint64 `json:"-"`
-	VideoRTCPRRCount          atomic.Uint64 `json:"-"`
-	VideoRTCPSRCount          atomic.Uint64 `json:"-"`
-	sipVideoRTPUnixNano       atomic.Int64  `json:"-"`
-	sipVideoRequireHealthyIDR atomic.Bool   `json:"-"`
-	sipVideoHealthyIDR        atomic.Bool   `json:"-"`
-	FIRSeq                    uint8         `json:"-"`
-	RTPBufferSize             int           `json:"-"` // RTP/RTCP packet buffer size (from Config.RTP.BufferSize, minimum 1500)
+	PLISent             int           `json:"pliSent"`
+	PLIResponse         int           `json:"pliResponse"`
+	LastPLISent         time.Time     `json:"-"`
+	LastKeyframe        time.Time     `json:"-"`
+	AudioRTCPRRCount    atomic.Uint64 `json:"-"`
+	AudioRTCPSRCount    atomic.Uint64 `json:"-"`
+	VideoRTCPRRCount    atomic.Uint64 `json:"-"`
+	VideoRTCPSRCount    atomic.Uint64 `json:"-"`
+	sipVideoRTPUnixNano atomic.Int64  `json:"-"`
+	// First SIP video RTP packet or RTCP SR/RR. Same freshness rule as
+	// remoteVideoSSRCLearnedAt: an earlier uplink IDR does not count.
+	sipFarEndVideoSeenUnixNano atomic.Int64 `json:"-"`
+	sipVideoRequireHealthyIDR  atomic.Bool  `json:"-"`
+	sipVideoHealthyIDR         atomic.Bool  `json:"-"`
+	FIRSeq                     uint8        `json:"-"`
+	RTPBufferSize              int          `json:"-"` // RTP/RTCP packet buffer size (from Config.RTP.BufferSize, minimum 1500)
 	// Video RTP retransmission cache (for WebRTC NACK handling)
 	VideoRTPHistoryPackets [][]byte `json:"-"`
 	VideoRTPHistorySeq     []uint16 `json:"-"`
@@ -346,6 +443,8 @@ type Session struct {
 	InboundTranslatorTgtLang  string                    `json:"-"`
 	InboundTranslatorTTSVoice string                    `json:"-"`
 	TranslationCaptionHandler TranslationCaptionHandler `json:"-"`
+	// ICE gathering limits, reused when a replacement PeerConnection is built
+	WebRTCICE config.WebRTCICEConfig `json:"-"`
 	// Inbound audio gain (SIP → WebRTC)
 	InboundGainEnabled bool                        `json:"-"`
 	InboundGain        float32                     `json:"-"`
@@ -488,11 +587,11 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 	// Build ICE servers configuration
 	iceServers := pkg_webrtc.BuildICEServers(turnConfig)
 
-	api, err := newGatewayWebRTCAPI(cfg.SIP.WebRTCTWCCEnabled)
+	api, err := newGatewayWebRTCAPI(cfg.SIP.WebRTCTWCCEnabled, id, cfg.SIP.WebRTCICE)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create WebRTC API: %w", err)
 	}
-	fmt.Printf("[%s] webrtc_api twcc=%v\n", id, cfg.SIP.WebRTCTWCCEnabled)
+	fmt.Printf("[%s] webrtc_api twcc=%v %s\n", id, cfg.SIP.WebRTCTWCCEnabled, cfg.SIP.WebRTCICE.Summary())
 
 	// Create WebRTC peer connection using custom API
 	webrtcConfig := webrtc.Configuration{
@@ -606,9 +705,20 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 		VideoAUNormalizeEnabled:              cfg.SIP.VideoAUNormalizeEnabled,
 		SwitchVideoGateMinIDRPackets:         cfg.SIP.SwitchVideoGateMinIDRPackets,
 		VideoReorderPacing:                   time.Duration(cfg.SIP.VideoReorderPacingMS) * time.Millisecond,
+		sipKeyframeRequestMode:               cfg.SIP.KeyframeRequestMode,
+		sipRTCPFBMinInterval:                 time.Duration(cfg.SIP.RTCPFBMinIntervalMS) * time.Millisecond,
+		sipRTCPFBGuard:                       time.Duration(cfg.SIP.RTCPFBGuardMS) * time.Millisecond,
+		uplinkPictureSizeChange:              cfg.SIP.UplinkPictureSizeChange,
+		proactiveBrowserPLIInitial:           time.Duration(cfg.SIP.ProactiveBrowserPLIInitialMS) * time.Millisecond,
+		proactiveBrowserPLISafety:            time.Duration(cfg.SIP.ProactiveBrowserPLISafetyMS) * time.Millisecond,
 		VideoTimestampJumpPLI:                cfg.SIP.VideoTimestampJumpPLI,
+		VideoSameTSReuse:                     cfg.SIP.VideoSameTSReuse,
+		sipVideoTSRebase:                     cfg.SIP.VideoTSRebase,
+		sipVideoTSBase:                       cfg.SIP.VideoTSBase,
 		VideoSuppressEarlyMedia:              cfg.SIP.VideoSuppressEarlyMedia,
 		WebRTCTWCCEnabled:                    cfg.SIP.WebRTCTWCCEnabled,
+		debugVideoPackets:                    cfg.SIP.DebugVideoPackets,
+		WebRTCICE:                            cfg.SIP.WebRTCICE,
 		SwitchVideoGateFailOpen:              time.Duration(cfg.SIP.SwitchVideoGateFailOpenMS) * time.Millisecond,
 		SwitchVideoGateFailOpenCap:           time.Duration(cfg.SIP.SwitchVideoGateFailOpenCapMS) * time.Millisecond,
 		sipVideoIDRReplayNotify:              make(chan struct{}, 1),
@@ -690,7 +800,9 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 
 	// Always count candidates so terminal diagnostics remain useful even when
 	// verbose TURN logging is disabled.
+	candidateLog := newLocalCandidateLog(id, "initial")
 	peerConnection.OnICECandidate(func(candidate *webrtc.ICECandidate) {
+		candidateLog.Observe(candidate)
 		if candidate == nil {
 			if cfg.API.DebugTURN {
 				fmt.Printf("[%s] 🧊 ICE Candidate gathering complete\n", id)
@@ -800,7 +912,9 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 					return
 				}
 				session.SendPLIToAsteriskForced("ice-connected")
-				session.SendPLItoWebRTC()
+				if skip, _ := session.SkipUplinkKeyframeRequest("startup", time.Now()); !skip {
+					session.SendPLItoWebRTC()
+				}
 			}()
 
 		case webrtc.ICEConnectionStateDisconnected, webrtc.ICEConnectionStateClosed:
@@ -1137,6 +1251,24 @@ func (s *Session) TryBeginTerminalAction(action string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.TerminalAction != "" {
+		return false
+	}
+	now := time.Now()
+	s.TerminalAction = action
+	s.TerminalActionAt = now
+	s.PendingMidCallRenegotiation = nil
+	s.UpdatedAt = now
+	return true
+}
+
+// TryBeginIncomingTerminalAction is TryBeginTerminalAction for a ringing
+// incoming call: it also requires StateIncoming under the same lock, so a
+// caller cancel or ring timeout that read StateIncoming earlier cannot end a
+// call that an accept has since answered.
+func (s *Session) TryBeginIncomingTerminalAction(action string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.State != StateIncoming || s.TerminalAction != "" {
 		return false
 	}
 	now := time.Now()

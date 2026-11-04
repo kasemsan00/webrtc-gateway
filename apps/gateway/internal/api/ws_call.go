@@ -144,7 +144,7 @@ func (s *Server) handleWSoffer(client *WSClient, msg WSMessage) {
 		PayloadID: answerPayloadID,
 	})
 
-	// An incoming session may be prepared in place by a multi-call client. Keep
+	// An incoming session may be negotiated in place by a multi-call client. Keep
 	// it in StateIncoming until the explicit accept command wins the SIP race.
 	resultState := sess.GetState()
 	if resultState != session.StateIncoming {
@@ -358,8 +358,13 @@ func (s *Server) handleWSCall(client *WSClient, msg WSMessage) {
 		// Set trunk auth context in session
 		sess.SetSIPAuthContext("trunk", "", trunkID, "", "", "", 0)
 
-		// Require authenticated user to use a trunk.
-		if s.tokenVerifier != nil && client.authClaims == nil {
+		// Trunk selection requires a verified JWT when auth is enabled.
+		// /ws-agent may omit the token when the call uses the SIP account
+		// bound by agent_register (Electron local user/pass). That account
+		// is already limited to the trunk this socket registered. Explicit
+		// trunk use on /ws and /ws-agent-device still requires claims.
+		// Public sipDomain/sipUsername/sipPassword calls do not enter here.
+		if s.tokenVerifier != nil && client.authClaims == nil && !(client != nil && client.agentOnly) {
 			s.sendWSError(client, msg.SessionID, "Token authentication required to use trunk")
 			return
 		}

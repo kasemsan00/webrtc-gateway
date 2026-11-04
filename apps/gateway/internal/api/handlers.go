@@ -52,6 +52,8 @@ type SessionResponse struct {
 	TranslatorSrcLang  string `json:"translatorSrcLang,omitempty"`
 	TranslatorTgtLang  string `json:"translatorTgtLang,omitempty"`
 	TranslatorTTSVoice string `json:"translatorTtsVoice,omitempty"`
+	// AnsweredAt is RFC3339 and null until the call first becomes active.
+	AnsweredAt *string `json:"answeredAt"`
 }
 
 // DTMFRequest represents a DTMF request

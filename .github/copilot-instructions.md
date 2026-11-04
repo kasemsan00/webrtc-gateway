@@ -23,7 +23,7 @@ Run from repo root unless a task explicitly targets an app folder.
 
 ## Repository map
 
-- `apps/frontend`: React + TypeScript + Vite operations UI.
+- `apps/frontend`: React + TypeScript + TanStack Start (Vite) operations UI.
 - `apps/gateway`: Go WebRTC <-> SIP bridge.
 - `packages/*`: shared lint, TS config, and UI packages.
 
@@ -48,8 +48,8 @@ Run from repo root unless a task explicitly targets an app folder.
 - Frontend implementation details: `apps/frontend/AGENTS.md`
 - Frontend runtime/env behavior: `apps/frontend/README.md`
 - Gateway implementation details: `apps/gateway/AGENTS.md`
-- Gateway architecture and flows: `docs/dual-flow.md`
-- Gateway reconnect behavior: `docs/call-resume.md`
+- Gateway WebSocket contract, call flows and resume: `docs/gateway/ws-contract.md`
+- Gateway env/config: `docs/gateway/config-reference.md`; troubleshooting: `docs/gateway/troubleshooting.md`
 
 ## Example prompts
 

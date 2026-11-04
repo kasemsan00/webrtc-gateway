@@ -209,8 +209,10 @@ func (s *Server) handleWSPing(client *WSClient, _ WSMessage) {
 	}
 }
 
-// handleWSRequestKeyframe handles explicit keyframe requests from clients.
-// Used by resume/video-recovery flows to trigger fast FIR/PLI toward SIP side.
+// handleWSRequestKeyframe handles WS request_keyframe (underscore) from clients.
+// Used by resume/video-recovery flows to recover the SIP-to-browser picture:
+// a cached SIP IDR replay or a SIP-leg FIR/PLI (shaped by
+// SIP_KEYFRAME_REQUEST_MODE), deferred until the SIP video SSRC is known.
 func (s *Server) handleWSRequestKeyframe(client *WSClient, msg WSMessage) {
 	sessionID := msg.SessionID
 	if sessionID == "" {
@@ -240,4 +242,24 @@ func (s *Server) handleWSRequestKeyframe(client *WSClient, msg WSMessage) {
 
 	action := sess.SendBrowserRecoveryToAsterisk("ws-request_keyframe")
 	log.Printf("📈 request_keyframe_handled session=%s action=%s", sessionID, action)
+}
+
+// handleWSSwitchKeyframeRequest asks the browser encoder for an IDR after the
+// agent replaces its outbound picture. This is the opposite direction from
+// request_keyframe, which recovers the SIP-to-browser leg.
+func (s *Server) handleWSSwitchKeyframeRequest(client *WSClient, msg WSMessage) {
+	sessionID := msg.SessionID
+	if sessionID == "" {
+		sessionID = client.sessionID
+	}
+	if sessionID == "" {
+		s.sendWSError(client, "", "Session ID required for keyframe request")
+		return
+	}
+	sess, ok := s.sessionMgr.GetSession(sessionID)
+	if !ok {
+		s.sendWSError(client, sessionID, "Session not found")
+		return
+	}
+	sess.HandleSwitchKeyframeRequest(time.Now())
 }

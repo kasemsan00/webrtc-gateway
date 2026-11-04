@@ -11,6 +11,8 @@ export interface ActiveSession {
   sipUsername: string
   durationSec: number
   createdAt: string
+  /** RFC3339 time the call was first answered; null while ringing. */
+  answeredAt?: string | null
   updatedAt: string
   translatorEnabled: boolean
   translatorSrcLang?: string

@@ -69,9 +69,9 @@ func (writer *telemetryResponseWriter) Write(body []byte) (int, error) {
 
 func (s *Server) telemetryHTTPMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		// WebSocket connections have their own short control-message spans. Log
-		// and health reads are intentionally excluded from noisy HTTP tracing.
-		if strings.HasPrefix(request.URL.Path, "/ws") || strings.HasPrefix(request.URL.Path, "/api/logs") || strings.HasPrefix(request.URL.Path, "/api/health") {
+		// WebSocket connections have their own short control-message spans. Log,
+		// health, and version reads are intentionally excluded from noisy HTTP tracing.
+		if strings.HasPrefix(request.URL.Path, "/ws") || strings.HasPrefix(request.URL.Path, "/api/logs") || strings.HasPrefix(request.URL.Path, "/api/health") || strings.HasPrefix(request.URL.Path, "/api/version") {
 			next.ServeHTTP(writer, request)
 			return
 		}

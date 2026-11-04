@@ -153,28 +153,28 @@ func TestObservabilityStartupSummaryOmitsEndpointHeadersAndAttributes(t *testing
 
 func TestSensitiveDiagnosticDefaultsRemainOff(t *testing.T) {
 	clearObservabilityEnv(t)
-	for _, key := range []string{"DEBUG_SIP_MESSAGE", "DEBUG_SIP_INVITE", "DEBUG_TURN", "DB_LOG_FULL_SIP", "PUSH_DEBUG_TTRS_TOKEN"} {
+	for _, key := range []string{"DEBUG_SIP_MESSAGE", "DEBUG_SIP_INVITE", "DEBUG_VIDEO_PACKETS", "DEBUG_SIP_TRUNK", "DEBUG_TURN", "DB_LOG_FULL_SIP", "PUSH_DEBUG_TTRS_TOKEN"} {
 		t.Setenv(key, "")
 	}
 	cfg, err := Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.SIP.DebugSIPMessage || cfg.SIP.DebugSIPInvite || cfg.API.DebugTURN || cfg.DB.LogFullSIP {
-		t.Fatalf("sensitive diagnostics enabled by default: sipMessage=%v sipInvite=%v turn=%v fullSIP=%v", cfg.SIP.DebugSIPMessage, cfg.SIP.DebugSIPInvite, cfg.API.DebugTURN, cfg.DB.LogFullSIP)
+	if cfg.SIP.DebugSIPMessage || cfg.SIP.DebugSIPInvite || cfg.SIP.DebugVideoPackets || cfg.SIP.DebugSIPTrunk || cfg.API.DebugTURN || cfg.DB.LogFullSIP {
+		t.Fatalf("sensitive diagnostics enabled by default: sipMessage=%v sipInvite=%v videoPackets=%v sipTrunk=%v turn=%v fullSIP=%v", cfg.SIP.DebugSIPMessage, cfg.SIP.DebugSIPInvite, cfg.SIP.DebugVideoPackets, cfg.SIP.DebugSIPTrunk, cfg.API.DebugTURN, cfg.DB.LogFullSIP)
 	}
 }
 
 func TestSensitiveDiagnosticExplicitDebugModeHasResidualExposure(t *testing.T) {
 	clearObservabilityEnv(t)
-	for _, key := range []string{"DEBUG_SIP_MESSAGE", "DEBUG_SIP_INVITE", "DEBUG_TURN", "DB_LOG_FULL_SIP"} {
+	for _, key := range []string{"DEBUG_SIP_MESSAGE", "DEBUG_SIP_INVITE", "DEBUG_VIDEO_PACKETS", "DEBUG_SIP_TRUNK", "DEBUG_TURN", "DB_LOG_FULL_SIP"} {
 		t.Setenv(key, "true")
 	}
 	cfg, err := Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.SIP.DebugSIPMessage || !cfg.SIP.DebugSIPInvite || !cfg.API.DebugTURN || !cfg.DB.LogFullSIP {
+	if !cfg.SIP.DebugSIPMessage || !cfg.SIP.DebugSIPInvite || !cfg.SIP.DebugVideoPackets || !cfg.SIP.DebugSIPTrunk || !cfg.API.DebugTURN || !cfg.DB.LogFullSIP {
 		t.Fatalf("explicit debug toggles were not honored: %+v %+v %+v", cfg.SIP, cfg.API, cfg.DB)
 	}
 	// These modes intentionally retain local diagnostic exposure; the

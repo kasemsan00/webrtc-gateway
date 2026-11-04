@@ -12,11 +12,13 @@ export async function fetchWSClients(): Promise<Array<WSClient>> {
 export function subscribeWSClientEvents(
   onEvent: (event: WSClientStreamEvent) => void,
   onError?: (event: Event) => void,
+  onOpen?: () => void,
 ) {
   return subscribeAuthenticatedSse<WSClientStreamEvent>({
     url: `${API_BASE}/ws-clients/stream`,
     eventName: 'ws-client',
     onEvent,
     onError,
+    onOpen,
   })
 }

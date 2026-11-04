@@ -5,13 +5,13 @@ import (
 	"testing"
 
 	"github.com/pion/webrtc/v4"
-)
 
-const transportCCURI = "http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01"
+	"webrtc-sip-gateway/internal/config"
+)
 
 func offerSDP(t *testing.T, twccEnabled bool) string {
 	t.Helper()
-	api, err := newGatewayWebRTCAPI(twccEnabled)
+	api, err := newGatewayWebRTCAPI(twccEnabled, "", config.WebRTCICEConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,6 +51,7 @@ func TestGatewayWebRTCAPIAdvertisesTWCC(t *testing.T) {
 		"a=rtcp-fb:96 nack pli",
 		"a=rtcp-fb:96 ccm fir",
 		"a=rtcp-fb:96 transport-cc",
+		"a=extmap:",
 		transportCCURI,
 	} {
 		if !strings.Contains(sdp, want) {

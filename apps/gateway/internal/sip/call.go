@@ -546,6 +546,9 @@ func (s *Server) hangup(sess *session.Session) error {
 	if err != nil {
 		fmt.Printf("[%s] Error creating BYE request: %v\n", sess.ID, err)
 	} else {
+		if cseq := byeReq.CSeq(); cseq != nil {
+			fmt.Printf("[%s] Created BYE request - CSeq: %d\n", sess.ID, cseq.SeqNo)
+		}
 		s.logEvent(&logstore.Event{
 			Timestamp: time.Now(),
 			SessionID: sess.ID,
@@ -813,6 +816,7 @@ func (s *Server) acceptCall(sess *session.Session) error {
 
 	// Create SDP answer using negotiated Opus PT and constraints from INVITE offer.
 	sdpOffer := s.createSDPAnswerForInvite(rtpPort, sess, inviteBody)
+	sess.RememberSIPAnswer(sdpOffer)
 
 	// Create 200 OK response using original request
 	okRes := sip.NewResponseFromRequest(req, 200, "OK", sdpOffer)
@@ -1431,8 +1435,8 @@ func (s *Server) createBYERequest(sess *session.Session) (*sip.Request, error) {
 	// CRITICAL: Force TCP transport to prevent sipgo from switching transports
 	req.SetTransport("TCP")
 
-	fmt.Printf("[%s] Created BYE request - CSeq: %d\n", sess.ID, cseq)
-
+	// Do not log "Created BYE" here. MESSAGE, INFO, and hold re-INVITE reuse
+	// this builder as a dialog template and rewrite the method afterwards.
 	if s.config.DebugSIPInvite {
 		fmt.Printf("\n=== BYE Request (debug; Session %s) ===\n", sess.ID)
 		fmt.Printf("%s\n", req.String())

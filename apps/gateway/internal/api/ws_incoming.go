@@ -340,7 +340,7 @@ func (s *Server) startIncomingRingTimeout(sessionID string, trunkID int64) {
 		if !ok || sess == nil || sess.GetState() != session.StateIncoming {
 			return
 		}
-		if !sess.TryBeginTerminalAction("timeout") {
+		if !sess.TryBeginIncomingTerminalAction("timeout") {
 			return
 		}
 		log.Printf("⏱️ Incoming call timed out: sessionID=%s trunkID=%d timeout=%s", sessionID, trunkID, timeout)
@@ -802,7 +802,7 @@ func (s *Server) handleWSReject(client *WSClient, msg WSMessage) {
 		reasonSource = "client_unspecified"
 	}
 	log.Printf("📴 [Reject] Received incoming reject via WS (session=%s, reason=%s, source=%s)", msg.SessionID, reason, reasonSource)
-	if !sess.TryBeginTerminalAction("reject") {
+	if !sess.TryBeginIncomingTerminalAction("reject") {
 		log.Printf("📴 [Reject] Duplicate incoming reject ignored (session=%s winner=%s)", msg.SessionID, sess.GetTerminalAction())
 		s.sendWSMessage(client, WSMessage{Type: "state", SessionID: msg.SessionID, State: string(session.StateEnded)})
 		return

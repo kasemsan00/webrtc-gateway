@@ -28,14 +28,14 @@ Browser / Mobile / Agent
 | --- | --- | --- | --- | --- | --- |
 | `/ws` | `API_ENABLE_WS` | เปิด | มือถือ Android/iOS | `access_token` เมื่อ `AUTH_ENABLE=true` | sticky: หลุดแล้วไม่ SIP UNREGISTER เพื่อให้ปลุกด้วย push ได้ |
 | `/ws-public` | `API_ENABLE_PUBLIC_WS` | ปิด | สายสาธารณะครั้งเดียว | ไม่ใช้ token | credential ส่งในข้อความ `call` ของ connection นั้น |
-| `/ws-agent` | `API_ENABLE_AGENT_WS` | ปิด | เอเจนต์บน PC | ไม่ใช้ token | client ส่ง `agent_register` พร้อม SIP credential; REGISTER อยู่ขณะมี client; client สุดท้ายหลุดแล้ว hangup แล้ว UNREGISTER |
+| `/ws-agent` | `API_ENABLE_AGENT_WS` | ปิด | เอเจนต์บน PC | `access_token` ไม่บังคับ ถ้ามีจะตรวจ JWT | client ส่ง `agent_register` พร้อม SIP credential; REGISTER อยู่ขณะมี client; client สุดท้ายหลุดแล้ว hangup แล้ว UNREGISTER |
 | `/ws-agent-device` | `API_ENABLE_AGENT_DEVICE_WS` | ปิด | เอเจนต์บนมือถือ | `access_token` และ `devicePlatform=android\|ios` | client ส่ง `device_register`; หลุดแล้วไม่ UNREGISTER และเก็บ FCM; ปลดด้วยข้อความ `unregister` |
 
 พฤติกรรมเฉพาะเส้นทาง:
 
 - **`/ws`** เมื่อตั้ง `SIPCLIENT_AUTH_REGISTER_URL` จะ provision trunk มือถือจาก JWT ก่อน upgrade สำเร็จ ต้องมี `devicePlatform=android|ios` ใน URL แล้ว gateway ส่ง `trunk_resolved` กลับ
 - **`/ws-public`** รับเฉพาะสายของ connection นั้น `call` ต้องมี `sipDomain`, `sipUsername`, `sipPassword`
-- **`/ws-agent`** trunk คงที่รูปแบบ `sipclient-agent-<username>@<domain>:<port>` หลาย client ใช้ SIP identity เดียวกันได้ สายเข้าถูกยื่นให้ทุก client ที่ว่าง คนแรกที่ `offer` หรือ `accept` ได้สาย
+- **`/ws-agent`** trunk คงที่รูปแบบ `sipclient-agent-<username>@<domain>:<port>` หลาย client ใช้ SIP identity เดียวกันได้ สายเข้าถูกยื่นให้ทุก client ที่ว่าง คนแรกที่ `offer` หรือ `accept` ได้สาย เมื่อ `AUTH_ENABLE=true` ใช้ได้สองแบบ: (A) เชื่อมด้วย `access_token` แล้วโทรผ่าน trunk ที่ `agent_register` ผูกไว้ (B) ไม่ส่ง token แล้วส่ง `sipDomain`/`sipUsername`/`sipPassword` ใน `agent_register` (แบบ Electron SIP local) หรือในข้อความ `call` (public mode) การเลือก trunk โดยไม่มี claims บน `/ws` และ `/ws-agent-device` ยังถูกปฏิเสธด้วย `Token authentication required to use trunk`
 - **`/ws-agent-device`** trunk คนละชุดกับ agent PC (`sipclient-agent-device-...`) ไม่เรียก mobile provisioner เก็บ FCM ผ่าน `device_push_token` สายเข้า username/domain/port เดียวกันถูกยื่นให้ client ที่ออนไลน์ทั้ง `/ws-agent` และ `/ws-agent-device` ถ้าไม่มีใครออนไลน์จึงใช้ FCM ของ device
 
 ถ้าแฟล็กของเส้นทางนั้นปิดอยู่ route จะไม่ถูกลงทะเบียน
@@ -58,6 +58,7 @@ Browser / Mobile / Agent
 
 - เสียง: Opus passthrough ถ้าเปิด `SIP_AUDIO_INBOUND_GAIN_ENABLE` จะ transcode เฉพาะทิศ SIP → WebRTC
 - วิดีโอ: H.264 Gateway แยก STAP-A, cache SPS/PPS แล้วฉีดก่อน IDR เพื่อให้ decoder ฝั่ง SIP เริ่มภาพได้
+- วิดีโอขาออก WebRTC → SIP ส่งตรงโดยไม่มี pacer เมื่อเบราว์เซอร์เปลี่ยนความละเอียดกลางสาย ค่าเริ่มต้น `SIP_UPLINK_PICTURE_SIZE_CHANGE=accept` จะพักภาพขนาดใหม่ไว้จนถึง IDR แรกแล้วส่งต่อ (ไม่ทิ้งวิดีโอ) รายละเอียดใน [`docs/gateway/config-reference.md`](docs/gateway/config-reference.md)
 - NAT ฝั่ง WebRTC ใช้ TURN (`TURN_SERVER`) ฝั่ง SIP ใช้ symmetric RTP และ `SIP_PUBLIC_IP` เมื่อ gateway อยู่หลัง NAT
 - พื้นที่ที่เปลี่ยนแล้วกระทบสายจริง: การแยก NAL, จังหวะฉีด SPS/PPS, การเร่ง PLI/FIR, และการเรียนรู้ที่อยู่ RTP
 
@@ -134,7 +135,7 @@ pnpm --filter frontend run test -- src/features/trunk/types.test.ts
 | `API_ENABLE_PUBLIC_WS` | เปิด `/ws-public` |
 | `API_ENABLE_AGENT_WS` | เปิด `/ws-agent` |
 | `API_ENABLE_AGENT_DEVICE_WS` | เปิด `/ws-agent-device` |
-| `AUTH_ENABLE` | บังคับ JWT สำหรับ `/ws`, `/ws-agent-device` และ REST ที่ป้องกันไว้ |
+| `AUTH_ENABLE` | บังคับ JWT สำหรับ `/ws`, `/ws-agent-device` และ REST ที่ป้องกันไว้; `/ws-agent` ใช้ได้ทั้ง `access_token`+trunk และ SIP user/pass โดยไม่ส่ง token |
 | `SIPCLIENT_AUTH_REGISTER_URL` | provision trunk มือถือตอนเชื่อม `/ws` |
 | `SIP_PORT` | พอร์ต SIP (ค่าเริ่มต้น `5060`) |
 | `DB_ENABLE` / `DB_DSN` | PostgreSQL สำหรับ trunk และบันทึกสาย |

@@ -178,7 +178,10 @@ func (s *Server) handleWSSendMessage(client *WSClient, msg WSMessage) {
 		}
 
 		// Route session chat through the PBX. Asterisk is a B2BUA and may accept
-		// an in-dialog MESSAGE without forwarding it to the remote call leg.
+		// an in-dialog MESSAGE without forwarding it to the remote call leg, so
+		// the bridged peer is also relayed directly. That relay is recorded for
+		// a short window so NotifySIPMessageOnDialog can drop the PBX copy when
+		// Asterisk does forward the same text.
 		if sess != nil {
 			if !client.isAgentPresence() {
 				if dest := strings.TrimSpace(msg.Destination); dest != "" {
@@ -190,6 +193,8 @@ func (s *Server) handleWSSendMessage(client *WSClient, msg WSMessage) {
 					from = strings.TrimSpace(msg.From)
 				}
 				agentSess := s.findBridgedAgentSession(sess)
+				// Phone→agent uses the same fast path. relayChatToSession records
+				// the body so a later PBX copy for that agent session is dropped.
 				if agentSess != nil && s.relayChatToSession(agentSess, from, msg.Body, contentType) {
 					dest := sess.ChatMessageDestination()
 					if dest == "" {
@@ -205,6 +210,16 @@ func (s *Server) handleWSSendMessage(client *WSClient, msg WSMessage) {
 					return
 				}
 			}
+			var publicSess *session.Session
+			var relayGen uint64
+			if client.isAgentPresence() {
+				publicSess = s.findBridgedPublicSession(sess)
+				if publicSess != nil && s.sessionHasChatTarget(publicSess.ID) {
+					// Mark before the SIP send. Asterisk can forward the MESSAGE
+					// before SendMessageToSession returns.
+					relayGen = s.noteBridgedChatRelay(publicSess.ID, msg.Body)
+				}
+			}
 			var err error
 			if client.isAgentPresence() && sess.HasDialogState() {
 				log.Printf("💬 Sending in-dialog message via session %s", sess.ID)
@@ -214,18 +229,21 @@ func (s *Server) handleWSSendMessage(client *WSClient, msg WSMessage) {
 				err = s.sipMaker.SendMessageForSession(sess, msg.Body, contentType)
 			}
 			if err != nil {
+				if relayGen != 0 {
+					s.forgetBridgedChatRelay(publicSess.ID, msg.Body, relayGen)
+				}
 				log.Printf("⚠️ SIP MESSAGE failed for session %s: %v", sessionID, err)
 				s.sendWSOperationError(client, sessionID, "send_message", fmt.Sprintf("Failed to send session message: %v", err))
 				return
 			}
-			if client.isAgentPresence() {
+			if publicSess != nil {
 				_, _, _, _, agentUser, _, _ := sess.GetSIPAuthContext()
 				from := sipURIUsername(agentUser)
 				if from == "" {
 					from = strings.TrimSpace(msg.From)
 				}
-				if publicSess := s.findBridgedPublicSession(sess); publicSess != nil {
-					s.relayChatToSession(publicSess, from, msg.Body, contentType)
+				if !s.relayChatToSession(publicSess, from, msg.Body, contentType) && relayGen != 0 {
+					s.forgetBridgedChatRelay(publicSess.ID, msg.Body, relayGen)
 				}
 			}
 			s.sendWSMessage(client, WSMessage{
@@ -364,6 +382,9 @@ func (s *Server) relayChatToSession(agentSess *session.Session, from, body, cont
 		log.Printf("⚠️ Public chat agent session %s has no WebSocket client", agentSess.ID)
 		return false
 	}
+	// Record before the WebSocket write so a PBX copy arriving on another
+	// goroutine is dropped instead of racing this fast path.
+	s.noteBridgedChatRelay(agentSess.ID, body)
 	_, _, _, _, agentUser, _, _ := agentSess.GetSIPAuthContext()
 	agentUser = sipURIUsername(agentUser)
 	msg := WSMessage{
@@ -583,6 +604,12 @@ func (s *Server) NotifySIPMessageOnDialog(sipCallID, to, from, body, contentType
 	}
 	if sessionID == "" {
 		sessionID = s.findSIPMessageSessionID(to)
+	}
+	if sessionID != "" && s.dropBridgedChatPBXCopy(sessionID, body) {
+		if s.config.DebugWebSocket {
+			log.Printf("💬 Dropped duplicate PBX chat copy for session %s bodyBytes=%d", sessionID, len(body))
+		}
+		return
 	}
 	targets, totalConnections, droppedDuplicate := s.selectSIPMessageTargets(sessionID)
 	if len(targets) == 0 && sessionID == "" {

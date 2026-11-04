@@ -34,6 +34,10 @@ type H264AccessUnitNormalizerConfig struct {
 	MaxPackets int
 	MaxBytes   int
 	MaxAge     time.Duration
+	// ReuseSameSourceTimestamp (SIP_VIDEO_SAME_TS_REUSE) gives an access unit
+	// whose source timestamp equals the previous one that same outbound
+	// timestamp. False keeps the old wall-clock step (reason=source-gap).
+	ReuseSameSourceTimestamp bool
 }
 
 // NormalizedH264AccessUnit is emitted only after the source marker and H.264
@@ -48,6 +52,24 @@ type NormalizedH264AccessUnit struct {
 	// Discontinuity is set when this access unit's outbound timestamp did not
 	// follow the previous source delta. Nil on a continuous frame.
 	Discontinuity *H264TimestampDiscontinuity
+	// SameTimestampSplit is set when this access unit repeated the previous
+	// source timestamp and reused its outbound timestamp. Not a discontinuity.
+	SameTimestampSplit *H264SameTimestampSplit
+}
+
+// H264SameTimestampSplit describes a second marker-terminated access unit on
+// one source RTP timestamp. Linphone stamps frames with its 10ms ticker, so
+// two encoder outputs collected in one tick share a timestamp. FirstMB tells
+// the two cases apart: 0 is a new picture, >0 is the rest of a split picture,
+// -1 is unknown.
+type H264SameTimestampSplit struct {
+	Incoming        uint32
+	Outgoing        uint32
+	Count           uint64
+	Wall            time.Duration
+	FirstMB         int
+	Packets         int
+	PreviousPackets int
 }
 
 // H264TimestampDiscontinuity is one outbound RTP timestamp repair. Wall is the
@@ -89,6 +111,11 @@ type H264AccessUnitNormalizer struct {
 	lastOutputAt             time.Time
 	stepTimestampAfterSwitch bool
 	pendingSwitchReason      string
+	// replayAfterOutput is set when RewriteForReplay moved outputTS past the
+	// last live access unit, so outputTS is no longer that AU's timestamp.
+	replayAfterOutput bool
+	lastAUPackets     int
+	sameTSSplits      uint64
 
 	cachedSPS                        []byte
 	cachedPPS                        []byte
@@ -292,7 +319,17 @@ func (n *H264AccessUnitNormalizer) NumberAccessUnit(au *NormalizedH264AccessUnit
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	ts, disc := n.mapTimestampLocked(au.SourceTimestamp, au.Packets[0].SequenceNumber, n.now())
+	now := n.now()
+	prevAt := n.lastOutputAt
+	ts, disc, reused := n.mapTimestampLocked(au.SourceTimestamp, au.Packets[0].SequenceNumber, now)
+	if reused {
+		n.sameTSSplits++
+		au.SameTimestampSplit = &H264SameTimestampSplit{
+			Incoming: au.SourceTimestamp, Outgoing: ts, Count: n.sameTSSplits, Wall: now.Sub(prevAt),
+			FirstMB: h264AccessUnitFirstMB(au.Packets), Packets: len(au.Packets), PreviousPackets: n.lastAUPackets,
+		}
+	}
+	n.lastAUPackets = len(au.Packets)
 	n.applyOutboundRTPLocked(au.Packets, ts)
 	au.Discontinuity = disc
 	if au.InjectedParameterSets && n.forceParameterSetPrefixRemaining > 0 {
@@ -301,7 +338,10 @@ func (n *H264AccessUnitNormalizer) NumberAccessUnit(au *NormalizedH264AccessUnit
 	n.emitted++
 }
 
-func (n *H264AccessUnitNormalizer) mapTimestampLocked(source uint32, firstSeq uint16, now time.Time) (uint32, *H264TimestampDiscontinuity) {
+// mapTimestampLocked returns the outbound timestamp for a source timestamp.
+// reused is true when the source repeated the previous timestamp and the
+// previous outbound timestamp was kept (ReuseSameSourceTimestamp).
+func (n *H264AccessUnitNormalizer) mapTimestampLocked(source uint32, firstSeq uint16, now time.Time) (uint32, *H264TimestampDiscontinuity, bool) {
 	if !n.haveOutput {
 		n.haveOutput = true
 		n.nextSeq = firstSeq
@@ -310,17 +350,26 @@ func (n *H264AccessUnitNormalizer) mapTimestampLocked(source uint32, firstSeq ui
 		n.lastOutputAt = now
 		n.stepTimestampAfterSwitch = false
 		n.pendingSwitchReason = ""
-		return n.outputTS, nil
+		n.replayAfterOutput = false
+		return n.outputTS, nil, false
 	}
 
 	sourceDelta := source - n.lastSourceTS
-	sourceBroken := int32(sourceDelta) <= 0 || sourceDelta > maxReasonableH264TimestampGap
 	switched := n.stepTimestampAfterSwitch
+	if sourceDelta == 0 && !switched && !n.replayAfterOutput && n.config.ReuseSameSourceTimestamp {
+		// Same source picture time as the AU just numbered: keep its outbound
+		// timestamp. A wall-clock step here would give one source timestamp
+		// two outbound ones 0-2ms apart.
+		n.lastOutputAt = now
+		return n.outputTS, nil, true
+	}
+	n.replayAfterOutput = false
+	sourceBroken := int32(sourceDelta) <= 0 || sourceDelta > maxReasonableH264TimestampGap
 	if !switched && !sourceBroken {
 		n.outputTS += sourceDelta
 		n.lastSourceTS = source
 		n.lastOutputAt = now
-		return n.outputTS, nil
+		return n.outputTS, nil, false
 	}
 
 	prevOut := n.outputTS
@@ -348,7 +397,7 @@ func (n *H264AccessUnitNormalizer) mapTimestampLocked(source uint32, firstSeq ui
 		Outgoing:         n.outputTS,
 		PreviousOutgoing: prevOut,
 		Wall:             wall,
-	}
+	}, false
 }
 
 // wallClockH264TimestampStep converts elapsed real time into a positive 90 kHz
@@ -437,11 +486,12 @@ func (n *H264AccessUnitNormalizer) RewriteForReplay(packets []*rtp.Packet) []*rt
 	defer n.mu.Unlock()
 
 	if !n.haveOutput {
-		n.outputTS, _ = n.mapTimestampLocked(packets[0].Timestamp, packets[0].SequenceNumber, n.now())
+		n.outputTS, _, _ = n.mapTimestampLocked(packets[0].Timestamp, packets[0].SequenceNumber, n.now())
 	} else {
 		n.outputTS += defaultH264TimestampStep
 		n.lastOutputAt = n.now()
 	}
+	n.replayAfterOutput = true
 
 	out := make([]*rtp.Packet, 0, len(packets))
 	for i, packet := range packets {
@@ -484,6 +534,36 @@ func (n *H264AccessUnitNormalizer) ResetForStreamSwitch(generation int, reason s
 	}
 	n.pendingSwitchReason = reason
 	n.forceParameterSetPrefixRemaining = defaultSwitchParameterSetPrefixCount
+}
+
+// h264AccessUnitFirstMB is first_mb_in_slice of the first slice in the
+// access unit (single NAL, FU-A start, or inside a STAP-A), or -1.
+func h264AccessUnitFirstMB(packets []*rtp.Packet) int {
+	for _, packet := range packets {
+		if packet == nil || len(packet.Payload) == 0 {
+			continue
+		}
+		payload := packet.Payload
+		switch payload[0] & 0x1f {
+		case 1, 5, 28:
+			if mb, ok := h264FirstMBInSlice(payload); ok {
+				return int(mb)
+			}
+		case 24:
+			for offset := 1; offset+2 <= len(payload); {
+				size := int(payload[offset])<<8 | int(payload[offset+1])
+				offset += 2
+				if size == 0 || offset+size > len(payload) {
+					break
+				}
+				if mb, ok := h264FirstMBInSlice(payload[offset : offset+size]); ok {
+					return int(mb)
+				}
+				offset += size
+			}
+		}
+	}
+	return -1
 }
 
 func inspectAccessUnit(packets []*rtp.Packet) (hasSPS, hasPPS, isIDR bool) {
