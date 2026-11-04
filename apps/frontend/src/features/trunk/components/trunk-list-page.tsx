@@ -893,33 +893,25 @@ export function TrunkListPage() {
   return (
     <div className="flex h-screen flex-col bg-background text-foreground">
       <Header
+        subBarAlways
         subBar={
+          // View, search, sort and columns live in the filter row so the
+          // header keeps one fixed-height line next to the sidebar.
           <div className="flex flex-wrap items-center gap-2 text-xs">
             {viewToggle}
-            {renderSearch('h-8 min-w-0 flex-1 text-xs')}
+            {renderSearch('h-7 min-w-0 flex-1 text-xs sm:w-56 sm:flex-none')}
             {sortSelect}
             {columnsMenu}
           </div>
         }
       >
         <div className="flex items-center gap-2 text-xs">
-          {/* Search, sort, view and columns move to the mobile sub bar. */}
-          <div className="hidden sm:contents">
-            {renderSearch('h-8 w-48 text-xs')}
-            {sortSelect}
-          </div>
           {viewMode === 'table' ? (
             <PageActiveCallsChip
               totalCalls={pageActiveCalls}
               trunksOnCall={pageTrunksOnCall}
             />
           ) : null}
-          <div className="hidden sm:contents">
-            <Separator orientation="vertical" className="h-4" />
-            {viewToggle}
-            {columnsMenu}
-          </div>
-          <Separator orientation="vertical" className="hidden h-4 sm:block" />
           {/* Add Trunk */}
           <Button
             size="sm"

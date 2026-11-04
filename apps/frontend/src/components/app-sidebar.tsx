@@ -85,7 +85,7 @@ export function AppSidebar({ className }: { className?: string }) {
     >
       <Link
         to="/"
-        className="flex h-[49px] shrink-0 items-center border-b border-border px-4"
+        className="box-content flex h-14 shrink-0 items-center border-b border-border px-4"
       >
         <span className="bg-linear-to-r from-cyan-600 to-emerald-600 bg-clip-text text-sm font-bold text-transparent dark:from-cyan-400 dark:to-emerald-400">
           Gateway Console
