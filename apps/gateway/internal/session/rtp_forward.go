@@ -432,22 +432,24 @@ func (s *Session) forwardRTPToAsteriskFrom(track rtpByteReader, kind string) {
 					}
 					continue
 				}
-				if containsIDR {
+				stapaCanWrite := destAddr != nil && conn != nil
+				if containsIDR && stapaCanWrite {
 					s.noteUplinkIDRAcceptedLocked()
 				}
 				// One outbound timestamp for the injected SPS/PPS and every
 				// de-aggregated NAL of this STAP-A (SIP_VIDEO_TS_REBASE).
 				stapaTS := s.uplinkVideoOutboundTSLocked(packet.Header.Timestamp, packet.Header.SSRC, time.Now())
 
-				if containsIDR {
+				if containsIDR && stapaCanWrite {
 					payload = s.prefixSTAPAIDRLocked(payload, packet.Timestamp)
+					uplinkAU.idrStarted = true
 					if !containsSPS || !containsPPS {
 						s.LastSPSPPSInjectionTime = time.Now()
 					}
 					if s.SwitchSPSPPSInjectRemaining > 0 {
 						s.SwitchSPSPPSInjectRemaining--
 					}
-				} else {
+				} else if !containsIDR && stapaCanWrite {
 					s.noteUplinkInBandParameterSetLocked(packet.Timestamp, containsSPS, containsPPS)
 				}
 
@@ -526,11 +528,23 @@ func (s *Session) forwardRTPToAsteriskFrom(track rtpByteReader, kind string) {
 				}
 				continue
 			}
-			if isKeyframe {
+			canWrite := destAddr != nil && conn != nil
+			if isFUAIDRContinuation(packet.Payload) && !uplinkAU.idrStarted {
+				requestPLI := uplinkAU.dropOrphanIDRFragmentLocked(s, canWrite, time.Now())
+				s.mu.Unlock()
+				if requestPLI {
+					go s.SendBrowserPLIImmediate("idr_without_start")
+				}
+				continue
+			}
+			if isKeyframe && canWrite {
 				// Accept before the picture hold releases this packet. The next
 				// FU-A fragment or P-slice is already in the read loop, and
-				// RecordUplinkKeyframe does not run until the write.
+				// RecordUplinkKeyframe does not run until the write. An IDR
+				// start that cannot be written (no SIP video address yet)
+				// must not open the gate or use up this AU's SPS/PPS prefix.
 				s.noteUplinkIDRAcceptedLocked()
+				uplinkAU.idrStarted = true
 			}
 			// Outbound timestamp for this packet and the SPS/PPS injected in
 			// front of it (SIP_VIDEO_TS_REBASE). Held packets never reach this,
@@ -541,11 +555,11 @@ func (s *Session) forwardRTPToAsteriskFrom(track rtpByteReader, kind string) {
 			// every slice in its own NAL type 5 packet, so a packet-count window
 			// repeats SPS/PPS in front of each slice and resets the far decoder.
 			redundancyCount := 0
-			if len(s.CachedSPS) > 0 && len(s.CachedPPS) > 0 && isKeyframe {
+			if len(s.CachedSPS) > 0 && len(s.CachedPPS) > 0 && isKeyframe && canWrite {
 				redundancyCount = s.uplinkKeyframeParameterSetCopiesLocked(packet.Header.Timestamp)
 			}
 
-			if redundancyCount > 0 && destAddr != nil && conn != nil {
+			if redundancyCount > 0 {
 				pendingWrites = append(pendingWrites, s.uplinkIDRParameterSetPacketsLocked(videoPT, packet.Timestamp, outTS)...)
 			}
 

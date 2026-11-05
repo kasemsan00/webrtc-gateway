@@ -241,8 +241,8 @@ func TestDecoderJoinPLIFollowUp(t *testing.T) {
 		t.Fatalf("default follow-up = (%d, %s)", attempts, gap)
 	}
 	attempts, gap = decoderJoinPLIFollowUp(true)
-	if attempts != 1 || gap != webrtcPLIOverallMinInterval {
-		t.Fatalf("pre-learn follow-up = (%d, %s), want one retry at %s", attempts, gap, webrtcPLIOverallMinInterval)
+	if attempts != 3 || gap != webrtcPLIOverallMinInterval {
+		t.Fatalf("pre-learn follow-up = (%d, %s), want three retries at %s", attempts, gap, webrtcPLIOverallMinInterval)
 	}
 }
 

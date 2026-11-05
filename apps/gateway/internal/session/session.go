@@ -212,6 +212,8 @@ type Session struct {
 	openedVideoSource                     string               `json:"-"`
 	bridgedKeyframeAt                     time.Time            `json:"-"`
 	switchVideoInfoFIRAt                  time.Time            `json:"-"`
+	returnRecoveryUplinkKickAt            time.Time            `json:"-"`
+	returnRecoveryUplinkKicks             int                  `json:"-"`
 	sipKeyframeRequestMode                string               `json:"-"`
 	sipRTCPFBMinInterval                  time.Duration        `json:"-"`
 	sipRTCPFBGuard                        time.Duration        `json:"-"`

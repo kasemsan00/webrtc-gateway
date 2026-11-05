@@ -1,3 +1,12 @@
+## 2026-11-05
+
+- **แก้ Android→9999 (echo) จอดำ ~60 วินาที**: ปลายทางแบบ echo ส่งกลับเฉพาะภาพที่ gateway ส่งไป และ Asterisk `Echo()` ตอบ picture_fast_update เพียงครั้งเดียวต่อสาย
+  - ไม่ส่ง FU-A IDR ที่ไม่มี fragment เริ่มต้น (ไม่มี SPS/PPS และ decode ไม่ได้) ไป SIP อีก และไม่นับเป็น uplink IDR ที่ส่งแล้ว (เดิมทำให้ `uplink_idr_parameter_sets ... missing_parameter_sets=1` และหยุดการขอ keyframe) ทิ้ง AU นั้นแล้วขอ PLI ใหม่ไม่เกินหนึ่งครั้งต่อวินาที (`uplink_idr_fragment_dropped reason=no-start`)
+  - IDR ที่มาถึงก่อนรู้ที่อยู่ SIP video ไม่เปิด uplink gate และไม่ใช้สิทธิ์ส่ง SPS/PPS ของ AU นั้น
+  - kick หลัง `remote-ssrc-learn`/`sip-rtcp-first` ที่ไม่นับ IDR ก่อน learn ส่ง PLI ติดตามได้สูงสุดสามครั้งห่างกัน 1 วินาที จนกว่าจะมี IDR หลัง kick
+  - เมื่อ client ขอ keyframe และยังไม่เคยได้ keyframe ขากลับในสายนี้ ขอ IDR จาก encoder ของ client โดยตรง (`uplink_keyframe_kick reason=return-recovery`) ทุก 2 วินาทีสูงสุด 10 ครั้งต่อสาย หยุดเมื่อได้ keyframe ขากลับ
+  - SIP INFO picture_fast_update ใช้ floor 1 วินาทีระหว่างที่ INFO ก่อนหน้ายังไม่ได้รับ keyframe ตอบ และกลับเป็น 2 วินาทีเมื่อได้รับแล้ว (`sip_keyframe_via_info ... recovering=`)
+
 ## 2026-10-29
 
 - **ถอด prepare-incoming ออกทั้งหมด**: ยกเลิกการสร้าง PeerConnection ล่วงหน้าระหว่างสายเรียกเข้ากำลังดัง เนื่องจากทำให้วิดีโอ Android ไม่ทำงานเมื่อเปิดใช้ กลับไปใช้ขั้นตอน offer/accept ปกติ โดยคงการแก้ H.264 SPS/PPS ให้รอ cache ครบก่อนส่ง IDR และส่ง SPS/PPS ล่าสุดนำหน้า IDR ทุก AU ทั้ง mode 0 และ 1 โดยไม่ส่งซ้ำ รวมถึง telemetry และ regression tests ที่เกี่ยวข้อง

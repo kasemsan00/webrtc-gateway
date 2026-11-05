@@ -180,6 +180,32 @@ func (s *Session) SetSIPKeyframeINFOSender(fn func(reason string)) {
 	s.mu.Unlock()
 }
 
+// sipKeyframeINFORecoveryMinInterval is the INFO floor while the previous
+// picture_fast_update has not been answered by a SIP→WebRTC keyframe (or no
+// return keyframe has arrived this call). Once one is answered, the normal
+// sipOriginatedBrowserKeyframeMinInterval (2s) floor applies again.
+const sipKeyframeINFORecoveryMinInterval = time.Second
+
+// allowSIPKeyframeINFO rate-limits recovery INFO. It shares its clock with
+// AllowSwitchVideoInfoFIR so switch and recovery INFOs never stack.
+func (s *Session) allowSIPKeyframeINFO(now time.Time) (allowed, recovering bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	last := s.switchVideoInfoFIRAt
+	recovering = s.LastKeyframe.IsZero() || (!last.IsZero() && s.LastKeyframe.Before(last))
+	floor := sipOriginatedBrowserKeyframeMinInterval
+	if recovering {
+		floor = sipKeyframeINFORecoveryMinInterval
+	}
+	if !last.IsZero() {
+		if age := now.Sub(last); age >= 0 && age < floor {
+			return false, recovering
+		}
+	}
+	s.switchVideoInfoFIRAt = now
+	return true, recovering
+}
+
 func (s *Session) requestSIPKeyframeINFO(reason string) {
 	if s == nil {
 		return
@@ -187,8 +213,9 @@ func (s *Session) requestSIPKeyframeINFO(reason string) {
 	if strings.TrimSpace(reason) == "" {
 		reason = "info"
 	}
-	if !s.AllowSwitchVideoInfoFIR(time.Now()) {
-		fmt.Printf("[%s] sip_keyframe_via_info_skipped reason=rate-limit trigger=%s\n", s.ID, reason)
+	allowed, recovering := s.allowSIPKeyframeINFO(time.Now())
+	if !allowed {
+		fmt.Printf("[%s] sip_keyframe_via_info_skipped reason=rate-limit trigger=%s recovering=%v\n", s.ID, reason, recovering)
 		return
 	}
 	s.mu.RLock()
@@ -199,6 +226,6 @@ func (s *Session) requestSIPKeyframeINFO(reason string) {
 		fmt.Printf("[%s] sip_keyframe_via_info_skipped reason=no-sender trigger=%s\n", id, reason)
 		return
 	}
-	fmt.Printf("[%s] sip_keyframe_via_info trigger=%s\n", id, reason)
+	fmt.Printf("[%s] sip_keyframe_via_info trigger=%s recovering=%v\n", id, reason, recovering)
 	go fn(reason)
 }

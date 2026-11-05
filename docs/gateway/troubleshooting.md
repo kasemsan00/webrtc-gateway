@@ -125,10 +125,17 @@ Do not bypass RTPengine in production for this diagnosis.
 - `uplink_keyframe_kick reason=remote-ssrc-learn pre_learn_idr=ignored` (or
   `reason=sip-rtcp-first`) means the only recent IDR was forwarded before the
   phone's video SSRC was learned or before its first video RTP/RTCP, so the
-  phone never saw it. The gateway sends FIR + PLI anyway, then one follow-up PLI
-  after 1s (`... pre_learn_idr=ignored follow_up=1`) unless a new IDR lands
-  first. If no later `uplink_keyframe_kick` or IDR appears, the browser did
-  not answer the PLI.
+  phone never saw it. The gateway sends FIR + PLI anyway, then up to three
+  follow-up PLIs 1s apart (`... pre_learn_idr=ignored follow_up=N`) until an
+  IDR from after the kick is forwarded. If no later `uplink_keyframe_kick` or
+  IDR appears, the browser did not answer the PLI.
+- `uplink_idr_fragment_dropped reason=no-start` means FU-A fragments of an IDR
+  arrived without their start fragment (start lost, or it came before the SIP
+  video address was set). That tail has no SPS/PPS and cannot be decoded, so
+  it is dropped instead of being written and counted as a forwarded IDR, and
+  the browser gets a PLI (`browser_pli sent reason=idr_without_start`, at most
+  once a second). An IDR start that cannot be written no longer opens the
+  uplink gate or uses up its access unit's SPS/PPS prefix.
 - Lower agent resolution mid-call is expected under low bandwidth (Chrome
   `degradationPreference=balanced`). With the default
   `SIP_UPLINK_PICTURE_SIZE_CHANGE=accept` the gateway does not drop the call's
@@ -139,6 +146,19 @@ Do not bypass RTPengine in production for this diagnosis.
   second (`browser_pli sent reason=picture_size_change`). Only
   `SIP_UPLINK_PICTURE_SIZE_CHANGE=reject` drops video after a size change
   (`uplink_sps_dimension_change dropped`).
+
+## Client stays black on 9999 / echo while SIP video RTP arrives
+
+- The echo returns only what the gateway sends, and Asterisk `Echo()` answers
+  a single picture_fast_update per call. While the client decoder keeps asking
+  (`browser_recovery_handled ... keyframeAge=none`) and no SIP→WebRTC keyframe
+  has arrived this call, the gateway also asks the client encoder for an IDR:
+  `uplink_keyframe_kick reason=return-recovery trigger=browser-pli attempt=N/10`.
+  At most one every 2s and ten per call; skipped while an uplink IDR is in
+  flight or was forwarded in the last 2s; stops at the first return keyframe.
+- `sip_keyframe_via_info ... recovering=true` means the previous INFO has not
+  been answered by a return keyframe, so the INFO floor is 1s instead of 2s.
+  `recovering=false` (answered) keeps the 2s floor.
 
 ## 401 Unauthorized (and 409 Conflict) on API/WS
 

@@ -18,6 +18,37 @@ type uplinkH264AU struct {
 	blocked   bool
 	lastPLI   time.Time
 	heldIDRs  uint64
+	// idrStarted is true once an IDR start (single NAL, FU-A start, or a
+	// STAP-A carrying an IDR) of this AU was actually written to SIP, with
+	// its SPS/PPS prefix. FU-A IDR continuations are forwarded only then.
+	idrStarted bool
+	orphaned   bool
+	orphanAUs  uint64
+}
+
+// isFUAIDRContinuation is a middle or end FU-A fragment of an IDR slice.
+func isFUAIDRContinuation(payload []byte) bool {
+	return len(payload) > 1 && payload[0]&0x1f == 28 && payload[1]&0x80 == 0 && payload[1]&0x1f == 5
+}
+
+// dropOrphanIDRFragmentLocked handles an FU-A IDR fragment whose start never
+// reached SIP (start lost, or written while the SIP video address was not
+// set yet). That tail has no SPS/PPS and cannot be decoded, and writing it
+// would record a "forwarded" uplink IDR that silences the startup PLI and
+// the decoder-join kicks. Drop it and ask for a fresh IDR at most once a
+// second (shared with the missing-parameter-set request).
+func (a *uplinkH264AU) dropOrphanIDRFragmentLocked(s *Session, canWrite bool, now time.Time) (requestPLI bool) {
+	if !a.orphaned {
+		a.orphaned = true
+		a.orphanAUs++
+	}
+	if !canWrite || (!a.lastPLI.IsZero() && now.Sub(a.lastPLI) < time.Second) {
+		return false
+	}
+	a.lastPLI = now
+	fmt.Printf("[%s] uplink_idr_fragment_dropped reason=no-start source_ts=%d dropped_aus=%d request_keyframe=true\n",
+		s.ID, a.timestamp, a.orphanAUs)
+	return true
 }
 
 // Cache replacement must invalidate the claim that the old bytes have already
@@ -36,6 +67,8 @@ func (a *uplinkH264AU) beginLocked(s *Session, p *rtp.Packet) {
 	if !a.set || a.ssrc != p.SSRC || a.timestamp != p.Timestamp || a.ended {
 		a.set, a.ssrc, a.timestamp = true, p.SSRC, p.Timestamp
 		a.blocked = false
+		a.idrStarted = false
+		a.orphaned = false
 		s.uplinkSPSPPSTimestampSet = false
 		s.uplinkInBandTimestampSet = false
 	}

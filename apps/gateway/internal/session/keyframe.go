@@ -36,6 +36,13 @@ const (
 	// SIP PLI/FIR toward the phone. A fresh uplink IDR or a recent request
 	// suppresses the next one. Switch and decoder kicks use force and bypass this.
 	sipOriginatedBrowserKeyframeMinInterval = 2 * time.Second
+	// While the browser decoder asks for a keyframe and no SIP→WebRTC
+	// keyframe has arrived this call, the browser's own encoder is asked for
+	// an IDR too (loopback far ends such as Asterisk Echo on 9999 only return
+	// what we send). Bounded so a far end that never sends a keyframe does
+	// not get a permanent IDR storm.
+	returnRecoveryUplinkKickInterval = 2 * time.Second
+	returnRecoveryUplinkKickMax      = 10
 )
 
 // shouldSendPLIToAsterisk gates PLI forwarding to avoid flooding.
@@ -96,6 +103,8 @@ func (s *Session) SendBrowserRecoveryToAsterisk(trigger string) string {
 			return "replay"
 		}
 	}
+
+	s.maybeKickUplinkForReturnRecovery(trigger, now)
 
 	s.mu.Lock()
 	lastKeyframe := s.LastKeyframe
@@ -371,12 +380,15 @@ func (s *Session) TryKickUplinkKeyframeForSwitch(reason string, now time.Time) b
 }
 
 // decoderJoinPLIFollowUp is the guarded PLI retry after the initial FIR+PLI.
-// A pre-learn IDR gets one retry after the forced-PLI cap so the browser is
-// not asked again while that cap would drop the packet. Other kicks keep
-// the short burst.
+// A pre-learn IDR gets up to three retries spaced by the forced-PLI cap, so
+// the browser is not asked again while that cap would drop the packet. One
+// retry was not enough: Android 9999 echo stayed black for 60s when the
+// kick and its single follow-up produced no post-learn IDR. Every retry
+// stops once an IDR from after the kick is forwarded. Other kicks keep the
+// short burst.
 func decoderJoinPLIFollowUp(preLearnIDRIgnored bool) (attempts int, gap time.Duration) {
 	if preLearnIDRIgnored {
-		return 1, webrtcPLIOverallMinInterval
+		return 3, webrtcPLIOverallMinInterval
 	}
 	return 3, 300 * time.Millisecond
 }
@@ -443,6 +455,81 @@ func (s *Session) KickUplinkKeyframeForSIPDecoder(reason string) bool {
 		}
 	}()
 	return true
+}
+
+// maybeKickUplinkForReturnRecovery asks the browser encoder for an IDR when
+// the browser decoder requests a keyframe and the SIP→WebRTC leg has not
+// delivered any keyframe this call. A loopback far end (Asterisk Echo on
+// 9999, callback tests) only returns what we send, and Echo answers a single
+// picture_fast_update per call, so SIP INFO/RTCP alone left Android black
+// for ~60s until its encoder happened to emit an IDR. Bounded: at most one
+// kick per returnRecoveryUplinkKickInterval and returnRecoveryUplinkKickMax
+// per call, skipped while an uplink IDR is in flight or one was forwarded
+// within the interval (it is still on its way back), and never once a
+// return keyframe has been seen. Returns true when FIR+PLI were sent.
+func (s *Session) maybeKickUplinkForReturnRecovery(trigger string, now time.Time) bool {
+	if s == nil {
+		return false
+	}
+	switch trigger {
+	case "browser-pli", "browser-fir", "ws-request_keyframe":
+	default:
+		return false
+	}
+	s.mu.Lock()
+	skip := decideReturnRecoveryUplinkKick(returnRecoveryUplinkKickInput{
+		ReturnKeyframeAt: s.LastKeyframe,
+		RemoteVideoSSRC:  s.RemoteVideoSSRC,
+		UplinkIDRFlight:  s.uplinkIDRInFlight,
+		LastUplinkIDR:    s.LastUplinkKeyframe,
+		LastKickAt:       s.returnRecoveryUplinkKickAt,
+		Kicks:            s.returnRecoveryUplinkKicks,
+		Now:              now,
+	})
+	if skip != "" {
+		s.mu.Unlock()
+		return false
+	}
+	s.returnRecoveryUplinkKickAt = now
+	s.returnRecoveryUplinkKicks++
+	attempt := s.returnRecoveryUplinkKicks
+	id := s.ID
+	s.mu.Unlock()
+	fmt.Printf("[%s] 📈 uplink_keyframe_kick reason=return-recovery trigger=%s attempt=%d/%d keyframeAge=none\n",
+		id, trigger, attempt, returnRecoveryUplinkKickMax)
+	s.sendWebRTCFeedbackWithForce("fir", true, nil)
+	s.sendWebRTCFeedbackWithForce("pli", true, nil)
+	return true
+}
+
+type returnRecoveryUplinkKickInput struct {
+	ReturnKeyframeAt time.Time
+	RemoteVideoSSRC  uint32
+	UplinkIDRFlight  bool
+	LastUplinkIDR    time.Time
+	LastKickAt       time.Time
+	Kicks            int
+	Now              time.Time
+}
+
+// decideReturnRecoveryUplinkKick is the fake-clock gate for
+// maybeKickUplinkForReturnRecovery. Empty means send.
+func decideReturnRecoveryUplinkKick(in returnRecoveryUplinkKickInput) string {
+	switch {
+	case !in.ReturnKeyframeAt.IsZero():
+		return "return-keyframe-seen"
+	case in.RemoteVideoSSRC == 0:
+		return "no-sip-video"
+	case in.Kicks >= returnRecoveryUplinkKickMax:
+		return "max"
+	case in.UplinkIDRFlight:
+		return "idr-in-flight"
+	case !in.LastKickAt.IsZero() && in.Now.Sub(in.LastKickAt) < returnRecoveryUplinkKickInterval:
+		return "rate-limit"
+	case !in.LastUplinkIDR.IsZero() && in.Now.Sub(in.LastUplinkIDR) < returnRecoveryUplinkKickInterval:
+		return "idr-fresh"
+	}
+	return ""
 }
 
 // ShouldStopStartupBrowserPLI is true once an uplink IDR is in flight or a
