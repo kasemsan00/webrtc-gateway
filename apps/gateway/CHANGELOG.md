@@ -6,6 +6,12 @@
   - kick หลัง `remote-ssrc-learn`/`sip-rtcp-first` ที่ไม่นับ IDR ก่อน learn ส่ง PLI ติดตามได้สูงสุดสามครั้งห่างกัน 1 วินาที จนกว่าจะมี IDR หลัง kick
   - เมื่อ client ขอ keyframe และยังไม่เคยได้ keyframe ขากลับในสายนี้ ขอ IDR จาก encoder ของ client โดยตรง (`uplink_keyframe_kick reason=return-recovery`) ทุก 2 วินาทีสูงสุด 10 ครั้งต่อสาย หยุดเมื่อได้ keyframe ขากลับ
   - SIP INFO picture_fast_update ใช้ floor 1 วินาทีระหว่างที่ INFO ก่อนหน้ายังไม่ได้รับ keyframe ตอบ และกลับเป็น 2 วินาทีเมื่อได้รับแล้ว (`sip_keyframe_via_info ... recovering=`)
+- **แก้ 9999 (echo) ขากลับยังจอดำแม้ uplink IDR ครบ**: Asterisk ส่ง IDR ขากลับมาครั้งเดียวแต่ client decode ไม่ได้ และ gateway หยุดพยายามเพราะถือว่า "มี keyframe แล้ว" (keyframeAge 50 วินาทีขึ้นไป)
+  - นับว่าขากลับค้าง (return recovery) เมื่อ client ยังขอ keyframe (PLI/FIR หรือ `request_keyframe` ภายใน 2 วินาที) และไม่มี keyframe ขากลับใหม่มาเกิน 1.5 วินาทีนับจากเริ่มขอ ส่วน keyframe ที่มาแล้วแต่ client ยังขอต่อถือว่ายังไม่ได้รับ
+  - kick `return-recovery` ขอ IDR จาก encoder ของ client ต่อได้ เมื่อ client ยังขอต่อ 2 วินาทีหลัง keyframe ขากลับล่าสุด (เดิมหยุดตั้งแต่ keyframe แรก) จำกัด 10 ครั้งต่อรอบ เริ่มรอบใหม่เมื่อ client เงียบ 5 วินาที
+  - โหมด `SIP_KEYFRAME_REQUEST_MODE=info` ส่ง RTCP PLI/FIR ไป SIP เพิ่มจาก INFO ระหว่าง return recovery (`sip_rtcp_fb_escalated reason=return-recovery`) โดยยังผ่าน gate เดิมทั้งหมด (IDR in-flight, guard, min interval, รอ marker)
+  - INFO recovery floor ลดเป็น 500ms และใช้ระหว่าง return recovery ด้วย
+  - keyframe watchdog ไม่ข้ามด้วยเหตุผล `rtp-flowing` เมื่อยังไม่เคยได้ keyframe ขากลับหรือ client ยังรอ keyframe (`keyframe_watchdog_client_waiting`)
 
 ## 2026-10-29
 

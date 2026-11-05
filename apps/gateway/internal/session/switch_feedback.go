@@ -255,7 +255,11 @@ func (s *Session) sendSIPFeedback(kind string, force bool, trigger string, autho
 	}
 	if !decision.SendRTCP {
 		if decision.Reason != "" {
-			fmt.Printf("[%s] sip_rtcp_fb_skipped kind=%s trigger=%s reason=%s\n", id, kind, trigger, decision.Reason)
+			if decision.Escalated {
+				fmt.Printf("[%s] sip_rtcp_fb_skipped kind=%s trigger=%s reason=%s escalated=return-recovery\n", id, kind, trigger, decision.Reason)
+			} else {
+				fmt.Printf("[%s] sip_rtcp_fb_skipped kind=%s trigger=%s reason=%s\n", id, kind, trigger, decision.Reason)
+			}
 		}
 		return true
 	}
@@ -265,6 +269,9 @@ func (s *Session) sendSIPFeedback(kind string, force bool, trigger string, autho
 	s.mu.Unlock()
 	if !snapshot.authorized {
 		return false
+	}
+	if decision.Escalated {
+		fmt.Printf("[%s] sip_rtcp_fb_escalated kind=%s trigger=%s reason=return-recovery\n", id, kind, trigger)
 	}
 	sendPreparedSIPFeedback(id, snapshot)
 	return true

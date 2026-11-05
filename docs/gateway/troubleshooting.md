@@ -150,15 +150,33 @@ Do not bypass RTPengine in production for this diagnosis.
 ## Client stays black on 9999 / echo while SIP video RTP arrives
 
 - The echo returns only what the gateway sends, and Asterisk `Echo()` answers
-  a single picture_fast_update per call. While the client decoder keeps asking
-  (`browser_recovery_handled ... keyframeAge=none`) and no SIP→WebRTC keyframe
-  has arrived this call, the gateway also asks the client encoder for an IDR:
-  `uplink_keyframe_kick reason=return-recovery trigger=browser-pli attempt=N/10`.
-  At most one every 2s and ten per call; skipped while an uplink IDR is in
-  flight or was forwarded in the last 2s; stops at the first return keyframe.
+  a single picture_fast_update per call. The gateway treats the return path
+  as stuck ("return recovery") while the client decoder keeps asking
+  (browser PLI/FIR or WS `request_keyframe` within the last 2s) and no
+  SIP→WebRTC keyframe has arrived for 1.5s of that asking. A return keyframe
+  the client never decoded (`keyframeAge` grows while PLIs continue) counts
+  as unanswered too.
+- Uplink kick: `uplink_keyframe_kick reason=return-recovery trigger=browser-pli
+  attempt=N/10 keyframeAge=<dur|none> unanswered=<dur>`. Sent when no return
+  keyframe has arrived this call, or the client has kept asking for 2s after
+  the last one. At most one every 2s and ten per recovery episode (5s without
+  client requests starts a new episode); skipped while an uplink IDR is in
+  flight or was forwarded in the last 2s.
+- RTCP escalation: with `SIP_KEYFRAME_REQUEST_MODE=info`, return recovery also
+  sends RTCP PLI/FIR toward SIP (`sip_rtcp_fb_escalated ... reason=return-recovery`)
+  next to the INFO. The usual RTCP gates still apply (uplink IDR in flight,
+  post-IDR guard, `SIP_RTCP_FB_MIN_INTERVAL_MS`, wait for a marker); skips log
+  `sip_rtcp_fb_skipped ... escalated=return-recovery`.
 - `sip_keyframe_via_info ... recovering=true` means the previous INFO has not
-  been answered by a return keyframe, so the INFO floor is 1s instead of 2s.
-  `recovering=false` (answered) keeps the 2s floor.
+  been answered by a return keyframe, none arrived this call, or return
+  recovery is active, so the INFO floor is 500ms instead of 2s.
+  `recovering=false` keeps the 2s floor.
+- The SIP video keyframe watchdog does not skip as `rtp-flowing` when no
+  return keyframe was ever seen or return recovery is active; it then logs
+  `keyframe_watchdog_client_waiting action=pli|fir keyframeAge=...`.
+- Echo may still ignore every request after the first. The uplink kick is the
+  path that works there; if the phone encoder ignores PLI/FIR, set a periodic
+  keyframe interval on the Android encoder.
 
 ## 401 Unauthorized (and 409 Conflict) on API/WS
 

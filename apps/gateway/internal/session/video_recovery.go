@@ -142,6 +142,9 @@ type KeyframeWatchdogInput struct {
 	BurstActive  bool
 	GateActive   bool
 	HealthyIDR   bool
+	// BrowserNeedsKeyframe is true while the client decoder has asked for a
+	// keyframe recently (browser PLI/FIR or WS request_keyframe).
+	BrowserNeedsKeyframe bool
 }
 
 // DecideKeyframeWatchdog chooses PLI/FIR only when video has actually stalled.
@@ -149,6 +152,9 @@ type KeyframeWatchdogInput struct {
 // (2wEu56CA9cGy: Linphone GOP ~6s, stale=4s forced an IDR every ~6s for the
 // whole call and n1669 stuttered). Do not treat RTP as healthy during an
 // active switch gate or before a full post-switch GOP (Al8uLPjnbirH).
+// RTP flowing is also not healthy when no keyframe was ever seen or when the
+// client keeps asking for one: 1mtLasLjXLNu (9999) got a single return IDR
+// the phone never decoded, and the watchdog skipped for 50s+ as rtp-flowing.
 func DecideKeyframeWatchdog(in KeyframeWatchdogInput) KeyframeWatchdogDecision {
 	keyframeAge := in.Now.Sub(in.LastKeyframe)
 	if in.LastKeyframe.IsZero() {
@@ -159,7 +165,8 @@ func DecideKeyframeWatchdog(in KeyframeWatchdogInput) KeyframeWatchdogDecision {
 	}
 
 	rtpFlowing := !in.LastRTP.IsZero() && in.Now.Sub(in.LastRTP) < in.Stale
-	if !in.BurstActive && !in.GateActive && in.HealthyIDR && rtpFlowing {
+	if !in.BurstActive && !in.GateActive && in.HealthyIDR && rtpFlowing &&
+		!in.LastKeyframe.IsZero() && !in.BrowserNeedsKeyframe {
 		return KeyframeWatchdogDecision{Action: KeyframeWatchdogNone, Reason: "rtp-flowing"}
 	}
 

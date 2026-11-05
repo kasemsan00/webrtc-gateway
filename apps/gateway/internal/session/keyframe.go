@@ -36,13 +36,20 @@ const (
 	// SIP PLI/FIR toward the phone. A fresh uplink IDR or a recent request
 	// suppresses the next one. Switch and decoder kicks use force and bypass this.
 	sipOriginatedBrowserKeyframeMinInterval = 2 * time.Second
-	// While the browser decoder asks for a keyframe and no SIP→WebRTC
-	// keyframe has arrived this call, the browser's own encoder is asked for
-	// an IDR too (loopback far ends such as Asterisk Echo on 9999 only return
-	// what we send). Bounded so a far end that never sends a keyframe does
-	// not get a permanent IDR storm.
+	// While the client decoder asks for a keyframe and the last SIP→WebRTC
+	// keyframe is missing or older than browserFIRStale, the browser's own
+	// encoder is asked for an IDR too (loopback far ends such as Asterisk
+	// Echo on 9999 only return what we send). Bounded per recovery episode
+	// so a client that never decodes does not get a permanent IDR storm.
 	returnRecoveryUplinkKickInterval = 2 * time.Second
 	returnRecoveryUplinkKickMax      = 10
+	// returnRecoveryRequestWindow is how long one client keyframe request
+	// keeps return recovery active. Clients repeat PLI every ~200ms while
+	// they cannot decode.
+	returnRecoveryRequestWindow = 2 * time.Second
+	// returnRecoveryEpisodeIdle without client requests ends an episode and
+	// re-arms the uplink kick cap.
+	returnRecoveryEpisodeIdle = 5 * time.Second
 )
 
 // shouldSendPLIToAsterisk gates PLI forwarding to avoid flooding.
@@ -87,6 +94,7 @@ func (s *Session) SendPLIToAsteriskForced(trigger string) {
 // Returns action: "none" | "pli" | "fir" | "both".
 func (s *Session) SendBrowserRecoveryToAsterisk(trigger string) string {
 	now := time.Now()
+	s.noteClientKeyframeRequest(trigger, now)
 
 	if isBrowserRecoveryTrigger(trigger) && trigger != "switch" {
 		if s.RequestSIPVideoIDRReplay(trigger) {
@@ -457,28 +465,95 @@ func (s *Session) KickUplinkKeyframeForSIPDecoder(reason string) bool {
 	return true
 }
 
-// maybeKickUplinkForReturnRecovery asks the browser encoder for an IDR when
-// the browser decoder requests a keyframe and the SIP→WebRTC leg has not
-// delivered any keyframe this call. A loopback far end (Asterisk Echo on
-// 9999, callback tests) only returns what we send, and Echo answers a single
-// picture_fast_update per call, so SIP INFO/RTCP alone left Android black
-// for ~60s until its encoder happened to emit an IDR. Bounded: at most one
-// kick per returnRecoveryUplinkKickInterval and returnRecoveryUplinkKickMax
-// per call, skipped while an uplink IDR is in flight or one was forwarded
-// within the interval (it is still on its way back), and never once a
-// return keyframe has been seen. Returns true when FIR+PLI were sent.
-func (s *Session) maybeKickUplinkForReturnRecovery(trigger string, now time.Time) bool {
-	if s == nil {
-		return false
-	}
+// isClientDecoderRecoveryTrigger is a keyframe request from the client
+// decoder (SIP→WebRTC direction is not decodable).
+func isClientDecoderRecoveryTrigger(trigger string) bool {
 	switch trigger {
 	case "browser-pli", "browser-fir", "ws-request_keyframe":
+		return true
 	default:
 		return false
 	}
+}
+
+// noteClientKeyframeRequest records a client decoder keyframe request. A
+// request after returnRecoveryEpisodeIdle of silence starts a new recovery
+// episode and re-arms the return-recovery uplink kick cap.
+func (s *Session) noteClientKeyframeRequest(trigger string, now time.Time) {
+	if s == nil || !isClientDecoderRecoveryTrigger(trigger) {
+		return
+	}
 	s.mu.Lock()
+	last := s.lastClientKeyframeRequestAt
+	if last.IsZero() || now.Sub(last) >= returnRecoveryEpisodeIdle {
+		s.clientKeyframeEpisodeAt = now
+		s.returnRecoveryUplinkKicks = 0
+	}
+	s.lastClientKeyframeRequestAt = now
+	s.mu.Unlock()
+}
+
+// clientKeyframeWaitLocked reports whether the client decoder is still
+// asking for a keyframe (a request within returnRecoveryRequestWindow) and
+// how long it has asked without a SIP→WebRTC keyframe: since the later of
+// the episode start and the last return keyframe. A keyframe that arrived
+// and still left the client asking (1mtLasLjXLNu) counts as unanswered once
+// this grows. The caller holds s.mu.
+func (s *Session) clientKeyframeWaitLocked(now time.Time) (waiting bool, unanswered time.Duration) {
+	last := s.lastClientKeyframeRequestAt
+	if last.IsZero() || now.Sub(last) > returnRecoveryRequestWindow {
+		return false, 0
+	}
+	since := s.clientKeyframeEpisodeAt
+	if s.LastKeyframe.After(since) {
+		since = s.LastKeyframe
+	}
+	if since.IsZero() || now.Before(since) {
+		return true, 0
+	}
+	return true, now.Sub(since)
+}
+
+// returnRecoveryActiveLocked is true while the client has asked for a
+// keyframe for at least browserFIRStale without one arriving (or after the
+// last one arrived). The caller holds s.mu.
+func (s *Session) returnRecoveryActiveLocked(now time.Time) bool {
+	waiting, unanswered := s.clientKeyframeWaitLocked(now)
+	return waiting && unanswered >= browserFIRStale
+}
+
+// BrowserNeedsReturnKeyframe reports returnRecoveryActiveLocked for the
+// keyframe watchdog.
+func (s *Session) BrowserNeedsReturnKeyframe(now time.Time) bool {
+	if s == nil {
+		return false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.returnRecoveryActiveLocked(now)
+}
+
+// maybeKickUplinkForReturnRecovery asks the browser encoder for an IDR when
+// the client decoder requests a keyframe and the SIP→WebRTC leg has not
+// given it a usable one: none this call, or the client is still asking
+// returnRecoveryUplinkKickInterval after the last one (1mtLasLjXLNu: one
+// return IDR, never decoded). A loopback far end (Asterisk Echo on 9999,
+// callback tests) only returns what we send, so SIP INFO/RTCP alone left
+// Android black until its encoder emitted an IDR. Bounded: at most one kick
+// per returnRecoveryUplinkKickInterval and returnRecoveryUplinkKickMax per
+// recovery episode, skipped while an uplink IDR is in flight or one was
+// forwarded within the interval (it is still on its way back). Returns true
+// when FIR+PLI were sent.
+func (s *Session) maybeKickUplinkForReturnRecovery(trigger string, now time.Time) bool {
+	if s == nil || !isClientDecoderRecoveryTrigger(trigger) {
+		return false
+	}
+	s.mu.Lock()
+	_, unanswered := s.clientKeyframeWaitLocked(now)
+	returnKeyframeAt := s.LastKeyframe
 	skip := decideReturnRecoveryUplinkKick(returnRecoveryUplinkKickInput{
-		ReturnKeyframeAt: s.LastKeyframe,
+		ReturnKeyframeAt: returnKeyframeAt,
+		Unanswered:       unanswered,
 		RemoteVideoSSRC:  s.RemoteVideoSSRC,
 		UplinkIDRFlight:  s.uplinkIDRInFlight,
 		LastUplinkIDR:    s.LastUplinkKeyframe,
@@ -495,8 +570,12 @@ func (s *Session) maybeKickUplinkForReturnRecovery(trigger string, now time.Time
 	attempt := s.returnRecoveryUplinkKicks
 	id := s.ID
 	s.mu.Unlock()
-	fmt.Printf("[%s] 📈 uplink_keyframe_kick reason=return-recovery trigger=%s attempt=%d/%d keyframeAge=none\n",
-		id, trigger, attempt, returnRecoveryUplinkKickMax)
+	keyframeAge := "none"
+	if !returnKeyframeAt.IsZero() {
+		keyframeAge = now.Sub(returnKeyframeAt).Round(time.Millisecond).String()
+	}
+	fmt.Printf("[%s] 📈 uplink_keyframe_kick reason=return-recovery trigger=%s attempt=%d/%d keyframeAge=%s unanswered=%s\n",
+		id, trigger, attempt, returnRecoveryUplinkKickMax, keyframeAge, unanswered.Round(time.Millisecond))
 	s.sendWebRTCFeedbackWithForce("fir", true, nil)
 	s.sendWebRTCFeedbackWithForce("pli", true, nil)
 	return true
@@ -504,6 +583,7 @@ func (s *Session) maybeKickUplinkForReturnRecovery(trigger string, now time.Time
 
 type returnRecoveryUplinkKickInput struct {
 	ReturnKeyframeAt time.Time
+	Unanswered       time.Duration
 	RemoteVideoSSRC  uint32
 	UplinkIDRFlight  bool
 	LastUplinkIDR    time.Time
@@ -516,8 +596,8 @@ type returnRecoveryUplinkKickInput struct {
 // maybeKickUplinkForReturnRecovery. Empty means send.
 func decideReturnRecoveryUplinkKick(in returnRecoveryUplinkKickInput) string {
 	switch {
-	case !in.ReturnKeyframeAt.IsZero():
-		return "return-keyframe-seen"
+	case !in.ReturnKeyframeAt.IsZero() && in.Unanswered < returnRecoveryUplinkKickInterval:
+		return "return-keyframe-answered"
 	case in.RemoteVideoSSRC == 0:
 		return "no-sip-video"
 	case in.Kicks >= returnRecoveryUplinkKickMax:

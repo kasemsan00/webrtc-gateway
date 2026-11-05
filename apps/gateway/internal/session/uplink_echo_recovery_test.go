@@ -2,10 +2,13 @@ package session
 
 import (
 	"bytes"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/pion/rtp"
+
+	"webrtc-sip-gateway/internal/config"
 )
 
 // fuaIDR splits one IDR NAL into FU-A payloads of chunk bytes.
@@ -130,7 +133,15 @@ func TestDecideReturnRecoveryUplinkKick(t *testing.T) {
 		want string
 	}{
 		{"send", func(*returnRecoveryUplinkKickInput) {}, ""},
-		{"return keyframe seen", func(in *returnRecoveryUplinkKickInput) { in.ReturnKeyframeAt = now.Add(-time.Minute) }, "return-keyframe-seen"},
+		{"return keyframe answered", func(in *returnRecoveryUplinkKickInput) {
+			in.ReturnKeyframeAt = now.Add(-time.Second)
+			in.Unanswered = 1999 * time.Millisecond
+		}, "return-keyframe-answered"},
+		// 1mtLasLjXLNu: one return IDR, client still asking 2s+ later.
+		{"return keyframe not decoded", func(in *returnRecoveryUplinkKickInput) {
+			in.ReturnKeyframeAt = now.Add(-time.Minute)
+			in.Unanswered = 2 * time.Second
+		}, ""},
 		{"no sip video", func(in *returnRecoveryUplinkKickInput) { in.RemoteVideoSSRC = 0 }, "no-sip-video"},
 		{"max", func(in *returnRecoveryUplinkKickInput) { in.Kicks = returnRecoveryUplinkKickMax }, "max"},
 		{"in flight", func(in *returnRecoveryUplinkKickInput) { in.UplinkIDRFlight = true }, "idr-in-flight"},
@@ -187,18 +198,198 @@ func TestSIPKeyframeINFORecoveryFloor(t *testing.T) {
 	if ok, recovering := sess.allowSIPKeyframeINFO(t0); !ok || !recovering {
 		t.Fatalf("first INFO: ok=%v recovering=%v", ok, recovering)
 	}
-	if ok, _ := sess.allowSIPKeyframeINFO(t0.Add(999 * time.Millisecond)); ok {
-		t.Fatal("INFO inside the 1s recovery floor")
+	if ok, _ := sess.allowSIPKeyframeINFO(t0.Add(499 * time.Millisecond)); ok {
+		t.Fatal("INFO inside the 500ms recovery floor")
 	}
-	if ok, recovering := sess.allowSIPKeyframeINFO(t0.Add(time.Second)); !ok || !recovering {
-		t.Fatalf("unanswered INFO retry at 1s: ok=%v recovering=%v", ok, recovering)
+	if ok, recovering := sess.allowSIPKeyframeINFO(t0.Add(500 * time.Millisecond)); !ok || !recovering {
+		t.Fatalf("unanswered INFO retry at 500ms: ok=%v recovering=%v", ok, recovering)
 	}
-	// A return keyframe answers the INFO: back to the 2s floor.
-	sess.LastKeyframe = t0.Add(1500 * time.Millisecond)
-	if ok, recovering := sess.allowSIPKeyframeINFO(t0.Add(2500 * time.Millisecond)); ok || recovering {
-		t.Fatalf("answered INFO at +1.5s: ok=%v recovering=%v, want rate-limited at 2s floor", ok, recovering)
+	// A return keyframe answers the INFO and the client stopped asking:
+	// back to the 2s floor.
+	sess.LastKeyframe = t0.Add(700 * time.Millisecond)
+	if ok, recovering := sess.allowSIPKeyframeINFO(t0.Add(1500 * time.Millisecond)); ok || recovering {
+		t.Fatalf("answered INFO at +1s: ok=%v recovering=%v, want rate-limited at 2s floor", ok, recovering)
 	}
-	if ok, _ := sess.allowSIPKeyframeINFO(t0.Add(3 * time.Second)); !ok {
+	if ok, _ := sess.allowSIPKeyframeINFO(t0.Add(2500 * time.Millisecond)); !ok {
 		t.Fatal("answered INFO after 2s floor")
+	}
+	// 1mtLasLjXLNu: the return keyframe arrived but the client keeps asking.
+	sess.LastKeyframe = t0.Add(2600 * time.Millisecond)
+	sess.noteClientKeyframeRequest("browser-pli", t0.Add(2700*time.Millisecond))
+	sess.noteClientKeyframeRequest("browser-pli", t0.Add(4300*time.Millisecond))
+	if ok, recovering := sess.allowSIPKeyframeINFO(t0.Add(4300 * time.Millisecond)); !ok || !recovering {
+		t.Fatalf("client still waiting 1.6s after keyframe: ok=%v recovering=%v, want 500ms floor", ok, recovering)
+	}
+}
+
+func TestReturnRecoveryActiveThresholds(t *testing.T) {
+	now := time.Unix(1_900_000_000, 0)
+	sess := &Session{ID: "rr-active"}
+	if sess.returnRecoveryActiveLocked(now) {
+		t.Fatal("active without any client request")
+	}
+	sess.LastKeyframe = now.Add(-30 * time.Second)
+	sess.noteClientKeyframeRequest("switch", now)
+	if !sess.lastClientKeyframeRequestAt.IsZero() {
+		t.Fatal("switch is not a client decoder request")
+	}
+	sess.noteClientKeyframeRequest("browser-pli", now)
+	if sess.returnRecoveryActiveLocked(now.Add(browserFIRStale - time.Millisecond)) {
+		t.Fatal("active before browserFIRStale of unanswered asking")
+	}
+	sess.noteClientKeyframeRequest("browser-fir", now.Add(browserFIRStale))
+	if !sess.returnRecoveryActiveLocked(now.Add(browserFIRStale)) {
+		t.Fatal("not active after browserFIRStale of unanswered asking")
+	}
+	if !sess.BrowserNeedsReturnKeyframe(now.Add(browserFIRStale + returnRecoveryRequestWindow)) {
+		t.Fatal("request window should still cover the last request")
+	}
+	if sess.BrowserNeedsReturnKeyframe(now.Add(browserFIRStale + returnRecoveryRequestWindow + time.Millisecond)) {
+		t.Fatal("client stopped asking: recovery must end")
+	}
+	// A keyframe that arrives restarts the unanswered clock.
+	sess.LastKeyframe = now.Add(browserFIRStale + 100*time.Millisecond)
+	sess.noteClientKeyframeRequest("ws-request_keyframe", now.Add(browserFIRStale+200*time.Millisecond))
+	if sess.returnRecoveryActiveLocked(now.Add(browserFIRStale + 200*time.Millisecond)) {
+		t.Fatal("fresh return keyframe must reset the unanswered clock")
+	}
+}
+
+// 1mtLasLjXLNu: one return IDR made LastKeyframe nonzero and the aadffd8
+// return-recovery kick never fired again while the phone stayed black.
+func TestReturnRecoveryKicksUplinkAfterUndecodedReturnKeyframe(t *testing.T) {
+	now := time.Now()
+	sess := &Session{ID: "echo-undecoded", RemoteVideoSSRC: 99}
+	sess.LastKeyframe = now.Add(-30 * time.Second)
+	sess.LastUplinkKeyframe = now.Add(-10 * time.Second)
+
+	sess.noteClientKeyframeRequest("browser-pli", now)
+	if sess.maybeKickUplinkForReturnRecovery("browser-pli", now) {
+		t.Fatal("kicked before the client asked for returnRecoveryUplinkKickInterval")
+	}
+	at := now.Add(returnRecoveryUplinkKickInterval)
+	sess.noteClientKeyframeRequest("browser-pli", at)
+	if !sess.maybeKickUplinkForReturnRecovery("browser-pli", at) {
+		t.Fatal("client still asking 2s after an undecoded return keyframe: expected uplink kick")
+	}
+
+	// Cap reached, then the client goes quiet: the next episode re-arms it.
+	sess.returnRecoveryUplinkKicks = returnRecoveryUplinkKickMax
+	at = at.Add(returnRecoveryUplinkKickInterval)
+	sess.noteClientKeyframeRequest("browser-pli", at)
+	if sess.maybeKickUplinkForReturnRecovery("browser-pli", at) {
+		t.Fatal("kicked past the per-episode cap")
+	}
+	episode := at.Add(returnRecoveryEpisodeIdle)
+	sess.noteClientKeyframeRequest("browser-pli", episode)
+	if sess.returnRecoveryUplinkKicks != 0 {
+		t.Fatalf("new episode kicks=%d, want 0", sess.returnRecoveryUplinkKicks)
+	}
+	at = episode.Add(returnRecoveryUplinkKickInterval)
+	sess.noteClientKeyframeRequest("browser-pli", at)
+	if !sess.maybeKickUplinkForReturnRecovery("browser-pli", at) {
+		t.Fatal("new episode did not kick")
+	}
+
+	// A return keyframe that the client accepts stops the kicks.
+	sess.LastKeyframe = at.Add(time.Second)
+	at = at.Add(returnRecoveryUplinkKickInterval + 500*time.Millisecond)
+	sess.noteClientKeyframeRequest("browser-pli", at)
+	if sess.maybeKickUplinkForReturnRecovery("browser-pli", at) {
+		t.Fatal("kicked 1.5s after a fresh return keyframe")
+	}
+}
+
+func TestDecideKeyframeWatchdogDoesNotSkipWhileClientWaits(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	in := KeyframeWatchdogInput{
+		Now: now, LastKeyframe: now.Add(-6 * time.Second), LastRTP: now.Add(-10 * time.Millisecond),
+		Stale: 4 * time.Second, FIRStale: 8 * time.Second, Interval: 2 * time.Second, HealthyIDR: true,
+	}
+	if got := DecideKeyframeWatchdog(in); got.Reason != "rtp-flowing" {
+		t.Fatalf("client not asking: want rtp-flowing skip, got %+v", got)
+	}
+	in.BrowserNeedsKeyframe = true
+	if got := DecideKeyframeWatchdog(in); got.Action != KeyframeWatchdogPLI || got.Reason != "keyframe-stale" {
+		t.Fatalf("client waiting: want PLI, got %+v", got)
+	}
+	in.LastKeyframe = now.Add(-50 * time.Second)
+	if got := DecideKeyframeWatchdog(in); got.Action != KeyframeWatchdogFIR {
+		t.Fatalf("client waiting 50s: want FIR, got %+v", got)
+	}
+	in.BrowserNeedsKeyframe = false
+	in.LastKeyframe = time.Time{}
+	if got := DecideKeyframeWatchdog(in); got.Action != KeyframeWatchdogPLI {
+		t.Fatalf("no return keyframe ever: want PLI, got %+v", got)
+	}
+}
+
+func TestDecideSIPKeyframeFeedbackModeInfoEscalatesForReturnRecovery(t *testing.T) {
+	now := time.Unix(1_900_000_400, 0)
+	base := SIPKeyframeFeedbackInput{
+		Mode: config.SIPKeyframeRequestModeInfo, Kind: "fir", Now: now,
+		Guard: 1500 * time.Millisecond, MinInterval: 2 * time.Second,
+		PacketSeen: true, LastPacketMarker: true, ReturnRecovery: true,
+	}
+	got := DecideSIPKeyframeFeedback(base)
+	if !got.SendRTCP || !got.SendINFO || !got.Escalated || got.Reason != "" {
+		t.Fatalf("escalated: %+v", got)
+	}
+	in := base
+	in.InFlight = true
+	if got := DecideSIPKeyframeFeedback(in); got.SendRTCP || !got.SendINFO || got.Reason != "idr-in-flight" {
+		t.Fatalf("escalated in-flight: %+v", got)
+	}
+	in = base
+	in.CompleteAt = now.Add(-time.Second)
+	if got := DecideSIPKeyframeFeedback(in); got.SendRTCP || got.Reason != "idr-guard" {
+		t.Fatalf("escalated guard: %+v", got)
+	}
+	in = base
+	in.LastRTCP = now.Add(-time.Second)
+	if got := DecideSIPKeyframeFeedback(in); got.SendRTCP || !got.SendINFO || got.Reason != "rate-limit" {
+		t.Fatalf("escalated rate-limit: %+v", got)
+	}
+	in = base
+	in.LastPacketMarker = false
+	if got := DecideSIPKeyframeFeedback(in); got.SendRTCP || !got.PendingRTCP || got.Reason != "mid-frame" {
+		t.Fatalf("escalated mid-frame: %+v", got)
+	}
+	in = base
+	in.ReturnRecovery = false
+	if got := DecideSIPKeyframeFeedback(in); got.SendRTCP || got.Escalated || got.Reason != "mode-info" {
+		t.Fatalf("no return recovery stays INFO-only: %+v", got)
+	}
+}
+
+func TestSendSIPFeedbackModeInfoEscalatesWhileClientWaits(t *testing.T) {
+	sess := newBurstTestSession("sip-fb-escalate")
+	makeSIPVideoRecoveryReady(t, sess)
+	sess.sipKeyframeRequestMode = config.SIPKeyframeRequestModeInfo
+	sess.sipRTCPFBMinInterval = 2 * time.Second
+	sess.sipRTCPFBGuard = 1500 * time.Millisecond
+	var infos atomic.Int32
+	sess.SetSIPKeyframeINFOSender(func(string) { infos.Add(1) })
+
+	now := time.Now()
+	sess.LastKeyframe = now.Add(-30 * time.Second)
+	sess.noteClientKeyframeRequest("browser-pli", now.Add(-500*time.Millisecond))
+	sess.SendPLIToAsteriskForced("browser-pli")
+	if !sess.LastSipPLISent.IsZero() {
+		t.Fatal("RTCP before the client asked for browserFIRStale")
+	}
+
+	// Client has been asking for 3s, last request just now.
+	sess.mu.Lock()
+	sess.clientKeyframeEpisodeAt = now.Add(-3 * time.Second)
+	sess.lastClientKeyframeRequestAt = now
+	sess.mu.Unlock()
+	sess.SendPLIToAsteriskForced("browser-pli")
+	if sess.LastSipPLISent.IsZero() {
+		t.Fatal("mode info did not escalate to RTCP PLI while the client waits")
+	}
+	waitFor(t, time.Second, func() bool { return infos.Load() >= 1 })
+	if infos.Load() < 1 {
+		t.Fatal("escalation must still send SIP INFO")
 	}
 }

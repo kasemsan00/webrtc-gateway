@@ -214,6 +214,8 @@ type Session struct {
 	switchVideoInfoFIRAt                  time.Time            `json:"-"`
 	returnRecoveryUplinkKickAt            time.Time            `json:"-"`
 	returnRecoveryUplinkKicks             int                  `json:"-"`
+	lastClientKeyframeRequestAt           time.Time            `json:"-"`
+	clientKeyframeEpisodeAt               time.Time            `json:"-"`
 	sipKeyframeRequestMode                string               `json:"-"`
 	sipRTCPFBMinInterval                  time.Duration        `json:"-"`
 	sipRTCPFBGuard                        time.Duration        `json:"-"`

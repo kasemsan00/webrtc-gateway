@@ -1327,23 +1327,28 @@ func (s *Server) startKeyframeWatchdogForSession(sess *session.Session) {
 		lastKeyframe, _ := sess.GetKeyframeTimes()
 		lastSipPLI, lastSipFIR := sess.GetSIPRecoveryTimes()
 		now := time.Now()
+		browserNeeds := sess.BrowserNeedsReturnKeyframe(now)
 		decision := session.DecideKeyframeWatchdog(session.KeyframeWatchdogInput{
-			Now:          now,
-			LastKeyframe: lastKeyframe,
-			LastRTP:      sess.LastSIPVideoRTPAt(),
-			LastSipPLI:   lastSipPLI,
-			LastSipFIR:   lastSipFIR,
-			Stale:        stale,
-			FIRStale:     firStale,
-			Interval:     interval,
-			BurstActive:  burstActive,
-			GateActive:   sess.IsSwitchVideoGateActive(),
-			HealthyIDR:   sess.HasHealthySIPVideoIDR(),
+			Now:                  now,
+			LastKeyframe:         lastKeyframe,
+			LastRTP:              sess.LastSIPVideoRTPAt(),
+			LastSipPLI:           lastSipPLI,
+			LastSipFIR:           lastSipFIR,
+			Stale:                stale,
+			FIRStale:             firStale,
+			Interval:             interval,
+			BurstActive:          burstActive,
+			GateActive:           sess.IsSwitchVideoGateActive(),
+			HealthyIDR:           sess.HasHealthySIPVideoIDR(),
+			BrowserNeedsKeyframe: browserNeeds,
 		})
 
 		keyframeAge := now.Sub(lastKeyframe)
 		if lastKeyframe.IsZero() {
 			keyframeAge = stale + time.Second
+		}
+		if decision.Action != session.KeyframeWatchdogNone && browserNeeds {
+			fmt.Printf("[%s] keyframe_watchdog_client_waiting action=%s keyframeAge=%v\n", sess.ID, decision.Action, keyframeAge)
 		}
 
 		switch decision.Action {

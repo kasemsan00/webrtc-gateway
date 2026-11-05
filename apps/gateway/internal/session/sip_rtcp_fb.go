@@ -20,15 +20,20 @@ type SIPKeyframeFeedbackInput struct {
 	Guard            time.Duration
 	MinInterval      time.Duration
 	Now              time.Time
+	// ReturnRecovery is true while the client decoder has been asking for a
+	// SIP→WebRTC keyframe for browserFIRStale without one arriving.
+	ReturnRecovery bool
 }
 
 // SIPKeyframeFeedbackDecision says whether this PLI/FIR may go out as RTCP,
 // should be redirected to SIP INFO picture_fast_update, or must wait for the
 // next forwarded marker bit (so Asterisk's forced marker lands on a new frame).
+// Escalated is true when mode info sends gated RTCP for return recovery.
 type SIPKeyframeFeedbackDecision struct {
 	SendRTCP    bool
 	SendINFO    bool
 	PendingRTCP bool
+	Escalated   bool
 	Reason      string
 }
 
@@ -80,31 +85,38 @@ func sipKeyframeWantsINFO(mode string) bool {
 // SIP/Asterisk video leg. Asterisk stamps marker=1 on the next forwarded
 // packet after each PLI/FIR, so RTCP is skipped while an uplink IDR is in
 // flight, during the post-IDR guard, faster than MinInterval, and mid-frame.
+// Mode info normally sends INFO only. While ReturnRecovery is set it behaves
+// like mode both: INFO plus RTCP through the same gates (1mtLasLjXLNu: Asterisk
+// sent one IDR, ignored further INFO, and RTCP was never tried).
 func DecideSIPKeyframeFeedback(in SIPKeyframeFeedbackInput) SIPKeyframeFeedbackDecision {
 	if !sipKeyframeRTCPKind(in.Kind) {
 		return SIPKeyframeFeedbackDecision{SendRTCP: true}
 	}
 	wantRTCP := sipKeyframeWantsRTCP(in.Mode)
 	wantINFO := sipKeyframeWantsINFO(in.Mode)
+	escalated := false
+	if !wantRTCP && in.ReturnRecovery {
+		wantRTCP, escalated = true, true
+	}
 	if !wantRTCP {
 		return SIPKeyframeFeedbackDecision{SendINFO: wantINFO, Reason: "mode-info"}
 	}
 	if in.InFlight {
-		return SIPKeyframeFeedbackDecision{SendINFO: wantINFO, Reason: "idr-in-flight"}
+		return SIPKeyframeFeedbackDecision{SendINFO: wantINFO, Escalated: escalated, Reason: "idr-in-flight"}
 	}
 	if in.Guard > 0 && uplinkIDRCompleteWithin(in.CompleteAt, in.Now, in.Guard) {
-		return SIPKeyframeFeedbackDecision{SendINFO: wantINFO, Reason: "idr-guard"}
+		return SIPKeyframeFeedbackDecision{SendINFO: wantINFO, Escalated: escalated, Reason: "idr-guard"}
 	}
 	if in.MinInterval > 0 && !in.LastRTCP.IsZero() {
 		age := in.Now.Sub(in.LastRTCP)
 		if age >= 0 && age < in.MinInterval {
-			return SIPKeyframeFeedbackDecision{SendINFO: wantINFO, Reason: "rate-limit"}
+			return SIPKeyframeFeedbackDecision{SendINFO: wantINFO, Escalated: escalated, Reason: "rate-limit"}
 		}
 	}
 	if in.PacketSeen && !in.LastPacketMarker {
-		return SIPKeyframeFeedbackDecision{SendINFO: wantINFO, PendingRTCP: true, Reason: "mid-frame"}
+		return SIPKeyframeFeedbackDecision{SendINFO: wantINFO, PendingRTCP: true, Escalated: escalated, Reason: "mid-frame"}
 	}
-	return SIPKeyframeFeedbackDecision{SendRTCP: true, SendINFO: wantINFO}
+	return SIPKeyframeFeedbackDecision{SendRTCP: true, SendINFO: wantINFO, Escalated: escalated}
 }
 
 func (s *Session) sipKeyframeFeedbackInputLocked(kind string, now time.Time) SIPKeyframeFeedbackInput {
@@ -123,6 +135,7 @@ func (s *Session) sipKeyframeFeedbackInputLocked(kind string, now time.Time) SIP
 		Guard:            s.sipRTCPFBGuard,
 		MinInterval:      s.sipRTCPFBMinInterval,
 		Now:              now,
+		ReturnRecovery:   s.returnRecoveryActiveLocked(now),
 	}
 }
 
@@ -180,11 +193,13 @@ func (s *Session) SetSIPKeyframeINFOSender(fn func(reason string)) {
 	s.mu.Unlock()
 }
 
-// sipKeyframeINFORecoveryMinInterval is the INFO floor while the previous
-// picture_fast_update has not been answered by a SIP→WebRTC keyframe (or no
-// return keyframe has arrived this call). Once one is answered, the normal
-// sipOriginatedBrowserKeyframeMinInterval (2s) floor applies again.
-const sipKeyframeINFORecoveryMinInterval = time.Second
+// sipKeyframeINFORecoveryMinInterval is the INFO floor while recovering:
+// the previous picture_fast_update has not been answered by a SIP→WebRTC
+// keyframe, no return keyframe has arrived this call, or the client decoder
+// is still asking (returnRecoveryActiveLocked — 1mtLasLjXLNu saw one return
+// IDR, then every later INFO rate-limited for 50s+). Otherwise the normal
+// sipOriginatedBrowserKeyframeMinInterval (2s) floor applies.
+const sipKeyframeINFORecoveryMinInterval = 500 * time.Millisecond
 
 // allowSIPKeyframeINFO rate-limits recovery INFO. It shares its clock with
 // AllowSwitchVideoInfoFIR so switch and recovery INFOs never stack.
@@ -192,7 +207,9 @@ func (s *Session) allowSIPKeyframeINFO(now time.Time) (allowed, recovering bool)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	last := s.switchVideoInfoFIRAt
-	recovering = s.LastKeyframe.IsZero() || (!last.IsZero() && s.LastKeyframe.Before(last))
+	recovering = s.LastKeyframe.IsZero() ||
+		(!last.IsZero() && s.LastKeyframe.Before(last)) ||
+		s.returnRecoveryActiveLocked(now)
 	floor := sipOriginatedBrowserKeyframeMinInterval
 	if recovering {
 		floor = sipKeyframeINFORecoveryMinInterval
