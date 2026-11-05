@@ -1,4 +1,8 @@
-# Uplink Keyframe On Remote Join Specification
+# uplink-keyframe-on-remote-join Specification
+
+## Purpose
+
+Request a fresh WebRTC uplink keyframe when a remote SIP video SSRC is first learned and gate WebRTC-to-SIP video forwarding on an initial IDR so late-joining SIP decoders start cleanly without black video.
 
 ## Requirements
 

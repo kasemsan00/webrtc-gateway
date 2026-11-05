@@ -188,7 +188,6 @@ func (s *Server) handleWebSocketConn(w http.ResponseWriter, r *http.Request, pub
 		releaseMobileAccount = nil
 	}
 	s.notifyWSClientChanged("connected", client)
-	telemetry.RecordWebSocketConnection(req.Context(), true)
 	_ = telemetry.Log(req.Context(), telemetry.LogEvent{Severity: telemetry.SeverityInfo, Component: "websocket", Name: "websocket.connected", Outcome: "success", Reason: "none"})
 
 	// Start write pump
@@ -239,7 +238,6 @@ func (s *Server) handleWebSocketConn(w http.ResponseWriter, r *http.Request, pub
 		s.cleanupAgentPresence(client)
 	}
 	s.notifyWSClientChanged("disconnected", client)
-	telemetry.RecordWebSocketConnection(context.Background(), false)
 	_ = telemetry.Log(context.Background(), telemetry.LogEvent{Severity: telemetry.SeverityInfo, Component: "websocket", Name: "websocket.disconnected", Outcome: "success", Reason: "peer_closed"})
 }
 

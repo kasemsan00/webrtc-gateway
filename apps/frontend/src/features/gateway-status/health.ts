@@ -51,10 +51,6 @@ const COMPONENT_INFO: Record<string, { label: string; purpose: string }> = {
     label: 'Push notifications',
     purpose: 'FCM/APNs wake-up pushes for incoming calls to mobile apps.',
   },
-  telemetry: {
-    label: 'Telemetry export',
-    purpose: 'Exports traces/metrics to the observability backend.',
-  },
 }
 
 const REASON_TEXT: Record<string, string> = {
@@ -68,11 +64,8 @@ const REASON_TEXT: Record<string, string> = {
     'Running, but this component does not report readiness.',
   translator_not_configured: 'Not configured.',
   push_not_configured: 'Not configured.',
-  telemetry_disabled: 'Disabled in config.',
   store_not_configured: 'Not configured.',
   cached_probe_failed: 'The last background probe failed.',
-  export_failed: 'Last export failed.',
-  export_not_observed: 'No successful export observed yet.',
   dependency_unavailable: 'A dependency is unavailable.',
   startup: 'Starting up.',
   unavailable: 'Unavailable.',
@@ -135,7 +128,6 @@ const ORDER = [
   'sipListener',
   'translator',
   'push',
-  'telemetry',
 ]
 
 export function describeComponents(

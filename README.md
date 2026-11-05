@@ -29,14 +29,14 @@ Browser / Mobile / Agent
 | `/ws` | `API_ENABLE_WS` | เปิด | มือถือ Android/iOS | `access_token` เมื่อ `AUTH_ENABLE=true` | sticky: หลุดแล้วไม่ SIP UNREGISTER เพื่อให้ปลุกด้วย push ได้ |
 | `/ws-public` | `API_ENABLE_PUBLIC_WS` | ปิด | สายสาธารณะครั้งเดียว | ไม่ใช้ token | credential ส่งในข้อความ `call` ของ connection นั้น |
 | `/ws-agent` | `API_ENABLE_AGENT_WS` | ปิด | เอเจนต์บน PC | `access_token` ไม่บังคับ ถ้ามีจะตรวจ JWT | client ส่ง `agent_register` พร้อม SIP credential; REGISTER อยู่ขณะมี client; client สุดท้ายหลุดแล้ว hangup แล้ว UNREGISTER |
-| `/ws-agent-device` | `API_ENABLE_AGENT_DEVICE_WS` | ปิด | เอเจนต์บนมือถือ | `access_token` และ `devicePlatform=android\|ios` | client ส่ง `device_register`; หลุดแล้วไม่ UNREGISTER และเก็บ FCM; ปลดด้วยข้อความ `unregister` |
+| `/ws-agent-device` | `API_ENABLE_AGENT_DEVICE_WS` | ปิด | เอเจนต์บนมือถือ | บังคับ `devicePlatform=android\|ios`; `access_token` ไม่บังคับตอนเชื่อม/ลงทะเบียน/รับสาย (ถ้ามีจะตรวจ JWT; ต้องใช้สำหรับ `call` โหมด trunk เมื่อ `AUTH_ENABLE=true`) | client ส่ง `device_register`; หลุดแล้วไม่ UNREGISTER และเก็บ FCM; ปลดด้วยข้อความ `unregister` |
 
 พฤติกรรมเฉพาะเส้นทาง:
 
-- **`/ws`** เมื่อตั้ง `SIPCLIENT_AUTH_REGISTER_URL` จะ provision trunk มือถือจาก JWT ก่อน upgrade สำเร็จ ต้องมี `devicePlatform=android|ios` ใน URL แล้ว gateway ส่ง `trunk_resolved` กลับ
+- **`/ws`** เมื่อตั้ง `SIPCLIENT_AUTH_REGISTER_URL` ร่วมกับ `AUTH_ENABLE=true`, `DB_ENABLE=true` และ `SIP_TRUNK_ENABLE=true` จะ provision trunk มือถืออัตโนมัติเฉพาะ JWT ของ realm `user` ก่อน upgrade สำเร็จ โดยต้องมี `devicePlatform=android|ios` ใน URL แล้ว gateway ส่ง `trunk_resolved` กลับ (หากมีงาน provision หรือ `unregister` ของบัญชีเดียวกันกำลังทำอยู่ซ้อนกันจะตอบ `409 Conflict`)
 - **`/ws-public`** รับเฉพาะสายของ connection นั้น `call` ต้องมี `sipDomain`, `sipUsername`, `sipPassword`
-- **`/ws-agent`** trunk คงที่รูปแบบ `sipclient-agent-<username>@<domain>:<port>` หลาย client ใช้ SIP identity เดียวกันได้ สายเข้าถูกยื่นให้ทุก client ที่ว่าง คนแรกที่ `offer` หรือ `accept` ได้สาย เมื่อ `AUTH_ENABLE=true` ใช้ได้สองแบบ: (A) เชื่อมด้วย `access_token` แล้วโทรผ่าน trunk ที่ `agent_register` ผูกไว้ (B) ไม่ส่ง token แล้วส่ง `sipDomain`/`sipUsername`/`sipPassword` ใน `agent_register` (แบบ Electron SIP local) หรือในข้อความ `call` (public mode) การเลือก trunk โดยไม่มี claims บน `/ws` และ `/ws-agent-device` ยังถูกปฏิเสธด้วย `Token authentication required to use trunk`
-- **`/ws-agent-device`** trunk คนละชุดกับ agent PC (`sipclient-agent-device-...`) ไม่เรียก mobile provisioner เก็บ FCM ผ่าน `device_push_token` สายเข้า username/domain/port เดียวกันถูกยื่นให้ client ที่ออนไลน์ทั้ง `/ws-agent` และ `/ws-agent-device` ถ้าไม่มีใครออนไลน์จึงใช้ FCM ของ device
+- **`/ws-agent`** trunk คงที่รูปแบบ `sipclient-agent-<username>@<domain>:<port>` หลาย client ใช้ SIP identity เดียวกันได้ สายเข้าถูกยื่นให้ทุก client ที่ว่าง คนแรกที่ `offer` หรือ `accept` ได้สาย เมื่อ `AUTH_ENABLE=true` ใช้ได้สองแบบ: (A) เชื่อมด้วย `access_token` แล้วโทรผ่าน trunk ที่ `agent_register` ผูกไว้ (B) ไม่ส่ง token แล้วส่ง `sipDomain`/`sipUsername`/`sipPassword` ใน `agent_register` (แบบ Electron SIP local) หรือในข้อความ `call` (public mode) ส่วนการส่ง `call` ขาออกโหมด trunk โดยไม่มี claims บน `/ws` และ `/ws-agent-device` ยังถูกปฏิเสธด้วย `Token authentication required to use trunk`
+- **`/ws-agent-device`** บังคับ `devicePlatform=android|ios` เสมอ ส่วน `access_token` ไม่บังคับตอนเชื่อม/`device_register`/รับสายเข้า (`notify_user_id` ใช้ `sub` จาก JWT ถ้ามี หรือถอยกลับเป็น `sip:<username>@<domain>:<port>`) และต้องใช้ JWT เฉพาะตอนโทรออกโหมด trunk เมื่อ `AUTH_ENABLE=true` ใช้ trunk คนละชุดกับ agent PC (`sipclient-agent-device-...`) ไม่เรียก mobile provisioner เก็บ FCM ผ่าน `device_push_token` สายเข้า username/domain/port เดียวกันถูกยื่นให้ client ที่ว่างทั้ง `/ws-agent` และ `/ws-agent-device` โดย trunk ของ agent-device จะส่ง FCM ที่เก็บไว้ควบคู่ไปด้วยแม้มี device WS ออนไลน์อยู่ เพื่อให้ระบบปฏิบัติการมือถือปลุกแอปขึ้นมารับสาย (`ws_incoming.go`) ในขณะที่ `/ws-agent` บน PC ใช้เฉพาะ WebSocket ขณะออนไลน์
 
 ถ้าแฟล็กของเส้นทางนั้นปิดอยู่ route จะไม่ถูกลงทะเบียน
 
@@ -93,7 +93,7 @@ Browser / Mobile / Agent
 
 ## เริ่มพัฒนา
 
-ต้องมี Node.js `>= 18`, pnpm 10 (`packageManager` ใน `package.json` คือ `pnpm@10.32.1`) และ Go `1.26.5`
+ต้องมี Node.js `>= 18`, pnpm 10 (`packageManager` ใน `package.json` คือ `pnpm@10.32.1`) และ Go `1.27.3`
 
 ```bash
 pnpm install
@@ -108,23 +108,31 @@ pnpm install
 
 ```bash
 pnpm dev:frontend    # http://localhost:3150
-pnpm dev:backend     # go run . ใน apps/gateway, API พอร์ต 8080
 pnpm build
 pnpm lint
-pnpm check-types
+pnpm check-types     # รันเฉพาะ workspace ที่มี script check-types (packages/ui, ไม่รวม apps/frontend)
 pnpm format
 ```
 
-ทดสอบเฉพาะส่วน:
+รัน Go gateway บนเครื่อง (API พอร์ต `8080`; หมายเหตุ: `pnpm dev:backend` เรียก `turbo run dev --filter=gateway` ซึ่งปัจจุบันเป็น no-op เพราะ `apps/gateway/package.json` ไม่มี script `dev`):
+
+```bash
+cd apps/gateway && go run .
+```
+
+ทดสอบและตรวจสอบเฉพาะส่วน:
 
 ```bash
 cd apps/gateway
 go test ./...
 
+# ตรวจสอบ apps/frontend (build / lint / test)
+pnpm --filter frontend run build
+pnpm --filter frontend run lint
 pnpm --filter frontend run test -- src/features/trunk/types.test.ts
 ```
 
-`FRONTEND_PASSWORD` ต้องตรงกันทั้ง frontend และ gateway หน้า admin ใช้รหัสนี้เป็น bearer ของ REST มือถือและ `/ws` ใช้ JWT ของ Keycloak เมื่อ `AUTH_ENABLE=true`
+`FRONTEND_PASSWORD` ต้องตรงกันทั้ง frontend และ gateway หน้า admin ใช้รหัสนี้เป็น bearer ของ REST (การตั้ง `FRONTEND_PASSWORD` บน gateway จะบังคับตรวจ Bearer บนเส้นทาง `/api/*` ที่ป้องกันไว้ แม้ `AUTH_ENABLE=false`) ส่วนมือถือและ `/ws` ใช้ JWT ของ Keycloak เมื่อ `AUTH_ENABLE=true` ทั้งนี้เส้นทางสาธารณะที่ไม่ต้องส่ง Bearer ได้แก่ `GET /api/version`, `GET /api/logs*`, `GET /api/client-diagnostics*` และ `POST|GET /api/chat-images*`
 
 ตัวแปรที่พบบ่อยอยู่ที่ [`docs/gateway/config-reference.md`](docs/gateway/config-reference.md) ชุดที่เกี่ยวกับเส้นทางด้านบน:
 
@@ -135,8 +143,8 @@ pnpm --filter frontend run test -- src/features/trunk/types.test.ts
 | `API_ENABLE_PUBLIC_WS` | เปิด `/ws-public` |
 | `API_ENABLE_AGENT_WS` | เปิด `/ws-agent` |
 | `API_ENABLE_AGENT_DEVICE_WS` | เปิด `/ws-agent-device` |
-| `AUTH_ENABLE` | บังคับ JWT สำหรับ `/ws`, `/ws-agent-device` และ REST ที่ป้องกันไว้; `/ws-agent` ใช้ได้ทั้ง `access_token`+trunk และ SIP user/pass โดยไม่ส่ง token |
-| `SIPCLIENT_AUTH_REGISTER_URL` | provision trunk มือถือตอนเชื่อม `/ws` |
+| `AUTH_ENABLE` | บังคับ JWT สำหรับ `/ws`, REST ที่ป้องกันไว้ และการส่ง `call` โหมด trunk บน `/ws-agent-device`; ส่วนการเชื่อม/`device_register`/สายเข้าบน `/ws-agent-device` ไม่บังคับ `access_token` และ `/ws-agent` ใช้ได้ทั้ง `access_token`+trunk หรือ SIP user/pass โดยไม่ส่ง token |
+| `SIPCLIENT_AUTH_REGISTER_URL` | provision trunk มือถือตอนเชื่อม `/ws` (เฉพาะ JWT realm `user` เมื่อเปิด `AUTH_ENABLE`, `DB_ENABLE`, `SIP_TRUNK_ENABLE`) |
 | `SIP_PORT` | พอร์ต SIP (ค่าเริ่มต้น `5060`) |
 | `DB_ENABLE` / `DB_DSN` | PostgreSQL สำหรับ trunk และบันทึกสาย |
 | `GATEWAY_INSTANCE_ID` | รหัส instance คงที่ |
@@ -185,5 +193,7 @@ curl "https://gateway.example.com/api/client-diagnostics/sessions/<sessionId>/ev
 | แก้ปัญหาสายและ media | [`docs/gateway/troubleshooting.md`](docs/gateway/troubleshooting.md) |
 | Deploy | [`deploy/README.md`](deploy/README.md) |
 | แนวทางแก้ gateway | [`apps/gateway/AGENTS.md`](apps/gateway/AGENTS.md) |
+| Trunk REST/SSE API | [`apps/gateway/trunk-api.md`](apps/gateway/trunk-api.md) |
+| ระบบแปลเสียงสด (S2S Translator) | [`docs/translator.md`](docs/translator.md) |
 | แนวทางแก้ frontend | [`apps/frontend/AGENTS.md`](apps/frontend/AGENTS.md) |
 | หน้า operations | [`apps/frontend/README.md`](apps/frontend/README.md) |

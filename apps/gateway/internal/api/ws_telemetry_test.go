@@ -38,11 +38,8 @@ func TestWebSocketReconnectEmitsBoundedConnectDisconnectEvents(t *testing.T) {
 		Format: telemetry.LogFormatJSON, Sanitizer: telemetry.NewSanitizer(256),
 	}))
 	ctx := context.Background()
-	telemetry.RecordWebSocketConnection(ctx, true)
 	_ = telemetry.Log(ctx, telemetry.LogEvent{Severity: telemetry.SeverityInfo, Component: "websocket", Name: "websocket.connected", Outcome: "success", Reason: "none"})
-	telemetry.RecordWebSocketConnection(ctx, false)
 	_ = telemetry.Log(ctx, telemetry.LogEvent{Severity: telemetry.SeverityInfo, Component: "websocket", Name: "websocket.disconnected", Outcome: "success", Reason: "peer_closed"})
-	telemetry.RecordWebSocketConnection(ctx, true)
 	_ = telemetry.Log(ctx, telemetry.LogEvent{Severity: telemetry.SeverityInfo, Component: "websocket", Name: "websocket.connected", Outcome: "success", Reason: "none"})
 	text := output.String()
 	if strings.Count(text, `"event.name":"websocket.connected"`) != 2 || strings.Count(text, `"event.name":"websocket.disconnected"`) != 1 {

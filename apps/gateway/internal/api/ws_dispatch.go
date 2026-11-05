@@ -15,17 +15,12 @@ import (
 func (s *Server) handleWSMessage(client *WSClient, message []byte) {
 	var msg WSMessage
 	if err := json.Unmarshal(message, &msg); err != nil {
-		telemetry.RecordWebSocketMessage(context.Background(), "other", "failure")
 		s.sendWSError(client, "", "Invalid message format")
 		return
 	}
-	ctx, span := telemetry.StartWebSocketSpan(context.Background(), msg.Type)
-	telemetry.SetSpanCorrelation(span, telemetry.Correlation{SessionID: msg.SessionID})
 	outcome, spanReason := "success", "none"
 	defer func() {
-		telemetry.RecordWebSocketMessage(ctx, msg.Type, outcome)
-		telemetry.EndSpan(span, outcome, spanReason, 0)
-		_ = telemetry.Log(ctx, telemetry.LogEvent{Severity: telemetry.SeverityInfo, Component: "websocket", Name: "websocket.message.completed", Outcome: outcome, Reason: spanReason, Correlation: telemetry.Correlation{SessionID: msg.SessionID}})
+		_ = telemetry.Log(context.Background(), telemetry.LogEvent{Severity: telemetry.SeverityInfo, Component: "websocket", Name: "websocket.message.completed", Outcome: outcome, Reason: spanReason, Correlation: telemetry.Correlation{SessionID: msg.SessionID}})
 	}()
 
 	if client != nil && client.agentDeviceOnly {

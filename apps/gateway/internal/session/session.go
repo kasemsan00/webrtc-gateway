@@ -1410,12 +1410,7 @@ func (s *Session) beginCallTelemetryLocked(now time.Time) (bool, time.Time) {
 }
 
 func (s *Session) emitCallStartedTelemetry(direction string, _ time.Time) {
-	ctx, span := telemetry.StartCallSpan(context.Background(), "started")
-	telemetry.SetSpanCorrelation(span, telemetry.Correlation{SessionID: s.ID})
-	telemetry.SetCallDirection(span, direction)
-	telemetry.EndSpan(span, "success", "none", 0)
-	telemetry.RecordCallStarted(ctx, direction)
-	_ = telemetry.Log(ctx, telemetry.LogEvent{Severity: telemetry.SeverityInfo, Component: "call", Name: "call.started", Outcome: "success", Reason: "none", Correlation: telemetry.Correlation{SessionID: s.ID}})
+	_ = telemetry.Log(context.Background(), telemetry.LogEvent{Severity: telemetry.SeverityInfo, Component: "call", Name: "call.started", Outcome: "success", Reason: "none", Correlation: telemetry.Correlation{SessionID: s.ID}})
 }
 
 // CopyCallInfoFrom copies direction/from/to/sipCallID from another session (thread-safe)

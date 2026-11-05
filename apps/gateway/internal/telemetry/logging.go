@@ -58,8 +58,6 @@ type ResourceIdentity struct {
 type Correlation struct {
 	SessionID         string
 	CallCorrelationID string
-	TraceID           string
-	SpanID            string
 	TrunkID           int64
 }
 
@@ -98,8 +96,8 @@ type StructuredLogConfig struct {
 }
 
 // StructuredLogger writes high-signal events to the supplied existing writer.
-// It performs no export or network work; stdout/file collection remains owned
-// by the deployment and its OpenTelemetry Collector.
+// It performs no export or network work; collecting stdout/log files is left
+// to the deployment.
 type StructuredLogger struct {
 	mu        sync.Mutex
 	writer    io.Writer
@@ -164,8 +162,6 @@ type structuredRecord struct {
 	Reason                string         `json:"reason,omitempty"`
 	SessionID             string         `json:"session.id,omitempty"`
 	CallCorrelationID     string         `json:"call.correlation_id,omitempty"`
-	TraceID               string         `json:"trace_id,omitempty"`
-	SpanID                string         `json:"span_id,omitempty"`
 	TrunkID               int64          `json:"trunk.id,omitempty"`
 	Measurements          map[string]any `json:"measurements,omitempty"`
 }
@@ -188,8 +184,6 @@ func (l *StructuredLogger) buildRecord(event LogEvent) structuredRecord {
 		Reason:                sanitizeString("reason", event.Reason),
 		SessionID:             sanitizeString("session.id", event.Correlation.SessionID),
 		CallCorrelationID:     sanitizeString("call.correlation_id", event.Correlation.CallCorrelationID),
-		TraceID:               sanitizeString("trace_id", event.Correlation.TraceID),
-		SpanID:                sanitizeString("span_id", event.Correlation.SpanID),
 		TrunkID:               event.Correlation.TrunkID,
 	}
 	for _, measurement := range event.Measurements {
@@ -254,8 +248,6 @@ func encodeText(record structuredRecord) string {
 	appendString("reason", record.Reason)
 	appendString("session.id", record.SessionID)
 	appendString("call.correlation_id", record.CallCorrelationID)
-	appendString("trace_id", record.TraceID)
-	appendString("span_id", record.SpanID)
 	if record.TrunkID != 0 {
 		fields = append(fields, "trunk.id="+strconv.FormatInt(record.TrunkID, 10))
 	}

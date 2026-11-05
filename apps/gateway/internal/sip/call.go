@@ -95,12 +95,8 @@ func (s *Server) resolveSessionSIPParams(sess *session.Session) (sipAuthParams, 
 // MakeCall initiates an outbound SIP INVITE
 func (s *Server) MakeCall(destination, from string, sess *session.Session) error {
 	started := time.Now()
-	ctx, span := telemetry.StartSIPSpan(context.Background(), "INVITE")
-	if sess != nil {
-		telemetry.SetSpanCorrelation(span, telemetry.Correlation{SessionID: sess.ID})
-	}
 	err := s.makeCall(destination, from, sess)
-	telemetry.EndSIP(ctx, span, "INVITE", started, 0, err)
+	telemetry.LogSIPTransaction(context.Background(), started, 0, err)
 	return err
 }
 
@@ -507,12 +503,8 @@ func (s *Server) handleInviteAuth(ctx context.Context, originalReq *sip.Request,
 // Hangup terminates a SIP call by sending BYE to Asterisk
 func (s *Server) Hangup(sess *session.Session) error {
 	started := time.Now()
-	ctx, span := telemetry.StartSIPSpan(context.Background(), "BYE")
-	if sess != nil {
-		telemetry.SetSpanCorrelation(span, telemetry.Correlation{SessionID: sess.ID})
-	}
 	err := s.hangup(sess)
-	telemetry.EndSIP(ctx, span, "BYE", started, 0, err)
+	telemetry.LogSIPTransaction(context.Background(), started, 0, err)
 	return err
 }
 
@@ -713,12 +705,8 @@ func (s *Server) CancelPendingCall(sess *session.Session) error {
 // AcceptCall accepts an incoming SIP call by sending 200 OK
 func (s *Server) AcceptCall(sess *session.Session) error {
 	started := time.Now()
-	ctx, span := telemetry.StartSIPSpan(context.Background(), "INVITE")
-	if sess != nil {
-		telemetry.SetSpanCorrelation(span, telemetry.Correlation{SessionID: sess.ID})
-	}
 	err := s.acceptCall(sess)
-	telemetry.EndSIP(ctx, span, "INVITE", started, 200, err)
+	telemetry.LogSIPTransaction(context.Background(), started, 200, err)
 	return err
 }
 
@@ -928,16 +916,12 @@ func isBenignIncomingRejectRespondError(err error) bool {
 // RejectCall rejects an incoming SIP call by sending 486 Busy Here
 func (s *Server) RejectCall(sess *session.Session, reason string) error {
 	started := time.Now()
-	ctx, span := telemetry.StartSIPSpan(context.Background(), "INVITE")
-	if sess != nil {
-		telemetry.SetSpanCorrelation(span, telemetry.Correlation{SessionID: sess.ID})
-	}
 	err := s.rejectCall(sess, reason)
 	status := 486
 	if reason == "no_answer" || reason == "unavailable" || reason == "offline" {
 		status = 480
 	}
-	telemetry.EndSIP(ctx, span, "INVITE", started, status, err)
+	telemetry.LogSIPTransaction(context.Background(), started, status, err)
 	return err
 }
 

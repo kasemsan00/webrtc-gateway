@@ -4,66 +4,11 @@ For agents debugging live gateway behavior without host or database credentials.
 
 ---
 
-## Centralized observability (Collector to OpenObserve)
-
-The optional gateway observability path is:
-
-```text
-gateway --OTLP--> OpenTelemetry Collector --OTLP/HTTPS--> existing OpenObserve
-```
-
-OpenObserve credentials exist only on the Collector. PostgreSQL LogStore and
-the local `/api/logs/*` endpoints remain independent and authoritative for their
-existing purposes. Full configuration, stream/RBAC/retention guidance and both
-exclusive log-source examples are in
-[`deploy/observability/README.md`](../../deploy/observability/README.md).
-
-Enable and verify:
-
-1. Select exactly one reference config: Kubernetes stdout, or Docker/host
-   read-only gateway files. Never mount the Docker socket or combine both log
-   sources.
-2. Inject the existing OpenObserve endpoint, organization, per-signal streams,
-   TLS settings and authorization into the Collector from a secret store.
-3. Run `pwsh deploy/observability/verify.ps1`, deploy the Collector, then verify
-   its cached health on port 13133 and scrape self-metrics on port 8888.
-4. Enable one non-production gateway with `OTEL_ENABLE=true` and its Collector
-   endpoint/protocol. Generate one HTTP/WS call flow and find logs, metrics and
-   sampled traces with matching service, environment and instance fields.
-5. Verify only one `log.source`, no seeded secret, no packet-level span, no
-   high-cardinality metric label, and no regression to local logs, LogStore,
-   call control or media before expanding rollout.
-
-Failure diagnosis:
-
-1. Read cached gateway telemetry health; the health request never probes the
-   Collector. Check local cumulative drops/failures and last-success freshness.
-2. Check Collector health, self-metrics, exporter queue/capacity, send failures,
-   retries and persistent-storage free space. Alert on refused records, queue
-   growth, gateway drops, stale export and export failures.
-3. Verify Collector-to-OpenObserve DNS/TLS, endpoint, organization, stream
-   permission and injected authorization without printing the credential.
-4. Leave active calls alone. Collector/OpenObserve failure must degrade or drop
-   bounded telemetry, never interrupt SIP/WebSocket/media work.
-
-Disable and roll back:
-
-1. Set `OTEL_ENABLE=false` and restart gateway instances one at a time.
-2. Verify local logs, `/api/logs/*`, PostgreSQL session APIs, SIP/WS control,
-   resume and Opus/H.264 media continue normally.
-3. Stop the Collector after its bounded drain deadline. Preserve its file-backed
-   queue until rollback is final; deleting it discards buffered telemetry.
-4. Re-enable by restoring the last validated Collector config and secret,
-   starting the Collector, then enabling one gateway canary first. No database,
-   frontend or protocol migration is involved.
-
----
-
 ## Direct database access for agent work
 
 - When work on `apps/gateway` needs live database data or schema verification, read from the MCP/database connection named `database-dev-k2-gateway`.
 - Treat direct database queries as read-only unless the user explicitly asks for a write or migration.
-- Prefer source-controlled schema files (`init.sql`, `migrations/`) for expected structure, then use `database-dev-k2-gateway` only to verify the live dev state.
+- Prefer source-controlled schema files (`schema/bootstrap-baseline.sql` + `migrations/`, applied via `cmd/db-bootstrap`) as the complete authoritative schema (`init.sql` alone is an older bootstrap file and lacks newer columns such as `call_sessions` auth columns), then use `database-dev-k2-gateway` only to verify the live dev state.
 
 ## Operational log access for agents
 
@@ -76,18 +21,18 @@ Use the HTTP API before asking the user for host or database access.
 Gateway process logs:
 
 - `GET /api/logs` publicly lists gateway-managed
-  `webrtc-sip-gateway-*.log` files without a bearer token.
+  `webrtc-sip-gateway-*.log` files in `./logs` (retaining at most 10 log files, newest first) without a bearer token.
 - `GET /api/logs/current?tail=500` publicly reads the current gateway log tail
-  without a bearer token.
+  without a bearer token (`tail` defaults to `500`, clamps above `5000` to `5000`, and returns `400` if `<= 0` or non-numeric).
 - `GET /api/logs/{name}?tail=500` publicly reads a selected gateway log file
-  tail without a bearer token.
+  tail without a bearer token (same `tail` default `500` and max `5000`).
 
 Runtime configuration (read-only):
 
-- `GET /api/config` returns the effective gateway configuration loaded from environment variables at startup.
+- `GET /api/config` returns the effective gateway configuration loaded from `internal/config/config.go` at startup (variables read outside `config.go` such as `SIP_FORCE_AVP`, `SIP_VIDEO_REORDER_TIMEOUT_MS`, `PUSH_DEBUG_TTRS_TOKEN`, and `DB_BOOTSTRAP_*` are not included).
 - Sensitive values (passwords, DSN credentials, push credential file paths, OAuth client secrets) are redacted in the response.
 - Requires the same bearer auth as other protected `/api/*` routes whenever a
-  JWT verifier or `FRONTEND_PASSWORD` is configured. The bearer value may be a
+  JWT verifier (`AUTH_ENABLE=true`) or `FRONTEND_PASSWORD` is configured. The bearer value may be a
   valid JWT or the exact configured admin password.
 - The frontend ops UI exposes this at `/settings`.
 
@@ -95,10 +40,17 @@ Runtime configuration (read-only):
 
 - `GET /api/health/details` returns authenticated, cached operational health.
   Component states are `disabled`, `connected`, `degraded`, `unavailable`, or
-  `unknown`. The response contains only allowlisted readiness facts, queue
-  depth/capacity, accepted/dropped totals, and freshness timestamps; it never
-  includes a DSN, credentials, tokens, payload bodies, or push identifiers.
-- `GET /api/version` returns the running build without auth (like `/api/logs`), and is excluded from HTTP telemetry: `{"version","commit","branch","buildTime","dirty","goVersion"}`. Docker builds get the values from the `GIT_COMMIT`, `GIT_BRANCH`, `GIT_VERSION`, `BUILD_TIME`, `GIT_DIRTY` build args (they are also the image's `org.opencontainers.image.revision|version|created` labels). `docker-ci.sh` fills them from the local checkout; `docker-ci.ps1` does not pass them, so a PowerShell-built image falls back to Go's embedded `vcs.*` info for those fields (normally `unknown` inside the Docker build). A local `go build` falls back to Go's embedded `vcs.*` info; anything missing reads `unknown`. The same values are logged once at startup as `gateway_version version=... commit=... branch=... build_time=... dirty=... go=...`.
+  `unknown`. Component `details` maps expose only the allowlisted keys `depth`,
+  `capacity`, `accepted`, `dropped`, `exported`, and `failed`, alongside
+  readiness/freshness fields; the response never includes a DSN, credentials,
+  tokens, payload bodies, or push identifiers. Note that `sipListener`,
+  `translator` (when enabled), and `push` (when enabled) currently report
+  `"state": "unknown"` (`"reason": "readiness_not_reported"`) because
+  `SetOperationalHealthProvider` is not wired in `main.go`.
+- Request-log / HTTP telemetry exclusions (`requestLogMiddleware`): `/ws*`,
+  `/api/logs*`, `/api/version`, and `/api/health*` (including `/api/health/details`)
+  are excluded from per-request HTTP telemetry logs.
+- `GET /api/version` returns the running build without auth (even when `API_ENABLE_REST=false`), and is excluded from HTTP telemetry: `{"version","commit","branch","buildTime","dirty","goVersion"}`. Docker builds get the values from the `GIT_COMMIT`, `GIT_BRANCH`, `GIT_VERSION`, `BUILD_TIME`, `GIT_DIRTY` build args (they are also the image's `org.opencontainers.image.revision|version|created` labels). **Both** `docker-ci.sh` and `docker-ci.ps1` pass those build args from the local git checkout. A local `go build` without `-ldflags` falls back to Go's embedded `vcs.*` info (`version` defaults to `dev`; anything missing reads `unknown`). The same values are logged once at startup as `gateway_version version=... commit=... branch=... build_time=... dirty=... go=...`, whereas structured JSON telemetry records (`telemetry.NewStructuredLogger`) currently emit `"service.version":"development"`.
 - `GET /api/dashboard` keeps the existing `dbConnected` field. It is `true`
   only when persistent database logging is actually connected; `DB_ENABLE=false`
   reports `false` even though the gateway uses an internal no-op LogStore.
@@ -123,26 +75,24 @@ Admin test incoming push (no SIP session):
 
 TTRS VRI client diagnostics uploaded to gateway:
 
-- `POST /api/client-diagnostics` accepts authenticated mobile uploads, max 100 events/request.
+- `POST /api/client-diagnostics` accepts authenticated mobile uploads (when REST auth is enabled): max body `128 KiB`, max `100` events/request, rate-limited to `30` requests/minute per JWT `sub` (or client IP when unauthenticated), returning `202 Accepted`. When a `sessionId` is supplied and the serialized batch JSON is `>= 2048` bytes, the gateway also archives a `client_diagnostics_batch` row in `call_payloads`.
 - `GET /api/client-diagnostics?page=1&pageSize=100` reads non-session TTRS VRI diagnostics from all clients.
-- Optional list filters: `clientTraceId`, `authSubject`, `source`, `level`, `name`.
-- `GET /api/client-diagnostics/sessions/{sessionId}/events?page=1&pageSize=100` reads TTRS VRI diagnostics stored as `call_events` category `client`.
-- `GET /api/client-diagnostics/sessions/{sessionId}/payloads?page=1&pageSize=100` lists large session diagnostics payloads.
+- Optional list filters on `GET /api/client-diagnostics`: `clientTraceId`, `authSubject`, `source`, `level`, `name`.
+- `GET /api/client-diagnostics/sessions/{sessionId}/events?page=1&pageSize=100` reads TTRS VRI diagnostics stored as `call_events` category `client` (supports optional `?name=` filter).
+- `GET /api/client-diagnostics/sessions/{sessionId}/payloads?page=1&pageSize=100` lists archived session diagnostics payloads (`client_diagnostics_batch`).
 - `GET /api/client-diagnostics/payloads/{payloadId}` reads one stored diagnostics payload.
-- The `GET /api/client-diagnostics*` read endpoints are intentionally available without a bearer token.
+- The four `GET /api/client-diagnostics*` read endpoints are intentionally public (available without a bearer token).
 
-PowerShell examples:
+PowerShell examples (public read endpoints — no bearer header needed):
 
 ```powershell
 $base = "https://gateway.example.com"
 Invoke-RestMethod "$base/api/logs" | ConvertTo-Json -Depth 8
 Invoke-RestMethod "$base/api/logs/current?tail=500" | ConvertTo-Json -Depth 8
 Invoke-RestMethod "$base/api/logs/<log-file-name>?tail=500" | ConvertTo-Json -Depth 8
-$token = "<jwt-or-frontend-password>"
-$headers = @{ Authorization = "Bearer $token" } # required by protected non-log APIs
-Invoke-RestMethod "$base/api/client-diagnostics?page=1&pageSize=100" -Headers $headers | ConvertTo-Json -Depth 12
-Invoke-RestMethod "$base/api/client-diagnostics?level=error&page=1&pageSize=100" -Headers $headers | ConvertTo-Json -Depth 12
-Invoke-RestMethod "$base/api/client-diagnostics/sessions/<sessionId>/events?page=1&pageSize=100" -Headers $headers | ConvertTo-Json -Depth 12
+Invoke-RestMethod "$base/api/client-diagnostics?page=1&pageSize=100" | ConvertTo-Json -Depth 12
+Invoke-RestMethod "$base/api/client-diagnostics?level=error&page=1&pageSize=100" | ConvertTo-Json -Depth 12
+Invoke-RestMethod "$base/api/client-diagnostics/sessions/<sessionId>/events?page=1&pageSize=100" | ConvertTo-Json -Depth 12
 ```
 
 Use a real session ID in session URLs. The placeholder `<sessionId>` or encoded

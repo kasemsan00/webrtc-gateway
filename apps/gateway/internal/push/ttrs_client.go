@@ -67,8 +67,7 @@ func NewTTRSClient(baseURL, tokenURL, grantType, clientID, clientSecret string, 
 // FetchNotifications retrieves notification entries for a given user ID.
 func (c *TTRSClient) FetchNotifications(ctx context.Context, userID string) (entries []NotificationEntry, err error) {
 	started := time.Now()
-	ctx, span := telemetry.StartDependencySpan(ctx, "push_ttrs")
-	defer func() { telemetry.EndDependency(ctx, span, "push_ttrs", started, err) }()
+	defer func() { telemetry.LogDependency(ctx, "push_ttrs", started, err) }()
 
 	url := fmt.Sprintf("%s/employees/v3/accounts/%s/notifications", c.baseURL, userID)
 

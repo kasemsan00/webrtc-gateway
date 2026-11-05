@@ -41,8 +41,6 @@ func TestStructuredLoggerGolden(t *testing.T) {
 				Correlation: Correlation{
 					SessionID:         "session-123",
 					CallCorrelationID: "corr-456",
-					TraceID:           "0123456789abcdef0123456789abcdef",
-					SpanID:            "0123456789abcdef",
 					TrunkID:           17,
 				},
 				Measurements: []Measurement{

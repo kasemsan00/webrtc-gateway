@@ -16,10 +16,10 @@ Run from repo root unless working in a specific app directory.
 - `pnpm install` — install all deps (requires pnpm@10, Node >= 18)
 - `pnpm build` — build all workspaces
 - `pnpm lint` — lint all workspaces
-- `pnpm check-types` — type-check all workspaces
+- `pnpm check-types` — runs `turbo run check-types` only in workspaces defining that script (`packages/ui`, not `apps/frontend`; use `pnpm --filter frontend run build` / `lint` / `test` to verify frontend)
 - `pnpm format` — format with Prettier
 - `pnpm dev:frontend` — frontend dev (port 3150)
-- `pnpm dev:backend` — runs `go run .` in `apps/gateway`
+- `cd apps/gateway && go run .` — run Go gateway locally on port 8080 (`pnpm dev:backend` calls `turbo run dev --filter=gateway`, which is currently a no-op because `apps/gateway/package.json` has no `dev` script)
 
 Go commands (run from `apps/gateway`):
 - `go test ./...`
@@ -44,14 +44,14 @@ audience are enforced when configured for that realm.
 
 - Monorepo: `pnpm` workspaces (`apps/*`, `packages/*`) + Turborepo (`turbo.json`)
 - `apps/frontend`: React + TypeScript + **TanStack Start** (SSR via Vite, port 3150)
-- `apps/gateway`: Go WebRTC↔SIP bridge, module path `webrtc-sip-gateway`, Go 1.26.5 (`go.mod`)
+- `apps/gateway`: Go WebRTC↔SIP bridge, module path `webrtc-sip-gateway`, Go 1.27.3 (`go.mod`)
 - `packages/`: `eslint-config`, `typescript-config`, `ui`
 - `pnpm-workspace.yaml` blocks native builds (`esbuild`, `sharp`, etc.) on virtiofs mounts
 
 ## Critical Rules
 
 - **Never edit generated files:** `apps/frontend/src/routeTree.gen.ts`
-- **SDP/media/SIP changes in `apps/gateway` are high risk** — invariants: Opus audio passthrough (no transcoding), H.264 video only, SPS/PPS caching and keyframe injection preserved
+- **SDP/media/SIP changes in `apps/gateway` are high risk** — invariants: Opus audio passthrough by default (optional `SIP_AUDIO_INBOUND_GAIN_ENABLE` transcodes SIP→WebRTC only), H.264 video only, SPS/PPS caching and keyframe injection preserved
 - **Pion (`github.com/pion/webrtc/v4`) is the WebRTC stack** — do not replace or mix stacks without explicit request
 - **Keep WS/API contract compatibility** across mobile clients; if you add/change a message type, update `internal/api/ws_dispatch.go` (router + per-endpoint allowlists), the `internal/api/ws_*.go` handler, the `WSMessage` struct in `internal/api/server.go`, and `docs/gateway/ws-contract.md`
 - **Trunks are soft-deleted** (`enabled=false`), never hard-deleted from `sip_trunks`
@@ -62,7 +62,7 @@ audience are enforced when configured for that realm.
 
 - Frontend: Vitest with jsdom; config is in `vite.config.ts` (no separate vitest config file)
 - Backend: `go test ./...`; fix bugs by adding a focused `_test.go` in the affected package
-- No CI workflows exist (`.github/workflows/` is empty)
+- No root `.github/workflows/` CI workflows exist
 
 ## Key References
 
@@ -71,5 +71,5 @@ audience are enforced when configured for that realm.
 - WebSocket contract (incl. resume and call flows): `docs/gateway/ws-contract.md`
 - Config reference: `docs/gateway/config-reference.md`; ops: `docs/gateway/ops-guide.md`; troubleshooting: `docs/gateway/troubleshooting.md`
 - Deploy profiles: `deploy/README.md`
-- Docker CI build scripts: `docker-ci.sh` / `docker-ci.ps1` (unified stack image only; default tag `1.4.1` plus `latest`; only the `.sh` passes build identity for `GET /api/version`)
+- Docker CI build scripts: `docker-ci.sh` / `docker-ci.ps1` (unified stack image only; default tag `1.4.1` plus `latest`; both pass git build identity `GIT_*` / `BUILD_TIME` for `GET /api/version`)
 - Workspace layout: `pnpm-workspace.yaml`

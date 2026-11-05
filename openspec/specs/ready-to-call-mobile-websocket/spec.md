@@ -1,4 +1,8 @@
-# Ready-To-Call Mobile WebSocket Specification
+# ready-to-call-mobile-websocket Specification
+
+## Purpose
+
+Ensure authenticated mobile `/ws` connections persist real device platform metadata (`android` or `ios`), bind `notify_user_id` cleanly to the verified JWT subject, complete SIP registration before signaling `trunk_resolved`, and default outbound calls to the resolved trunk.
 
 ## Requirements
 

@@ -1,4 +1,8 @@
-# Remote Media Ready Specification
+# remote-media-ready Specification
+
+## Purpose
+
+Notify bound WebSocket clients via an additive `media` readiness signal when remote SIP video (and optionally audio) is first observed as decode-ready on the gateway, independent of SIP call-progress `active` state.
 
 ## Requirements
 

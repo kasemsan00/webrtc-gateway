@@ -40,7 +40,6 @@ func (s *logStore) eventBatchWorker() {
 	for {
 		select {
 		case event := <-s.eventQueue:
-			telemetry.RecordPersistenceQueue("events", len(s.eventQueue), cap(s.eventQueue))
 			batch = append(batch, event)
 			if len(batch) >= s.config.BatchSize {
 				flush()
@@ -131,7 +130,6 @@ func (s *logStore) statsBatchWorker() {
 	for {
 		select {
 		case stats := <-s.statsQueue:
-			telemetry.RecordPersistenceQueue("stats", len(s.statsQueue), cap(s.statsQueue))
 			batch = append(batch, stats)
 			if len(batch) >= s.config.BatchSize {
 				flush()
@@ -162,10 +160,7 @@ func recordPersistenceBatchTelemetry(component string, started time.Time, count 
 		outcome = "failure"
 	}
 	duration := time.Since(started)
-	ctx, span := telemetry.StartDependencySpan(context.Background(), "postgres")
-	telemetry.RecordPersistenceBatch(ctx, component, outcome, duration)
-	telemetry.EndSpan(span, outcome, persistenceTelemetryReason(err), 0)
-	_ = telemetry.Log(ctx, telemetry.LogEvent{Severity: telemetry.SeverityInfo, Component: "persistence", Name: "persistence.batch.completed", Outcome: outcome, Reason: persistenceTelemetryReason(err), Measurements: []telemetry.Measurement{telemetry.Int64Measurement("count", int64(count)), telemetry.DurationMilliseconds("duration_ms", duration)}})
+	_ = telemetry.Log(context.Background(), telemetry.LogEvent{Severity: telemetry.SeverityInfo, Component: "persistence", Name: "persistence.batch.completed", Outcome: outcome, Reason: persistenceTelemetryReason(err), Measurements: []telemetry.Measurement{telemetry.Int64Measurement("count", int64(count)), telemetry.DurationMilliseconds("duration_ms", duration)}})
 }
 
 // batchInsertStats inserts multiple stats records using pgx Batch

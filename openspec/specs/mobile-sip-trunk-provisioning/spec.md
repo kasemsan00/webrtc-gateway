@@ -1,4 +1,8 @@
-# Mobile SIP Trunk Provisioning Specification
+# mobile-sip-trunk-provisioning Specification
+
+## Purpose
+
+Automatically provision, persist, and register a deterministic SIP trunk for authenticated mobile WebSocket clients by exchanging their verified JWT access token with the external SIP client authentication service during `/ws` connection setup.
 
 ## Requirements
 

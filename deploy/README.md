@@ -44,7 +44,7 @@ There is no root `docker-compose.yml`.
 
 Services use `network_mode: host` (SIP/RTP).
 
-Before application services start, Compose runs the one-shot `db-bootstrap` service from the same release image. It safely initializes an empty gateway schema or applies pending migrations to an existing schema. If it fails, the rollout is blocked. Keep `DB_BOOTSTRAP_ON_START=false` for production application services; use `DB_BOOTSTRAP_ON_START=true` only when deliberately running a single instance without the compose job.
+Compose runs the one-shot `db-bootstrap` service from `registry.kasemsan.com/webrtc-sip-gateway:${TAG:-1.4.0}`. It safely initializes an empty gateway schema or applies pending migrations to an existing schema. In split mode, `gateway` waits on `db-bootstrap` (`condition: service_completed_successfully`) so a failed bootstrap blocks the gateway rollout, while `gateway-console` starts independently. Keep `DB_BOOTSTRAP_ON_START=false` for production application services; use `DB_BOOTSTRAP_ON_START=true` only when deliberately running a single instance without the compose job.
 
 Configure external nginx/Coolify using [`nginx.external.conf.example`](nginx.external.conf.example) — route `/admin/` to `127.0.0.1:4173` and `/api`+`/ws` to `127.0.0.1:8080`.
 
@@ -88,6 +88,7 @@ location / {
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Host $host;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection $connection_upgrade;
     proxy_read_timeout 3600s;
@@ -103,6 +104,8 @@ Same as split, plus:
 STACK_PROXY_PORT=8088
 ```
 
+Note: `deploy/Dockerfile.unified` defines a `HEALTHCHECK` that probes `http://127.0.0.1:8088/admin/`. If you override `STACK_PROXY_PORT` or `VITE_BASE_PATH`, also override `healthcheck` in Compose to match.
+
 ## Admin password
 
 Set `FRONTEND_PASSWORD` on both the frontend and gateway processes (unified `env_file` already shared). The admin UI shows a password-only login. After login it sends that value as `Authorization: Bearer` on `/api/*`.
@@ -113,7 +116,7 @@ The frontend process exits if `FRONTEND_PASSWORD` is empty. Do not set `VITE_FRO
 
 ## Chat images
 
-`POST /api/chat-images` and `GET /api/chat-images/{id}` serve in-call chat photos from a local disk volume (`CHAT_IMAGE_DIR`, default `/var/lib/webrtc-gateway/chat-images`). Proxies in front of `/api/` need `client_max_body_size 12m` so 10MB uploads succeed. Set `CHAT_IMAGE_PUBLIC_BASE_URL=https://your-domain` so returned URLs are absolute.
+`POST /api/chat-images` and `GET /api/chat-images/{id}` serve in-call chat photos from a local disk directory (`CHAT_IMAGE_DIR`; the gateway binary's built-in default is `chat-images`, while the Compose files default it to `/var/lib/webrtc-gateway/chat-images`). Proxies in front of `/api/` need `client_max_body_size 12m` so 10MB uploads succeed. Set `CHAT_IMAGE_PUBLIC_BASE_URL=https://your-domain` so returned URLs are absolute.
 
 ## Images
 
@@ -128,7 +131,7 @@ The frontend process exits if `FRONTEND_PASSWORD` is empty. Do not set `VITE_FRO
 - tags `registry.kasemsan.com/webrtc-sip-gateway-stack:${BRANCH}` and `:latest`; `BRANCH` defaults to `1.4.1`, `REGISTRY` to `registry.kasemsan.com`, `PLATFORMS` to `linux/amd64`;
 - `VITE_BASE_PATH` defaults to `/admin/`; `VITE_GATEWAY_URL` and `VITE_CONFIG_AUTORECORD` are passed through;
 - `RUN_MIGRATIONS=true` (with `DB_DSN`) runs Goose migrations before the build;
-- only `docker-ci.sh` passes the `GIT_*`/`BUILD_TIME` build args that `GET /api/version` reports.
+- both `docker-ci.sh` and `docker-ci.ps1` pass the `GIT_*` (`GIT_COMMIT`, `GIT_BRANCH`, `GIT_VERSION`, `GIT_DIRTY`) and `BUILD_TIME` build args that `GET /api/version` reports.
 
 The split images (`webrtc-sip-gateway-console`, `webrtc-sip-gateway`) are built from their own Dockerfiles; no script in this repo builds them. The compose files default `TAG` to `1.4.0`, so set `TAG` explicitly to the release you pushed.
 

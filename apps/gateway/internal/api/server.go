@@ -57,7 +57,6 @@ type Server struct {
 	chatImageLimits    map[string]*chatImageRateState
 	bridgedChatEcho    bridgedChatEchoGuard // drops the PBX copy of a body just relayed to a bridged session
 	healthProviders    map[string]OperationalHealthProvider
-	mediaTelemetry     map[string]mediaRecoveryCounters
 	startTime          time.Time
 	mu                 sync.RWMutex
 	mobileOps          map[string]bool // reservations; mu is released before provisioning/SIP I/O
@@ -239,7 +238,6 @@ func NewServer(cfg config.APIConfig, turnCfg config.TURNConfig, gatewayCfg confi
 		diagnosticLimits:   make(map[string]*diagnosticRateState),
 		chatImageLimits:    make(map[string]*chatImageRateState),
 		healthProviders:    make(map[string]OperationalHealthProvider),
-		mediaTelemetry:     make(map[string]mediaRecoveryCounters),
 		startTime:          time.Now(),
 	}
 }
@@ -340,7 +338,7 @@ func (s *Server) newRouter() *mux.Router {
 
 	// Enable CORS
 	router.Use(s.corsMiddleware)
-	router.Use(s.telemetryHTTPMiddleware)
+	router.Use(s.requestLogMiddleware)
 
 	// WebSocket endpoint
 	if s.config.EnableWS {

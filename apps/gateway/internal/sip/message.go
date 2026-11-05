@@ -18,9 +18,8 @@ import (
 // SendMessage sends a SIP MESSAGE to a destination
 func (s *Server) SendMessage(destination, from, body, contentType string) error {
 	started := time.Now()
-	ctx, span := telemetry.StartSIPSpan(context.Background(), "MESSAGE")
 	err := s.sendMessage(destination, from, body, contentType)
-	telemetry.EndSIP(ctx, span, "MESSAGE", started, 0, err)
+	telemetry.LogSIPTransaction(context.Background(), started, 0, err)
 	return err
 }
 
@@ -460,9 +459,8 @@ func (s *Server) handleMessageAuthWithParams(ctx context.Context, originalReq *s
 // This sends directly to the remote Contact address from the session
 func (s *Server) SendMessageToSession(sess *session.Session, body, contentType string) error {
 	started := time.Now()
-	ctx, span := telemetry.StartSIPSpan(context.Background(), "MESSAGE")
 	err := s.sendMessageToSession(sess, body, contentType)
-	telemetry.EndSIP(ctx, span, "MESSAGE", started, 0, err)
+	telemetry.LogSIPTransaction(context.Background(), started, 0, err)
 	return err
 }
 

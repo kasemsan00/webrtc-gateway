@@ -23,7 +23,7 @@
 
 WebRTC-SIP Gateway bridges WebRTC clients (browser/mobile) to SIP/RTP endpoints (Asterisk, Kamailio).
 
-- **Language:** Go 1.26.5 (`go.mod`)
+- **Language:** Go 1.27.3 (`go.mod`)
 - **Core libs:** `pion/webrtc/v4`, `emiago/sipgo`, `gorilla/websocket`, `gorilla/mux`, `pion/rtp`, `pion/rtcp`, `pion/sdp/v3`, `pgx/v5`, `golang-jwt/jwt/v5`
 - **Runtime mode:** API mode (HTTP + WebSocket)
 - **Data plane:** SRTP (WebRTC side) <-> RTP/RTCP (SIP side)
@@ -63,7 +63,7 @@ apps/gateway/
 |  |- audio/         # inbound Opus gain
 |  |- buildinfo/     # build identity for GET /api/version
 |  |- chatimage/     # in-call chat image disk store
-|  |- config/config.go
+|  |- config/        # config.go, public_view.go, webrtc_ice.go
 |  |- dbbootstrap/   # bootstrap baseline + Goose runner
 |  |- logger/        # process log files served by /api/logs
 |  |- logstore/
@@ -71,12 +71,16 @@ apps/gateway/
 |  |- session/       # WebRTC + RTP forwarding, keyframe gates
 |  |- sip/           # SIP server, trunks, SDP
 |  |- sipclientauth/ # mobile trunk provision client
-|  |- telemetry/     # optional OTLP export
+|  |- telemetry/     # structured JSON event logs (no export)
 |  |- translator/    # gRPC translation client
 |  |- pkg/webrtc/
 |  `- webrtc/
 |- migrations/       # Goose migrations
 |- schema/           # bootstrap baseline
+|- scripts/          # migrate.ps1, migrate.sh, docker-entrypoint.sh, test-db-bootstrap.sh
+|- Dockerfile
+|- docker-compose.yml
+|- trunk-api.md      # Trunk REST/SSE API reference
 |- init.sql
 `- .env.example
 ```
@@ -105,6 +109,7 @@ apps/gateway/
 | `ws_midcall.go` | `renegotiate_answer`, `client_state`, `ping`, `request_keyframe` (SIP→browser recovery, `SendBrowserRecoveryToAsterisk`), `request-keyframe` (browser IDR toward SIP, `HandleSwitchKeyframeRequest`) |
 | `ws_translate.go` | `translate`, `translate_stop`, caption events |
 | `ws_notify.go` | `Notify*` callbacks, `send_message` (routes by `msg.SessionID`; agent sockets send in-dialog MESSAGE when the session has dialog state) |
+| `ws_notify_chat_echo.go` | `bridgedChatEchoGuard` suppressing PBX-echoed in-dialog `MESSAGE` copies |
 | `ws_util.go` | `sendWSMessage`, logging helpers, SSE broadcast |
 | `handlers.go` | Shared REST types, `respondJSON`/`respondError` |
 | `handlers_call.go` | offer/call/hangup/dtmf/switch REST |
@@ -116,7 +121,7 @@ apps/gateway/
 | `handlers_version.go` | `/api/version` |
 | `switch_renegotiate.go` | `@switch` client-assisted WebRTC renegotiation |
 | `stats_collector.go` | periodic session stats to LogStore |
-| `telemetry_http.go` | HTTP telemetry middleware |
+| `request_log.go` | HTTP request structured-log middleware |
 | `handlers_sse.go` | trunk/session/ws-client SSE streams |
 | `handlers_log.go` | `/api/logs/*` |
 | `handlers_chat_image.go` | `/api/chat-images` upload/get |
@@ -186,7 +191,7 @@ When modifying this codebase:
 **Agent rules:**
 
 1. Use the file map — do not read `server.go` wholesale for WS handler work.
-2. WS message changes: update `ws_dispatch.go` + handler file + `docs/gateway/ws-contract.md`.
+2. WS message changes: update `ws_dispatch.go` + handler file + `WSMessage` in `server.go` + `docs/gateway/ws-contract.md`.
 3. New files should stay ≤ ~600 lines; split further if exceeded.
 4. Do not merge unrelated handlers back into monolith files.
 5. Mechanical moves only — no behavior changes unless explicitly requested.

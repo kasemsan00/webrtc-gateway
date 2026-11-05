@@ -1,4 +1,8 @@
-# Outbound Call Progress Specification
+# outbound-call-progress Specification
+
+## Purpose
+
+Deliver accurate SIP dialog-driven outbound call-progress WebSocket signals (`connecting`, `ringing`, `active`, `ended`) so clients distinguish real far-end SIP ringing and answer events from local WebRTC ICE connectivity.
 
 ## Requirements
 

@@ -42,16 +42,19 @@ Checkpoints:
 
 Correlate browser inbound RTP diagnostics with Gateway logs by `sessionId`:
 
-- Look for `request_keyframe_handled ... action=` when the client sends WS `request_keyframe` (underscore). That message recovers the SIP→browser picture (cached IDR replay or SIP-leg keyframe request); `action=webrtc` with `request_keyframe_deferred` means the SIP video address/SSRC was not known yet. The hyphenated `request-keyframe` is the opposite direction (browser IDR toward SIP) and logs `switch_keyframe_request received`.
+- Look for `request_keyframe_handled ... action=` when the client sends WS `request_keyframe` (underscore). That message recovers the SIP→browser picture (cached IDR replay or SIP-leg keyframe request); `action=webrtc` with session log `request_keyframe_deferred` means the SIP video address/SSRC was not known yet. The hyphenated `request-keyframe` is the opposite direction (browser IDR toward SIP) and logs `switch_keyframe_request received`.
 - Confirm switch recovery reaches `h264_au_normalized status=complete-idr` and ends through Gateway RTP stability or its bounded timeout.
 - Confirm startup prints `SIP Video H264 AU Normalization: true`. Every 300 SIP video packets, inspect `h264_au_stats` for `emitted`, `dropped_incomplete`, `dropped_overflow`, and `pending_packets`.
 - A `h264_au_normalized status=complete-idr` line now means the marker and all FU-A fragments were complete; a bare IDR/FU-A start no longer counts as successful keyframe delivery.
 - Accepted `@switch` transitions use **blackout-until-safe-IDR** by default
-  (`SIP_SWITCH_VIDEO_TRANSITION_MODE=blackout`): the complete-IDR gate drops all
-  SIP→WebRTC video until a decoder-safe IDR with fresh parameter sets is ready,
-  then `switch_video_gate_release` opens the path. Pion keeps the negotiated
-  WebRTC binding SSRC unchanged on the wire — egress packet SSRC rewrite does
-  not reset client decoders.
+  (`SIP_SWITCH_VIDEO_TRANSITION_MODE=blackout`): unless skipped by opt-in
+  `SIP_SWITCH_VIDEO_RENEGOTIATE_ENABLE=true` (with `SIP_MIDCALL_RENEGOTIATION_ENABLE=true`),
+  the transition hold drops **all** SIP→WebRTC video packets (including early
+  keyframes) during the minimum `SIP_SWITCH_VIDEO_BLACKOUT_MS` (300ms) window
+  and holds the complete-IDR gate until both that window has elapsed and a
+  decoder-safe IDR with fresh parameter sets is ready (`switch_video_gate_release`).
+  Pion keeps the negotiated WebRTC binding SSRC unchanged on the wire — egress
+  packet SSRC rewrite does not reset client decoders.
 - `switch_transition_hold_start mode=blackout` plus
   `switch_video_gate_reject reason=blackout-hold` means the minimum blackout
   window has not elapsed yet. `switch_transition_hold_end reason=gate-released`
@@ -77,19 +80,22 @@ Correlate browser inbound RTP diagnostics with Gateway logs by `sessionId`:
 
 With `SIP_VIDEO_AU_NORMALIZE_ENABLE=true`, an accepted `@switch` holds SIP→WebRTC
 video until the Gateway writes fresh SPS/PPS and a complete IDR for the new
-switch generation. Default `blackout` mode intentionally freezes the last frame
-until release; set `SIP_SWITCH_VIDEO_TRANSITION_MODE=preserve` only as a bounded
-rollback if you need the queue still visible during the unsafe window. Audio
-continues independently.
+switch generation. Default `blackout` mode drops **all** packets during the
+minimum `SIP_SWITCH_VIDEO_BLACKOUT_MS` window before allowing the complete-IDR
+gate to release; `SIP_SWITCH_VIDEO_TRANSITION_MODE=preserve` skips that minimum
+blackout window and holds only unsafe non-keyframe packets so the last rendered
+frame stays visible until the first keyframe/safe IDR releases immediately.
+Audio continues independently.
 
-When `SIP_SWITCH_VIDEO_RENEGOTIATE_ENABLE=true`, `@switch` also starts a
-make-before-break WebRTC handoff: the live PeerConnection stays parked until
-the replacement ICE-connects. The gateway emits `switch_renegotiate_started`
-before `switch_renegotiate_pc_replaced` so the client can createOffer in
-parallel. Gateway answers return after a short ICE budget (`ice_gathering=ready`
-or `partial`); they do not wait the resume 3s gather timeout. The 300ms
-blackout hold is skipped (`switch_transition_hold_skipped reason=renegotiate`).
-Look for `switch_renegotiate_make_before_break_armed`,
+When opt-in `SIP_SWITCH_VIDEO_RENEGOTIATE_ENABLE=true` (default `false`, requires
+`SIP_MIDCALL_RENEGOTIATION_ENABLE=true`), a genuine `@switch` skips the
+`SIP_SWITCH_VIDEO_BLACKOUT_MS` transition hold (`switch_transition_hold_skipped reason=renegotiate`)
+and starts a make-before-break WebRTC handoff: the live PeerConnection stays
+parked until the replacement ICE-connects. The gateway emits
+`switch_renegotiate_started` before `switch_renegotiate_pc_replaced` so the
+client can `createOffer` in parallel. Gateway answers return after a short ICE
+budget (`ice_gathering=ready` or `partial`); they do not wait the resume 3s
+gather timeout. Look for `switch_renegotiate_make_before_break_armed`,
 `switch_renegotiate_pc_replaced make_before_break=true`, then
 `switch_renegotiate_legacy_pc_closed`. ttrs-vri (SIP→WebRTC) should keep the
 last frame until the new path is ready. A freeze of **Linphone’s remote video**
@@ -134,7 +140,7 @@ Do not bypass RTPengine in production for this diagnosis.
   `SIP_UPLINK_PICTURE_SIZE_CHANGE=reject` drops video after a size change
   (`uplink_sps_dimension_change dropped`).
 
-## 401 Unauthorized on API/WS
+## 401 Unauthorized (and 409 Conflict) on API/WS
 
 Checkpoints:
 
@@ -144,12 +150,22 @@ Checkpoints:
   (`AUTH_TTRS_EMPLOYEE_JWKS_URL`, `AUTH_TTRS_EMPLOYEE_JWT_ISSUER`,
   `AUTH_TTRS_EMPLOYEE_JWT_AUDIENCE`). Issuer and audience checks apply when
   their values are configured.
-- For REST operations, remember that a non-empty `FRONTEND_PASSWORD` enables
-  bearer authentication even when `AUTH_ENABLE=false`.
+- For REST operations, remember that a non-empty `FRONTEND_PASSWORD` enforces
+  `Authorization: Bearer <FRONTEND_PASSWORD>` (or a valid JWT when
+  `AUTH_ENABLE=true`) on protected `/api/*` routes even when `AUTH_ENABLE=false`.
+  `FRONTEND_PASSWORD` is never accepted on WebSocket endpoints.
 - Verify token `iss` and `aud` match configured values exactly.
-- Verify token is not expired (`exp`) and is already valid (`nbf`).
+- Verify token is not expired (`exp`) and is already valid (`nbf`), accounting
+  for the gateway's `30s` clock-skew leeway.
 - Verify JWT header `kid` exists in current JWKS (gateway auto-refreshes JWKS once on unknown `kid`).
-- For WebSocket, verify client sends `access_token` query param on the connect URL.
+- Realm hints (`user|users|client` vs `employee|employees|agent`): browser
+  cross-origin clients should pass `?auth_type=...` in the URL query rather than
+  the `X-Auth-Type` header because `X-Auth-Type` is not listed in CORS
+  `Access-Control-Allow-Headers`.
+- Endpoint-specific WebSocket upgrade rules:
+  - `/ws` requires `?access_token=<jwt>` when `AUTH_ENABLE=true` (ignored when `AUTH_ENABLE=false`). When `SIPCLIENT_AUTH_REGISTER_URL` is set, user-realm `/ws` connections also require `devicePlatform=android|ios`, and a concurrent mobile provisioning or `unregister` operation for the same JWT `sub` returns HTTP `409 Conflict` (`Account operation in progress; retry connection`).
+  - `/ws-agent-device` **always** requires `devicePlatform=android|ios` on the connect URL (returns `401` when missing or invalid, even when `AUTH_ENABLE=false`).
+  - `/ws-agent` and `/ws-agent-device` treat `access_token` as optional, but passing a non-empty `access_token` while `AUTH_ENABLE=false` is rejected with `401`.
 
 ## Incoming INVITE rejected as ambiguous trunk match
 

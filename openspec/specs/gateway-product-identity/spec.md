@@ -1,3 +1,5 @@
+# gateway-product-identity Specification
+
 ## Purpose
 
 Define the canonical brand-neutral identity of the WebRTC-SIP Gateway across source, runtime, distribution, protocol-visible metadata, operations UI, and compatibility rollout.

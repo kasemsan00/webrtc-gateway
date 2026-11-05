@@ -37,8 +37,7 @@ func NewClient(cfg Config) *Client {
 
 func (c *Client) Connect(ctx context.Context) (err error) {
 	started := time.Now()
-	ctx, span := telemetry.StartDependencySpan(ctx, "translator")
-	defer func() { telemetry.EndDependency(ctx, span, "translator", started, err) }()
+	defer func() { telemetry.LogDependency(ctx, "translator", started, err) }()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -62,8 +61,7 @@ func (c *Client) Connect(ctx context.Context) (err error) {
 
 func (c *Client) TranslateStream(ctx context.Context) (stream pb.SpeechTranslator_TranslateClient, err error) {
 	started := time.Now()
-	ctx, span := telemetry.StartDependencySpan(ctx, "translator")
-	defer func() { telemetry.EndDependency(ctx, span, "translator", started, err) }()
+	defer func() { telemetry.LogDependency(ctx, "translator", started, err) }()
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
@@ -80,8 +78,7 @@ func (c *Client) TranslateStream(ctx context.Context) (stream pb.SpeechTranslato
 
 func (c *Client) CheckHealth(ctx context.Context) (err error) {
 	started := time.Now()
-	ctx, span := telemetry.StartDependencySpan(ctx, "translator")
-	defer func() { telemetry.EndDependency(ctx, span, "translator", started, err) }()
+	defer func() { telemetry.LogDependency(ctx, "translator", started, err) }()
 	c.mu.RLock()
 	conn := c.conn
 	c.mu.RUnlock()
@@ -94,8 +91,7 @@ func (c *Client) CheckHealth(ctx context.Context) (err error) {
 
 func (c *Client) Send(ctx context.Context, audioData []byte) (result *pb.TranslationResult, err error) {
 	started := time.Now()
-	ctx, span := telemetry.StartDependencySpan(ctx, "translator")
-	defer func() { telemetry.EndDependency(ctx, span, "translator", started, err) }()
+	defer func() { telemetry.LogDependency(ctx, "translator", started, err) }()
 	stream, err := c.TranslateStream(ctx)
 	if err != nil {
 		return nil, err
@@ -129,8 +125,7 @@ func (c *Client) Send(ctx context.Context, audioData []byte) (result *pb.Transla
 
 func (c *Client) SynthesizeText(ctx context.Context, lang, text, voiceName string) (audioResult []byte, err error) {
 	started := time.Now()
-	ctx, span := telemetry.StartDependencySpan(ctx, "translator")
-	defer func() { telemetry.EndDependency(ctx, span, "translator", started, err) }()
+	defer func() { telemetry.LogDependency(ctx, "translator", started, err) }()
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return nil, nil

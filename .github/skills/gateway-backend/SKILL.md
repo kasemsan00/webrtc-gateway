@@ -20,7 +20,7 @@ Use this skill for tasks in `apps/gateway` where correctness under live media lo
 
 - No panics in hot paths.
 - Do not hold locks while doing network I/O.
-- Preserve audio as Opus passthrough.
+- Preserve audio as Opus passthrough by default (optional `SIP_AUDIO_INBOUND_GAIN_ENABLE` transcodes SIP → WebRTC only; outbound stays passthrough).
 - Preserve video as H.264 only.
 - Keep SPS or PPS caching, keyframe requests, and reinjection behavior intact unless the task explicitly changes media behavior.
 - Treat WebSocket and SIP contract changes as breaking until clients and docs are updated together.
@@ -52,7 +52,7 @@ Start from these files before widening scope:
 3. Reconfirm the local invariants.
    - For concurrency changes, check shared-state ownership and lock boundaries.
    - For signaling changes, check request and response compatibility across client and server.
-   - For media changes, verify Opus passthrough and H.264-only assumptions still hold.
+   - For media changes, verify default Opus passthrough (with optional `SIP_AUDIO_INBOUND_GAIN_ENABLE` on SIP → WebRTC only) and H.264-only assumptions still hold.
 
 4. Make the smallest root-cause edit.
    - Favor narrow changes in the controlling abstraction.
@@ -79,10 +79,9 @@ Start from these files before widening scope:
 
 ## Required References
 
-- Read `apps/gateway/AGENTS.md` before substantial gateway changes.
+- Read `apps/gateway/AGENTS.md` before substantial gateway changes and for standard build/test commands (`go build -o webrtc-sip-gateway .`, `go test ./...`).
 - Use `docs/gateway/ws-contract.md` for call flow, signaling, resume, or reconnect behavior.
 - Use `docs/gateway/config-reference.md` and `docs/gateway/troubleshooting.md` for env knobs and log lines.
-- Check `apps/gateway/project.json` for standard build and test commands.
 
 ## Completion Criteria
 

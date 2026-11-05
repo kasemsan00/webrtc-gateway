@@ -31,12 +31,9 @@ func hasActiveVideoMedia(sdp string) bool {
 func (s *Server) handleWSResume(client *WSClient, msg WSMessage) {
 	resumeStartedAt := time.Now()
 	telemetryOutcome, telemetryReason := "failure", "internal_error"
-	ctx, span := telemetry.StartCallSpan(context.Background(), "resume")
-	telemetry.SetSpanCorrelation(span, telemetry.Correlation{SessionID: msg.SessionID})
 	defer func() {
 		elapsed := time.Since(resumeStartedAt)
-		telemetry.EndSpan(span, telemetryOutcome, telemetryReason, 0)
-		_ = telemetry.Log(ctx, telemetry.LogEvent{Severity: telemetry.SeverityInfo, Component: "call", Name: "call.resume.completed", Outcome: telemetryOutcome, Reason: telemetryReason, Correlation: telemetry.Correlation{SessionID: msg.SessionID}, Measurements: []telemetry.Measurement{telemetry.DurationMilliseconds("duration_ms", elapsed)}})
+		_ = telemetry.Log(context.Background(), telemetry.LogEvent{Severity: telemetry.SeverityInfo, Component: "call", Name: "call.resume.completed", Outcome: telemetryOutcome, Reason: telemetryReason, Correlation: telemetry.Correlation{SessionID: msg.SessionID}, Measurements: []telemetry.Measurement{telemetry.DurationMilliseconds("duration_ms", elapsed)}})
 		if elapsed > resumeSlowLogThreshold {
 			log.Printf("⚠️ Slow resume request: session=%s elapsed=%s hasSDP=%v", msg.SessionID, elapsed.Round(10*time.Millisecond), msg.SDP != "")
 		}
@@ -230,7 +227,6 @@ func (s *Server) handleWSResume(client *WSClient, msg WSMessage) {
 	log.Printf("📊 Resume total elapsed: session=%s elapsed=%s", msg.SessionID, time.Since(resumeStartedAt).Round(10*time.Millisecond))
 	log.Printf("✅ Session %s resumed successfully (state: %s, direction: %s, wasReconnecting: %v, hasSDP: %v)", msg.SessionID, finalState, direction, wasReconnecting, answerSDP != "")
 	telemetryOutcome, telemetryReason = "success", "none"
-	telemetry.RecordMediaRecovery(context.Background(), direction, "resume", "success")
 
 	// Send success response with session details (and answer SDP if renegotiated)
 	_, from, to, _ := sess.GetCallInfo()

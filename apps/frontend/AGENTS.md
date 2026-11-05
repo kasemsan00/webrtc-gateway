@@ -7,7 +7,7 @@ React + TypeScript + TanStack Start frontend for gateway operations UI inside th
 ## Project Structure
 
 - `src/routes/`: TanStack file-based routes (`index.tsx`, `dashboard.tsx`, `active-sessions.tsx`, `trunks.tsx`, `instances.tsx`, `sessions*.tsx`, `session-directory.tsx`, `public-accounts.tsx`, `ws-clients.tsx`, `client-diagnostics.tsx`, `logs.tsx`, `settings.tsx`).
-- `src/features/`: domain modules (`auth`, `dashboard`, `active-sessions`, `gateway-instances`, `gateway-config`, `gateway-logs`, `trunk`, `session-history`, `session-detail`, `session-directory`, `public-accounts`, `ws-clients`, `client-diagnostics`, `smoke`).
+- `src/features/`: domain modules (`auth`, `dashboard`, `active-sessions`, `gateway-instances`, `gateway-config`, `gateway-logs`, `gateway-status`, `trunk`, `session-history`, `session-detail`, `session-directory`, `public-accounts`, `ws-clients`, `client-diagnostics`, `smoke`).
 - `src/components/` and `src/components/ui/`: shared UI and primitives.
 - `src/lib/`: shared utilities, store helpers, theme/provider utilities.
 - Generated file: `src/routeTree.gen.ts` (do not edit manually).
@@ -42,6 +42,7 @@ Single-test examples:
 
 ## API/Contract Notes
 
+- See [`apps/gateway/trunk-api.md`](../gateway/trunk-api.md) for the authoritative trunk REST/SSE contract, query filters, sorting rules, and payload shapes.
 - Keep trunk API compatibility for both `trunkId` (numeric) and `trunkPublicId` (UUID).
 - For `/api/trunks`, server-side sorting does not support `activeCallCount`; sort that field client-side only.
 - If backend WS/REST contracts change, update this app and affected mobile clients together.

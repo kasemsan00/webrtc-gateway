@@ -21,7 +21,6 @@ func (s *Server) sendWSMessage(client *WSClient, msg WSMessage) {
 	case client.send <- data:
 	default:
 		log.Printf("Dropping WebSocket message: client send buffer full (sessionID=%s, type=%s)", client.sessionID, msg.Type)
-		telemetry.RecordWebSocketMessage(context.Background(), msg.Type, "dropped")
 		_ = telemetry.Log(context.Background(), telemetry.LogEvent{Severity: telemetry.SeverityWarn, Component: "websocket", Name: "websocket.message.dropped", Outcome: "dropped", Reason: "queue_full", Correlation: telemetry.Correlation{SessionID: client.sessionID}})
 	}
 }

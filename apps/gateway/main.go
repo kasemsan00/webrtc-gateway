@@ -37,24 +37,6 @@ var (
 	gatewayVersion = "development"
 )
 
-type telemetryHealthAdapter struct{ runtime *telemetry.Runtime }
-
-func (a telemetryHealthAdapter) OperationalHealth() api.HealthComponentResponse {
-	snapshot := a.runtime.Health()
-	lastSuccess, lastFailure := "", ""
-	if snapshot.LastSuccessAt != nil {
-		lastSuccess = snapshot.LastSuccessAt.Format(time.RFC3339Nano)
-	}
-	if snapshot.LastFailureAt != nil {
-		lastFailure = snapshot.LastFailureAt.Format(time.RFC3339Nano)
-	}
-	return api.NewHealthComponentResponse(snapshot.State, snapshot.Reason, lastSuccess, lastFailure, map[string]uint64{
-		"depth": snapshot.Queue.Depth, "capacity": snapshot.Queue.Capacity,
-		"accepted": snapshot.Queue.Accepted, "dropped": snapshot.Queue.Dropped,
-		"exported": snapshot.Queue.Exported, "failed": snapshot.Queue.Failed,
-	})
-}
-
 func main() {
 	// Parse command line flags
 	flag.Parse()
@@ -79,33 +61,23 @@ func main() {
 	// Display configuration
 	cfg.Display()
 
-	// Create cancellable context for graceful shutdown before initializing
-	// process-scoped telemetry. No listener can accept traffic before this point.
+	// Create cancellable context for graceful shutdown before any listener can
+	// accept traffic.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	telemetryRuntime, err := telemetry.New(ctx, cfg.Observability, cfg.Gateway.InstanceID, gatewayVersion)
-	if err != nil {
-		log.Fatalf("Failed to initialize OpenTelemetry: %v", err)
-	}
 	structuredLogger := telemetry.NewStructuredLogger(logger.Writer(), telemetry.StructuredLogConfig{
 		Format: telemetry.LogFormatJSON,
 		Resource: telemetry.ResourceIdentity{
-			ServiceName: cfg.Observability.ServiceName, ServiceVersion: gatewayVersion,
-			Environment: cfg.Observability.Environment, GatewayInstanceID: cfg.Gateway.InstanceID,
+			ServiceName: "webrtc-sip-gateway", ServiceVersion: gatewayVersion,
+			Environment: "unspecified", GatewayInstanceID: cfg.Gateway.InstanceID,
 		},
 		Sanitizer: telemetry.NewSanitizer(1024),
 	})
 	telemetry.SetStructuredLogger(structuredLogger)
 	_ = structuredLogger.Log(ctx, telemetry.LogEvent{Severity: telemetry.SeverityInfo, Component: "gateway", Name: "gateway.started", Outcome: "success", Reason: "none"})
-	telemetry.RecordGatewayStart(ctx)
 	defer func() {
 		_ = structuredLogger.Log(context.Background(), telemetry.LogEvent{Severity: telemetry.SeverityInfo, Component: "gateway", Name: "gateway.stopped", Outcome: "success", Reason: "none"})
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), time.Duration(cfg.Observability.ShutdownTimeoutMS)*time.Millisecond)
-		defer shutdownCancel()
-		if err := telemetryRuntime.Shutdown(shutdownCtx); err != nil {
-			log.Printf("OpenTelemetry shutdown incomplete: reason=shutdown_deadline")
-		}
 	}()
 
 	if cfg.SIP.AudioInboundGainEnable {
@@ -157,11 +129,11 @@ func main() {
 	defer store.Stop()
 
 	// HTTP/WebSocket API mode with multiple sessions
-	runAPIMode(ctx, cfg, unicast, store, telemetryRuntime)
+	runAPIMode(ctx, cfg, unicast, store)
 }
 
 // runAPIMode runs the gateway with HTTP/WebSocket API
-func runAPIMode(ctx context.Context, cfg *config.Config, unicastAddress string, store logstore.LogStore, telemetryRuntime *telemetry.Runtime) {
+func runAPIMode(ctx context.Context, cfg *config.Config, unicastAddress string, store logstore.LogStore) {
 	fmt.Println("\n=== Running in API Mode (HTTP/WebSocket) ===")
 
 	// Register gateway instance for redirect lookup
@@ -254,7 +226,6 @@ func runAPIMode(ctx context.Context, cfg *config.Config, unicastAddress string, 
 		apiServer.AttachTrunkListChangeCallback(trunkManager)
 	}
 	apiServer.SetRuntimeConfig(cfg)
-	apiServer.SetOperationalHealthProvider("telemetry", telemetryHealthAdapter{runtime: telemetryRuntime})
 	if cfg.Auth.FrontendPassword != "" {
 		apiServer.SetAdminPassword(cfg.Auth.FrontendPassword)
 		log.Printf("Admin REST password auth enabled")

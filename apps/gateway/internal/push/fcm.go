@@ -86,8 +86,7 @@ func (s *FCMSender) SendDisplayPush(ctx context.Context, token, title, notificat
 
 func (s *FCMSender) sendPush(ctx context.Context, token, title, notificationBody string, data map[string]string, mobileDevice string, forceNotification bool) (err error) {
 	started := time.Now()
-	ctx, span := telemetry.StartDependencySpan(ctx, "push_fcm")
-	defer func() { telemetry.EndDependency(ctx, span, "push_fcm", started, err) }()
+	defer func() { telemetry.LogDependency(ctx, "push_fcm", started, err) }()
 	url := fmt.Sprintf("%s/%s/messages:send", fcmBaseURL, s.projectID)
 
 	payload := buildFCMPayload(token, title, notificationBody, data, mobileDevice, forceNotification)

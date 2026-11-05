@@ -1,3 +1,5 @@
+# gateway-operations-observability Specification
+
 ## Purpose
 
 Provide operators with truthful runtime health, durable call and media evidence, and connected console views that make gateway failures diagnosable without exposing secrets or changing call behavior.

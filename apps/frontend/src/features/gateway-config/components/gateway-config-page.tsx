@@ -57,7 +57,6 @@ const PREFERRED_SUBSYSTEM_ORDER = [
   'sessionDir',
   'push',
   'translator',
-  'observability',
 ]
 
 function ConfigValueCell({

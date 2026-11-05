@@ -63,20 +63,10 @@ func (s *Session) SetState(state SessionState) {
 		s.emitCallStartedTelemetry(direction, startedAt)
 	}
 	if recordSetup {
-		ctx, span := telemetry.StartCallSpan(context.Background(), "setup")
-		telemetry.SetSpanCorrelation(span, telemetry.Correlation{SessionID: s.ID})
-		telemetry.SetCallDirection(span, direction)
-		telemetry.EndSpan(span, "success", "none", 0)
-		telemetry.RecordCallSetup(ctx, direction, "success", setupDuration)
-		_ = telemetry.Log(ctx, telemetry.LogEvent{Severity: telemetry.SeverityInfo, Component: "call", Name: "call.setup.completed", Outcome: "success", Reason: "none", Correlation: telemetry.Correlation{SessionID: s.ID}, Measurements: []telemetry.Measurement{telemetry.DurationMilliseconds("duration_ms", setupDuration)}})
+		_ = telemetry.Log(context.Background(), telemetry.LogEvent{Severity: telemetry.SeverityInfo, Component: "call", Name: "call.setup.completed", Outcome: "success", Reason: "none", Correlation: telemetry.Correlation{SessionID: s.ID}, Measurements: []telemetry.Measurement{telemetry.DurationMilliseconds("duration_ms", setupDuration)}})
 	}
 	if recordCompleted {
-		ctx, span := telemetry.StartCallSpan(context.Background(), "completed")
-		telemetry.SetSpanCorrelation(span, telemetry.Correlation{SessionID: s.ID})
-		telemetry.SetCallDirection(span, direction)
-		telemetry.EndSpan(span, outcome, reason, 0)
-		telemetry.RecordCallCompleted(ctx, direction, outcome, reason, -1, duration)
-		_ = telemetry.Log(ctx, telemetry.LogEvent{Severity: telemetry.SeverityInfo, Component: "call", Name: "call.completed", Outcome: outcome, Reason: reason, Correlation: telemetry.Correlation{SessionID: s.ID}, Measurements: []telemetry.Measurement{telemetry.DurationMilliseconds("duration_ms", duration)}})
+		_ = telemetry.Log(context.Background(), telemetry.LogEvent{Severity: telemetry.SeverityInfo, Component: "call", Name: "call.completed", Outcome: outcome, Reason: reason, Correlation: telemetry.Correlation{SessionID: s.ID}, Measurements: []telemetry.Measurement{telemetry.DurationMilliseconds("duration_ms", duration)}})
 	}
 }
 

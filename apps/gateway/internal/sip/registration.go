@@ -73,9 +73,8 @@ func (s *Server) CreateClient() error {
 // goroutine runs at a time.
 func (s *Server) Register(ctx context.Context) error {
 	started := time.Now()
-	spanCtx, span := telemetry.StartSIPSpan(ctx, "REGISTER")
 	err := s.register(ctx)
-	telemetry.EndSIP(spanCtx, span, "REGISTER", started, 0, err)
+	telemetry.LogSIPTransaction(ctx, started, 0, err)
 	return err
 }
 

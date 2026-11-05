@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -26,29 +25,7 @@ type Config struct {
 	SessionDir       SessionDirectoryConfig
 	PushNotification PushNotificationConfig
 	Translator       TranslatorConfig
-	Observability    ObservabilityConfig
 	ChatImage        ChatImageConfig
-}
-
-// ObservabilityConfig controls the optional OTLP connection to an adjacent
-// OpenTelemetry Collector. Headers are secret and must never be displayed or
-// returned by the public configuration API.
-type ObservabilityConfig struct {
-	Enable             bool
-	Endpoint           string
-	Protocol           string
-	Headers            string
-	ServiceName        string
-	Environment        string
-	ResourceAttributes string
-	MetricsIntervalMS  int
-	TracesEnable       bool
-	TraceSampleRatio   float64
-	MaxQueueSize       int
-	MaxExportBatchSize int
-	ScheduleDelayMS    int
-	ExportTimeoutMS    int
-	ShutdownTimeoutMS  int
 }
 
 const (
@@ -503,23 +480,6 @@ func Load() (*Config, error) {
 			TTSVoice:    getEnvWithDefault("TRANSLATOR_TTS_VOICE", "th-TH-PremwadeeNeural"),
 			OpusBitrate: getEnvAsInt("TRANSLATOR_OPUS_BITRATE", 24000),
 		},
-		Observability: ObservabilityConfig{
-			Enable:             getEnvAsBool("OTEL_ENABLE", false),
-			Endpoint:           strings.TrimSpace(getEnvWithDefault("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318")),
-			Protocol:           strings.ToLower(strings.TrimSpace(getEnvWithDefault("OTEL_EXPORTER_OTLP_PROTOCOL", "http/protobuf"))),
-			Headers:            strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_HEADERS")),
-			ServiceName:        strings.TrimSpace(getEnvWithDefault("OTEL_SERVICE_NAME", "webrtc-sip-gateway")),
-			Environment:        strings.TrimSpace(getEnvWithDefault("OTEL_DEPLOYMENT_ENVIRONMENT", "unspecified")),
-			ResourceAttributes: strings.TrimSpace(os.Getenv("OTEL_RESOURCE_ATTRIBUTES")),
-			MetricsIntervalMS:  getEnvAsInt("OTEL_METRIC_EXPORT_INTERVAL_MS", 10000),
-			TracesEnable:       getEnvAsBool("OTEL_TRACES_ENABLE", true),
-			TraceSampleRatio:   getEnvAsFloat64("OTEL_TRACES_SAMPLER_ARG", 0.05),
-			MaxQueueSize:       getEnvAsInt("OTEL_BSP_MAX_QUEUE_SIZE", 2048),
-			MaxExportBatchSize: getEnvAsInt("OTEL_BSP_MAX_EXPORT_BATCH_SIZE", 512),
-			ScheduleDelayMS:    getEnvAsInt("OTEL_BSP_SCHEDULE_DELAY_MS", 5000),
-			ExportTimeoutMS:    getEnvAsInt("OTEL_EXPORTER_OTLP_TIMEOUT_MS", 3000),
-			ShutdownTimeoutMS:  getEnvAsInt("OTEL_SHUTDOWN_TIMEOUT_MS", 5000),
-		},
 		ChatImage: ChatImageConfig{
 			Enable:                 getEnvAsBool("CHAT_IMAGE_ENABLE", true),
 			Dir:                    strings.TrimSpace(getEnvWithDefault("CHAT_IMAGE_DIR", DefaultChatImageDir)),
@@ -530,94 +490,12 @@ func Load() (*Config, error) {
 			CleanupIntervalSeconds: getEnvAsInt("CHAT_IMAGE_CLEANUP_INTERVAL_SECONDS", DefaultChatImageCleanupIntervalSeconds),
 		},
 	}
-	if err := validateObservabilityEnvironment(); err != nil {
-		return nil, err
-	}
-	if err := cfg.Observability.Validate(); err != nil {
-		return nil, err
-	}
 	return cfg, nil
-}
-
-func validateObservabilityEnvironment() error {
-	for _, key := range []string{"OTEL_ENABLE", "OTEL_TRACES_ENABLE"} {
-		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
-			if _, err := strconv.ParseBool(value); err != nil {
-				return fmt.Errorf("%s must be a boolean", key)
-			}
-		}
-	}
-	for _, key := range []string{"OTEL_METRIC_EXPORT_INTERVAL_MS", "OTEL_BSP_MAX_QUEUE_SIZE", "OTEL_BSP_MAX_EXPORT_BATCH_SIZE", "OTEL_BSP_SCHEDULE_DELAY_MS", "OTEL_EXPORTER_OTLP_TIMEOUT_MS", "OTEL_SHUTDOWN_TIMEOUT_MS"} {
-		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
-			if _, err := strconv.Atoi(value); err != nil {
-				return fmt.Errorf("%s must be an integer", key)
-			}
-		}
-	}
-	if value := strings.TrimSpace(os.Getenv("OTEL_TRACES_SAMPLER_ARG")); value != "" {
-		if _, err := strconv.ParseFloat(value, 64); err != nil {
-			return fmt.Errorf("OTEL_TRACES_SAMPLER_ARG must be a number")
-		}
-	}
-	return nil
-}
-
-// Validate rejects an explicitly enabled but unsafe or ambiguous telemetry
-// configuration before network listeners accept traffic.
-func (c ObservabilityConfig) Validate() error {
-	if !c.Enable {
-		return nil
-	}
-	if c.ServiceName == "" {
-		return fmt.Errorf("OTEL_SERVICE_NAME must not be empty when OTEL_ENABLE=true")
-	}
-	if c.Environment == "" {
-		return fmt.Errorf("OTEL_DEPLOYMENT_ENVIRONMENT must not be empty when OTEL_ENABLE=true")
-	}
-	if c.Protocol != "http/protobuf" && c.Protocol != "grpc" {
-		return fmt.Errorf("OTEL_EXPORTER_OTLP_PROTOCOL must be http/protobuf or grpc")
-	}
-	parsed, err := url.Parse(c.Endpoint)
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
-		return fmt.Errorf("OTEL_EXPORTER_OTLP_ENDPOINT must be a valid http or https collector URL")
-	}
-	if c.MetricsIntervalMS < 1000 {
-		return fmt.Errorf("OTEL_METRIC_EXPORT_INTERVAL_MS must be at least 1000")
-	}
-	if c.TraceSampleRatio < 0 || c.TraceSampleRatio > 1 {
-		return fmt.Errorf("OTEL_TRACES_SAMPLER_ARG must be between 0 and 1")
-	}
-	if c.MaxQueueSize <= 0 {
-		return fmt.Errorf("OTEL_BSP_MAX_QUEUE_SIZE must be positive")
-	}
-	if c.MaxExportBatchSize <= 0 || c.MaxExportBatchSize > c.MaxQueueSize {
-		return fmt.Errorf("OTEL_BSP_MAX_EXPORT_BATCH_SIZE must be positive and no greater than OTEL_BSP_MAX_QUEUE_SIZE")
-	}
-	if c.ScheduleDelayMS <= 0 {
-		return fmt.Errorf("OTEL_BSP_SCHEDULE_DELAY_MS must be positive")
-	}
-	if c.ExportTimeoutMS <= 0 {
-		return fmt.Errorf("OTEL_EXPORTER_OTLP_TIMEOUT_MS must be positive")
-	}
-	if c.ShutdownTimeoutMS <= 0 {
-		return fmt.Errorf("OTEL_SHUTDOWN_TIMEOUT_MS must be positive")
-	}
-	return nil
 }
 
 // Display prints the loaded configuration to stdout
 func (c *Config) Display() {
 	fmt.Println("=== Environment Configuration ===")
-	fmt.Println("\nOpenTelemetry:")
-	fmt.Printf("  Enabled: %v\n", c.Observability.Enable)
-	if c.Observability.Enable {
-		fmt.Printf("  Protocol: %s\n", c.Observability.Protocol)
-		fmt.Printf("  Service: %s\n", c.Observability.ServiceName)
-		fmt.Printf("  Environment: %s\n", c.Observability.Environment)
-		fmt.Printf("  Traces: %v (sampleRatio=%.4f)\n", c.Observability.TracesEnable, c.Observability.TraceSampleRatio)
-		fmt.Printf("  Queue: %d (batch=%d)\n", c.Observability.MaxQueueSize, c.Observability.MaxExportBatchSize)
-	}
-
 	// Display TURN Server Configuration
 	fmt.Println("\nTURN Server:")
 	if c.TURN.Server != "" {
