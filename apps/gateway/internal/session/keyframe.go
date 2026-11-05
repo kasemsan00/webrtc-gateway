@@ -548,9 +548,30 @@ func (s *Session) maybeKickUplinkForReturnRecovery(trigger string, now time.Time
 	if s == nil || !isClientDecoderRecoveryTrigger(trigger) {
 		return false
 	}
+	sent, _ := s.tryReturnRecoveryUplinkKick(trigger, now)
+	return sent
+}
+
+// returnKeyframeThisCallLocked is the last SIP→WebRTC keyframe of the
+// current call. LastKeyframe survives ResetMediaState, so a keyframe from
+// before this call's first remote video SSRC learn does not count (SIP video
+// RTP, and so every return keyframe of this call, arrives after the learn).
+// The caller holds s.mu.
+func (s *Session) returnKeyframeThisCallLocked() time.Time {
+	if !s.remoteVideoSSRCLearnedAt.IsZero() && s.LastKeyframe.Before(s.remoteVideoSSRCLearnedAt) {
+		return time.Time{}
+	}
+	return s.LastKeyframe
+}
+
+// tryReturnRecoveryUplinkKick runs decideReturnRecoveryUplinkKick and, when
+// allowed, sends the browser a forced FIR + PLI that bypasses the 1s forced
+// PLI cap (a decoder-join kick at SSRC learn would otherwise swallow the
+// learn+500ms kick). Returns the skip reason when nothing was sent.
+func (s *Session) tryReturnRecoveryUplinkKick(trigger string, now time.Time) (bool, string) {
 	s.mu.Lock()
 	_, unanswered := s.clientKeyframeWaitLocked(now)
-	returnKeyframeAt := s.LastKeyframe
+	returnKeyframeAt := s.returnKeyframeThisCallLocked()
 	skip := decideReturnRecoveryUplinkKick(returnRecoveryUplinkKickInput{
 		ReturnKeyframeAt: returnKeyframeAt,
 		Unanswered:       unanswered,
@@ -563,7 +584,7 @@ func (s *Session) maybeKickUplinkForReturnRecovery(trigger string, now time.Time
 	})
 	if skip != "" {
 		s.mu.Unlock()
-		return false
+		return false, skip
 	}
 	s.returnRecoveryUplinkKickAt = now
 	s.returnRecoveryUplinkKicks++
@@ -577,8 +598,29 @@ func (s *Session) maybeKickUplinkForReturnRecovery(trigger string, now time.Time
 	fmt.Printf("[%s] 📈 uplink_keyframe_kick reason=return-recovery trigger=%s attempt=%d/%d keyframeAge=%s unanswered=%s\n",
 		id, trigger, attempt, returnRecoveryUplinkKickMax, keyframeAge, unanswered.Round(time.Millisecond))
 	s.sendWebRTCFeedbackWithForce("fir", true, nil)
-	s.sendWebRTCFeedbackWithForce("pli", true, nil)
-	return true
+	s.sendBrowserPLIPastForcedCap()
+	return true, ""
+}
+
+// sendBrowserPLIPastForcedCap writes one forced browser PLI even when another
+// forced PLI went out within webrtcPLIOverallMinInterval. Callers bound their
+// own rate.
+func (s *Session) sendBrowserPLIPastForcedCap() bool {
+	s.mu.Lock()
+	saved := s.LastWebRTCPLISent
+	s.LastWebRTCPLISent = time.Time{}
+	snapshot := s.prepareWebRTCFeedbackLocked("pli", true, nil)
+	if !snapshot.ready {
+		s.LastWebRTCPLISent = saved
+	} else {
+		s.lastBrowserIDRRequest = time.Now()
+	}
+	id := s.ID
+	s.mu.Unlock()
+	if !snapshot.authorized || !snapshot.ready || snapshot.throttled {
+		return false
+	}
+	return sendPreparedWebRTCFeedback(id, snapshot)
 }
 
 type returnRecoveryUplinkKickInput struct {
@@ -592,9 +634,20 @@ type returnRecoveryUplinkKickInput struct {
 	Now              time.Time
 }
 
-// decideReturnRecoveryUplinkKick is the fake-clock gate for
-// maybeKickUplinkForReturnRecovery. Empty means send.
+// decideReturnRecoveryUplinkKick is the fake-clock gate for return-recovery
+// uplink kicks. Empty means send. Before the first return keyframe of the
+// call (KVt9sOuRsPuy: Echo reflects only a phone IDR sent after it started
+// echoing; the 2s idr-fresh window held the first useful kick to learn+2.2s)
+// kicks are spaced returnPathKickInterval apart and only wait
+// returnPathKickIDRFresh after a forwarded uplink IDR. Once a return keyframe
+// exists, the 2s interval and idr-fresh window apply as before.
 func decideReturnRecoveryUplinkKick(in returnRecoveryUplinkKickInput) string {
+	interval := returnRecoveryUplinkKickInterval
+	idrFresh := returnRecoveryUplinkKickInterval
+	if in.ReturnKeyframeAt.IsZero() {
+		interval = returnPathKickInterval
+		idrFresh = returnPathKickIDRFresh
+	}
 	switch {
 	case !in.ReturnKeyframeAt.IsZero() && in.Unanswered < returnRecoveryUplinkKickInterval:
 		return "return-keyframe-answered"
@@ -604,9 +657,9 @@ func decideReturnRecoveryUplinkKick(in returnRecoveryUplinkKickInput) string {
 		return "max"
 	case in.UplinkIDRFlight:
 		return "idr-in-flight"
-	case !in.LastKickAt.IsZero() && in.Now.Sub(in.LastKickAt) < returnRecoveryUplinkKickInterval:
+	case !in.LastKickAt.IsZero() && in.Now.Sub(in.LastKickAt) < interval:
 		return "rate-limit"
-	case !in.LastUplinkIDR.IsZero() && in.Now.Sub(in.LastUplinkIDR) < returnRecoveryUplinkKickInterval:
+	case !in.LastUplinkIDR.IsZero() && in.Now.Sub(in.LastUplinkIDR) < idrFresh:
 		return "idr-fresh"
 	}
 	return ""

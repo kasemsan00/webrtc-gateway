@@ -12,6 +12,10 @@
   - โหมด `SIP_KEYFRAME_REQUEST_MODE=info` ส่ง RTCP PLI/FIR ไป SIP เพิ่มจาก INFO ระหว่าง return recovery (`sip_rtcp_fb_escalated reason=return-recovery`) โดยยังผ่าน gate เดิมทั้งหมด (IDR in-flight, guard, min interval, รอ marker)
   - INFO recovery floor ลดเป็น 500ms และใช้ระหว่าง return recovery ด้วย
   - keyframe watchdog ไม่ข้ามด้วยเหตุผล `rtp-flowing` เมื่อยังไม่เคยได้ keyframe ขากลับหรือ client ยังรอ keyframe (`keyframe_watchdog_client_waiting`)
+- **ลดเวลาจอดำตอนเริ่มสาย 9999 (echo) จาก ~4 วินาที**: IDR แรกจากโทรศัพท์มาถึงพร้อมกับตอนเรียนรู้ SSRC ขากลับ (มิลลิวินาทีเดียวกัน) Echo จึงไม่สะท้อนกลับ และ kick ตัวแรกที่ได้ผลรอถึง learn+2.2 วินาที (KVt9sOuRsPuy)
+  - เมื่อเรียนรู้ remote video SSRC ครั้งแรกของสาย และสายรับแล้ว (หลัง 200 OK) ขอ IDR จากโทรศัพท์ (forced FIR + PLI ข้าม cap 1 วินาทีของ forced PLI) ที่ learn+500ms แล้วทุก ~1 วินาที จนกว่าจะได้ IDR ขากลับที่สมบูรณ์ (`uplink_keyframe_kick reason=return-recovery trigger=ssrc-learn`, `return_path_kick_schedule_stop`)
+  - ก่อนได้ keyframe ขากลับแรกของสาย kick เว้นระยะ 1 วินาที และรอเพียง 500ms หลัง uplink IDR (เดิม 2 วินาทีทั้งคู่) ทั้งจากตาราง learn และจาก PLI ของ client ใช้ cap 10 ครั้งร่วมกัน ไม่ kick ระหว่าง uplink IDR in-flight หลังได้ keyframe ขากลับแล้วพฤติกรรมเหมือนเดิม
+  - keyframe ของสายก่อน (LastKeyframe ไม่ถูก reset) ไม่นับเป็น keyframe ขากลับของสายใหม่
 
 ## 2026-10-29
 

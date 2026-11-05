@@ -156,12 +156,24 @@ Do not bypass RTPengine in production for this diagnosis.
   SIP→WebRTC keyframe has arrived for 1.5s of that asking. A return keyframe
   the client never decoded (`keyframeAge` grows while PLIs continue) counts
   as unanswered too.
-- Uplink kick: `uplink_keyframe_kick reason=return-recovery trigger=browser-pli
-  attempt=N/10 keyframeAge=<dur|none> unanswered=<dur>`. Sent when no return
-  keyframe has arrived this call, or the client has kept asking for 2s after
-  the last one. At most one every 2s and ten per recovery episode (5s without
-  client requests starts a new episode); skipped while an uplink IDR is in
-  flight or was forwarded in the last 2s.
+- Uplink kick: `uplink_keyframe_kick reason=return-recovery trigger=<browser-pli|ssrc-learn|...>
+  attempt=N/10 keyframeAge=<dur|none> unanswered=<dur>`. Echo reflects only an
+  uplink IDR sent after it started echoing; the IDR that opens the call often
+  lands in the same millisecond as the SSRC learn and never comes back
+  (KVt9sOuRsPuy).
+  - Learn schedule (`trigger=ssrc-learn`): 500ms after the first remote video
+    SSRC learn of the call, once the call is answered, and then about every 1s
+    while no return keyframe has arrived this call. Stops at the first
+    complete SIP→WebRTC IDR, at the cap, or after 15s
+    (`return_path_kick_schedule_stop reason=return-keyframe|max|window|ended|new-call`).
+  - Client PLIs also kick: always while no return keyframe has arrived this
+    call, or when the client has kept asking for 2s after the last one.
+  - Spacing before the first return keyframe: at least 1s between kicks and
+    500ms after a forwarded uplink IDR. After a return keyframe exists: 2s and
+    2s as before. Never while an uplink IDR is in flight. Ten kicks per
+    recovery episode, shared by both triggers (5s without client requests
+    starts a new episode). The kick PLI bypasses the 1s forced browser PLI
+    cap; the kick's own spacing bounds it.
 - RTCP escalation: with `SIP_KEYFRAME_REQUEST_MODE=info`, return recovery also
   sends RTCP PLI/FIR toward SIP (`sip_rtcp_fb_escalated ... reason=return-recovery`)
   next to the INFO. The usual RTCP gates still apply (uplink IDR in flight,

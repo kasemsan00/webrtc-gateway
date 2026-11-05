@@ -216,6 +216,7 @@ type Session struct {
 	returnRecoveryUplinkKicks             int                  `json:"-"`
 	lastClientKeyframeRequestAt           time.Time            `json:"-"`
 	clientKeyframeEpisodeAt               time.Time            `json:"-"`
+	returnPathKickArmed                   bool                 `json:"-"`
 	sipKeyframeRequestMode                string               `json:"-"`
 	sipRTCPFBMinInterval                  time.Duration        `json:"-"`
 	sipRTCPFBGuard                        time.Duration        `json:"-"`

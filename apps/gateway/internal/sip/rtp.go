@@ -799,6 +799,12 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 				fmt.Printf("[%s] 📈 sip_video_ssrc_learned ssrc=%d previous=%d\n", sess.ID, ssrc, previousSSRC)
 				sess.StartVideoRTCPFallbackWindow(4*time.Second, "ssrc-learn")
 				_ = sess.FlushPendingBrowserKeyframeRequest("ssrc-learn")
+				if previousSSRC == 0 {
+					// Echo/9999 reflects only an uplink IDR sent after it
+					// started echoing: kick the browser at learn+500ms and
+					// every ~1s until the first return keyframe.
+					sess.StartReturnPathUplinkKicks()
+				}
 
 				// Send FIR first, then a short guarded PLI burst.
 				// Keep startup recovery conservative to avoid RTCP storms during @switch answer.

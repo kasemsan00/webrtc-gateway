@@ -442,6 +442,7 @@ func (s *Session) ResetMediaState() {
 	s.returnRecoveryUplinkKicks = 0
 	s.lastClientKeyframeRequestAt = time.Time{}
 	s.clientKeyframeEpisodeAt = time.Time{}
+	s.returnPathKickArmed = false
 	s.uplinkVideoPacketSeen = false
 	s.lastUplinkPacketMarker = false
 	s.pendingSIPRTCPKind = ""

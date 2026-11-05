@@ -145,10 +145,22 @@ func TestDecideReturnRecoveryUplinkKick(t *testing.T) {
 		{"no sip video", func(in *returnRecoveryUplinkKickInput) { in.RemoteVideoSSRC = 0 }, "no-sip-video"},
 		{"max", func(in *returnRecoveryUplinkKickInput) { in.Kicks = returnRecoveryUplinkKickMax }, "max"},
 		{"in flight", func(in *returnRecoveryUplinkKickInput) { in.UplinkIDRFlight = true }, "idr-in-flight"},
-		{"rate limit", func(in *returnRecoveryUplinkKickInput) { in.LastKickAt = now.Add(-1999 * time.Millisecond) }, "rate-limit"},
-		{"rate limit elapsed", func(in *returnRecoveryUplinkKickInput) { in.LastKickAt = now.Add(-2 * time.Second) }, ""},
-		{"uplink idr fresh", func(in *returnRecoveryUplinkKickInput) { in.LastUplinkIDR = now.Add(-time.Second) }, "idr-fresh"},
+		{"rate limit", func(in *returnRecoveryUplinkKickInput) { in.LastKickAt = now.Add(-999 * time.Millisecond) }, "rate-limit"},
+		{"rate limit elapsed", func(in *returnRecoveryUplinkKickInput) { in.LastKickAt = now.Add(-time.Second) }, ""},
+		{"uplink idr fresh", func(in *returnRecoveryUplinkKickInput) { in.LastUplinkIDR = now.Add(-499 * time.Millisecond) }, "idr-fresh"},
+		{"uplink idr 500ms", func(in *returnRecoveryUplinkKickInput) { in.LastUplinkIDR = now.Add(-500 * time.Millisecond) }, ""},
 		{"uplink idr old", func(in *returnRecoveryUplinkKickInput) { in.LastUplinkIDR = now.Add(-63 * time.Second) }, ""},
+		// Once a return keyframe exists the dc4aed4 2s spacing is unchanged.
+		{"return keyframe rate limit", func(in *returnRecoveryUplinkKickInput) {
+			in.ReturnKeyframeAt = now.Add(-time.Minute)
+			in.Unanswered = 3 * time.Second
+			in.LastKickAt = now.Add(-1999 * time.Millisecond)
+		}, "rate-limit"},
+		{"return keyframe idr fresh", func(in *returnRecoveryUplinkKickInput) {
+			in.ReturnKeyframeAt = now.Add(-time.Minute)
+			in.Unanswered = 3 * time.Second
+			in.LastUplinkIDR = now.Add(-1999 * time.Millisecond)
+		}, "idr-fresh"},
 	}
 	for _, tc := range cases {
 		in := base
