@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"webrtc-sip-gateway/internal/logstore"
+	"webrtc-sip-gateway/internal/push"
 	"webrtc-sip-gateway/internal/session"
 	"webrtc-sip-gateway/internal/sip"
 )
@@ -276,10 +277,67 @@ func (s *Server) incomingSessionHasVideo(sessionID string) bool {
 	return hasActiveVideoMedia(string(inviteBody))
 }
 
+// incomingPushRecord is what call_ended needs about a call that was pushed to a phone.
+type incomingPushRecord struct {
+	from      string
+	to        string
+	trunkID   int64
+	startedAt time.Time
+}
+
+// dispatchCallEndedPush tells the phones pushed about sessionID that it stopped ringing, so they
+// stop ringing without a WebSocket and can record a missed call. winner is the client that answered,
+// if any. Only calls that got an incoming push get one, and at most once.
+func (s *Server) dispatchCallEndedPush(sessionID, reason string, winner *WSClient) {
+	if s.pushService == nil || s.trunkManager == nil {
+		return
+	}
+	value, ok := s.incomingPushes.LoadAndDelete(sessionID)
+	if !ok {
+		return
+	}
+	record := value.(incomingPushRecord)
+	var winnerTrunkID int64
+	if winner != nil {
+		s.mu.RLock()
+		winnerTrunkID = winner.resolvedTrunkID
+		s.mu.RUnlock()
+	}
+	ended := push.CallEnded{SessionID: sessionID, From: record.from, To: record.to, Reason: reason, StartedAt: record.startedAt}
+	targetIDs := s.incomingTargetTrunkIDs(record.trunkID)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("🔔 [Push] call_ended push panic recovered: sessionID=%s panic=%v", sessionID, r)
+			}
+		}()
+		lookupCtx, cancel := context.WithTimeout(context.Background(), incomingPushTrunkLookupTimeout)
+		defer cancel()
+		for id := range targetIDs {
+			trunk, err := s.trunkManager.GetTrunkByIDFromDB(lookupCtx, id)
+			if err != nil {
+				log.Printf("🔔 [Push] Skip call_ended push: failed to load trunk from DB (sessionID=%s trunkID=%d err=%v)", sessionID, id, err)
+				continue
+			}
+			if token := trunkStoredFcmToken(trunk); token != "" {
+				// A stored token is one device, and that device answered.
+				if id != winnerTrunkID {
+					s.pushService.NotifyCallEndedFCMToken(token, ended)
+				}
+				continue
+			}
+			if selectIncomingPushRoute(trunk, s.pushService.CanSendAPNS(), s.config.TrunkPNAppID).SendFCM {
+				s.pushService.NotifyCallEnded(*trunk.NotifyUserID, ended)
+			}
+		}
+	}()
+}
+
 func (s *Server) dispatchIncomingPush(sessionID, from, to string, trunkID int64, hasVideo bool) {
 	if s.pushService == nil || s.trunkManager == nil {
 		return
 	}
+	s.incomingPushes.Store(sessionID, incomingPushRecord{from: from, to: to, trunkID: trunkID, startedAt: time.Now()})
 	targetIDs := s.incomingTargetTrunkIDs(trunkID)
 	go func() {
 		defer func() {
@@ -332,6 +390,8 @@ func (s *Server) startIncomingRingTimeout(sessionID string, trunkID int64) {
 		timer := time.NewTimer(timeout)
 		defer timer.Stop()
 		<-timer.C
+		// Every pushed call gets this timer, so answered and declined calls do not stay in the map.
+		defer s.incomingPushes.Delete(sessionID)
 
 		if s.sessionMgr == nil {
 			return
@@ -455,10 +515,12 @@ func (s *Server) NotifyIncomingCall(sessionID, from, to string, trunkID int64) {
 // NotifyIncomingCancel notifies connected WebSocket clients that an incoming call was cancelled by caller.
 func (s *Server) NotifyIncomingCancel(sessionID string, trunkID int64, reason string) {
 	s.fanoutIncomingCancel(sessionID, trunkID, reason, nil)
+	s.dispatchCallEndedPush(sessionID, reason, nil)
 }
 
 func (s *Server) notifyIncomingAnsweredElsewhere(sessionID string, trunkID int64, winner *WSClient) {
 	s.fanoutIncomingCancel(sessionID, trunkID, incomingCancelAnsweredElsewhere, winner)
+	s.dispatchCallEndedPush(sessionID, incomingCancelAnsweredElsewhere, winner)
 }
 
 func (s *Server) sendIncomingAnsweredElsewhere(client *WSClient, sessionID string) {

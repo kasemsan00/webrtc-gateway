@@ -84,12 +84,19 @@ func (s *FCMSender) SendDisplayPush(ctx context.Context, token, title, notificat
 	return s.sendPush(ctx, token, title, notificationBody, data, mobileDevice, true)
 }
 
-func (s *FCMSender) sendPush(ctx context.Context, token, title, notificationBody string, data map[string]string, mobileDevice string, forceNotification bool) (err error) {
+func (s *FCMSender) sendPush(ctx context.Context, token, title, notificationBody string, data map[string]string, mobileDevice string, forceNotification bool) error {
+	return s.send(ctx, buildFCMPayload(token, title, notificationBody, data, mobileDevice, forceNotification))
+}
+
+// SendDataPush sends an Android data-only message with its own priority and TTL.
+func (s *FCMSender) SendDataPush(ctx context.Context, token string, data map[string]string, options DataPushOptions) error {
+	return s.send(ctx, buildFCMDataPayload(token, data, options))
+}
+
+func (s *FCMSender) send(ctx context.Context, payload fcmRequest) (err error) {
 	started := time.Now()
 	defer func() { telemetry.LogDependency(ctx, "push_fcm", started, err) }()
 	url := fmt.Sprintf("%s/%s/messages:send", fcmBaseURL, s.projectID)
-
-	payload := buildFCMPayload(token, title, notificationBody, data, mobileDevice, forceNotification)
 
 	requestBody, err := json.Marshal(payload)
 	if err != nil {
@@ -121,6 +128,16 @@ func (s *FCMSender) sendPush(ctx context.Context, token, title, notificationBody
 	}
 
 	return nil
+}
+
+func buildFCMDataPayload(token string, data map[string]string, options DataPushOptions) fcmRequest {
+	return fcmRequest{
+		Message: fcmMessage{
+			Token:   token,
+			Data:    data,
+			Android: &fcmAndroidConfig{Priority: options.Priority, TTL: options.TTL},
+		},
+	}
 }
 
 func buildFCMPayload(token, title, notificationBody string, data map[string]string, mobileDevice string, forceNotification bool) fcmRequest {

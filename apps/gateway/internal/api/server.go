@@ -33,6 +33,7 @@ type Server struct {
 	trunkManager       TrunkManager
 	logStore           logstore.LogStore
 	pushService        *push.Service
+	incomingPushes     sync.Map // ringing calls a phone was pushed about: sessionID -> incomingPushRecord
 	mobileProvisioner  MobileSIPProvisioner
 	config             config.APIConfig
 	turnConfig         config.TURNConfig

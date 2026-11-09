@@ -39,6 +39,13 @@ const (
 type FCMClient interface {
 	SendPush(ctx context.Context, token, title, notificationBody string, data map[string]string, mobileDevice string) error
 	SendDisplayPush(ctx context.Context, token, title, notificationBody string, data map[string]string, mobileDevice string) error
+	SendDataPush(ctx context.Context, token string, data map[string]string, options DataPushOptions) error
+}
+
+// DataPushOptions sets the Android delivery of a data-only FCM message.
+type DataPushOptions struct {
+	Priority string
+	TTL      string
 }
 
 // NormalizeTestPushStyle accepts data or message. Empty defaults to data.
@@ -291,6 +298,101 @@ func buildIncomingCallPushData(sessionID, from, to, mobileDevice string, now tim
 		"platform":           pushPlatformFromMobileDevice(mobileDevice),
 		"hasVideo":           strconv.FormatBool(hasVideo),
 	}
+}
+
+// Reasons of a call_ended push. They are the reasons of the WebSocket cancel message.
+const (
+	CallEndedCallerCancelled   = "caller_cancelled"
+	CallEndedNoAnswer          = "no_answer"
+	CallEndedAnsweredElsewhere = "answered_elsewhere"
+)
+
+const (
+	// A missed call is worth delivering to a phone that comes back online later.
+	callEndedMissedTTL = "86400s"
+	// answered_elsewhere only stops a ringing phone, so it is useless once the ring is over.
+	callEndedStopRingingTTL = "30s"
+)
+
+// CallEnded describes an unanswered incoming call that a phone was pushed about.
+type CallEnded struct {
+	SessionID string
+	From      string
+	To        string
+	Reason    string
+	StartedAt time.Time
+}
+
+// NotifyCallEndedFCMToken tells the phone holding a gateway-stored token that the call is over.
+// Best-effort, like every other call push; it must not log the token.
+func (s *Service) NotifyCallEndedFCMToken(token string, ended CallEnded) {
+	token = strings.TrimSpace(token)
+	if s == nil || s.fcm == nil || token == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), pushTimeout)
+	defer cancel()
+	if err := s.sendCallEnded(ctx, token, ended); err != nil {
+		log.Printf("🔔 [Push] call_ended FCM send failed: sessionID=%s reason=%s err=%v", ended.SessionID, ended.Reason, err)
+		return
+	}
+	log.Printf("🔔 [Push] call_ended FCM sent: sessionID=%s reason=%s", ended.SessionID, ended.Reason)
+}
+
+// NotifyCallEnded tells the user's Android devices registered with TTRS that the call is over.
+// iOS tokens are skipped: an alert is needed there and no iOS client handles this yet.
+func (s *Service) NotifyCallEnded(userID string, ended CallEnded) {
+	if s == nil || s.ttrs == nil || s.fcm == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), pushTimeout)
+	defer cancel()
+	entries, err := s.ttrs.FetchNotifications(ctx, userID)
+	if err != nil {
+		log.Printf("🔔 [Push] call_ended skipped: failed to fetch notifications for user %s: %v", userID, err)
+		return
+	}
+	sent := 0
+	for _, entry := range FilterByServiceID(entries, pushServiceID) {
+		if pushPlatformFromMobileDevice(entry.MobileDevice) != "android" {
+			continue
+		}
+		if err := s.sendCallEnded(ctx, entry.Token, ended); err != nil {
+			log.Printf("🔔 [Push] call_ended FCM send failed: userID=%s device=%s err=%v", userID, entry.MobileDevice, err)
+			continue
+		}
+		sent++
+	}
+	log.Printf("🔔 [Push] call_ended summary: userID=%s sessionID=%s reason=%s sent=%d", userID, ended.SessionID, ended.Reason, sent)
+}
+
+func (s *Service) sendCallEnded(ctx context.Context, token string, ended CallEnded) error {
+	return s.fcm.SendDataPush(ctx, token, buildCallEndedPushData(ended), callEndedPushOptions(ended.Reason))
+}
+
+// buildCallEndedPushData carries the caller so a phone that never saw incoming_call can still
+// record the missed call. It must never hold expiresAt or ringTimeoutSeconds: SDKs before 0.1.24
+// persist any push that has a caller and an expiry as a call to ring on the next start.
+func buildCallEndedPushData(ended CallEnded) map[string]string {
+	return map[string]string{
+		"type":      "call_ended",
+		"sessionId": ended.SessionID,
+		"reason":    ended.Reason,
+		// FCM data payload has reserved keys (e.g. "from"), so use custom names.
+		"caller":    ended.From,
+		"callee":    ended.To,
+		"startedAt": ended.StartedAt.UTC().Format(time.RFC3339),
+		"platform":  "android",
+	}
+}
+
+// callEndedPushOptions uses normal priority for answered_elsewhere: the app shows nothing for it,
+// and FCM demotes apps whose high-priority messages produce no visible notification.
+func callEndedPushOptions(reason string) DataPushOptions {
+	if reason == CallEndedAnsweredElsewhere {
+		return DataPushOptions{Priority: "normal", TTL: callEndedStopRingingTTL}
+	}
+	return DataPushOptions{Priority: "high", TTL: callEndedMissedTTL}
 }
 
 func pushPlatformFromMobileDevice(mobileDevice string) string {

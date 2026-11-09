@@ -25,6 +25,44 @@ func (s *stubFCM) SendDisplayPush(ctx context.Context, token, title, body string
 	return s.SendPush(ctx, token, title, body, data, device)
 }
 
+func (s *stubFCM) SendDataPush(_ context.Context, token string, _ map[string]string, _ DataPushOptions) error {
+	s.calls++
+	s.token = token
+	return s.err
+}
+
+func TestCallEndedPushDataNeverLooksLikeARingableCall(t *testing.T) {
+	started := time.Date(2026, 11, 9, 3, 0, 0, 0, time.UTC)
+	data := buildCallEndedPushData(CallEnded{SessionID: "s1", From: "1000", To: "2000", Reason: CallEndedCallerCancelled, StartedAt: started})
+	want := map[string]string{"type": "call_ended", "sessionId": "s1", "reason": "caller_cancelled", "caller": "1000", "callee": "2000", "startedAt": "2026-11-09T03:00:00Z"}
+	for key, value := range want {
+		if data[key] != value {
+			t.Fatalf("%s = %q, want %q", key, data[key], value)
+		}
+	}
+	for _, key := range []string{"expiresAt", "ringTimeoutSeconds"} {
+		if _, found := data[key]; found {
+			t.Fatalf("%s would make SDKs before 0.1.24 persist the push as a call to ring", key)
+		}
+	}
+}
+
+func TestCallEndedPushOptions(t *testing.T) {
+	if got := callEndedPushOptions(CallEndedNoAnswer); got.Priority != "high" || got.TTL != "86400s" {
+		t.Fatalf("missed call options: %+v", got)
+	}
+	if got := callEndedPushOptions(CallEndedAnsweredElsewhere); got.Priority != "normal" || got.TTL != "30s" {
+		t.Fatalf("answered elsewhere options: %+v", got)
+	}
+}
+
+func TestBuildFCMDataPayloadHasNoNotification(t *testing.T) {
+	payload := buildFCMDataPayload("tok", map[string]string{"type": "call_ended"}, DataPushOptions{Priority: "high", TTL: "86400s"})
+	if payload.Message.Notification != nil || payload.Message.Android == nil || payload.Message.Android.TTL != "86400s" {
+		t.Fatalf("unexpected payload: %+v", payload.Message)
+	}
+}
+
 func TestNormalizeTestPushStyle(t *testing.T) {
 	style, err := NormalizeTestPushStyle("")
 	if err != nil || style != TestPushStyleData {
