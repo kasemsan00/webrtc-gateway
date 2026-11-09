@@ -22,6 +22,11 @@ type StateNotifier interface {
 
 // MidCallRenegotiationNotifier notifies clients about WebRTC-assisted
 // renegotiation needed after an accepted SIP mid-call offer.
+// RemoteHoldNotifier is told when the SIP far end holds or resumes a call.
+type RemoteHoldNotifier interface {
+	NotifyRemoteHold(sessionID string, held bool)
+}
+
 type MidCallRenegotiationNotifier interface {
 	NotifyMidCallRenegotiation(sessionID string, renegotiation session.MidCallRenegotiationSnapshot, validation session.MidCallSDPValidation)
 }

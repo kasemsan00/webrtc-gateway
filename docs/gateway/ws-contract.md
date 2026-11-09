@@ -178,6 +178,8 @@ flow; clients should display the pending failure and retain authentication.
 - `answer`, `state`, `incoming`, `ringing`, `media`, `hold_state`
   - `incoming` is `{type:"incoming", sessionId, from, to, hasVideo}` where `hasVideo` is a JSON string (`"true"` or `"false"`).
   - `hold_state` includes `sessionId` and `held: true|false` and confirms a successful or idempotent `hold`/`unhold` request.
+  - `remote_hold` includes `sessionId` and `held: true|false`, sent when a SIP re-INVITE or UPDATE from the far end holds or resumes the call (audio `sendonly`/`inactive`, or `c=0.0.0.0`). It is separate from `hold_state`, which only reports this client's own request.
+  - `state` with `state: "ended"` may include `endReason` when an outbound call failed: `busy`, `declined`, `not_found`, `invalid_number`, `forbidden`, `unavailable`, `no_answer`, `incompatible`, `auth_failed`, `service_unavailable` or `failed`. It is absent for a normal hang-up.
 - `message`, `messageSent`, `dtmf`
   - `message` is `{type:"message", sessionId?, from, to, body, contentType}` for inbound SIP MESSAGE.
   - `messageSent` is `{type:"messageSent", sessionId?, destination?, body}` confirming outbound `send_message` delivery.

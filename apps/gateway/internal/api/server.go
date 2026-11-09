@@ -162,6 +162,7 @@ type WSMessage struct {
 	MultiCall    bool            `json:"multiCall,omitempty"`
 	ActiveCalls  int             `json:"activeCalls,omitempty"`
 	Held         *bool           `json:"held,omitempty"`
+	EndReason    string          `json:"endReason,omitempty"`
 	Reason       string          `json:"reason,omitempty"`
 	ReasonSource string          `json:"reasonSource,omitempty"`
 	Error        string          `json:"error,omitempty"`

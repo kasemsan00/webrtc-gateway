@@ -436,6 +436,16 @@ func isInDialogRequest(req *sip.Request) bool {
 	return fromHasTag && toHasTag
 }
 
+func (s *Server) notifyRemoteHoldChange(sess *session.Session, offer []byte) {
+	held := session.IsRemoteHoldOffer(string(offer))
+	if !sess.SetRemoteHeld(held) {
+		return
+	}
+	if notifier, ok := s.midCallNotifier.(RemoteHoldNotifier); ok {
+		notifier.NotifyRemoteHold(sess.ID, held)
+	}
+}
+
 func (s *Server) handleActiveReINVITE(req *sip.Request, tx sip.ServerTransaction, sess *session.Session, callIDValue string) {
 	tryingRes := sip.NewResponseFromRequest(req, 100, "Trying", nil)
 	_ = tx.Respond(tryingRes)
@@ -497,6 +507,7 @@ func (s *Server) handleActiveReINVITE(req *sip.Request, tx sip.ServerTransaction
 		(!previousMediaState.HasActiveVideo && validation.HasActiveVideo)
 
 	sess.ApplyMidCallSDPValidation(validation)
+	s.notifyRemoteHoldChange(sess, req.Body())
 	if s.stateNotifier != nil {
 		s.stateNotifier.NotifySessionState(sess.ID, session.StateActive)
 	}
@@ -633,6 +644,7 @@ func (s *Server) handleUPDATE(req *sip.Request, tx sip.ServerTransaction) {
 	requiresClientRenegotiation := validation.RequiresClientRenegotiation ||
 		(!previousMediaState.HasActiveVideo && validation.HasActiveVideo)
 	sess.ApplyMidCallSDPValidation(validation)
+	s.notifyRemoteHoldChange(sess, req.Body())
 	if s.stateNotifier != nil {
 		s.stateNotifier.NotifySessionState(sess.ID, session.StateActive)
 	}

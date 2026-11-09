@@ -1120,6 +1120,57 @@ func TestNotifyIncomingCancel_SendsOnlyClientsResolvedOnSameTrunk(t *testing.T) 
 	}
 }
 
+func newCallProgressTestServer(t *testing.T) (*Server, *session.Session, *WSClient) {
+	t.Helper()
+	mgr := newTestSessionManager()
+	sess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+	sess.SetCallInfo("outbound", "1001", "1002", "call-progress")
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, nil, nil, nil, nil)
+	client := &WSClient{sessionID: sess.ID, send: make(chan []byte, 8), ConnectedAt: time.Now()}
+	srv.mu.Lock()
+	srv.wsClients[sess.ID] = client
+	srv.wsConnections[client] = struct{}{}
+	srv.mu.Unlock()
+	return srv, sess, client
+}
+
+func TestNotifySessionState_EndedCarriesTheFailureReason(t *testing.T) {
+	srv, sess, client := newCallProgressTestServer(t)
+	sess.SetEndReason("busy")
+
+	srv.NotifySessionState(sess.ID, session.StateEnded)
+
+	msgs := readWSMessages(t, client.send)
+	if len(msgs) == 0 || msgs[0].Type != "state" || msgs[0].State != string(session.StateEnded) || msgs[0].EndReason != "busy" {
+		t.Fatalf("expected ended state with endReason busy, got %+v", msgs)
+	}
+}
+
+func TestNotifySessionState_NormalProgressHasNoEndReason(t *testing.T) {
+	srv, sess, client := newCallProgressTestServer(t)
+
+	srv.NotifySessionState(sess.ID, session.StateEnded)
+
+	msgs := readWSMessages(t, client.send)
+	if len(msgs) == 0 || msgs[0].EndReason != "" {
+		t.Fatalf("expected no endReason, got %+v", msgs)
+	}
+}
+
+func TestNotifyRemoteHold_SendsHeldToTheCallClient(t *testing.T) {
+	srv, sess, client := newCallProgressTestServer(t)
+
+	srv.NotifyRemoteHold(sess.ID, true)
+
+	msgs := readWSMessages(t, client.send)
+	if len(msgs) != 1 || msgs[0].Type != "remote_hold" || msgs[0].SessionID != sess.ID || msgs[0].Held == nil || !*msgs[0].Held {
+		t.Fatalf("expected remote_hold held=true, got %+v", msgs)
+	}
+}
+
 func TestNotifySIPMessage_TargetsMatchingSessionOnly(t *testing.T) {
 	mgr := newTestSessionManager()
 	targetSession, err := mgr.CreateSession(config.TURNConfig{})

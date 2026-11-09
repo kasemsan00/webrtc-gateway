@@ -294,6 +294,7 @@ func (s *Server) makeCall(destination, from string, sess *session.Session) error
 
 			default:
 				// Other final responses (4xx, 5xx, 6xx)
+				sess.SetEndReason(endReasonForSIPStatus(res.StatusCode))
 				sess.UpdateState(session.StateEnded)
 				s.notifySessionStateChange(sess, session.StateEnded)
 				s.logEvent(&logstore.Event{
@@ -333,6 +334,7 @@ func (s *Server) makeCall(destination, from string, sess *session.Session) error
 				s.trySendCancel(inviteReq, sess)
 			}
 
+			sess.SetEndReason(endReasonNoAnswer)
 			sess.UpdateState(session.StateEnded)
 			s.notifySessionStateChange(sess, session.StateEnded)
 			s.logEvent(&logstore.Event{
@@ -470,6 +472,7 @@ func (s *Server) handleInviteAuth(ctx context.Context, originalReq *sip.Request,
 
 	case res.StatusCode == 401 || res.StatusCode == 407:
 		// Still unauthorized - credentials might be wrong
+		sess.SetEndReason(endReasonAuthFailed)
 		sess.UpdateState(session.StateEnded)
 		s.notifySessionStateChange(sess, session.StateEnded)
 		s.logEvent(&logstore.Event{
@@ -485,6 +488,7 @@ func (s *Server) handleInviteAuth(ctx context.Context, originalReq *sip.Request,
 
 	default:
 		// Other final responses (4xx, 5xx, 6xx)
+		sess.SetEndReason(endReasonForSIPStatus(res.StatusCode))
 		sess.UpdateState(session.StateEnded)
 		s.notifySessionStateChange(sess, session.StateEnded)
 		s.logEvent(&logstore.Event{

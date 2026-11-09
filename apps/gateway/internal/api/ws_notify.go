@@ -63,7 +63,12 @@ func (s *Server) NotifySessionStateWithReason(sessionID string, state session.Se
 		State:     string(state),
 		Reason:    reason,
 	}
-	log.Printf("[%s] 📡 WS call-progress type=state state=%s reason=%s", sessionID, state, reason)
+	if state == session.StateEnded && s.sessionMgr != nil {
+		if sess, ok := s.sessionMgr.GetSession(sessionID); ok {
+			msg.EndReason = sess.GetEndReason()
+		}
+	}
+	log.Printf("[%s] 📡 WS call-progress type=state state=%s reason=%s endReason=%s", sessionID, state, reason, msg.EndReason)
 	for _, client := range targets {
 		s.sendWSMessage(client, msg)
 		if state == session.StateEnded {
@@ -111,6 +116,15 @@ func (s *Server) NotifyRemoteMedia(sessionID, kind, direction, state string) {
 		Direction: direction,
 		State:     state,
 	})
+}
+
+// NotifyRemoteHold tells the call's client that the SIP far end held or resumed it.
+func (s *Server) NotifyRemoteHold(sessionID string, held bool) {
+	targets, _, _ := s.selectSIPMessageTargets(sessionID)
+	for _, client := range targets {
+		value := held
+		s.sendWSMessage(client, WSMessage{Type: "remote_hold", SessionID: sessionID, Held: &value})
+	}
 }
 
 func (s *Server) NotifyMidCallRenegotiation(sessionID string, renegotiation session.MidCallRenegotiationSnapshot, validation session.MidCallSDPValidation) {
