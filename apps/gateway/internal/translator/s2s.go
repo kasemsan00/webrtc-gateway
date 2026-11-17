@@ -22,11 +22,9 @@ type S2SPipeline struct {
 	srcLang            string
 	tgtLang            string
 	ttsVoice           string
-	srcPort            int
 	stats              S2SStats
 	statsMu            sync.Mutex
 	running            atomic.Bool
-	cancel             context.CancelFunc
 	debugLabel         string
 	codecMu            sync.Mutex
 	bufferMu           sync.Mutex

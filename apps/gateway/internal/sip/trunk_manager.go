@@ -157,7 +157,6 @@ type TrunkManager struct {
 	trunks         map[int64]*Trunk                 // All loaded trunks
 	trunkByPublic  map[string]int64                 // public_id -> trunk ID
 	ownedLeases    map[int64]bool                   // Trunks we currently own
-	registrations  map[int64]*sip.ClientTransaction // Active registration transactions
 	refreshWorkers map[int64]chan struct{}          // Stop signals for refresh workers
 	leaseRetryRuns map[int64]int                    // Consecutive lease-renew transient failures
 	// registrationAnnounced is log state only: true after this process has
@@ -168,6 +167,9 @@ type TrunkManager struct {
 	registrarIdentities  map[int64]*registrarIdentity
 	registrarGenerations map[int64]uint64
 	resolver             registrarEndpointResolver
+	// registerRetries holds backoff for owned trunks whose last REGISTER
+	// failed; the lease heartbeat retries them.
+	registerRetries map[int64]*registerRetry
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -233,7 +235,6 @@ func NewTrunkManager(db *pgxpool.Pool, cfg *config.Config, userAgent *sipgo.User
 		trunks:                make(map[int64]*Trunk),
 		trunkByPublic:         make(map[string]int64),
 		ownedLeases:           make(map[int64]bool),
-		registrations:         make(map[int64]*sip.ClientTransaction),
 		refreshWorkers:        make(map[int64]chan struct{}),
 		leaseRetryRuns:        make(map[int64]int),
 		registrationAnnounced: make(map[int64]bool),
@@ -844,13 +845,9 @@ func (tm *TrunkManager) markLeaseLost(trunkID int64) {
 		close(stopCh)
 		delete(tm.refreshWorkers, trunkID)
 	}
-	delete(tm.registrations, trunkID)
-	if tm.registrarGenerations == nil {
-		tm.registrarGenerations = make(map[int64]uint64)
-	}
-	tm.registrarGenerations[trunkID]++
-	delete(tm.registrarIdentities, trunkID)
+	tm.invalidateRegistrarIdentityLocked(trunkID)
 	delete(tm.ownedLeases, trunkID)
+	delete(tm.registerRetries, trunkID)
 	delete(tm.leaseRetryRuns, trunkID)
 	tm.setRegistrationAnnouncedLocked(trunkID, false)
 	tm.mu.Unlock()
@@ -910,8 +907,9 @@ func (tm *TrunkManager) releaseLease(trunkID int64) {
 	tm.emitTrunkListChange("lease_updated", trunkID)
 }
 
-// registerTrunk performs SIP REGISTER for a trunk
-func (tm *TrunkManager) registerTrunk(trunkID int64) error {
+// registerTrunk performs SIP REGISTER for a trunk. A failure on a trunk this
+// instance owns is retried with backoff from the lease heartbeat.
+func (tm *TrunkManager) registerTrunk(trunkID int64) (err error) {
 	tm.mu.Lock()
 	trunk, ok := tm.trunks[trunkID]
 	var generation uint64
@@ -919,11 +917,7 @@ func (tm *TrunkManager) registerTrunk(trunkID int64) error {
 	if ok {
 		copied := *trunk
 		trunk = &copied
-		if tm.registrarGenerations == nil {
-			tm.registrarGenerations = make(map[int64]uint64)
-		}
-		tm.registrarGenerations[trunkID]++
-		generation = tm.registrarGenerations[trunkID]
+		generation = tm.nextRegistrarGenerationLocked(trunkID)
 		previouslyAnnounced = tm.registrationAnnounced[trunkID]
 	}
 	tm.mu.Unlock()
@@ -931,6 +925,11 @@ func (tm *TrunkManager) registerTrunk(trunkID int64) error {
 	if !ok {
 		return fmt.Errorf("trunk %d not found", trunkID)
 	}
+	defer func() {
+		if err != nil {
+			tm.noteRegisterFailure(trunkID)
+		}
+	}()
 
 	// Build REGISTER request (matching registration.go pattern)
 	recipient := sip.Uri{
@@ -1045,6 +1044,23 @@ func (tm *TrunkManager) registerTrunk(trunkID int64) error {
 		return fmt.Errorf("%s", errMsg)
 	}
 
+	// UnregisterTrunk or a lost lease may have run while this REGISTER was in
+	// flight (its Expires:0 can even reach the registrar first). Do not report
+	// success or restart the refresh worker for a binding nobody wants.
+	owned, current := tm.registerOutcomeStillWanted(trunkID, generation)
+	if !owned {
+		fmt.Printf("📞 [TrunkManager] Trunk %d REGISTER completed after unregister or lease loss; releasing binding\n", trunkID)
+		if releaseErr := tm.releaseTrunkContact(trunk); releaseErr != nil {
+			fmt.Printf("⚠️ [TrunkManager] Trunk %d stale binding release failed: %v\n", trunkID, releaseErr)
+		}
+		return fmt.Errorf("trunk %d is no longer owned by this instance", trunkID)
+	}
+	if !current {
+		// A newer REGISTER for this trunk is in flight and owns the outcome.
+		tm.logTrunkDebug("📞 [TrunkManager] Trunk %d superseded REGISTER result ignored (generation=%d)\n", trunkID, generation)
+		return nil
+	}
+
 	tm.publishRegistrarIdentityFromRegister(trunk, generation, res, expires)
 
 	// Success
@@ -1059,31 +1075,26 @@ func (tm *TrunkManager) registerTrunk(trunkID int64) error {
 
 // unregisterTrunk sends REGISTER with Expires:0 (best-effort)
 func (tm *TrunkManager) unregisterTrunk(trunkID int64) {
-	tm.mu.RLock()
+	tm.mu.Lock()
 	trunk, ok := tm.trunks[trunkID]
-	stopCh, hasWorker := tm.refreshWorkers[trunkID]
-	tm.mu.RUnlock()
-
 	if !ok {
+		tm.mu.Unlock()
 		return
 	}
-
-	tm.invalidateRegistrarIdentity(trunkID)
-
-	// Stop refresh worker
-	if hasWorker {
+	tm.invalidateRegistrarIdentityLocked(trunkID)
+	// Close and delete under one lock: markLeaseLost and startRefreshWorker
+	// close the same channel, and closing it twice panics.
+	if stopCh, hasWorker := tm.refreshWorkers[trunkID]; hasWorker {
 		close(stopCh)
-		tm.mu.Lock()
 		delete(tm.refreshWorkers, trunkID)
-		tm.mu.Unlock()
 	}
+	tm.mu.Unlock()
 
 	if err := tm.releaseTrunkContact(trunk); err != nil {
 		fmt.Printf("⚠️ [TrunkManager] Trunk %d unregister failed (ignored): %v\n", trunkID, err)
 	}
 
 	tm.mu.Lock()
-	delete(tm.registrations, trunkID)
 	delete(tm.leaseRetryRuns, trunkID)
 	tm.setRegistrationAnnouncedLocked(trunkID, false)
 	tm.mu.Unlock()
@@ -1353,6 +1364,7 @@ func (tm *TrunkManager) leaseHeartbeatWorker() {
 				}
 				tm.handleLeaseRenewResult(id, nil)
 			}
+			tm.retryFailedRegistrations(time.Now())
 
 		case <-tm.ctx.Done():
 			fmt.Printf("📞 [TrunkManager] Lease heartbeat worker stopped\n")
@@ -1506,27 +1518,6 @@ func (tm *TrunkManager) GetDefaultTrunk() (interface{}, bool) {
 		}
 	}
 	return nil, false
-}
-
-// IsOwnedTrunk checks if this instance owns the lease for a trunk
-func (tm *TrunkManager) IsOwnedTrunk(trunkID int64) bool {
-	tm.mu.RLock()
-	defer tm.mu.RUnlock()
-	return tm.ownedLeases[trunkID]
-}
-
-// GetAllOwnedTrunks returns all trunks currently owned by this instance
-func (tm *TrunkManager) GetAllOwnedTrunks() []*Trunk {
-	tm.mu.RLock()
-	defer tm.mu.RUnlock()
-
-	owned := make([]*Trunk, 0, len(tm.ownedLeases))
-	for id := range tm.ownedLeases {
-		if trunk, ok := tm.trunks[id]; ok {
-			owned = append(owned, trunk)
-		}
-	}
-	return owned
 }
 
 // ListTrunks returns trunks from the database with pagination, search, and time filtering.
@@ -2064,14 +2055,10 @@ func (tm *TrunkManager) UnregisterTrunk(trunkID int64, force bool) error {
 		close(stopCh)
 		delete(tm.refreshWorkers, trunkID)
 	}
-	delete(tm.registrations, trunkID)
-	if tm.registrarGenerations == nil {
-		tm.registrarGenerations = make(map[int64]uint64)
-	}
-	tm.registrarGenerations[trunkID]++
-	delete(tm.registrarIdentities, trunkID)
+	tm.invalidateRegistrarIdentityLocked(trunkID)
 	delete(tm.ownedLeases, trunkID)
 	delete(tm.leaseRetryRuns, trunkID)
+	delete(tm.registerRetries, trunkID)
 	tm.setRegistrationAnnouncedLocked(trunkID, false)
 	if loaded, ok := tm.trunks[trunkID]; ok {
 		loaded.LeaseOwner = nil

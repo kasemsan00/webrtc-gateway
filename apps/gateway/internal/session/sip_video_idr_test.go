@@ -221,3 +221,10 @@ func TestDetachPeerConnectionNilsTrackOwner(t *testing.T) {
 		t.Fatal("detach must stop video egress")
 	}
 }
+
+func (s *Session) videoEgressIsStopped() bool {
+	s.videoEgressMu.Lock()
+	defer s.videoEgressMu.Unlock()
+	return s.videoEgressClosed
+}
+

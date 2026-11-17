@@ -126,72 +126,6 @@ func logVideoSameTimestampSplit(sessionID string, d *session.H264SameTimestampSp
 		sessionID, d.Incoming, d.Outgoing, d.FirstMB, d.Packets, d.PreviousPackets, d.Count, d.Wall.Milliseconds())
 }
 
-// startRTPListener starts an RTP listener and returns the port
-// Uses configurable port range from environment variables
-func (s *Server) startRTPListener() (int, error) {
-	// Try ports in configured range
-	for port := s.rtpConfig.PortMin; port <= s.rtpConfig.PortMax; port++ {
-		conn, err := net.ListenUDP("udp", &net.UDPAddr{
-			Port: port,
-			IP:   net.ParseIP("0.0.0.0"),
-		})
-		if err != nil {
-			continue
-		}
-
-		go s.handleRTPPackets(conn)
-
-		udpAddr, ok := conn.LocalAddr().(*net.UDPAddr)
-		if !ok {
-			conn.Close()
-			continue
-		}
-
-		fmt.Printf("RTP listener started on port: %d\n", udpAddr.Port)
-		return udpAddr.Port, nil
-	}
-
-	return 0, fmt.Errorf("failed to find available RTP port in range %d-%d", s.rtpConfig.PortMin, s.rtpConfig.PortMax)
-}
-
-// handleRTPPackets reads RTP packets and writes them to the audio track
-func (s *Server) handleRTPPackets(conn *net.UDPConn) {
-	buffer := make([]byte, s.rtpConfig.BufferSize)
-	packetCount := 0
-
-	fmt.Printf("🎧 [RTP Audio] Handler started, listening for packets from Asterisk...\n")
-
-	for {
-		n, addr, err := conn.ReadFromUDP(buffer)
-		if err != nil {
-			fmt.Printf("❌ [RTP Audio] Error reading packet: %v\n", err)
-			return
-		}
-
-		packetCount++
-		if packetCount <= 5 || packetCount%1000 == 0 {
-			fmt.Printf("📦 [RTP Audio] Received packet #%d: %d bytes from %s\n", packetCount, n, addr)
-		}
-
-		// Check if audioTrack is nil
-		if s.audioTrack == nil {
-			if packetCount == 1 {
-				fmt.Printf("⚠️ [RTP Audio] AudioTrack is nil, skipping packet\n")
-			}
-			continue
-		}
-
-		if _, err := s.audioTrack.Write(buffer[:n]); err != nil {
-			fmt.Printf("❌ [RTP Audio] Error writing to WebRTC track: %v\n", err)
-			return
-		}
-
-		if packetCount <= 5 {
-			fmt.Printf("✅ [RTP Audio] Packet #%d forwarded to WebRTC successfully\n", packetCount)
-		}
-	}
-}
-
 // startRTPListenerForSession starts audio and video RTP listeners for a session
 func (s *Server) startRTPListenerForSession(sess *session.Session) (int, error) {
 	// Try ports in configured range (need 4 ports: audioRTP, audioRTCP, videoRTP, videoRTCP)
@@ -278,12 +212,21 @@ func (s *Server) startRTPListenerForSession(sess *session.Session) (int, error) 
 	return 0, fmt.Errorf("failed to find available RTP port in range %d-%d", s.rtpConfig.PortMin, s.rtpConfig.PortMax)
 }
 
+// logAudioWriteError logs the first few consecutive audio write errors, then
+// one in every 500.
+func logAudioWriteError(sessionID string, consecutive int, err error) {
+	if consecutive <= 3 || consecutive%500 == 0 {
+		fmt.Printf("[%s] Error writing to audio track (consecutive=%d): %v\n", sessionID, consecutive, err)
+	}
+}
+
 // handleAudioRTPPacketsForSession reads audio RTP packets and writes them to a session's audio track
 func (s *Server) handleAudioRTPPacketsForSession(conn *net.UDPConn, sess *session.Session) {
 	buffer := make([]byte, s.rtpConfig.BufferSize)
 	packetCount := 0
 
-	fmt.Printf("[%s] Audio RTP handler started, AudioTrack is nil: %v\n", sess.ID, sess.AudioTrack == nil)
+	fmt.Printf("[%s] Audio RTP handler started, AudioTrack is nil: %v\n", sess.ID, !sess.HasAudioTrack())
+	audioWriteErrors := 0
 
 	// Create ICE credentials for STUN response
 	iceCreds := &ICECredentials{
@@ -307,6 +250,18 @@ func (s *Server) handleAudioRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 
 		// Handle STUN packets (ICE connectivity check)
 		if HandleSTUNPacket(conn, buffer[:n], remoteAddr, iceCreds, sess.ID, "audio") {
+			continue
+		}
+
+		// Muxed RTCP (the gateway offers a=rtcp-mux on audio). An SR/RR parsed
+		// as RTP would go into the Opus track as a garbage packet with a wild
+		// sequence and timestamp, and mark remote audio ready too early.
+		if isRTCPPacketCheck(buffer[:n]) {
+			report := "rr"
+			if buffer[1] == 200 {
+				report = "sr"
+			}
+			sess.NoteInboundRTCP("audio", report)
 			continue
 		}
 
@@ -375,13 +330,17 @@ func (s *Server) handleAudioRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 			fmt.Printf("[%s] Audio RTP packet #%d received: %d bytes from %s\n", sess.ID, packetCount, n, remoteAddr.String())
 		}
 
-		if sess.AudioTrack != nil {
+		if sess.HasAudioTrack() {
 			outBuf := buffer[:n]
 			packet := &rtp.Packet{}
 			if err := packet.Unmarshal(buffer[:n]); err != nil {
 				if writeErr := sess.WriteAudioToWebRTC(outBuf); writeErr != nil {
-					fmt.Printf("[%s] Error writing to audio track: %v\n", sess.ID, writeErr)
-					return
+					if sess.GetState() == session.StateEnded {
+						return
+					}
+					audioWriteErrors++
+					logAudioWriteError(sess.ID, audioWriteErrors, writeErr)
+					continue
 				}
 				if sess.TryMarkRemoteAudioReady() {
 					s.notifyRemoteMediaReady(sess, "audio")
@@ -433,9 +392,9 @@ func (s *Server) handleAudioRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 
 			// CRITICAL: Rewrite RTP payload type from SIP side to WebRTC side
 			// SIP may use PT=107 (or other), but WebRTC expects PT=111 (registered in MediaEngine)
-			if sess.SIPOpusPT > 0 && sess.SIPOpusPT != 111 {
+			if sipOpusPT := sess.GetSIPOpusPT(); sipOpusPT > 0 && sipOpusPT != 111 {
 				originalPT := outPacket.Header.PayloadType
-				if originalPT != DTMFPayloadType && originalPT == sess.SIPOpusPT {
+				if originalPT != DTMFPayloadType && originalPT == sipOpusPT {
 					outPacket.Header.PayloadType = 111
 					if packetCount <= 5 {
 						fmt.Printf("[%s] 🔄 Rewrite audio PT: %d → 111 (packet #%d)\n", sess.ID, originalPT, packetCount)
@@ -447,9 +406,17 @@ func (s *Server) handleAudioRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 			}
 
 			if err := sess.WriteAudioToWebRTC(outBuf); err != nil {
-				fmt.Printf("[%s] Error writing to audio track: %v\n", sess.ID, err)
-				return
+				// A transient error (e.g. no track while the PeerConnection is
+				// replaced on resume) must not kill SIP->WebRTC audio for the
+				// rest of the call. Only a finished session stops the loop.
+				if sess.GetState() == session.StateEnded {
+					return
+				}
+				audioWriteErrors++
+				logAudioWriteError(sess.ID, audioWriteErrors, err)
+				continue
 			}
+			audioWriteErrors = 0
 			if sess.TryMarkRemoteAudioReady() {
 				s.notifyRemoteMediaReady(sess, "audio")
 			}
@@ -508,7 +475,7 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 		uplinkExtraPLIAttempts = 3
 	)
 
-	fmt.Printf("[%s] Video RTP handler started, VideoTrack is nil: %v\n", sess.ID, sess.VideoTrack == nil)
+	fmt.Printf("[%s] Video RTP handler started, VideoTrack is nil: %v\n", sess.ID, !sess.HasVideoTrack())
 
 	udpPackets := make(chan videoUDPIngress, 128)
 	udpErr := make(chan error, 1)
@@ -552,7 +519,7 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 		auNormalizer = session.NewH264AccessUnitNormalizer(session.H264AccessUnitNormalizerConfig{
 			ReuseSameSourceTimestamp: sess.VideoSameTSReuse,
 		}, func(au session.NormalizedH264AccessUnit) {
-			if sess.VideoTrack == nil {
+			if !sess.HasVideoTrack() {
 				if au.IsIDR {
 					sess.RememberSIPVideoIDR(au, false)
 				}
@@ -589,7 +556,7 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 		defer sess.BindH264AUNumberer(nil)
 	}
 	reorderBuf := session.NewVideoReorderBuffer(sess.ID, func(data []byte, isKeyframe bool) {
-		if sess.VideoTrack == nil {
+		if !sess.HasVideoTrack() {
 			return
 		}
 		if auNormalizer != nil {
@@ -630,10 +597,17 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 	idrReplayTicker := time.NewTicker(250 * time.Millisecond)
 	defer idrReplayTicker.Stop()
 	tryWritePendingSIPVideoIDR := func() {
-		if sess.GetState() == session.StateEnded || sess.VideoTrack == nil || !sess.HasPendingSIPVideoIDRWrite() {
+		if sess.GetState() == session.StateEnded || !sess.HasVideoTrack() || !sess.HasPendingSIPVideoIDRWrite() {
 			return
 		}
-		if wrote, reason := sess.WritePendingSIPVideoIDR(sess.WriteVideoToWebRTC); wrote {
+		// Serialized with the reorder buffer's own writes so a replayed IDR
+		// cannot interleave with a batch the timer is releasing.
+		var wrote bool
+		var reason string
+		reorderBuf.Serialize(func() {
+			wrote, reason = sess.WritePendingSIPVideoIDR(sess.WriteVideoToWebRTC)
+		})
+		if wrote {
 			fmt.Printf("[%s] sip_video_idr_flushed reason=%s\n", sess.ID, reason)
 		}
 	}
@@ -883,8 +857,19 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 					lastSeq = seq
 					forwardSeq = true
 				default:
-					// Old/reordered packet (or wrap edge mis-order): keep baseline for normal progression.
-					seqOutOfOrder++
+					if haveLastVideoTS && sipVideoTimestampFar(lastVideoTS, packet.Timestamp) {
+						// Sequence went backward with a timestamp from another
+						// timeline: the far end restarted its numbering on the same
+						// SSRC (queue-to-agent handoff). Adopt it so the stream-switch
+						// path below resets the reorder buffer, normalizer and gate.
+						fmt.Printf("[%s] sip_video_seq_restart prev_seq=%d seq=%d prev_ts=%d ts=%d\n",
+							sess.ID, lastSeq, seq, lastVideoTS, packet.Timestamp)
+						lastSeq = seq
+						forwardSeq = true
+					} else {
+						// Old/reordered packet (or wrap edge mis-order): keep baseline for normal progression.
+						seqOutOfOrder++
+					}
 				}
 			}
 
@@ -1010,7 +995,7 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 			sess.MarkSwitchVideoProgress(time.Now(), auNormalizer == nil && isKeyframe)
 
 			// Push into sequence reorder; complete-AU validation follows at flush.
-			if sess.VideoTrack != nil {
+			if sess.HasVideoTrack() {
 				reorderBuf.Push(seq, egressData, isKeyframe)
 			} else if packetCount == 1 {
 				fmt.Printf("[%s] WARNING: VideoTrack is nil, cannot forward video RTP!\n", sess.ID)
@@ -1050,7 +1035,7 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 				}
 			}
 
-			if sess.VideoTrack != nil && auNormalizer == nil {
+			if sess.HasVideoTrack() && auNormalizer == nil {
 				sess.CacheVideoRTPPacket(packet.SequenceNumber, buffer[:n])
 				_, _ = sess.WriteVideoToWebRTC(buffer[:n])
 			}
@@ -1073,12 +1058,6 @@ func isRTCPPacketCheck(data []byte) bool {
 	// RTCP payload types: 200-207
 	payloadType := data[1]
 	return payloadType >= 200 && payloadType <= 207
-}
-
-// seqAhead returns true if a is newer than b for 16-bit RTP sequence numbers.
-func seqAhead(a, b uint16) bool {
-	d := uint16(a - b)
-	return d != 0 && d < 0x8000
 }
 
 // handleRTCPFromSIP parses RTCP packets from SIP/Linphone and forwards PLI/FIR to WebRTC browser
@@ -1127,10 +1106,13 @@ func (s *Server) handleRTCPFromSIP(data []byte, sess *session.Session, rtcpCount
 			}
 
 		case *rtcp.TransportLayerNack:
-			// Forward NACK from SIP/Linphone to WebRTC browser for packet retransmission
-			fmt.Printf("[%s] 🔄 Received NACK from Linphone/SIP - Forwarding to WebRTC browser (Media SSRC=%d, Nacks=%v)\n",
-				sess.ID, p.MediaSSRC, p.Nacks)
-			sess.SendNACKToWebRTC(p.MediaSSRC, p.Nacks)
+			// Not forwarded: the NACK names the gateway's rewritten uplink SSRC
+			// and sequence numbers, which the browser never sent, and there is
+			// no uplink retransmission cache. Loss is repaired by keyframes.
+			if rtcpCount <= 5 || rtcpCount%200 == 0 {
+				fmt.Printf("[%s] Received NACK from SIP for uplink video (MediaSSRC=%d, Nacks=%v) - not forwarded\n",
+					sess.ID, p.MediaSSRC, p.Nacks)
+			}
 
 		default:
 			if rtcpCount <= 5 {

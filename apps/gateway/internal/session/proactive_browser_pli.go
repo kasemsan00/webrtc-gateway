@@ -45,16 +45,6 @@ type ProactiveBrowserPLIDecision struct {
 	Reason string
 }
 
-// DecideProactiveBrowserPLI is the fake-clock decision for the proactive
-// browser-PLI loop. Startup PLIs stop once any IDR has been forwarded.
-// After that only the safety net remains, and it fires only when no IDR
-// has been forwarded for safety AND either SIP never asked for a keyframe
-// or the last SIP FIR/PLI is still unanswered. An answered SIP request
-// means the phone is recovering on its own; do not poke a 10s IDR cadence.
-func DecideProactiveBrowserPLI(lastIDR, lastPLI, now time.Time, initial, safety time.Duration) ProactiveBrowserPLIDecision {
-	return DecideProactiveBrowserPLIForCall(lastIDR, lastPLI, time.Time{}, now, false, initial, safety)
-}
-
 // DecideProactiveBrowserPLIForCall is DecideProactiveBrowserPLI with SIP
 // keyframe state. sipSeen is true after any SIP INFO VFU or RTCP PLI/FIR.
 func DecideProactiveBrowserPLIForCall(lastIDR, lastPLI, lastSIP, now time.Time, sipSeen bool, initial, safety time.Duration) ProactiveBrowserPLIDecision {
@@ -96,25 +86,6 @@ func SwitchEpochIDRSatisfied(firstSliceIDR, switchAt time.Time) bool {
 		return false
 	}
 	return !firstSliceIDR.Before(switchAt)
-}
-
-// BrowserKeyframeRequestSatisfied reports that another browser IDR request
-// would not help: one was forwarded within BrowserKeyframeSatisfyWindow, or
-// a PLI is still outstanding and waiting for that IDR.
-func BrowserKeyframeRequestSatisfied(lastIDR, lastPLI, now time.Time) (bool, string) {
-	if !lastIDR.IsZero() {
-		age := now.Sub(lastIDR)
-		if age >= 0 && age < BrowserKeyframeSatisfyWindow {
-			return true, "idr-fresh"
-		}
-	}
-	if !lastPLI.IsZero() && (lastIDR.IsZero() || lastIDR.Before(lastPLI)) {
-		age := now.Sub(lastPLI)
-		if age >= 0 && age < BrowserKeyframeSatisfyWindow {
-			return true, "pli-pending"
-		}
-	}
-	return false, ""
 }
 
 // IDRSatisfiesKeyframeRequest is true when an IDR was forwarded at or after

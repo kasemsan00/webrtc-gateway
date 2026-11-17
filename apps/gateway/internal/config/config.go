@@ -176,7 +176,6 @@ type SIPConfig struct {
 	// - rtp:  always send to SIP video RTP port (rtcp-mux style)
 	// - rtcp: always send to learned/rtp+1 RTCP target only
 	VideoFeedbackTransport string
-	VideoPreserveSTAPA     bool // Preserve STAP-A packets (don't de-aggregate) when they contain SPS+PPS+IDR (default: false)
 	// Keyframe watchdog: request FIR/PLI when keyframes go stale (SIP → WebRTC)
 	VideoKeyframeWatchdogEnabled    bool // Enable keyframe watchdog (default: true)
 	VideoKeyframeWatchdogIntervalMS int  // Check interval in ms (default: 2000)
@@ -365,7 +364,6 @@ func Load() (*Config, error) {
 			AudioUseAVPF:                         getEnvAsBool("SIP_AUDIO_USE_AVPF", false),
 			VideoUseAVPF:                         getEnvAsBool("SIP_VIDEO_USE_AVPF", true),
 			VideoFeedbackTransport:               getSIPVideoFeedbackTransport(),
-			VideoPreserveSTAPA:                   getEnvAsBool("SIP_VIDEO_PRESERVE_STAPA", false),
 			VideoKeyframeWatchdogEnabled:         getEnvAsBool("SIP_VIDEO_KEYFRAME_WATCHDOG", true),
 			VideoKeyframeWatchdogIntervalMS:      getEnvAsInt("SIP_VIDEO_KEYFRAME_WATCHDOG_INTERVAL_MS", 2000),
 			VideoKeyframeStaleMS:                 getEnvAsInt("SIP_VIDEO_KEYFRAME_STALE_MS", 4000),
@@ -538,7 +536,6 @@ func (c *Config) Display() {
 	}
 	fmt.Printf("  Video Use AVPF: %v\n", c.SIP.VideoUseAVPF)
 	fmt.Printf("  Video Feedback Transport: %s\n", c.SIP.VideoFeedbackTransport)
-	fmt.Printf("  Video Preserve STAP-A: %v\n", c.SIP.VideoPreserveSTAPA)
 	fmt.Printf("  Video Keyframe Watchdog: %v (interval=%dms, stale=%dms, firStale=%dms)\n",
 		c.SIP.VideoKeyframeWatchdogEnabled,
 		c.SIP.VideoKeyframeWatchdogIntervalMS,
@@ -938,19 +935,6 @@ func getEnvAsFloat32(key string, defaultValue float32) float32 {
 		return defaultValue
 	}
 	return float32(value)
-}
-
-func getEnvAsFloat64(key string, defaultValue float64) float64 {
-	valueStr := os.Getenv(key)
-	if valueStr == "" {
-		return defaultValue
-	}
-	value, err := strconv.ParseFloat(valueStr, 64)
-	if err != nil {
-		fmt.Printf("Warning: Invalid value for %s, using default: %.4f\n", key, defaultValue)
-		return defaultValue
-	}
-	return value
 }
 
 func getEnvAsBool(key string, defaultValue bool) bool {

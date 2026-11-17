@@ -3,7 +3,6 @@ package dbbootstrap
 import (
 	"bytes"
 	"os"
-	"path/filepath"
 	"testing"
 	"time"
 )
@@ -43,22 +42,6 @@ func TestClassifyRelations(t *testing.T) {
 				t.Fatalf("classifyRelations() = %s, want %s", got, tc.want)
 			}
 		})
-	}
-}
-
-func TestKnownVersionsSorted(t *testing.T) {
-	dir := t.TempDir()
-	for _, name := range []string{"202603010001_second.sql", "202602010001_first.sql", "README.md"} {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte("-- +goose Up\nSELECT 1;"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	versions, err := KnownVersions(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(versions) != 2 || versions[0] != 202602010001 || versions[1] != 202603010001 {
-		t.Fatalf("unexpected versions: %v", versions)
 	}
 }
 

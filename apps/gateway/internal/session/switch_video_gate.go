@@ -409,12 +409,6 @@ func (s *Session) scheduleUndersizedIDRPLI(generation int, now time.Time) (time.
 	return wait, true
 }
 
-func (s *Session) ClearSwitchVideoGateStillEmitted() {
-	s.mu.Lock()
-	s.SwitchVideoGateStillEmitted = false
-	s.mu.Unlock()
-}
-
 func (s *Session) sendScheduledUndersizedIDRPLI(generation int) {
 	s.mu.Lock()
 	if !s.SwitchVideoGateActive || s.SwitchVideoGateReleasing || s.SwitchVideoGateGeneration != generation {

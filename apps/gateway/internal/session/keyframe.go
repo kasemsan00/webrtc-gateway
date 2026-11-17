@@ -2,7 +2,6 @@ package session
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/pion/rtcp"
@@ -51,31 +50,6 @@ const (
 	// re-arms the uplink kick cap.
 	returnRecoveryEpisodeIdle = 5 * time.Second
 )
-
-// shouldSendPLIToAsterisk gates PLI forwarding to avoid flooding.
-// In force mode (browser request), only the minimum interval is enforced.
-func (s *Session) shouldSendPLIToAsterisk(now time.Time, force bool) bool {
-	s.mu.RLock()
-	lastKeyframe := s.LastKeyframe
-	lastPLISent := s.LastSipPLISent
-	s.mu.RUnlock()
-
-	minInterval := pliMinInterval
-	if force {
-		minInterval = pliForceMinInterval
-	}
-
-	if !lastPLISent.IsZero() && now.Sub(lastPLISent) < minInterval {
-		return false
-	}
-	if force {
-		return true
-	}
-	if lastKeyframe.IsZero() {
-		return true
-	}
-	return now.Sub(lastKeyframe) > pliKeyframeGrace
-}
 
 // SendPLIToAsterisk sends a Picture Loss Indication to Asterisk as Compound RTCP (RR + PLI)
 // RTCP is sent to RTP port + 1 as per RFC 3550, with fallback to RTP port (for rtcp-mux)
@@ -217,12 +191,6 @@ func (s *Session) clearPendingBrowserKeyframeRequestLocked() {
 	s.PendingBrowserKeyframeRequestEpoch = 0
 }
 
-func (s *Session) ClearPendingBrowserKeyframeRequest() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.clearPendingBrowserKeyframeRequestLocked()
-}
-
 // FlushPendingBrowserKeyframeRequest sends SIP-directed recovery if a client
 // keyframe request was deferred. Returns action from SendBrowserRecoveryToAsterisk,
 // or "none" if nothing was pending.
@@ -348,13 +316,6 @@ func (s *Session) HasUplinkKeyframe() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return !s.LastUplinkKeyframe.IsZero()
-}
-
-// HasRecentUplinkKeyframe reports whether an uplink IDR was forwarded within maxAge.
-func (s *Session) HasRecentUplinkKeyframe(maxAge time.Duration) bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return !s.LastUplinkKeyframe.IsZero() && time.Since(s.LastUplinkKeyframe) <= maxAge
 }
 
 // HasUplinkKeyframeSince reports whether an uplink IDR was forwarded at or after t.
@@ -825,31 +786,6 @@ func (s *Session) ShouldContinueSwitchFeedbackBurst(generation int, mediaEpoch u
 		return false
 	}
 	return !s.SwitchFeedbackBurstSatisfied
-}
-
-// SendNACKToWebRTC forwards a NACK (Negative Acknowledgement) to the WebRTC browser
-// requesting retransmission of lost packets
-func (s *Session) SendNACKToWebRTC(mediaSSRC uint32, nacks []rtcp.NackPair) {
-	if s.PeerConnection == nil {
-		fmt.Printf("[%s] Cannot forward NACK: PeerConnection is nil\n", s.ID)
-		return
-	}
-
-	// Create NACK packet to send to browser
-	nack := &rtcp.TransportLayerNack{
-		MediaSSRC: mediaSSRC,
-		Nacks:     nacks,
-	}
-
-	// Write RTCP NACK to the WebRTC peer connection
-	if err := s.PeerConnection.WriteRTCP([]rtcp.Packet{nack}); err != nil {
-		if strings.Contains(err.Error(), "read/write on closed pipe") {
-			return
-		}
-		fmt.Printf("[%s] Error sending NACK to browser: %v\n", s.ID, err)
-	} else {
-		fmt.Printf("[%s] 🔄 Forwarded NACK to WebRTC browser (MediaSSRC=%d, Nacks=%v)\n", s.ID, mediaSSRC, nacks)
-	}
 }
 
 // SendNACKToAsterisk sends a NACK to Asterisk requesting retransmission of lost packets

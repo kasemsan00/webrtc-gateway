@@ -182,25 +182,6 @@ func TestPLISourcesCoalesceToOneRequest(t *testing.T) {
 	}
 }
 
-func TestBrowserKeyframeRequestSatisfied(t *testing.T) {
-	now := time.Unix(80, 0)
-	if skip, _ := BrowserKeyframeRequestSatisfied(time.Time{}, time.Time{}, now); skip {
-		t.Fatal("empty clocks were satisfied")
-	}
-	if skip, reason := BrowserKeyframeRequestSatisfied(now.Add(-999*time.Millisecond), time.Time{}, now); !skip || reason != "idr-fresh" {
-		t.Fatalf("IDR 999ms ago: skip=%v reason=%s", skip, reason)
-	}
-	if skip, _ := BrowserKeyframeRequestSatisfied(now.Add(-BrowserKeyframeSatisfyWindow), time.Time{}, now); skip {
-		t.Fatal("IDR at 1s was still treated as fresh")
-	}
-	if skip, reason := BrowserKeyframeRequestSatisfied(time.Time{}, now.Add(-200*time.Millisecond), now); !skip || reason != "pli-pending" {
-		t.Fatalf("pending PLI: skip=%v reason=%s", skip, reason)
-	}
-	if skip, _ := BrowserKeyframeRequestSatisfied(now.Add(-50*time.Millisecond), now.Add(-200*time.Millisecond), now); !skip {
-		t.Fatal("IDR after the pending PLI was not fresh")
-	}
-}
-
 func TestIDRSatisfiesKeyframeRequest(t *testing.T) {
 	fir := time.Unix(90, 0)
 	if IDRSatisfiesKeyframeRequest(time.Time{}, fir) {
@@ -589,3 +570,14 @@ func TestUplinkVideoStalledLine(t *testing.T) {
 		t.Fatalf("stall line %q", line)
 	}
 }
+
+// DecideProactiveBrowserPLI is the fake-clock decision for the proactive
+// browser-PLI loop. Startup PLIs stop once any IDR has been forwarded.
+// After that only the safety net remains, and it fires only when no IDR
+// has been forwarded for safety AND either SIP never asked for a keyframe
+// or the last SIP FIR/PLI is still unanswered. An answered SIP request
+// means the phone is recovering on its own; do not poke a 10s IDR cadence.
+func DecideProactiveBrowserPLI(lastIDR, lastPLI, now time.Time, initial, safety time.Duration) ProactiveBrowserPLIDecision {
+	return DecideProactiveBrowserPLIForCall(lastIDR, lastPLI, time.Time{}, now, false, initial, safety)
+}
+

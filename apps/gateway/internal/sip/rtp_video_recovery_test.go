@@ -35,3 +35,23 @@ func TestSipVideoTimestampJumpedDetectsPreAnswerToEndpoint(t *testing.T) {
 		t.Fatal("pre-answer still to endpoint clock should be a jump")
 	}
 }
+
+// A backward sequence step is only a restart when its timestamp is on another
+// timeline. A late packet a frame behind must stay "out of order".
+func TestSipVideoTimestampFar(t *testing.T) {
+	cases := []struct {
+		prev, next uint32
+		far        bool
+	}{
+		{1_000_000_000, 1_000_000_000 - 3000, false}, // late packet, previous frame
+		{1_000_000_000, 1_000_000_000 + 3000, false}, // next frame
+		{1_000_000_000, 2700, true},                  // restart on a lower timeline
+		{2700, 1_000_000_000, true},                  // restart on a higher timeline
+		{10, ^uint32(0) - 10, false},                 // wrap, 21 ticks apart
+	}
+	for _, c := range cases {
+		if got := sipVideoTimestampFar(c.prev, c.next); got != c.far {
+			t.Fatalf("sipVideoTimestampFar(%d, %d) = %v, want %v", c.prev, c.next, got, c.far)
+		}
+	}
+}

@@ -350,3 +350,128 @@ func makeMinimalRTP(seq uint16) []byte {
 		0, 0, 0, 1, // SSRC
 	}
 }
+
+// Same SSRC, sequence restarted lower (queue-to-agent handoff): after a run
+// of in-order "old" packets the buffer must follow the new numbering instead
+// of dropping everything until it catches up with nextSeq.
+func TestVideoReorderBuffer_RebasesAfterBackwardJump(t *testing.T) {
+	var mu sync.Mutex
+	var flushed []uint16
+	buf := NewVideoReorderBuffer("test", func(data []byte, isKeyframe bool) {
+		mu.Lock()
+		defer mu.Unlock()
+		flushed = append(flushed, uint16(data[2])<<8|uint16(data[3]))
+	})
+
+	for seq := uint16(30000); seq < 30010; seq++ {
+		buf.Push(seq, makeMinimalRTP(seq), false)
+	}
+	for seq := uint16(1000); seq < 1000+reorderRebaseRun+5; seq++ {
+		buf.Push(seq, makeMinimalRTP(seq), false)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	want := 10 + reorderRebaseRun + 5 // old stream + the whole run + 5 after it
+	if len(flushed) != want {
+		t.Fatalf("flushed %d packets, want %d: %v", len(flushed), want, flushed)
+	}
+	for i, seq := range flushed[10:] {
+		if seq != uint16(1000+i) {
+			t.Fatalf("new numbering must be released in order from 1000, got %v", flushed[10:])
+		}
+	}
+	if buf.Rebases != 1 {
+		t.Fatalf("Rebases = %d, want 1", buf.Rebases)
+	}
+}
+
+// A late in-order burst just behind nextSeq (e.g. retransmissions after the
+// gap was skipped) is old data, not a restart.
+func TestVideoReorderBuffer_LateBurstNearNextSeqDoesNotRebase(t *testing.T) {
+	buf := NewVideoReorderBuffer("test", func([]byte, bool) {})
+	for seq := uint16(5000); seq < 5200; seq++ {
+		buf.Push(seq, makeMinimalRTP(seq), false)
+	}
+	for seq := uint16(5100); seq < 5100+2*reorderRebaseRun; seq++ {
+		buf.Push(seq, makeMinimalRTP(seq), false)
+	}
+	if buf.Rebases != 0 {
+		t.Fatalf("Rebases = %d, want 0", buf.Rebases)
+	}
+	_, _, droppedOld, _ := buf.GetStats()
+	if droppedOld != int64(2*reorderRebaseRun) {
+		t.Fatalf("droppedOld = %d, want %d", droppedOld, 2*reorderRebaseRun)
+	}
+}
+
+// Scattered late duplicates must keep being dropped.
+func TestVideoReorderBuffer_ScatteredOldPacketsDoNotRebase(t *testing.T) {
+	buf := NewVideoReorderBuffer("test", func([]byte, bool) {})
+	for seq := uint16(500); seq < 600; seq++ {
+		buf.Push(seq, makeMinimalRTP(seq), false)
+	}
+	for i := 0; i < 3*reorderRebaseRun; i++ {
+		old := uint16(400 + 2*i) // not consecutive
+		buf.Push(old, makeMinimalRTP(old), false)
+	}
+	if buf.Rebases != 0 {
+		t.Fatalf("Rebases = %d, want 0", buf.Rebases)
+	}
+	_, _, droppedOld, _ := buf.GetStats()
+	if droppedOld != int64(3*reorderRebaseRun) {
+		t.Fatalf("droppedOld = %d, want %d", droppedOld, 3*reorderRebaseRun)
+	}
+}
+
+// A batch released by the timeout must reach the writer before a packet
+// pushed after it, even while the timeout is still writing.
+func TestVideoReorderBuffer_TimeoutBatchIsNotOvertaken(t *testing.T) {
+	var mu sync.Mutex
+	var flushed []uint16
+	firstTimeoutWrite := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	buf := NewVideoReorderBuffer("test", func(data []byte, isKeyframe bool) {
+		seq := uint16(data[2])<<8 | uint16(data[3])
+		if seq == 102 {
+			once.Do(func() {
+				close(firstTimeoutWrite)
+				<-release // hold the timeout batch mid-write
+			})
+		}
+		mu.Lock()
+		flushed = append(flushed, seq)
+		mu.Unlock()
+	})
+
+	buf.Push(100, makeMinimalRTP(100), false)
+	buf.Push(102, makeMinimalRTP(102), false) // 101 lost
+	buf.Push(103, makeMinimalRTP(103), false)
+	<-firstTimeoutWrite // timeout is writing 102..103
+
+	pushed := make(chan struct{})
+	go func() {
+		buf.Push(104, makeMinimalRTP(104), false)
+		close(pushed)
+	}()
+	select {
+	case <-pushed:
+		t.Fatal("Push must wait for the timeout batch to finish writing")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	<-pushed
+
+	mu.Lock()
+	defer mu.Unlock()
+	want := []uint16{100, 102, 103, 104}
+	if len(flushed) != len(want) {
+		t.Fatalf("flushed %v, want %v", flushed, want)
+	}
+	for i := range want {
+		if flushed[i] != want[i] {
+			t.Fatalf("flushed %v, want %v", flushed, want)
+		}
+	}
+}

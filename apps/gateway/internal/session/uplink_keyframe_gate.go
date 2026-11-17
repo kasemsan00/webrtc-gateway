@@ -180,7 +180,6 @@ func (s *Session) noteUplinkIDRProgressLocked(isIDR bool, rtpTimestamp uint32, m
 	newPicture := !s.uplinkVideoIDRTimestampSeen || rtpTimestamp != s.uplinkVideoLastIDRTimestamp
 	if newPicture || !s.uplinkIDRInFlight {
 		s.uplinkIDRInFlight = true
-		s.uplinkIDRInFlightTS = rtpTimestamp
 	}
 	if marker {
 		s.uplinkIDRInFlight = false

@@ -342,29 +342,6 @@ func TestRegistrarOperationFailureDoesNotPublishInitialIdentity(t *testing.T) {
 	}
 }
 
-func TestRegistrarIdentityPruneInvalidatesLatePublication(t *testing.T) {
-	t.Parallel()
-
-	trunk := &Trunk{ID: 14, Domain: "sipagent.ttrs.or.th", Port: 5060, Username: "00025", Transport: "tcp", Enabled: true}
-	tm := &TrunkManager{
-		trunks:              map[int64]*Trunk{},
-		registrarIdentities: map[int64]*registrarIdentity{trunk.ID: registrarIdentityFixture(trunk)},
-	}
-	tm.mu.Lock()
-	tm.pruneRegistrarIdentitiesLocked()
-	tm.mu.Unlock()
-
-	if tm.registrarIdentities[trunk.ID] != nil {
-		t.Fatal("prune must remove identity for unloaded trunk")
-	}
-	if tm.registrarGenerations[trunk.ID] != 1 {
-		t.Fatalf("prune must advance generation, got %d", tm.registrarGenerations[trunk.ID])
-	}
-	if tm.tryPublishRegistrarIdentity(trunk.ID, 0, registrarIdentityFixture(trunk)) {
-		t.Fatal("late publication from pre-prune generation must fail")
-	}
-}
-
 func TestRegistrarIdentityConcurrentOperations(t *testing.T) {
 	trunk := &Trunk{ID: 13, Domain: "sipagent.ttrs.or.th", Port: 5060, Username: "00025", Transport: "tcp", Enabled: true}
 	tm := &TrunkManager{
@@ -511,3 +488,31 @@ func BenchmarkMatchTrunkFromInviteDetailed(b *testing.B) {
 		_ = tm.MatchTrunkFromInviteDetailed(req)
 	}
 }
+
+func (tm *TrunkManager) beginRegistrarOperation(trunkID int64) uint64 {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	if tm.registrarGenerations == nil {
+		tm.registrarGenerations = make(map[int64]uint64)
+	}
+	tm.registrarGenerations[trunkID]++
+	return tm.registrarGenerations[trunkID]
+}
+
+
+func (tm *TrunkManager) currentRegistrarGeneration(trunkID int64) uint64 {
+	tm.mu.RLock()
+	defer tm.mu.RUnlock()
+	if tm.registrarGenerations == nil {
+		return 0
+	}
+	return tm.registrarGenerations[trunkID]
+}
+
+
+func (tm *TrunkManager) invalidateRegistrarIdentity(trunkID int64) {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	tm.invalidateRegistrarIdentityLocked(trunkID)
+}
+

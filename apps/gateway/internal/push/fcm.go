@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"sync"
 	"time"
 
 	"golang.org/x/oauth2"
@@ -27,7 +26,6 @@ type FCMSender struct {
 	projectID   string
 	tokenSource oauth2.TokenSource
 	httpClient  *http.Client
-	mu          sync.RWMutex
 }
 
 // NewFCMSender creates an FCMSender from a service account JSON file.

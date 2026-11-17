@@ -20,6 +20,14 @@ func sipVideoShouldRecoverGap(skipped int, lastRecovery, now time.Time) bool {
 	return lastRecovery.IsZero() || now.Sub(lastRecovery) >= sipVideoGapRecoveryMinInterval
 }
 
+// sipVideoTimestampFar reports a timestamp more than the jump threshold away
+// in either direction. Unlike sipVideoTimestampJumped it does not treat a
+// slightly older timestamp (a late packet) as a jump.
+func sipVideoTimestampFar(prev, next uint32) bool {
+	d := next - prev
+	return d > sipVideoTimestampJumpThreshold && d < ^uint32(0)-sipVideoTimestampJumpThreshold
+}
+
 func sipVideoTimestampJumped(havePrev bool, prev, next uint32) bool {
 	if !havePrev {
 		return false

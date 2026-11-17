@@ -73,6 +73,10 @@ func (s *Server) setupHandlers() {
 		s.handleUPDATE(req, tx)
 	})
 
+	s.sipServer.OnNotify(func(req *sip.Request, tx sip.ServerTransaction) {
+		s.handleNOTIFY(req, tx)
+	})
+
 	s.sipServer.OnRefer(func(req *sip.Request, tx sip.ServerTransaction) {
 		s.handleREFER(req, tx)
 	})
@@ -268,12 +272,12 @@ func (s *Server) handleINVITE(req *sip.Request, tx sip.ServerTransaction) {
 				SIPCallID: callIDValue,
 			})
 
-			// CRITICAL: Update the transaction - old one may have timed out
-			sess.UpdateIncomingInviteTransaction(tx, req, req.Body())
-			s.registerIncomingCancelHandler(sess, tx)
-
+			state := sess.GetState()
 			// If session is still in "incoming" state, resend 180 Ringing
-			if sess.GetState() == session.StateIncoming {
+			if state == session.StateIncoming {
+				// CRITICAL: Update the transaction - old one may have timed out
+				sess.UpdateIncomingInviteTransaction(tx, req, req.Body())
+				s.registerIncomingCancelHandler(sess, tx)
 				fmt.Printf("📞 Resending 180 Ringing for session %s\n", sess.ID)
 				ringingRes := sip.NewResponseFromRequest(req, 180, "Ringing", nil)
 				ringingRes.AppendHeader(&sip.ContactHeader{
@@ -285,10 +289,7 @@ func (s *Server) handleINVITE(req *sip.Request, tx sip.ServerTransaction) {
 				s.waitForIncomingInviteTransaction(sess, tx)
 				return
 			}
-			// If already active, this might be a mid-call re-INVITE (hold/resume)
-			if sess.GetState() == session.StateActive {
-				s.handleActiveReINVITE(req, tx, sess, callIDValue)
-			}
+			s.respondExistingDialogReINVITE(req, tx, sess, state, callIDValue)
 			return // Don't create new session
 		}
 	}
@@ -312,8 +313,19 @@ func (s *Server) handleINVITE(req *sip.Request, tx sip.ServerTransaction) {
 	if isTrunkCall && trunkOwned {
 		fmt.Printf("📞 Processing trunk incoming call\n")
 	} else if !isTrunkCall {
-		// Already rejected above, this code path shouldn't be reached
-		fmt.Printf("❌ Non-trunk incoming call - already rejected\n")
+		// Only reached without a trunk manager (no database): every other
+		// non-trunk INVITE was answered above. Answer this one too, or the
+		// caller's INVITE transaction just times out.
+		fmt.Printf("❌ Incoming call rejected: trunk manager unavailable\n")
+		_ = tx.Respond(sip.NewResponseFromRequest(req, 503, "Service Unavailable", nil))
+		s.logEvent(&logstore.Event{
+			Timestamp:     time.Now(),
+			SessionID:     "",
+			Category:      "sip",
+			Name:          "sip_invite_rejected_no_trunk_manager",
+			SIPStatusCode: 503,
+			SIPCallID:     callIDValue,
+		})
 		return
 	}
 
@@ -446,6 +458,26 @@ func (s *Server) notifyRemoteHoldChange(sess *session.Session, offer []byte) {
 	}
 }
 
+// respondExistingDialogReINVITE answers an INVITE for a session that is past
+// the incoming stage. Every such INVITE gets a final response: a re-INVITE
+// left unanswered makes Asterisk time out with 408 and tear the call down.
+//   - active or reconnecting (client network drop): handle as mid-call
+//     re-INVITE (hold/resume, media change)
+//   - ended: 481, the dialog is gone
+//   - outbound connecting/ringing (no dialog yet): 491 so the peer retries
+func (s *Server) respondExistingDialogReINVITE(req *sip.Request, tx sip.ServerTransaction, sess *session.Session, state session.SessionState, callIDValue string) {
+	switch state {
+	case session.StateActive, session.StateReconnecting:
+		s.handleActiveReINVITE(req, tx, sess, callIDValue)
+		return
+	case session.StateEnded:
+		_ = tx.Respond(sip.NewResponseFromRequest(req, 481, "Call/Transaction Does Not Exist", nil))
+	default:
+		_ = tx.Respond(sip.NewResponseFromRequest(req, 491, "Request Pending", nil))
+	}
+	fmt.Printf("[%s] sip_reinvite rejected state=%s\n", sess.ID, state)
+}
+
 func (s *Server) handleActiveReINVITE(req *sip.Request, tx sip.ServerTransaction, sess *session.Session, callIDValue string) {
 	tryingRes := sip.NewResponseFromRequest(req, 100, "Trying", nil)
 	_ = tx.Respond(tryingRes)
@@ -507,8 +539,12 @@ func (s *Server) handleActiveReINVITE(req *sip.Request, tx sip.ServerTransaction
 		(!previousMediaState.HasActiveVideo && validation.HasActiveVideo)
 
 	sess.ApplyMidCallSDPValidation(validation)
+	s.updateAsteriskEndpointsFromMidCallOffer(req.Body(), sess)
 	s.notifyRemoteHoldChange(sess, req.Body())
-	if s.stateNotifier != nil {
+	// Only an active call is re-announced as active. While the client is
+	// reconnecting this would flip the SDK from RECONNECTING to IN_CALL with
+	// media still down.
+	if s.stateNotifier != nil && sess.GetState() == session.StateActive {
 		s.stateNotifier.NotifySessionState(sess.ID, session.StateActive)
 	}
 	if requiresClientRenegotiation && s.midCallNotifier != nil {
@@ -644,8 +680,12 @@ func (s *Server) handleUPDATE(req *sip.Request, tx sip.ServerTransaction) {
 	requiresClientRenegotiation := validation.RequiresClientRenegotiation ||
 		(!previousMediaState.HasActiveVideo && validation.HasActiveVideo)
 	sess.ApplyMidCallSDPValidation(validation)
+	s.updateAsteriskEndpointsFromMidCallOffer(req.Body(), sess)
 	s.notifyRemoteHoldChange(sess, req.Body())
-	if s.stateNotifier != nil {
+	// Only an active call is re-announced as active. While the client is
+	// reconnecting this would flip the SDK from RECONNECTING to IN_CALL with
+	// media still down.
+	if s.stateNotifier != nil && sess.GetState() == session.StateActive {
 		s.stateNotifier.NotifySessionState(sess.ID, session.StateActive)
 	}
 	if requiresClientRenegotiation && s.midCallNotifier != nil {

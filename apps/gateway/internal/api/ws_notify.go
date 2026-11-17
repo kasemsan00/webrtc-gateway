@@ -340,51 +340,21 @@ func (s *Server) findBridgedAgentSession(publicSess *session.Session) *session.S
 	if found := s.findAgentChatSession(publicSess.ChatMessageDestination()); found != nil && found.ID != publicSess.ID {
 		return found
 	}
-	_, pubFrom, _, _ := publicSess.GetCallInfo()
-	pubUser := sipURIUsername(pubFrom)
-	if pubUser == "" {
+	if dir, _, _, _ := publicSess.GetCallInfo(); strings.EqualFold(strings.TrimSpace(dir), "inbound") {
 		return nil
 	}
-	for _, sess := range s.sessionMgr.ListSessions() {
-		if sess == nil || sess.ID == publicSess.ID || sess.GetState() == session.StateEnded {
-			continue
-		}
-		dir, fromField, _, _ := sess.GetCallInfo()
-		if !strings.EqualFold(strings.TrimSpace(dir), "inbound") {
-			continue
-		}
-		if sipURIUsername(fromField) == pubUser {
-			return sess
-		}
-	}
-	return nil
+	return session.FindBridgedGatewayPeer(s.sessionMgr.ListSessions(), publicSess)
 }
 
 func (s *Server) findBridgedPublicSession(agentSess *session.Session) *session.Session {
 	if agentSess == nil || s.sessionMgr == nil {
 		return nil
 	}
-	dir, fromField, _, _ := agentSess.GetCallInfo()
+	dir, _, _, _ := agentSess.GetCallInfo()
 	if !strings.EqualFold(strings.TrimSpace(dir), "inbound") {
 		return nil
 	}
-	caller := sipURIUsername(fromField)
-	if caller == "" {
-		return nil
-	}
-	for _, sess := range s.sessionMgr.ListSessions() {
-		if sess == nil || sess.ID == agentSess.ID || sess.GetState() == session.StateEnded {
-			continue
-		}
-		pubDir, pubFrom, _, _ := sess.GetCallInfo()
-		if !strings.EqualFold(strings.TrimSpace(pubDir), "outbound") {
-			continue
-		}
-		if sipURIUsername(pubFrom) == caller {
-			return sess
-		}
-	}
-	return nil
+	return session.FindBridgedGatewayPeer(s.sessionMgr.ListSessions(), agentSess)
 }
 
 func (s *Server) relayChatToSession(agentSess *session.Session, from, body, contentType string) bool {

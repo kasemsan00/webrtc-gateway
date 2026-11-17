@@ -1,3 +1,47 @@
+## 2026-11-17
+
+- **สายออกที่ Asterisk ขอ auth (401/407) ส่ง `ringing` ให้ client แล้ว**: เปลี่ยน INVITE ที่แนบ credentials จาก `DoDigestAuth` (ซึ่งทิ้ง 1xx ทั้งหมด) เป็น `TransactionDigestAuth` และใช้ลูปรับ response เดียวกับ INVITE แรก
+  - timeout หลัง auth ส่ง CANCEL ให้ INVITE ตัวที่ถูกต้อง (เดิมไม่ส่ง ปลายทางดังต่อ)
+  - CSeq เป็น header แบบ typed ทำให้ค่าบนสาย, CANCEL และ ACK ตรงกัน (เดิม INVITE ส่ง 2 แต่ CANCEL ใช้ 3)
+  - 181/182/199 เป็น provisional ไม่ใช่สายล้มเหลว; 2xx ทุกตัวถือว่ารับสาย; 487 ที่ตอบ CANCEL ของเราเองไม่มี `endReason`
+  - เก็บ INVITE ที่รับสายแล้วไว้ เพื่อ ACK 200 OK ที่ Asterisk ส่งซ้ำ (เดิมล้างทิ้งทันที บน UDP ทำให้โดน BYE หลัง 32 วินาที)
+- **BYE, hold re-INVITE, MESSAGE และ INFO ใช้ transport ของ trunk**: เดิม hardcode TCP ทำให้ trunk แบบ UDP วางสายไม่ได้
+- **re-INVITE ทุกตัวได้รับคำตอบ**: สถานะ `reconnecting` จัดการเหมือน active แต่ไม่ส่ง `state: active` ให้ client (เดิมไม่ตอบ Asterisk จึง 408 แล้วตัดสาย), สายที่จบแล้วได้ 481, สายออกที่ยังไม่มี dialog ได้ 491 และ re-INVITE ไม่ลงทะเบียน CANCEL handler ของสายเรียกเข้าอีก
+- **re-INVITE/UPDATE ที่ย้าย media ของ Asterisk (c=/m= ใหม่) ส่ง RTP ไปที่อยู่ใหม่** ยกเว้น hold แบบ `c=0.0.0.0` หรือ port 0
+- **REGISTER ที่ล้มเหลวถูก retry อัตโนมัติ** จาก lease heartbeat แบบ backoff 5 วินาทีถึง 5 นาที (เดิม trunk ที่ register ไม่ได้ตอน boot ค้างจนกว่าจะ refresh ผ่าน admin และ refresh ที่ล้มเหลวรอ 0.8×Expires)
+  - REGISTER ที่สำเร็จหลัง unregister/เสีย lease ไม่ถูกนับว่า registered และส่ง Expires:0 ซ้ำเพื่อลบ binding
+  - แก้ panic ปิด channel ของ refresh worker ซ้ำเมื่อ `unregisterTrunk` ชนกับ `markLeaseLost`
+- **audio SIP→WebRTC ไม่หยุดทั้งสายเมื่อเขียน track ไม่ได้ครั้งเดียว** (เช่นระหว่างสลับ PeerConnection ตอน resume)
+- **INVITE ที่ไม่มี trunk manager (ไม่มี DB) ได้ 503** แทนการเงียบ
+- **ปฏิเสธ destination/from ที่มี CR/LF หรืออักขระคั่น URI** กัน SIP header injection จาก WebSocket
+- แก้ data race ของ `SIPOpusPT` และ `AudioTrack`
+- **media (`internal/session`)**
+  - PeerConnection ใหม่หลัง resume/`@switch` จัดการ RTCP จาก browser เหมือนตัวแรก (`browser_rtcp.go`): PLI/FIR ใช้ trigger `browser-pli`/`browser-fir` ที่ recovery logic รู้จัก (เดิม `browser-rtcp`), NACK ส่งซ้ำจาก cache (เดิมทิ้ง) และอ่าน RTCP ของ receiver ด้วย
+  - PeerConnection ใหม่เข้า grace `reconnecting` 30 วินาทีเมื่อ ICE disconnected เหมือนตัวแรก
+  - timer ของ grace ผูกกับรอบ disconnect ของมันเอง (เดิม disconnect→reconnect→disconnect ภายใน 30 วินาทีทำให้สายถูกตัดหลังรอบที่สองเพียงวินาทีเดียว)
+  - ไม่ forward NACK ฝั่ง SIP ไป browser แล้ว: อ้าง SSRC/seq ฝั่ง uplink ที่ browser ไม่รู้จัก และอ่าน `PeerConnection` แบบไม่ lock จน panic ได้
+  - ไม่ส่ง NACK ของ browser ต่อไป Asterisk เมื่อเปิด AU normalizer (seq ถูก renumber จึงขอ packet ผิดตัว)
+  - reorder buffer ยอมรับเลข sequence ใหม่หลังได้ packet "เก่า" เรียงกัน 16 ตัว (SSRC เดิมแต่ seq ถอยหลัง เช่น handoff คิว→agent) เดิมจอดำจนกว่า seq จะไล่ทัน
+  - AU ที่มาหลัง seq gap และไม่เริ่มที่ macroblock 0 (slice แรกหาย) ไม่ถูกส่งเป็นภาพสมบูรณ์ จึงไม่ถูก cache/replay เป็น IDR ที่ใช้ได้
+  - อ่าน/สลับ `VideoTrack` ภายใต้ lock เดียวกัน และ resume ถอด track เดิมก่อนปิด PeerConnection เดิมแบบ async (กัน pion deadlock ระหว่าง write กับ Close)
+  - การผ่อนเกณฑ์ `SIP_SWITCH_VIDEO_RTP_MIN_PACKET_DELTA` หลัง gate ใช้เฉพาะรอบ switch นั้น (เดิมลดค่าถาวรทั้งสาย)
+  - PLI/FIR ฝั่ง SIP ที่รอ marker (mid-frame) ส่งออกได้เมื่อ uplink หยุดเกิน 200ms (เดิมรอตลอดไปถ้า uplink หยุดที่ packet ไม่มี marker)
+- **media รอบรีวิวที่สอง**
+  - สายที่จบเพราะ ICE (failed หรือหมด grace 30 วินาที) ส่ง BYE ไป Asterisk และแจ้ง client ว่า ended (เดิมขา Asterisk ค้างจน RTP timeout และ client ไม่รู้)
+  - SIP video ที่ seq ถอยหลังพร้อม timestamp คนละ timeline ถือเป็นการเริ่ม stream ใหม่ (`sip_video_seq_restart`) แล้วเข้า path stream-switch เดิม (reset reorder/normalizer, เปิด gate, PLI)
+  - reorder buffer rebase เฉพาะเมื่อ packet ที่เรียงกันอยู่ห่างจาก nextSeq ≥1024 และปล่อยทั้งชุด 16 ตัว ไม่ทิ้ง; packet สายที่มาช้าใกล้ ๆ ยังถูกทิ้งเป็น old
+  - reorder buffer ส่ง batch ตามลำดับเสมอ: batch จาก timeout จะไม่ถูก packet ถัดไปแซง (เดิม normalizer ทิ้ง AU ที่ลำดับสลับ ซึ่งมักเป็น IDR ที่เพิ่งขอ) และ IDR replay เขียนเข้าคิวเดียวกัน
+  - RTCP ที่ mux มาบน port audio ไม่ถูกส่งเข้า Opus track อีก (นับเป็น SR/RR)
+  - media ย้าย IP กลางสายล้างที่อยู่ RTCP ของ video ที่เรียนรู้ไว้และเปิด trust window ใหม่ PLI/FIR จึงไปที่ปลายทางใหม่
+  - resume ระหว่าง `@switch` ที่ยังไม่เสร็จ หรือ `@switch` ซ้อน ปิด PeerConnection ที่ park ไว้ (เดิม leak) และถอด track ของมันก่อนปิด
+  - abort `@switch`, commit, resume และ hangup ถอด track audio/video ภายใต้ egress lock ก่อนปิด PeerConnection (กัน pion Write/Close deadlock) และ timer หลัง commit ไม่ล้าง audio track ของ `@switch` รอบใหม่
+- **ลบ dead code**: package `internal/webrtc` เหลือเพียง `GetUnicastAddress`, RTP listener แบบ global track เดิม, ICE credential generator, helper และ field ที่ไม่มี production code เรียก/อ่าน, ตัวนับ `incomingCounters` ที่เขียนอย่างเดียว และ config `SIP_VIDEO_PRESERVE_STAPA` ที่ไม่มีผล (ลบจาก `.env.example` และ config reference)
+- **โอนสาย (call transfer)**: ข้อความ WS `transfer` ส่ง REFER ใน dialog ไปที่ Asterisk แบบ blind (`destination`) หรือ attended (`targetSessionId` ใส่ `Replaces` ของอีกสาย) ทั้งสองสายต้องเป็นของ client เอง ความคืบหน้าจาก NOTIFY (`message/sipfrag`) ส่งให้ client เป็น `transfer_progress` (`accepted`/`trying`/`completed`/`failed` พร้อม SIP status) gateway รับ NOTIFY แล้ว (Allow มี `NOTIFY`, dialog ที่ไม่รู้จักตอบ 481) REFER ขาเข้ายังตอบ 501
+- **สายเรียกซ้อนบน `/ws`**: socket ที่ไม่ใช่ public ส่ง `client_state` `multiCall: true` ได้ สายเข้าระหว่างคุยจะถูกส่งให้ client แทนการตอบ busy (เดิมเฉพาะ agent presence) สถานะ `unavailable` ยังปฏิเสธเหมือนเดิม
+- **agent-device ต่อสายต่อหลังเน็ตหลุด**: socket ของ agent-device ปิดแล้ว สายยังอยู่ 30 วินาทีให้ device ที่ register ใหม่ `resume` (ต้องเป็นเจ้าของสาย หรืออยู่ trunk เดียวกัน) เกินเวลาแล้วจึงจบสาย เดิมจบสายทันที การ `resume` ย้ายความเป็นเจ้าของสายไปที่ socket ใหม่ผ่าน `bindClientSession`
+- **วางสายที่สองไม่ตัดสายแรก**: การจับคู่สาย WebRTC สองขาที่ Asterisk เชื่อมกัน (ขาผู้โทรกับขา agent ที่รับจากคิว) ใช้แค่เบอร์ผู้โทร ผู้โทรที่มีสองสาย (สายที่สอง/สายเรียกซ้อน) วางสายหนึ่งแล้ว gateway วางขา agent ของอีกสายไปด้วย ตอนนี้จับคู่เฉพาะเมื่อไม่กำกวมทั้งสองทาง หรือเมื่อ agent ของ `@switch` ระบุตรงกัน ใช้ทั้งการวางสายตาม การส่งต่อแชท และการขอ keyframe
+- **สายที่พักไม่หลุดเองหลัง 6 วินาที**: ACK ของ 200 OK ที่ตอบ re-INVITE กลางสาย (พักสาย/คืนสาย) ไม่มี Route header เพราะ 200 ของ re-INVITE ไม่มี Record-Route proxy จึงทิ้ง ACK แล้ว Asterisk ส่ง 200 ซ้ำจนหมดเวลาและวางสาย ตอนนี้ ACK ของคำขอในไดอะล็อกใช้ route set ของไดอะล็อก และการ ACK 200 ที่ส่งซ้ำของ re-INVITE สร้างจากไดอะล็อกแทน INVITE แรก (CSeq ไม่ตรง)
+
 ## 2026-11-05
 
 - **แก้ Android→9999 (echo) จอดำ ~60 วินาที**: ปลายทางแบบ echo ส่งกลับเฉพาะภาพที่ gateway ส่งไป และ Asterisk `Echo()` ตอบ picture_fast_update เพียงครั้งเดียวต่อสาย

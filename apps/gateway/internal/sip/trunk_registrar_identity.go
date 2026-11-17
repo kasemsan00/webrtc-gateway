@@ -251,37 +251,12 @@ func (tm *TrunkManager) registrarResolver() registrarEndpointResolver {
 	return defaultRegistrarResolver{}
 }
 
-func (tm *TrunkManager) beginRegistrarOperation(trunkID int64) uint64 {
-	tm.mu.Lock()
-	defer tm.mu.Unlock()
-	if tm.registrarGenerations == nil {
-		tm.registrarGenerations = make(map[int64]uint64)
-	}
-	tm.registrarGenerations[trunkID]++
-	return tm.registrarGenerations[trunkID]
-}
-
-func (tm *TrunkManager) currentRegistrarGeneration(trunkID int64) uint64 {
-	tm.mu.RLock()
-	defer tm.mu.RUnlock()
-	if tm.registrarGenerations == nil {
-		return 0
-	}
-	return tm.registrarGenerations[trunkID]
-}
-
 func (tm *TrunkManager) invalidateRegistrarIdentityLocked(trunkID int64) {
 	if tm.registrarGenerations == nil {
 		tm.registrarGenerations = make(map[int64]uint64)
 	}
 	tm.registrarGenerations[trunkID]++
 	delete(tm.registrarIdentities, trunkID)
-}
-
-func (tm *TrunkManager) invalidateRegistrarIdentity(trunkID int64) {
-	tm.mu.Lock()
-	defer tm.mu.Unlock()
-	tm.invalidateRegistrarIdentityLocked(trunkID)
 }
 
 func (tm *TrunkManager) tryPublishRegistrarIdentity(trunkID int64, generation uint64, identity *registrarIdentity) bool {
@@ -304,18 +279,6 @@ func (tm *TrunkManager) tryPublishRegistrarIdentity(trunkID int64, generation ui
 	published.TrunkID = trunkID
 	tm.registrarIdentities[trunkID] = published
 	return true
-}
-
-func (tm *TrunkManager) pruneRegistrarIdentitiesLocked() {
-	if tm.registrarGenerations == nil {
-		tm.registrarGenerations = make(map[int64]uint64)
-	}
-	for id := range tm.registrarIdentities {
-		if _, ok := tm.trunks[id]; !ok {
-			delete(tm.registrarIdentities, id)
-			tm.registrarGenerations[id]++
-		}
-	}
 }
 
 func (tm *TrunkManager) publishRegistrarIdentityFromRegister(trunk *Trunk, generation uint64, res *gosip.Response, expiresSeconds int) {

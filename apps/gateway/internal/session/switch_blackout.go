@@ -73,36 +73,6 @@ func (s *Session) startSwitchVideoTransitionHold(generation int, mediaEpoch uint
 	return true
 }
 
-// StopSwitchVideoBlackout ends the temporary @switch blackout hold.
-func (s *Session) StopSwitchVideoBlackout(reason string) {
-	now := time.Now()
-
-	s.mu.Lock()
-	wasActive := isSwitchVideoTransitionActiveLocked(s)
-	if !wasActive {
-		s.mu.Unlock()
-		return
-	}
-	startedAt := s.SwitchVideoBlackoutStarted
-	if startedAt.IsZero() {
-		startedAt = now
-	}
-	mode := s.SwitchVideoTransitionMode
-	firstKeyframeMs := elapsedMs(startedAt, s.SwitchVideoFirstKeyframeAt)
-	s.SwitchVideoBlackoutUntil = time.Time{}
-	s.SwitchVideoBlackoutMaxWait = time.Time{}
-	s.SwitchVideoBlackoutStarted = time.Time{}
-	s.SwitchVideoFirstKeyframeAt = time.Time{}
-	s.mu.Unlock()
-
-	heldMs := now.Sub(startedAt).Milliseconds()
-	if heldMs < 0 {
-		heldMs = 0
-	}
-	fmt.Printf("[%s] switch_transition_hold_end mode=%s reason=%s heldMs=%d firstKeyframeMs=%d\n",
-		s.ID, normalizeSwitchVideoTransitionMode(mode), reason, heldMs, firstKeyframeMs)
-}
-
 // ShouldHoldSwitchVideoPacket returns true when SIP->WebRTC forwarding should
 // hold (drop) the current packet because @switch transition hold is active.
 //

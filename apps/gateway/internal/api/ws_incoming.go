@@ -73,10 +73,12 @@ func isClientAvailableForIncoming(client *WSClient) bool {
 	if client == nil {
 		return false
 	}
+	// A multi-call client (agent, or a /ws phone that opted into call waiting)
+	// is offered a new call while busy; only "unavailable" turns it away.
 	if normalizeClientAvailability(client.availability) != clientAvailabilityIdle {
-		return client.isAgentPresence() && client.multiCall && normalizeClientAvailability(client.availability) != clientAvailabilityUnavailable
+		return client.multiCall && normalizeClientAvailability(client.availability) != clientAvailabilityUnavailable
 	}
-	if client.isAgentPresence() && client.multiCall {
+	if client.multiCall {
 		return true
 	}
 	return !isBusyCallState(client.callState)
@@ -87,15 +89,6 @@ func (s *Server) incomingRingTimeout() time.Duration {
 		return defaultIncomingRingTimeout
 	}
 	return time.Duration(s.config.IncomingRingTimeoutSeconds) * time.Second
-}
-
-func (s *Server) incrementIncomingCounter(name string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.incomingCounters == nil {
-		s.incomingCounters = make(map[string]int64)
-	}
-	s.incomingCounters[name]++
 }
 
 func (s *Server) rejectIncomingSession(sessionID, statusReason, source string) {
@@ -404,7 +397,6 @@ func (s *Server) startIncomingRingTimeout(sessionID string, trunkID int64) {
 			return
 		}
 		log.Printf("⏱️ Incoming call timed out: sessionID=%s trunkID=%d timeout=%s", sessionID, trunkID, timeout)
-		s.incrementIncomingCounter("incoming_no_answer")
 		s.logTerminalAction(sess, "timeout", 480, "no_answer", "gateway")
 		if trunkID > 0 {
 			s.NotifyIncomingCancel(sessionID, trunkID, "no_answer")
@@ -471,11 +463,9 @@ func (s *Server) NotifyIncomingCall(sessionID, from, to string, trunkID int64) {
 			})
 			log.Printf("📲 Sent incoming call notification to resolved client (sessionID=%s trunkID=%d)", sessionID, client.resolvedTrunkID)
 		}
-		s.incrementIncomingCounter("incoming_presented")
 		// A connected phone still needs FCM to bring the app forward and answer.
 		// Desktop /ws-agent stays websocket-only while that client is live.
 		if (s.isAgentDeviceTrunk(trunkID) || !s.isAgentPresenceTrunk(trunkID)) && s.hasIncomingPushTarget(trunkID) {
-			s.incrementIncomingCounter("incoming_push_wait")
 			s.dispatchIncomingPush(sessionID, from, to, trunkID, hasVideo)
 		}
 		s.startIncomingRingTimeout(sessionID, trunkID)
@@ -485,12 +475,9 @@ func (s *Server) NotifyIncomingCall(sessionID, from, to string, trunkID int64) {
 
 	if matchingClients > 0 {
 		reason := "busy"
-		counter := "incoming_busy"
 		if busyClients == 0 && unavailableClients > 0 {
 			reason = "unavailable"
-			counter = "incoming_unavailable"
 		}
-		s.incrementIncomingCounter(counter)
 		log.Printf("📲 Incoming admission rejected: sessionID=%s trunkID=%d reason=%s matching=%d busy=%d unavailable=%d", sessionID, trunkID, reason, matchingClients, busyClients, unavailableClients)
 		s.rejectIncomingSession(sessionID, reason, reason)
 		return
@@ -501,13 +488,11 @@ func (s *Server) NotifyIncomingCall(sessionID, from, to string, trunkID int64) {
 	}
 
 	if s.hasIncomingPushTarget(trunkID) {
-		s.incrementIncomingCounter("incoming_push_wait")
 		s.dispatchIncomingPush(sessionID, from, to, trunkID, hasVideo)
 		s.startIncomingRingTimeout(sessionID, trunkID)
 		return
 	}
 
-	s.incrementIncomingCounter("incoming_offline")
 	log.Printf("📲 Incoming admission rejected: sessionID=%s trunkID=%d reason=offline_no_push", sessionID, trunkID)
 	s.rejectIncomingSession(sessionID, "offline", "offline")
 }
@@ -788,7 +773,6 @@ func (s *Server) handleWSAccept(client *WSClient, msg WSMessage) {
 		trunkID = client.resolvedTrunkID
 	}
 	s.notifyIncomingAnsweredElsewhere(incomingSessionID, trunkID, client)
-	s.incrementIncomingCounter("incoming_accepted")
 	s.kickBridgedCallerUplinkOnAccept(callSession)
 }
 
@@ -919,7 +903,6 @@ func (s *Server) handleWSReject(client *WSClient, msg WSMessage) {
 			}
 		} else {
 			log.Printf("✅ [Reject] SIP reject sent successfully (session=%s, reason=%s, source=%s)", msg.SessionID, reason, reasonSource)
-			s.incrementIncomingCounter("incoming_rejected")
 			s.logEvent(&logstore.Event{
 				Timestamp: time.Now(),
 				SessionID: sess.ID,

@@ -14,13 +14,3 @@ func TestNormalizeTrunkPublicID(t *testing.T) {
 	}
 }
 
-func TestIsValidTrunkPublicID(t *testing.T) {
-	t.Parallel()
-
-	if IsValidTrunkPublicID("not-a-uuid") {
-		t.Fatalf("expected invalid UUID to be rejected")
-	}
-	if !IsValidTrunkPublicID("00000000-0000-0000-0000-000000000000") {
-		t.Fatalf("expected valid UUID to pass")
-	}
-}

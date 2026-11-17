@@ -3,7 +3,6 @@ package api
 import (
 	"strings"
 
-	"webrtc-sip-gateway/internal/session"
 )
 
 // bindClientSession records per-call ownership while retaining sessionID for
@@ -103,16 +102,6 @@ func (s *Server) ownedClientSessionIDs(client *WSClient) []string {
 		ids = append(ids, client.sessionID)
 	}
 	return ids
-}
-
-func (s *Server) activeOwnedSessionCount(client *WSClient) int {
-	count := 0
-	for _, id := range s.ownedClientSessionIDs(client) {
-		if sess, ok := s.sessionMgr.GetSession(id); ok && sess != nil && sess.GetState() != session.StateEnded {
-			count++
-		}
-	}
-	return count
 }
 
 func (s *Server) agentClientCanAccessSession(client *WSClient, msg WSMessage) (bool, string) {

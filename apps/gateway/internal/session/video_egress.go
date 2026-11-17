@@ -16,10 +16,27 @@ var errVideoEgressStopped = errors.New("video egress stopped")
 func (s *Session) WriteVideoToWebRTC(data []byte) (int, error) {
 	s.videoEgressMu.Lock()
 	defer s.videoEgressMu.Unlock()
-	if s.videoEgressClosed || s.VideoTrack == nil {
+	if s.videoEgressClosed {
 		return 0, errVideoEgressStopped
 	}
-	return s.VideoTrack.Write(data)
+	// VideoTrack is swapped under s.mu (resume, @switch, make-before-break).
+	// Lock order is videoEgressMu, then s.mu.
+	track := s.currentVideoTrack()
+	if track == nil {
+		return 0, errVideoEgressStopped
+	}
+	return track.Write(data)
+}
+
+func (s *Session) currentVideoTrack() *webrtc.TrackLocalStaticRTP {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.VideoTrack
+}
+
+// HasVideoTrack reports whether a WebRTC video track is attached.
+func (s *Session) HasVideoTrack() bool {
+	return s.currentVideoTrack() != nil
 }
 
 // StopVideoEgress waits for any in-flight WebRTC video write, then rejects
@@ -30,24 +47,23 @@ func (s *Session) StopVideoEgress() {
 	s.videoEgressMu.Unlock()
 }
 
-func (s *Session) videoEgressIsStopped() bool {
-	s.videoEgressMu.Lock()
-	defer s.videoEgressMu.Unlock()
-	return s.videoEgressClosed
-}
-
 // DetachPeerConnection stops video egress and takes the PeerConnection so the
 // caller can close it without racing later cleanup.
 func (s *Session) DetachPeerConnection() *webrtc.PeerConnection {
 	s.StopVideoEgress()
+	// No audio write may be in flight on these tracks when the caller
+	// closes the PeerConnection (same pion Write/Close overlap as video).
+	s.audioEgressMu.Lock()
 	s.mu.Lock()
 	pc := s.PeerConnection
 	legacy := s.legacyPeerConnection
 	s.PeerConnection = nil
+	s.AudioTrack = nil
 	s.legacyPeerConnection = nil
 	s.legacyAudioTrack = nil
 	s.legacyVideoTrack = nil
 	s.mu.Unlock()
+	s.audioEgressMu.Unlock()
 	if legacy != nil && legacy != pc {
 		ClosePeerConnectionAsync(legacy, s.ID)
 	}

@@ -29,14 +29,6 @@ func (s *Session) CacheVideoRTPPacket(seq uint16, data []byte) {
 	s.videoRTPHistoryMu.Unlock()
 }
 
-// ClearVideoRTPHistory invalidates cached RTP packets.
-func (s *Session) ClearVideoRTPHistory() {
-	s.videoRTPHistoryMu.Lock()
-	clear(s.VideoRTPHistoryPackets)
-	clear(s.VideoRTPHistorySeq)
-	s.videoRTPHistoryMu.Unlock()
-}
-
 func (s *Session) getCachedVideoRTPPacket(seq uint16) []byte {
 	if s.VideoRTPHistorySize == 0 {
 		return nil
@@ -59,7 +51,7 @@ func (s *Session) getCachedVideoRTPPacket(seq uint16) []byte {
 // RetransmitVideoNACK attempts to resend cached RTP packets in response to NACKs.
 // Returns (sent, missing).
 func (s *Session) RetransmitVideoNACK(nacks []rtcp.NackPair) (int, int) {
-	if s.VideoTrack == nil || len(nacks) == 0 {
+	if !s.HasVideoTrack() || len(nacks) == 0 {
 		return 0, len(nacks)
 	}
 

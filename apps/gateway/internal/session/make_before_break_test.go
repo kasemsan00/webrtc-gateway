@@ -2,6 +2,7 @@ package session
 
 import (
 	"testing"
+	"time"
 
 	"github.com/pion/webrtc/v4"
 
@@ -75,5 +76,63 @@ func TestWriteAudioToWebRTCFansOutToLegacyTrack(t *testing.T) {
 	pkt := []byte{0x80, 0x6f, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01}
 	if err := sess.WriteAudioToWebRTC(pkt); err != nil {
 		t.Fatalf("write audio: %v", err)
+	}
+}
+
+// A second @switch before the first commits re-parks the PeerConnection. The
+// one parked first must be closed, not leaked.
+func TestSecondSwitchClosesFirstParkedPeerConnection(t *testing.T) {
+	original := newGatewayH264Answerer(t)
+	sess := &Session{ID: "switch-twice", PeerConnection: original, State: StateActive}
+
+	if err := sess.PrepareSwitchPeerConnection(config.TURNConfig{}, false); err != nil {
+		t.Fatalf("first @switch failed: %v", err)
+	}
+	first := sess.PeerConnection
+	if err := sess.PrepareSwitchPeerConnection(config.TURNConfig{}, false); err != nil {
+		t.Fatalf("second @switch failed: %v", err)
+	}
+	t.Cleanup(func() { _ = sess.PeerConnection.Close(); _ = first.Close() })
+
+	if sess.legacyPeerConnection != first {
+		t.Fatal("expected the first replacement to be parked now")
+	}
+	waitForPeerConnectionClosed(t, original)
+}
+
+// A resume during an unfinished @switch drops the parked PeerConnection; it
+// must be closed and not restorable.
+func TestCreateReplacementForResumeClosesParkedPeerConnection(t *testing.T) {
+	original := newGatewayH264Answerer(t)
+	sess := &Session{ID: "resume-during-switch", PeerConnection: original, State: StateActive}
+
+	if err := sess.PrepareSwitchPeerConnection(config.TURNConfig{}, false); err != nil {
+		t.Fatalf("@switch failed: %v", err)
+	}
+	switchPC := sess.PeerConnection
+	resumePC, err := sess.createReplacementPeerConnection(config.TURNConfig{}, false, renegotiateVideoOfferDiagnostics{}, false)
+	if err != nil {
+		t.Fatalf("resume replacement failed: %v", err)
+	}
+	t.Cleanup(func() { _ = resumePC.Close() })
+
+	if sess.legacyPeerConnection != nil || sess.legacyAudioTrack != nil {
+		t.Fatal("parked PeerConnection and its tracks must be detached")
+	}
+	if sess.AbortMakeBeforeBreak() {
+		t.Fatal("nothing should be left to restore")
+	}
+	waitForPeerConnectionClosed(t, original)
+	waitForPeerConnectionClosed(t, switchPC)
+}
+
+func waitForPeerConnectionClosed(t *testing.T, pc *webrtc.PeerConnection) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for pc.ConnectionState() != webrtc.PeerConnectionStateClosed {
+		if time.Now().After(deadline) {
+			t.Fatalf("PeerConnection not closed, state=%s", pc.ConnectionState())
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

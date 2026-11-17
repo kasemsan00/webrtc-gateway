@@ -15,8 +15,6 @@ const (
 	resumeSlowLogThreshold = 3 * time.Second
 )
 
-type resumeVideoOfferDiagnostics = session.OfferVideoDiagnostics
-
 func analyzeResumeOfferVideoSDP(sdp string) session.OfferVideoDiagnostics {
 	return session.AnalyzeOfferVideo(sdp)
 }
@@ -157,18 +155,17 @@ func (s *Server) handleWSResume(client *WSClient, msg WSMessage) {
 	// If session was in reconnecting state, transition back to active only after resume succeeds.
 	wasReconnecting := state == session.StateReconnecting
 
-	// Remove old client mapping if exists (from previous WebSocket connection)
-	s.mu.Lock()
+	// Move ownership from the previous WebSocket connection to this one. The
+	// old socket keeps no ownership: when it finally times out (a half-open
+	// socket after a network switch), its cleanup must not end this call.
+	s.mu.RLock()
 	oldClient, hadOldClient := s.wsClients[msg.SessionID]
+	s.mu.RUnlock()
 	if hadOldClient && oldClient != client {
-		// Clear old client's sessionID to prevent its cleanup from deleting the new client
-		oldClient.sessionID = ""
+		s.unbindClientSession(oldClient, msg.SessionID)
 		log.Printf("🔄 Replacing old WebSocket client for session %s", msg.SessionID)
 	}
-	// Associate the new client with the session
-	s.wsClients[msg.SessionID] = client
-	client.sessionID = msg.SessionID
-	s.mu.Unlock()
+	s.bindClientSession(client, msg.SessionID)
 	s.notifyWSClientChanged("updated", client)
 	if hadOldClient && oldClient != client {
 		s.notifyWSClientChanged("updated", oldClient)

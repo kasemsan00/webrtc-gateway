@@ -14,7 +14,10 @@ func TestSIPAdvertisedCapabilitiesMatchImplementedMidCallFeatures(t *testing.T) 
 			t.Fatalf("expected Allow to include %s, got %q", method, allow)
 		}
 	}
-	for _, unsupported := range []string{"REFER", "PRACK", "SUBSCRIBE", "NOTIFY"} {
+	if !strings.Contains(allow, "NOTIFY") {
+		t.Fatalf("expected Allow to include NOTIFY for transfer progress, got %q", allow)
+	}
+	for _, unsupported := range []string{"REFER", "PRACK", "SUBSCRIBE"} {
 		if strings.Contains(allow, unsupported) {
 			t.Fatalf("did not expect Allow to advertise %s before first-class support, got %q", unsupported, allow)
 		}

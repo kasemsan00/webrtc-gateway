@@ -90,7 +90,6 @@ When `FRONTEND_PASSWORD` is set and `AUTH_ENABLE=false`, protected `/api/*` rout
 - `SIP_AUDIO_INBOUND_GAIN_MAX` (default `3.0`)
 - `SIP_VIDEO_USE_AVPF` (default `true`)
 - `SIP_VIDEO_FEEDBACK_TRANSPORT` (default `dual`; `auto|rtp|rtcp|dual`). `dual` always sends PLI/FIR/NACK to both the SIP video RTP port and RTCP (RTP first), which Asterisk `chan_sip` needs. `auto` now keeps the RTP target for the whole call instead of dropping it after the 4s fallback window. AVPF offers advertise `ccm fir`, `nack`, and `nack pli`; chan_sip peers that answer `RTP/AVP` ignore the extra `a=rtcp-fb` lines.
-- `SIP_VIDEO_PRESERVE_STAPA` (default `false`)
 - `SIP_VIDEO_AU_NORMALIZE_ENABLE` (default `true`; validates complete timestamp-grouped H.264 access units, rewrites outbound RTP continuity, injects fresh SPS/PPS before IDR when absent, and keeps a real `@switch` gated until a decoder-safe IDR is written; set `false` only as a bounded rollback to the legacy raw reordered/packet-level transition path)
 - `SIP_SWITCH_VIDEO_GATE_MIN_IDR_PACKETS` (default `1`; clamped `1..64`; smallest complete post-switch IDR the gate will release before the 2s stall timeout. Completeness is SPS/PPS + IDR with a closed FU-A/marker. Raise toward `24` only if a specific encoder's tiny flush IDRs still poison the decoder.)
 - `SIP_SWITCH_VIDEO_GATE_FAIL_OPEN_MS` (default `3000`; release a stalled gate when RTP is still healthy and the SSRC and source match the stream the gate already opened)

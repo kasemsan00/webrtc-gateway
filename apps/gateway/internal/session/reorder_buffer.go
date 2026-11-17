@@ -81,6 +81,12 @@ type VideoReorderBuffer struct {
 	DroppedOld int64 // packets dropped (behind nextSeq)
 	TimedOut   int64 // gap-skipped slots (timeout or force-flush)
 	SkipEvents int64 // unrecovered gap events (timeout or force-flush)
+	Rebases    int64 // sequence baselines re-established after a backward jump
+
+	// oldRunPackets holds consecutive in-order packets far behind nextSeq;
+	// oldLast is the last of them (noteOldLocked).
+	oldRunPackets []reorderWrite
+	oldLast       uint16
 }
 
 // NewVideoReorderBuffer creates a reorder buffer for SIP->WebRTC video.
@@ -114,26 +120,34 @@ func (b *VideoReorderBuffer) SetPacing(d time.Duration) {
 	b.pace = d
 }
 
-func (b *VideoReorderBuffer) emit(writes []reorderWrite, skips []reorderSkip) {
-	if len(writes) > 0 {
-		burst := false
-		for _, w := range writes {
-			if w.paced {
-				burst = true
-				break
-			}
+// Ordering: Push (RTP goroutine), timeoutFlush (timer goroutine) and Drain
+// each hold emitMu from collecting their batch under mu until the batch is
+// written. Taking emitMu only for the write let a later batch go out first
+// (timer collects 105..110, RTP collects 111, RTP writes 111 first), and the
+// AU normalizer then dropped the out-of-order access unit, often the recovery
+// IDR. Lock order: emitMu, then mu. Skip callbacks run after emitMu is
+// released because they send keyframe requests.
+
+// writeLocked writes a collected batch. Caller must hold emitMu.
+func (b *VideoReorderBuffer) writeLocked(writes []reorderWrite) {
+	burst := false
+	for _, w := range writes {
+		if w.paced {
+			burst = true
+			break
 		}
-		b.emitMu.Lock()
-		for i, w := range writes {
-			if i > 0 && burst && b.pace > 0 {
-				time.Sleep(b.pace)
-			}
-			if b.writeFn != nil {
-				b.writeFn(w.data, w.isKeyframe)
-			}
-		}
-		b.emitMu.Unlock()
 	}
+	for i, w := range writes {
+		if i > 0 && burst && b.pace > 0 {
+			time.Sleep(b.pace)
+		}
+		if b.writeFn != nil {
+			b.writeFn(w.data, w.isKeyframe)
+		}
+	}
+}
+
+func (b *VideoReorderBuffer) notifySkips(skips []reorderSkip) {
 	if b.onSkip == nil {
 		return
 	}
@@ -144,16 +158,31 @@ func (b *VideoReorderBuffer) emit(writes []reorderWrite, skips []reorderSkip) {
 	}
 }
 
+// Serialize runs fn in the same order as the buffer's own writes. Video
+// written past the buffer (a replayed IDR) must use it so it cannot
+// interleave with a batch being released.
+func (b *VideoReorderBuffer) Serialize(fn func()) {
+	b.emitMu.Lock()
+	defer b.emitMu.Unlock()
+	fn()
+}
+
 // Push adds a packet to the reorder buffer. It may trigger immediate or
 // deferred flushes depending on sequence position relative to nextSeq.
 func (b *VideoReorderBuffer) Push(seq uint16, data []byte, isKeyframe bool) {
-	var writes []reorderWrite
-	var skips []reorderSkip
+	b.emitMu.Lock()
+	writes, skips := b.pushCollect(seq, data, isKeyframe)
+	b.writeLocked(writes)
+	b.emitMu.Unlock()
+	b.notifySkips(skips)
+}
 
+// pushCollect places a packet and returns what is now ready to write.
+func (b *VideoReorderBuffer) pushCollect(seq uint16, data []byte, isKeyframe bool) (writes []reorderWrite, skips []reorderSkip) {
 	b.mu.Lock()
+	defer b.mu.Unlock()
 	if b.closed {
-		b.mu.Unlock()
-		return
+		return nil, nil
 	}
 
 	// Copy data since the caller's buffer may be reused.
@@ -166,9 +195,7 @@ func (b *VideoReorderBuffer) Push(seq uint16, data []byte, isKeyframe bool) {
 		b.hasBase = true
 		b.Released++
 		writes = append(writes, reorderWrite{data: pkt, isKeyframe: isKeyframe})
-		b.mu.Unlock()
-		b.emit(writes, nil)
-		return
+		return writes, nil
 	}
 
 	offset := uint16(seq - b.nextSeq)
@@ -203,11 +230,71 @@ func (b *VideoReorderBuffer) Push(seq uint16, data []byte, isKeyframe bool) {
 		}
 
 	default:
-		// Behind nextSeq (old/duplicate): drop.
+		// Behind nextSeq (old/duplicate): drop, unless a run of consecutive
+		// packets far behind shows the source sequence jumped backward.
+		b.noteOldLocked(seq, pkt, isKeyframe, &writes)
+		return writes, skips
+	}
+	b.resetOldRunLocked()
+	return writes, skips
+}
+
+const (
+	// reorderRebaseRun is how many consecutive in-order packets behind
+	// nextSeq mean the sender restarted its sequence (same SSRC) rather than
+	// late duplicates.
+	reorderRebaseRun = 16
+	// reorderRebaseMinBehind keeps late bursts out of the rebase: a NACK
+	// retransmission or a delayed burst sits just behind recently released
+	// numbers, a restart lands far away.
+	reorderRebaseMinBehind = 1024
+)
+
+// noteOldLocked handles a packet behind nextSeq. Usually it is dropped. A
+// run of reorderRebaseRun in-order packets at least reorderRebaseMinBehind
+// behind means the sender restarted its numbering: pending packets from the
+// old numbering are dropped and the whole run is released as the new
+// baseline. The SIP loop normally catches a restart first (backward sequence
+// with a far timestamp, sip_video_seq_restart) and resets the buffer; this is
+// the fallback when the timestamp did not jump. Caller must hold mu.
+func (b *VideoReorderBuffer) noteOldLocked(seq uint16, pkt []byte, isKeyframe bool, writes *[]reorderWrite) {
+	if uint16(b.nextSeq-seq) < reorderRebaseMinBehind {
+		b.resetOldRunLocked()
+		b.DroppedOld++
+		return
+	}
+	if len(b.oldRunPackets) == 0 || seq != b.oldLast+1 {
+		b.DroppedOld += int64(len(b.oldRunPackets))
+		b.oldRunPackets = b.oldRunPackets[:0]
+	}
+	b.oldLast = seq
+	b.oldRunPackets = append(b.oldRunPackets, reorderWrite{data: pkt, isKeyframe: isKeyframe})
+	if len(b.oldRunPackets) < reorderRebaseRun {
+		return
+	}
+	fmt.Printf("[%s] reorder: rebase after %d in-order packets behind nextSeq (old next=%d new next=%d pending_dropped=%d)\n",
+		b.sessID, len(b.oldRunPackets), b.nextSeq, seq+1, len(b.packets))
+	for pending := range b.packets {
+		delete(b.packets, pending)
 		b.DroppedOld++
 	}
-	b.mu.Unlock()
-	b.emit(writes, skips)
+	if b.timer != nil {
+		b.timer.Stop()
+		b.timer = nil
+	}
+	*writes = append(*writes, b.oldRunPackets...)
+	b.Released += int64(len(b.oldRunPackets))
+	b.oldRunPackets = nil
+	b.nextSeq = seq + 1
+	b.Rebases++
+}
+
+// resetOldRunLocked drops a pending run of old packets. Caller must hold mu.
+func (b *VideoReorderBuffer) resetOldRunLocked() {
+	if len(b.oldRunPackets) > 0 {
+		b.DroppedOld += int64(len(b.oldRunPackets))
+		b.oldRunPackets = b.oldRunPackets[:0]
+	}
 }
 
 // flushConsecutiveLocked appends all consecutive buffered packets starting from nextSeq.
@@ -265,13 +352,18 @@ func (b *VideoReorderBuffer) resetTimerLocked() {
 // timeoutFlush is called when the reorder timer fires.
 // It skips the gap to the lowest buffered packet and flushes consecutive from there.
 func (b *VideoReorderBuffer) timeoutFlush() {
-	var writes []reorderWrite
-	var skips []reorderSkip
+	b.emitMu.Lock()
+	writes, skips := b.timeoutCollect()
+	b.writeLocked(writes)
+	b.emitMu.Unlock()
+	b.notifySkips(skips)
+}
 
+func (b *VideoReorderBuffer) timeoutCollect() (writes []reorderWrite, skips []reorderSkip) {
 	b.mu.Lock()
+	defer b.mu.Unlock()
 	if b.closed || len(b.packets) == 0 {
-		b.mu.Unlock()
-		return
+		return nil, nil
 	}
 
 	// Find the lowest buffered seq that is ahead of nextSeq.
@@ -293,8 +385,7 @@ func (b *VideoReorderBuffer) timeoutFlush() {
 			delete(b.packets, seq)
 			b.DroppedOld++
 		}
-		b.mu.Unlock()
-		return
+		return nil, nil
 	}
 
 	// Skip gap: advance to the lowest buffered packet.
@@ -315,8 +406,7 @@ func (b *VideoReorderBuffer) timeoutFlush() {
 	if len(b.packets) > 0 {
 		b.resetTimerLocked()
 	}
-	b.mu.Unlock()
-	b.emit(writes, skips)
+	return writes, skips
 }
 
 // GetStats returns current reorder buffer statistics.
@@ -353,6 +443,7 @@ func (b *VideoReorderBuffer) Reset() {
 		delete(b.packets, seq)
 	}
 	b.hasBase = false
+	b.oldRunPackets = nil
 }
 
 // Drain flushes all remaining buffered packets and stops the timer.
@@ -360,6 +451,8 @@ func (b *VideoReorderBuffer) Reset() {
 func (b *VideoReorderBuffer) Drain() {
 	var writes []reorderWrite
 
+	b.emitMu.Lock()
+	defer b.emitMu.Unlock()
 	b.mu.Lock()
 	b.closed = true
 	if b.timer != nil {
@@ -399,7 +492,7 @@ func (b *VideoReorderBuffer) Drain() {
 		}
 	}
 	b.mu.Unlock()
-	b.emit(writes, nil)
+	b.writeLocked(writes)
 }
 
 // seqBeforeU16 returns true if a comes before b in 16-bit sequence space.

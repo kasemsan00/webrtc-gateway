@@ -117,28 +117,3 @@ func (s *Session) AnswerClientOffer(offerSDP string) (string, error) {
 	return ld.SDP, nil
 }
 
-// ApplyPeerConnectionAnswer applies a client answer SDP to the active
-// PeerConnection during mid-call renegotiation that the gateway offered.
-func (s *Session) ApplyPeerConnectionAnswer(answerSDP string) error {
-	if answerSDP == "" {
-		return fmt.Errorf("answer sdp missing")
-	}
-
-	s.mu.RLock()
-	pc := s.PeerConnection
-	s.mu.RUnlock()
-	if pc == nil {
-		return fmt.Errorf("peer connection not available")
-	}
-
-	answer := webrtc.SessionDescription{
-		Type: webrtc.SDPTypeAnswer,
-		SDP:  answerSDP,
-	}
-	if err := pc.SetRemoteDescription(answer); err != nil {
-		return fmt.Errorf("set remote description: %w", err)
-	}
-	queued := s.flushPendingRemoteICE(pc)
-	fmt.Printf("[%s] switch_renegotiate_answer_applied queued_ice=%d\n", s.ID, queued)
-	return nil
-}

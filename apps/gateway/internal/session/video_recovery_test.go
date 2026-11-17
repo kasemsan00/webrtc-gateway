@@ -160,19 +160,6 @@ func TestSendBrowserRecoveryToAsterisk_ForcesRecoveryWhenBurstKeyframeIsStale(t 
 	}
 }
 
-func TestForcedPLIStillHonorsMinimumInterval(t *testing.T) {
-	sess := newBurstTestSession("burst-pli-throttle")
-	now := time.Now()
-	sess.LastSipPLISent = now
-
-	if sess.shouldSendPLIToAsterisk(now.Add(pliForceMinInterval/2), true) {
-		t.Fatalf("expected forced PLI to be throttled inside minimum interval")
-	}
-	if !sess.shouldSendPLIToAsterisk(now.Add(pliForceMinInterval+time.Millisecond), true) {
-		t.Fatalf("expected forced PLI after minimum interval")
-	}
-}
-
 func TestRecordKeyframe_KeepsVideoRecoveryBurstOverrideActive(t *testing.T) {
 	sess := newBurstTestSession("burst-keyframe")
 	sess.StartVideoRecoveryBurst("unit-test")
@@ -325,20 +312,6 @@ func TestSwitchVideoRecoveryRestartIsIdempotent(t *testing.T) {
 	}
 	if sess.ConsumeSwitchPLIBypass() {
 		t.Fatalf("expected switch PLI bypass to be one-shot")
-	}
-}
-
-func TestSwitchPLIBypassDoesNotAffectWSKeyframeThrottle(t *testing.T) {
-	sess := newBurstTestSession("switch-bypass-isolated")
-	now := time.Now()
-	sess.LastSipPLISent = now
-	sess.StartSwitchVideoRecovery(2*time.Second, 500*time.Millisecond)
-
-	if !sess.ConsumeSwitchPLIBypass() {
-		t.Fatalf("expected switch bypass to be available")
-	}
-	if sess.shouldSendPLIToAsterisk(now.Add(pliForceMinInterval/2), true) {
-		t.Fatalf("expected normal forced PLI throttle to remain active")
 	}
 }
 

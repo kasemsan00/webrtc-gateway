@@ -31,6 +31,7 @@ func (s *Session) commitMakeBeforeBreak(newPC *webrtc.PeerConnection) {
 		return
 	}
 	legacy := s.legacyPeerConnection
+	legacyAudio := s.legacyAudioTrack
 	s.legacyPeerConnection = nil
 	s.legacyVideoTrack = nil
 	s.mu.Unlock()
@@ -40,9 +41,17 @@ func (s *Session) commitMakeBeforeBreak(newPC *webrtc.PeerConnection) {
 	fmt.Printf("[%s] switch_renegotiate_legacy_pc_closing_after_handoff\n", s.ID)
 	go func() {
 		time.Sleep(300 * time.Millisecond)
+		// audioEgressMu: no audio write may be in flight on the legacy
+		// track when its PeerConnection closes.
+		s.audioEgressMu.Lock()
 		s.mu.Lock()
-		s.legacyAudioTrack = nil
+		// A newer @switch may have parked a different audio track within
+		// these 300ms; only drop the one this handoff left behind.
+		if s.legacyAudioTrack == legacyAudio {
+			s.legacyAudioTrack = nil
+		}
 		s.mu.Unlock()
+		s.audioEgressMu.Unlock()
 		_ = legacy.Close()
 		fmt.Printf("[%s] switch_renegotiate_legacy_pc_closed\n", s.ID)
 	}()
@@ -51,6 +60,13 @@ func (s *Session) commitMakeBeforeBreak(newPC *webrtc.PeerConnection) {
 // AbortMakeBeforeBreak restores the parked PeerConnection when the replacement
 // never becomes usable. Returns false when no handoff was in progress.
 func (s *Session) AbortMakeBeforeBreak() bool {
+	// Swap the video track back while no write is in flight on the
+	// replacement's track, which is closed below (pion Write/Close overlap;
+	// see video_egress.go). Lock order: videoEgressMu, s.mu.
+	s.videoEgressMu.Lock()
+	defer s.videoEgressMu.Unlock()
+	s.audioEgressMu.Lock()
+	defer s.audioEgressMu.Unlock()
 	s.mu.Lock()
 	legacy := s.legacyPeerConnection
 	if legacy == nil {
@@ -81,6 +97,8 @@ func (s *Session) AbortMakeBeforeBreak() bool {
 }
 
 func (s *Session) WriteAudioToWebRTC(data []byte) error {
+	s.audioEgressMu.Lock()
+	defer s.audioEgressMu.Unlock()
 	s.mu.RLock()
 	primary := s.AudioTrack
 	legacy := s.legacyAudioTrack
@@ -95,4 +113,26 @@ func (s *Session) WriteAudioToWebRTC(data []byte) error {
 		_, _ = legacy.Write(data)
 	}
 	return nil
+}
+
+// HasAudioTrack reports whether a WebRTC audio track is attached.
+func (s *Session) HasAudioTrack() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.AudioTrack != nil
+}
+
+// GetSIPOpusPT returns the Opus payload type negotiated with the SIP peer.
+func (s *Session) GetSIPOpusPT() uint8 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.SIPOpusPT
+}
+
+// SetSIPOpusPT stores the Opus payload type negotiated with the SIP peer.
+// The uplink forwarder reads it under s.mu, so writers must take the lock.
+func (s *Session) SetSIPOpusPT(pt uint8) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.SIPOpusPT = pt
 }

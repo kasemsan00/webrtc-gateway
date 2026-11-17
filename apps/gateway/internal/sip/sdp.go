@@ -123,7 +123,7 @@ func (s *Server) createSDPOffer(rtpPort int, sess *session.Session) []byte {
 	// Determine Opus payload type to use
 	// For incoming calls: use the PT negotiated from INVITE SDP (e.g., 107)
 	// For outbound calls: default to 111 (will be set when parsing 200 OK answer)
-	opusPT := sess.SIPOpusPT
+	opusPT := sess.GetSIPOpusPT()
 	if opusPT == 0 {
 		opusPT = 111 // Default for outbound calls
 	}
@@ -391,6 +391,47 @@ func sdpFmtpHasParameter(line, key, value string) bool {
 
 // parseAsteriskSDPAndSetEndpoints parses Asterisk's SDP answer to extract RTP ports
 // and configures the session for forwarding WebRTC → Asterisk
+// parseSDPMediaEndpoints returns the IPv4 c= address (the last one seen,
+// session or media level), the audio and video ports, and the video profile.
+func parseSDPMediaEndpoints(lines []string) (ip string, audioPort, videoPort int, videoProfile string) {
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+
+		if strings.HasPrefix(line, "c=IN IP4 ") {
+			ip = strings.TrimPrefix(line, "c=IN IP4 ")
+		}
+		if strings.HasPrefix(line, "m=audio ") {
+			if parts := strings.Fields(line); len(parts) >= 2 {
+				fmt.Sscanf(parts[1], "%d", &audioPort)
+			}
+		}
+		if strings.HasPrefix(line, "m=video ") {
+			parts := strings.Fields(line)
+			if len(parts) >= 2 {
+				fmt.Sscanf(parts[1], "%d", &videoPort)
+			}
+			if len(parts) >= 3 {
+				videoProfile = parts[2]
+			}
+		}
+	}
+	return ip, audioPort, videoPort, videoProfile
+}
+
+// updateAsteriskEndpointsFromMidCallOffer follows Asterisk when a re-INVITE or
+// UPDATE moves its media (new c= address or m= port). Hold offers using
+// c=0.0.0.0 or port 0 leave the current endpoints alone.
+func (s *Server) updateAsteriskEndpointsFromMidCallOffer(sdpBody []byte, sess *session.Session) {
+	if sess == nil || len(sdpBody) == 0 {
+		return
+	}
+	ipStr, audioPort, videoPort, _ := parseSDPMediaEndpoints(strings.Split(string(sdpBody), "\n"))
+	ip := net.ParseIP(strings.TrimSpace(ipStr))
+	if sess.UpdateAsteriskEndpointsFromOffer(ip, audioPort, videoPort) {
+		fmt.Printf("[%s] sip_midcall_media_moved ip=%s audio=%d video=%d\n", sess.ID, ip, audioPort, videoPort)
+	}
+}
+
 func (s *Server) parseAsteriskSDPAndSetEndpoints(sdpBody []byte, sess *session.Session) {
 	sdpStr := string(sdpBody)
 	lines := strings.Split(sdpStr, "\n")
@@ -398,39 +439,8 @@ func (s *Server) parseAsteriskSDPAndSetEndpoints(sdpBody []byte, sess *session.S
 	// Store full SDP for debugging if video is rejected
 	fullSDP := sdpStr
 
-	var asteriskIP string
-	var audioPort, videoPort int
-	var videoProfile string
 	hasRtcpFb := sdpVideoHasRTCPFeedback(sdpStr)
-
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-
-		// Get connection IP from c= line
-		if strings.HasPrefix(line, "c=IN IP4 ") {
-			asteriskIP = strings.TrimPrefix(line, "c=IN IP4 ")
-		}
-
-		// Get audio port from m=audio line
-		if strings.HasPrefix(line, "m=audio ") {
-			parts := strings.Fields(line)
-			if len(parts) >= 2 {
-				fmt.Sscanf(parts[1], "%d", &audioPort)
-			}
-		}
-
-		// Get video port and profile from m=video line
-		if strings.HasPrefix(line, "m=video ") {
-			parts := strings.Fields(line)
-			if len(parts) >= 2 {
-				fmt.Sscanf(parts[1], "%d", &videoPort)
-				// Extract profile (RTP/AVP or RTP/AVPF)
-				if len(parts) >= 3 {
-					videoProfile = parts[2]
-				}
-			}
-		}
-	}
+	asteriskIP, audioPort, videoPort, videoProfile := parseSDPMediaEndpoints(lines)
 
 	if asteriskIP != "" && audioPort > 0 {
 		audioAddr := &net.UDPAddr{

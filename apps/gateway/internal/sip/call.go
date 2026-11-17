@@ -141,7 +141,7 @@ func (s *Server) makeCall(destination, from string, sess *session.Session) error
 	sess.StartVideoRTCPFallbackWindow(4*time.Second, "call-start")
 
 	// For outbound calls: default Opus PT to 111 (will be updated from 200 OK answer if different)
-	sess.SIPOpusPT = 111
+	sess.SetSIPOpusPT(111)
 
 	// Start RTP listener for this session
 	rtpPort, err := s.startRTPListenerForSession(sess)
@@ -223,10 +223,54 @@ func (s *Server) makeCall(destination, from string, sess *session.Session) error
 		return fmt.Errorf("failed to send INVITE: %w", err)
 	}
 	sess.SetOutboundInvite(tx, inviteReq)
-	defer sess.ClearOutboundInvite()
+	answered := false
+	defer func() {
+		if answered {
+			// Keep the answered INVITE (without its finished transaction) so a
+			// retransmitted 200 can still be ACKed by handleUnhandledSIPResponse.
+			_, req := sess.GetOutboundInvite()
+			sess.SetOutboundInvite(nil, req)
+			return
+		}
+		sess.ClearOutboundInvite()
+	}()
 	defer tx.Terminate()
 
-	// Handle responses from the transaction
+	answered, err = s.awaitOutboundInvite(ctx, tx, inviteReq, sess, params, false)
+	if answered {
+		cleanupOnError = false
+	}
+	return err
+}
+
+// awaitOutboundInvite reads the responses of an outbound INVITE client
+// transaction until a final response, the transaction ends, or ctx is done.
+// Every 1xx is provisional; 180/183 move the session to ringing. On the first
+// INVITE a 401/407 hands over to handleInviteAuth; on the authenticated INVITE
+// it means the credentials were rejected. answered is true once the call is
+// established (or the transaction ended without error), so the caller keeps
+// media transports open.
+func (s *Server) awaitOutboundInvite(
+	ctx context.Context,
+	tx sip.ClientTransaction,
+	inviteReq *sip.Request,
+	sess *session.Session,
+	params sipAuthParams,
+	authenticated bool,
+) (answered bool, err error) {
+	callID := ""
+	if h := inviteReq.CallID(); h != nil {
+		callID = h.Value()
+	}
+	dialogCSeq := 1
+	if cseq := inviteReq.CSeq(); cseq != nil {
+		dialogCSeq = int(cseq.SeqNo)
+	}
+	failedEvent := "sip_invite_failed"
+	if authenticated {
+		failedEvent = "sip_invite_auth_failed"
+	}
+
 	for {
 		select {
 		case res := <-tx.Responses():
@@ -241,19 +285,13 @@ func (s *Server) makeCall(destination, from string, sess *session.Session) error
 				Name:          "sip_response_received",
 				SIPMethod:     string(inviteReq.Method),
 				SIPStatusCode: res.StatusCode,
-				SIPCallID:     inviteReq.CallID().Value(),
+				SIPCallID:     callID,
 			})
 
-			fmt.Printf("[%s] Received SIP response: %d %s\n", sess.ID, res.StatusCode, res.Reason)
+			fmt.Printf("[%s] Received SIP response: %d %s (authenticated=%v)\n", sess.ID, res.StatusCode, res.Reason, authenticated)
 
 			switch {
-			case res.StatusCode == 100:
-				// Trying - continue waiting
-				fmt.Printf("[%s] Call trying...\n", sess.ID)
-				continue
-
 			case res.StatusCode == 180 || res.StatusCode == 183:
-				// Ringing - update state and continue waiting
 				sess.UpdateState(session.StateRinging)
 				s.notifySessionStateChange(sess, session.StateRinging)
 				s.logEvent(&logstore.Event{
@@ -267,15 +305,18 @@ func (s *Server) makeCall(destination, from string, sess *session.Session) error
 				fmt.Printf("[%s] Call ringing...\n", sess.ID)
 				continue
 
-			case res.StatusCode == 200:
-				if err := s.completeOutboundInvite200(ctx, inviteReq, res, sess, params, 1, false); err != nil {
-					return err
-				}
-				cleanupOnError = false
-				return nil
+			case res.IsProvisional():
+				// 100 Trying, 181 forwarded, 182 queued, 199 early dialog
+				// terminated: keep waiting for the final response.
+				continue
 
-			case res.StatusCode == 401 || res.StatusCode == 407:
-				// Authentication required - handle in separate function
+			case res.IsSuccess():
+				if err := s.completeOutboundInvite200(ctx, inviteReq, res, sess, params, dialogCSeq, authenticated); err != nil {
+					return false, err
+				}
+				return true, nil
+
+			case (res.StatusCode == 401 || res.StatusCode == 407) && !authenticated:
 				fmt.Printf("[%s] Authentication required for INVITE\n", sess.ID)
 				s.logEvent(&logstore.Event{
 					Timestamp:     time.Now(),
@@ -283,30 +324,47 @@ func (s *Server) makeCall(destination, from string, sess *session.Session) error
 					Category:      "sip",
 					Name:          "sip_invite_auth_challenge",
 					SIPStatusCode: res.StatusCode,
-					SIPCallID:     inviteReq.CallID().Value(),
+					SIPCallID:     callID,
 				})
 				tx.Terminate() // Terminate current transaction before auth
-				if err := s.handleInviteAuth(ctx, inviteReq, res, sess); err != nil {
-					return err
-				}
-				cleanupOnError = false
-				return nil
+				return s.handleInviteAuth(ctx, inviteReq, res, sess)
 
-			default:
-				// Other final responses (4xx, 5xx, 6xx)
-				sess.SetEndReason(endReasonForSIPStatus(res.StatusCode))
+			case res.StatusCode == 401 || res.StatusCode == 407:
+				// Still unauthorized - credentials might be wrong
+				sess.SetEndReason(endReasonAuthFailed)
 				sess.UpdateState(session.StateEnded)
 				s.notifySessionStateChange(sess, session.StateEnded)
 				s.logEvent(&logstore.Event{
 					Timestamp:     time.Now(),
 					SessionID:     sess.ID,
 					Category:      "sip",
-					Name:          "sip_invite_failed",
+					Name:          "sip_invite_auth_rejected",
 					SIPStatusCode: res.StatusCode,
-					SIPCallID:     inviteReq.CallID().Value(),
+					Data:          map[string]interface{}{"reason": res.Reason},
 				})
-				s.logSessionSnapshot(ctx, sess, "sip_invite_failed")
-				return fmt.Errorf("call failed with status: %d %s", res.StatusCode, res.Reason)
+				s.logSessionSnapshot(ctx, sess, "sip_invite_auth_rejected")
+				return false, fmt.Errorf("authentication failed - check username/password: %d %s", res.StatusCode, res.Reason)
+
+			default:
+				// Other final responses (3xx, 4xx, 5xx, 6xx). A 487 that
+				// answers our own CANCEL is the caller hanging up, not a
+				// failure, so it carries no end reason.
+				if res.StatusCode != 487 || !sess.IsPendingCancelRequested() {
+					sess.SetEndReason(endReasonForSIPStatus(res.StatusCode))
+				}
+				sess.UpdateState(session.StateEnded)
+				s.notifySessionStateChange(sess, session.StateEnded)
+				s.logEvent(&logstore.Event{
+					Timestamp:     time.Now(),
+					SessionID:     sess.ID,
+					Category:      "sip",
+					Name:          failedEvent,
+					SIPStatusCode: res.StatusCode,
+					SIPCallID:     callID,
+					Data:          map[string]interface{}{"reason": res.Reason},
+				})
+				s.logSessionSnapshot(ctx, sess, failedEvent)
+				return false, fmt.Errorf("call failed with status: %d %s", res.StatusCode, res.Reason)
 			}
 
 		case <-tx.Done():
@@ -319,13 +377,12 @@ func (s *Server) makeCall(destination, from string, sess *session.Session) error
 					SessionID: sess.ID,
 					Category:  "sip",
 					Name:      "sip_invite_transaction_error",
-					Data:      map[string]interface{}{"error": err.Error()},
+					Data:      map[string]interface{}{"error": err.Error(), "authenticated": authenticated},
 				})
 				s.logSessionSnapshot(ctx, sess, "sip_invite_transaction_error")
-				return fmt.Errorf("transaction error: %w", err)
+				return false, fmt.Errorf("transaction error: %w", err)
 			}
-			cleanupOnError = false
-			return nil
+			return true, nil
 
 		case <-ctx.Done():
 			// Best-effort CANCEL to terminate the pending INVITE on the SIP peer.
@@ -344,20 +401,21 @@ func (s *Server) makeCall(destination, from string, sess *session.Session) error
 				Name:      "sip_invite_timeout",
 			})
 			s.logSessionSnapshot(ctx, sess, "sip_invite_timeout")
-			return fmt.Errorf("call timed out")
+			return false, fmt.Errorf("call timed out")
 		}
 	}
 }
 
-// handleInviteAuth handles authentication for INVITE requests
-func (s *Server) handleInviteAuth(ctx context.Context, originalReq *sip.Request, challenge *sip.Response, sess *session.Session) error {
+// handleInviteAuth re-sends the INVITE with digest credentials and waits for
+// its final response. answered reports an established call.
+func (s *Server) handleInviteAuth(ctx context.Context, originalReq *sip.Request, challenge *sip.Response, sess *session.Session) (answered bool, err error) {
 	params, err := s.resolveSessionSIPParams(sess)
 	if err != nil {
-		return fmt.Errorf("failed to resolve SIP auth params: %w", err)
+		return false, fmt.Errorf("failed to resolve SIP auth params: %w", err)
 	}
 	password := params.Password
 	if password == "" {
-		return fmt.Errorf("authentication required but no password configured")
+		return false, fmt.Errorf("authentication required but no password configured")
 	}
 
 	fmt.Printf("[%s] Creating authenticated INVITE request\n", sess.ID)
@@ -392,9 +450,9 @@ func (s *Server) handleInviteAuth(ctx context.Context, originalReq *sip.Request,
 	viaHop.Params = viaParams
 	authReq.PrependHeader(viaHop)
 
-	// Update CSeq to 2 for the authenticated request
-	authReq.RemoveHeader("CSeq")
-	authReq.AppendHeader(sip.NewHeader("CSeq", "2 INVITE"))
+	// CSeq: sipgo's digest transaction increments the typed CSeq header
+	// (1 -> 2). Keeping it typed keeps the wire value, CANCEL and ACK in step.
+	setRequestCSeq(authReq, 1, sip.INVITE)
 
 	// Ensure compatibility headers are present
 	if len(authReq.GetHeaders("User-Agent")) == 0 {
@@ -431,12 +489,9 @@ func (s *Server) handleInviteAuth(ctx context.Context, originalReq *sip.Request,
 
 	fmt.Printf("[%s] Sending authenticated INVITE with new Via/CSeq\n", sess.ID)
 
-	// Keep the authenticated INVITE so retransmitted 200 OKs can be ACKed
-	// after DoDigestAuth consumes the client transaction.
-	sess.SetOutboundInvite(nil, authReq)
-
-	// Use DoDigestAuth with the cloned request
-	res, err := s.sipClient.DoDigestAuth(ctx, authReq, challenge, digest)
+	// TransactionDigestAuth (not DoDigestAuth) so 180/183 still reach the
+	// client and a timeout can CANCEL this exact INVITE.
+	authTx, err := s.sipClient.TransactionDigestAuth(ctx, authReq, challenge, digest)
 	if err != nil {
 		sess.UpdateState(session.StateEnded)
 		s.notifySessionStateChange(sess, session.StateEnded)
@@ -448,60 +503,23 @@ func (s *Server) handleInviteAuth(ctx context.Context, originalReq *sip.Request,
 			Data:      map[string]interface{}{"error": err.Error()},
 		})
 		s.logSessionSnapshot(ctx, sess, "sip_invite_auth_failed")
-		return fmt.Errorf("authenticated INVITE failed: %w", err)
+		return false, fmt.Errorf("authenticated INVITE failed: %w", err)
 	}
+	defer authTx.Terminate()
 
-	fmt.Printf("[%s] Auth INVITE response: %d %s\n", sess.ID, res.StatusCode, res.Reason)
+	// CANCEL and the 200 retransmit ACK must use the authenticated INVITE.
+	sess.SetOutboundInvite(authTx, authReq)
 
-	// Handle response
-	switch {
-	case res.StatusCode >= 100 && res.StatusCode < 200:
-		// Provisional response (100, 180, 183, etc.)
-		if res.StatusCode == 180 || res.StatusCode == 183 {
-			sess.UpdateState(session.StateRinging)
-			s.notifySessionStateChange(sess, session.StateRinging)
-			fmt.Printf("[%s] Call ringing...\n", sess.ID)
-		}
-		return nil
+	return s.awaitOutboundInvite(ctx, authTx, authReq, sess, params, true)
+}
 
-	case res.StatusCode == 200:
-		if err := s.completeOutboundInvite200(ctx, authReq, res, sess, params, 2, true); err != nil {
-			return err
-		}
-		return nil
-
-	case res.StatusCode == 401 || res.StatusCode == 407:
-		// Still unauthorized - credentials might be wrong
-		sess.SetEndReason(endReasonAuthFailed)
-		sess.UpdateState(session.StateEnded)
-		s.notifySessionStateChange(sess, session.StateEnded)
-		s.logEvent(&logstore.Event{
-			Timestamp:     time.Now(),
-			SessionID:     sess.ID,
-			Category:      "sip",
-			Name:          "sip_invite_auth_rejected",
-			SIPStatusCode: res.StatusCode,
-			Data:          map[string]interface{}{"reason": res.Reason},
-		})
-		s.logSessionSnapshot(ctx, sess, "sip_invite_auth_rejected")
-		return fmt.Errorf("authentication failed - check username/password: %d %s", res.StatusCode, res.Reason)
-
-	default:
-		// Other final responses (4xx, 5xx, 6xx)
-		sess.SetEndReason(endReasonForSIPStatus(res.StatusCode))
-		sess.UpdateState(session.StateEnded)
-		s.notifySessionStateChange(sess, session.StateEnded)
-		s.logEvent(&logstore.Event{
-			Timestamp:     time.Now(),
-			SessionID:     sess.ID,
-			Category:      "sip",
-			Name:          "sip_invite_auth_failed",
-			SIPStatusCode: res.StatusCode,
-			Data:          map[string]interface{}{"reason": res.Reason},
-		})
-		s.logSessionSnapshot(ctx, sess, "sip_invite_auth_failed")
-		return fmt.Errorf("authenticated call failed: %d %s", res.StatusCode, res.Reason)
+// setRequestCSeq replaces the CSeq header with a typed one. sipgo parses a
+// generic CSeq header lazily into a separate copy, so incrementing that copy
+// (as its digest auth does) would not change what goes on the wire.
+func setRequestCSeq(req *sip.Request, seq uint32, method sip.RequestMethod) {
+	for req.RemoveHeader("CSeq") {
 	}
+	req.AppendHeader(&sip.CSeqHeader{SeqNo: seq, MethodName: method})
 }
 
 // Hangup terminates a SIP call by sending BYE to Asterisk
@@ -785,7 +803,7 @@ func (s *Server) acceptCall(sess *session.Session) error {
 		// Parse Opus payload type from INVITE SDP
 		opusPT := parseOpusPayloadType(inviteBody)
 		if opusPT > 0 {
-			sess.SIPOpusPT = opusPT
+			sess.SetSIPOpusPT(opusPT)
 			fmt.Printf("[%s] 🎵 Negotiated Opus payload type: %d (from INVITE SDP)\n", sess.ID, opusPT)
 			s.logEvent(&logstore.Event{
 				Timestamp: time.Now(),
@@ -796,14 +814,14 @@ func (s *Server) acceptCall(sess *session.Session) error {
 			})
 		} else {
 			// Fallback to default if not found in INVITE
-			sess.SIPOpusPT = 111
+			sess.SetSIPOpusPT(111)
 			fmt.Printf("[%s] ⚠️ No Opus in INVITE SDP, defaulting to PT=111\n", sess.ID)
 		}
 
 		s.parseAsteriskSDPAndSetEndpoints(inviteBody, sess)
 	} else {
 		fmt.Printf("[%s] ⚠️ No INVITE SDP to parse - WebRTC→Asterisk may not work\n", sess.ID)
-		sess.SIPOpusPT = 111 // Default
+		sess.SetSIPOpusPT(111) // Default
 	}
 
 	// Create SDP answer using negotiated Opus PT and constraints from INVITE offer.
@@ -821,7 +839,7 @@ func (s *Server) acceptCall(sess *session.Session) error {
 	if err := tx.Respond(okRes); err != nil {
 		// Proxy/retransmission timing can report "transaction terminated"
 		// even though ACK fallback can still complete dialog establishment.
-		if isBenignIncomingAcceptRespondError(err) {
+		if isBenignIncomingRespondError(err) {
 			fmt.Printf("⚠️ [%s] Non-fatal 200 OK response warning: %v\n", sess.ID, err)
 			s.logEvent(&logstore.Event{
 				Timestamp: time.Now(),
@@ -901,15 +919,9 @@ func (s *Server) acceptCall(sess *session.Session) error {
 	return nil
 }
 
-func isBenignIncomingAcceptRespondError(err error) bool {
-	if err == nil {
-		return false
-	}
-	errMsg := strings.ToLower(err.Error())
-	return strings.Contains(errMsg, "transaction terminated")
-}
-
-func isBenignIncomingRejectRespondError(err error) bool {
+// isBenignIncomingRespondError reports a respond error caused by the INVITE
+// server transaction already being gone (CANCEL or timeout won the race).
+func isBenignIncomingRespondError(err error) bool {
 	if err == nil {
 		return false
 	}
@@ -969,7 +981,7 @@ func (s *Server) rejectCall(sess *session.Session, reason string) error {
 		rejectRes = sip.NewResponse(code, reasonPhrase)
 	}
 	if err := tx.Respond(rejectRes); err != nil {
-		if isBenignIncomingRejectRespondError(err) {
+		if isBenignIncomingRespondError(err) {
 			fmt.Printf("⚠️ [%s] Reject response warning: %v\n", sess.ID, err)
 			s.logEvent(&logstore.Event{
 				Timestamp: time.Now(),
@@ -1022,18 +1034,6 @@ func (s *Server) SendDTMF(sess *session.Session, digits string) error {
 	return nil
 }
 
-// createInviteRequest creates a SIP INVITE request (legacy)
-func (s *Server) createInviteRequest(destination, from string, sdpBody []byte) (*sip.Request, error) {
-	params := sipAuthParams{
-		Domain:    s.getActiveDomain(),
-		Port:      s.getActivePort(),
-		Username:  s.getActiveUsername(),
-		Password:  s.getActivePassword(),
-		Transport: "tcp",
-	}
-	return s.createInviteRequestWithParams(destination, from, sdpBody, params)
-}
-
 // createInviteRequestWithParams creates a SIP INVITE request with explicit SIP params
 func (s *Server) createInviteRequestWithParams(destination, from string, sdpBody []byte, params sipAuthParams) (*sip.Request, error) {
 	domain := params.Domain
@@ -1065,6 +1065,18 @@ func (s *Server) createInviteRequestWithParams(destination, from string, sdpBody
 		// Successfully parsed as URI with username
 		username = parsedURI.User
 	}
+	// destination and from come from WebSocket clients (including the
+	// unauthenticated /ws-public). sipgo writes the user part verbatim, so a
+	// CR/LF here would inject SIP headers.
+	if err := validateSIPUserPart(username); err != nil {
+		return nil, fmt.Errorf("invalid destination: %w", err)
+	}
+	if fromUser != "" {
+		if err := validateSIPUserPart(fromUser); err != nil {
+			return nil, fmt.Errorf("invalid from: %w", err)
+		}
+	}
+
 	// For INVITE, always use domain as host (not the host from destination)
 	// NO PORT in Request-URI (like Linphone)
 	recipient := sip.Uri{
@@ -1113,7 +1125,7 @@ func (s *Server) createInviteRequestWithParams(destination, from string, sdpBody
 	req.AppendHeader(sip.NewHeader("Call-ID", callID))
 
 	// Add CSeq
-	req.AppendHeader(sip.NewHeader("CSeq", "1 INVITE"))
+	req.AppendHeader(&sip.CSeqHeader{SeqNo: 1, MethodName: sip.INVITE})
 
 	// Add Max-Forwards
 	req.AppendHeader(sip.NewHeader("Max-Forwards", "70"))
@@ -1153,6 +1165,26 @@ func (s *Server) createInviteRequestWithParams(destination, from string, sdpBody
 	req.SetTransport(transportUpper)
 
 	return req, nil
+}
+
+// validateSIPUserPart rejects a SIP URI user part that would break the
+// request it is written into: empty, over 128 bytes, control characters or
+// whitespace (header injection), or URI/header delimiters. Dial-string
+// characters such as * # + are allowed.
+func validateSIPUserPart(user string) error {
+	if user == "" {
+		return fmt.Errorf("empty SIP user")
+	}
+	if len(user) > 128 {
+		return fmt.Errorf("SIP user longer than 128 bytes")
+	}
+	for i := 0; i < len(user); i++ {
+		c := user[i]
+		if c <= 0x20 || c == 0x7f || strings.IndexByte(`<>"@:\`, c) >= 0 {
+			return fmt.Errorf("SIP user contains invalid character %q", c)
+		}
+	}
+	return nil
 }
 
 func normalizeSIPUser(user string) string {
@@ -1208,6 +1240,18 @@ func (s *Server) resolveDialogDomainPort(sess *session.Session) (string, int) {
 		fallbackPort = 5060
 	}
 	return fallbackDomain, fallbackPort
+}
+
+// dialogTransport is the transport in-dialog requests use: the trunk's (or
+// the account's) configured transport, defaulting to TCP.
+func (s *Server) dialogTransport(sess *session.Session) (upper, lower string) {
+	lower = "tcp"
+	if params, err := s.resolveSessionSIPParams(sess); err == nil {
+		if t := strings.ToLower(strings.TrimSpace(params.Transport)); t != "" {
+			lower = t
+		}
+	}
+	return strings.ToUpper(lower), lower
 }
 
 // createBYERequest creates a SIP BYE request for terminating a call
@@ -1277,7 +1321,8 @@ func (s *Server) createBYERequest(sess *session.Session) (*sip.Request, error) {
 		recipient.Host = domain
 	}
 
-	fmt.Printf("[%s] BYE target source=%s domain=%s port=%d\n", sess.ID, source, domain, port)
+	transportUpper, transportLower := s.dialogTransport(sess)
+	fmt.Printf("[%s] BYE target source=%s domain=%s port=%d transport=%s\n", sess.ID, source, domain, port, transportLower)
 
 	// Resolve destination domain
 	ips, err := net.LookupIP(domain)
@@ -1300,7 +1345,7 @@ func (s *Server) createBYERequest(sess *session.Session) (*sip.Request, error) {
 	viaHop := &sip.ViaHeader{
 		ProtocolName:    "SIP",
 		ProtocolVersion: "2.0",
-		Transport:       "TCP",
+		Transport:       transportUpper,
 		Host:            s.publicAddress,
 		Port:            s.sipPort,
 	}
@@ -1407,7 +1452,7 @@ func (s *Server) createBYERequest(sess *session.Session) (*sip.Request, error) {
 		Port: s.sipPort,
 	}
 	byeContactParams := sip.NewParams()
-	byeContactParams.Add("transport", "tcp")
+	byeContactParams.Add("transport", transportLower)
 	contactUri.UriParams = byeContactParams
 	req.AppendHeader(&sip.ContactHeader{
 		Address: contactUri,
@@ -1420,8 +1465,9 @@ func (s *Server) createBYERequest(sess *session.Session) (*sip.Request, error) {
 	destinationAddr := fmt.Sprintf("%s:%d", resolvedIP, port)
 	req.SetDestination(destinationAddr)
 
-	// CRITICAL: Force TCP transport to prevent sipgo from switching transports
-	req.SetTransport("TCP")
+	// Pin the dialog's transport so sipgo does not fall back to its default
+	// (UDP). Hold re-INVITE, MESSAGE and INFO reuse this builder.
+	req.SetTransport(transportUpper)
 
 	// Do not log "Created BYE" here. MESSAGE, INFO, and hold re-INVITE reuse
 	// this builder as a dialog template and rewrite the method afterwards.
@@ -1436,6 +1482,16 @@ func (s *Server) createBYERequest(sess *session.Session) (*sip.Request, error) {
 
 // sendAckForInvite creates and sends an ACK request for a 200 OK response to INVITE
 func (s *Server) sendAckForInvite(inviteReq *sip.Request, res *sip.Response) {
+	ackReq := s.buildAckForInvite(inviteReq, res)
+	s.sendBuiltAck(ackReq, ackReq.Recipient)
+}
+
+// buildAckForInvite builds the ACK for a 2xx to inviteReq. It travels along the
+// dialog's route set: a dialog-creating 200 carries it as Record-Route, but the
+// 200 to an in-dialog re-INVITE usually does not, so that ACK reuses the
+// re-INVITE's own Route headers. Without them the proxy drops the ACK, Asterisk
+// keeps retransmitting its 200 and hangs up the call after about 6 seconds.
+func (s *Server) buildAckForInvite(inviteReq *sip.Request, res *sip.Response) *sip.Request {
 	// Use Contact header from response as Request-URI if available
 	recipient := inviteReq.Recipient
 	if contact := res.Contact(); contact != nil {
@@ -1445,10 +1501,15 @@ func (s *Server) sendAckForInvite(inviteReq *sip.Request, res *sip.Response) {
 	// Create ACK request
 	ackReq := sip.NewRequest(sip.ACK, recipient)
 
-	// Handle Record-Route headers from response
-	recordRoutes := res.GetHeaders("Record-Route")
-	for i := len(recordRoutes) - 1; i >= 0; i-- {
-		ackReq.AppendHeader(sip.NewHeader("Route", recordRoutes[i].Value()))
+	if inDialogRequest(inviteReq) {
+		for _, route := range inviteReq.GetHeaders("Route") {
+			ackReq.AppendHeader(sip.NewHeader("Route", route.Value()))
+		}
+	} else {
+		recordRoutes := res.GetHeaders("Record-Route")
+		for i := len(recordRoutes) - 1; i >= 0; i-- {
+			ackReq.AppendHeader(sip.NewHeader("Route", recordRoutes[i].Value()))
+		}
 	}
 
 	// Copy Via header from INVITE (with new branch)
@@ -1502,7 +1563,21 @@ func (s *Server) sendAckForInvite(inviteReq *sip.Request, res *sip.Response) {
 	}
 
 	ackReq.SetTransport(transport)
+	return ackReq
+}
 
+// inDialogRequest reports whether req was sent inside an established dialog
+// (its To carries the remote tag), such as a hold or media re-INVITE.
+func inDialogRequest(req *sip.Request) bool {
+	to := req.To()
+	if to == nil || to.Params == nil {
+		return false
+	}
+	tag, ok := to.Params.Get("tag")
+	return ok && tag != ""
+}
+
+func (s *Server) sendBuiltAck(ackReq *sip.Request, recipient sip.Uri) {
 	if s.sipClient == nil {
 		fmt.Printf("ACK not sent: sipClient is nil (Request-URI: %s)\n", recipient.String())
 		return
@@ -1561,9 +1636,9 @@ func (s *Server) completeOutboundInvite200(
 			fmt.Printf("SDP answer received: bytes=%d\n", len(res.Body()))
 		}
 		opusPT = parseOpusPayloadType(res.Body())
-		if opusPT > 0 && opusPT != sess.SIPOpusPT {
-			fmt.Printf("[%s] 🎵 Updated Opus PT from answer: %d → %d\n", sess.ID, sess.SIPOpusPT, opusPT)
-			sess.SIPOpusPT = opusPT
+		if previousOpusPT := sess.GetSIPOpusPT(); opusPT > 0 && opusPT != previousOpusPT {
+			fmt.Printf("[%s] 🎵 Updated Opus PT from answer: %d → %d\n", sess.ID, previousOpusPT, opusPT)
+			sess.SetSIPOpusPT(opusPT)
 			opusUpdated = true
 		}
 		if videoPT, ok := parseH264PayloadType(res.Body()); ok {
@@ -1661,6 +1736,15 @@ func (s *Server) handleUnhandledSIPResponse(res *sip.Response) {
 	inviteReq, _ := storedReq.(*sip.Request)
 	if inviteReq == nil {
 		return
+	}
+	if stored := inviteReq.CSeq(); stored == nil || stored.SeqNo != cseq.SeqNo {
+		// A 200 to a later in-dialog re-INVITE (hold, media change): ACK it along
+		// the dialog, not with the first INVITE's headers.
+		dialogReq, err := s.createBYERequest(sess)
+		if err != nil {
+			return
+		}
+		inviteReq = dialogReq
 	}
 	fmt.Printf("[%s] ACK retransmit for unhandled INVITE 200\n", sess.ID)
 	s.sendAckForInvite(inviteReq, res)

@@ -52,7 +52,6 @@ type Server struct {
 	sessionStreamSeq   int
 	wsClientStreams    map[int]chan []byte
 	wsClientStreamSeq  int
-	incomingCounters   map[string]int64
 	diagnosticLimits   map[string]*diagnosticRateState
 	chatImageStore     *chatimage.Store
 	chatImageLimits    map[string]*chatImageRateState
@@ -207,6 +206,10 @@ type WSMessage struct {
 	IsFinal        *bool  `json:"isFinal,omitempty"`
 	// Session resume redirect
 	RedirectURL string `json:"redirectUrl,omitempty"` // Server response: resume_redirect with new WS URL
+	// Call transfer: targetSessionId selects attended transfer (the caller's
+	// other call); statusCode carries the SIP status in transfer_progress.
+	TargetSessionID string `json:"targetSessionId,omitempty"`
+	StatusCode      int    `json:"statusCode,omitempty"`
 }
 
 // NewServer creates a new API server
@@ -236,7 +239,6 @@ func NewServer(cfg config.APIConfig, turnCfg config.TURNConfig, gatewayCfg confi
 		trunkStreams:       make(map[int]chan []byte),
 		sessionStreams:     make(map[int]chan []byte),
 		wsClientStreams:    make(map[int]chan []byte),
-		incomingCounters:   make(map[string]int64),
 		diagnosticLimits:   make(map[string]*diagnosticRateState),
 		chatImageLimits:    make(map[string]*chatImageRateState),
 		healthProviders:    make(map[string]OperationalHealthProvider),

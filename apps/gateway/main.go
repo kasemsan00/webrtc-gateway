@@ -171,7 +171,7 @@ func runAPIMode(ctx context.Context, cfg *config.Config, unicastAddress string, 
 	sessionMgr.StartCleanup(ctx, 30*time.Second)
 
 	// Initialize SIP server (with nil audio track - sessions will have their own)
-	sipServer, err := sip.NewServer(cfg.SIP, cfg.RTP, nil, unicastAddress, cfg.SIP.LocalPort)
+	sipServer, err := sip.NewServer(cfg.SIP, cfg.RTP, unicastAddress, cfg.SIP.LocalPort)
 	if err != nil {
 		log.Fatalf("Failed to create SIP server: %v", err)
 	}
@@ -222,6 +222,8 @@ func runAPIMode(ctx context.Context, cfg *config.Config, unicastAddress string, 
 		trunkMgrInterface = trunkManager
 	}
 	apiServer := api.NewServer(cfg.API, cfg.TURN, cfg.Gateway, cfg.Translator, sessionMgr, sipServer, publicRegistry, trunkMgrInterface, store)
+	// Calls ended by ICE (failed, or reconnect grace expired) send BYE.
+	sessionMgr.SetICEEndedHandler(apiServer.HandleICEEnded)
 	if trunkManager != nil {
 		apiServer.AttachTrunkListChangeCallback(trunkManager)
 	}

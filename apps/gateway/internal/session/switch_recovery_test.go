@@ -18,7 +18,10 @@ func TestPostGateRecoverySoftening(t *testing.T) {
 	sess.mu.Lock()
 	sess.applyPostGateRecoverySofteningLocked(now)
 	stable := sess.SwitchVideoRecoveryStableWindow
-	minPackets := sess.SwitchVideoRTPMinPacketDelta
+	minPackets := sess.switchRTPStabilityPolicyLocked().MinPacketDelta
+	sess.finishSwitchVideoRecoveryLocked(now, "test")
+	afterFinish := sess.switchRTPStabilityPolicyLocked().MinPacketDelta
+	configured := sess.SwitchVideoRTPMinPacketDelta
 	sess.mu.Unlock()
 
 	if stable != postGateRecoveryStableWindow {
@@ -26,5 +29,10 @@ func TestPostGateRecoverySoftening(t *testing.T) {
 	}
 	if minPackets != postGateRTPMinPacketDelta {
 		t.Fatalf("min packet delta = %d, want %d", minPackets, postGateRTPMinPacketDelta)
+	}
+	// The softening belongs to one recovery; the next switch in the same
+	// call must use the configured threshold again.
+	if afterFinish != 30 || configured != 30 {
+		t.Fatalf("after recovery: policy=%d configured=%d, want 30", afterFinish, configured)
 	}
 }

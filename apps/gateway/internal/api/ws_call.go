@@ -595,17 +595,14 @@ func (s *Server) handleWSHangup(client *WSClient, msg WSMessage) {
 			if err := s.sipMaker.RejectCall(sess, "busy"); err != nil {
 				log.Printf("[%s] Reject-on-hangup error: %v", msg.SessionID, err)
 			}
-			s.incrementIncomingCounter("incoming_rejected")
 		case hasDialog || state == session.StateActive:
 			if err := s.sipMaker.Hangup(sess); err != nil {
 				log.Printf("[%s] Hangup error: %v", msg.SessionID, err)
 			}
-			s.incrementIncomingCounter("bye")
 		case state == session.StateConnecting || state == session.StateRinging:
 			if err := s.sipMaker.CancelPendingCall(sess); err != nil {
 				log.Printf("[%s] Cancel pending call error: %v", msg.SessionID, err)
 			}
-			s.incrementIncomingCounter("outgoing_canceled")
 		default:
 			sess.UpdateState(session.StateEnded)
 		}

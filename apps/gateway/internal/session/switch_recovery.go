@@ -127,11 +127,11 @@ func (s *Session) startSwitchVideoRecovery(generation int, mediaEpoch uint64, re
 		s.mu.Unlock()
 		return false
 	}
-	s.SwitchReceivedAt = now
 	s.SwitchVideoRecoveryStartedAt = now
 	s.SwitchVideoRecoveryUntil = now.Add(maxWindow)
 	s.SwitchVideoRecoveryFirstKeyframeAt = time.Time{}
 	s.SwitchVideoRecoveryStableWindow = stableWindow
+	s.switchRTPMinPacketDeltaSoftened = false
 	s.SwitchVideoRecoveryOneShotPLI = true
 	s.SwitchFeedbackBurstSatisfied = false
 	s.SwitchVideoRecoverySummary = VideoRecoverySummary{}
@@ -177,10 +177,9 @@ func (s *Session) applyPostGateRecoverySofteningLocked(now time.Time) {
 	if s.SwitchVideoRecoveryStableWindow > softened {
 		s.SwitchVideoRecoveryStableWindow = softened
 	}
-	if s.SwitchVideoRTPMinPacketDelta > postGateRTPMinPacketDelta {
-		s.SwitchVideoRTPMinPacketDelta = postGateRTPMinPacketDelta
-	}
-	s.SwitchVideoGateReleasedAt = now
+	// Soften only this recovery. SwitchVideoRTPMinPacketDelta is the
+	// configured value and must not drift down for the rest of the call.
+	s.switchRTPMinPacketDeltaSoftened = true
 	s.SwitchFeedbackBurstSatisfied = true
 }
 
@@ -197,12 +196,12 @@ func (s *Session) finishSwitchVideoRecoveryLocked(now time.Time, reason string) 
 	s.SwitchVideoRecoveryUntil = time.Time{}
 	s.SwitchVideoRecoveryFirstKeyframeAt = time.Time{}
 	s.SwitchVideoRecoveryOneShotPLI = false
+	s.switchRTPMinPacketDeltaSoftened = false
 	s.SwitchVideoRecoverySummary = VideoRecoverySummary{}
 	s.SwitchVideoRecoveryRTPBaseline = VideoRecoverySummary{}
 	s.SwitchVideoRecoveryRTPBaselineAt = time.Time{}
 	s.SwitchVideoRecoveryLastUnstableLog = time.Time{}
 	s.SwitchVideoRecoveryUnstableCount = 0
-	s.SwitchVideoGateReleasedAt = time.Time{}
 
 	recoveryMS := int64(-1)
 	firstKeyframeMS := int64(-1)
@@ -221,8 +220,12 @@ func (s *Session) finishSwitchVideoRecoveryLocked(now time.Time, reason string) 
 }
 
 func (s *Session) switchRTPStabilityPolicyLocked() switchRTPStabilityPolicy {
+	minPackets := normalizePositiveInt(s.SwitchVideoRTPMinPacketDelta, defaultSwitchRTPMinPacketDelta)
+	if s.switchRTPMinPacketDeltaSoftened && minPackets > postGateRTPMinPacketDelta {
+		minPackets = postGateRTPMinPacketDelta
+	}
 	return switchRTPStabilityPolicy{
-		MinPacketDelta:         normalizePositiveInt(s.SwitchVideoRTPMinPacketDelta, defaultSwitchRTPMinPacketDelta),
+		MinPacketDelta:         minPackets,
 		MaxGapDelta:            normalizePositiveInt(s.SwitchVideoRTPMaxGapDelta, defaultSwitchRTPMaxGapDelta),
 		MaxMissingDelta:        normalizePositiveInt(s.SwitchVideoRTPMaxMissingDelta, defaultSwitchRTPMaxMissingDelta),
 		MaxOutOfOrderDelta:     normalizePositiveInt(s.SwitchVideoRTPMaxOutOfOrderDelta, defaultSwitchRTPMaxOutOfOrderDelta),
@@ -387,12 +390,3 @@ func (s *Session) UpdateSwitchVideoRecoverySummary(summary VideoRecoverySummary)
 	s.SwitchVideoRecoverySummary = summary
 }
 
-func (s *Session) StopSwitchVideoRecoveryIfActive(reason string) {
-	now := time.Now()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if !s.SwitchVideoRecoveryUntil.IsZero() || !s.SwitchVideoRecoveryStartedAt.IsZero() {
-		s.finishSwitchVideoRecoveryLocked(now, reason)
-	}
-}

@@ -7,9 +7,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
 	"time"
 
@@ -351,16 +349,3 @@ func RedactDSN(dsn string) string {
 	return parsed.String()
 }
 
-// KnownVersions is intentionally exported for package-level tests and diagnostics.
-func KnownVersions(dir string) ([]int64, error) {
-	versions, err := migrationVersions(filepath.Clean(dir))
-	if err != nil {
-		return nil, err
-	}
-	result := make([]int64, 0, len(versions))
-	for version := range versions {
-		result = append(result, version)
-	}
-	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
-	return result, nil
-}

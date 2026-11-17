@@ -21,15 +21,6 @@ func analyzeRenegotiateVideoOffer(sdp string) OfferVideoDiagnostics {
 	return AnalyzeOfferVideo(sdp)
 }
 
-func waitForGatheringComplete(gatherComplete <-chan struct{}, timeout time.Duration) bool {
-	select {
-	case <-gatherComplete:
-		return true
-	case <-time.After(timeout):
-		return false
-	}
-}
-
 func waitForRenegotiateIceGatheringComplete(pc *webrtc.PeerConnection, timeout time.Duration) bool {
 	return waitForIceGatheringComplete(pc, timeout, hasUsableResumeCandidatesInSDP)
 }

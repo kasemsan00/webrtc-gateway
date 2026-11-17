@@ -5,6 +5,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"time"
 
 	"webrtc-sip-gateway/internal/session"
 	"webrtc-sip-gateway/internal/sip"
@@ -333,12 +334,41 @@ func (s *Server) forceEndSession(sess *session.Session, reason string) {
 		sess.UpdateState(session.StateEnded)
 	}
 
+	s.releaseSessionAccount(sess)
+	s.sessionMgr.DeleteSession(sess.ID)
+}
+
+// releaseSessionAccount drops the call's hold on its SIP account: the public
+// registry reference or the trunk's in_use_by.
+func (s *Server) releaseSessionAccount(sess *session.Session) {
 	authMode, accountKey, trunkID, _, _, _, _ := sess.GetSIPAuthContext()
 	if authMode == "public" && accountKey != "" && s.publicRegistry != nil {
 		s.publicRegistry.DecrementRefCount(accountKey)
 	}
 	if authMode == "trunk" && trunkID > 0 && s.trunkManager != nil {
-		_ = s.trunkManager.SetTrunkInUseBy(context.Background(), trunkID, nil)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = s.trunkManager.SetTrunkInUseBy(ctx, trunkID, nil)
 	}
-	s.sessionMgr.DeleteSession(sess.ID)
+}
+
+// HandleICEEnded finishes a call the session ended because WebRTC ICE gave
+// up (ICE failed, or the 30s reconnect grace ran out). An established dialog
+// gets a BYE, which also sends the client its ended state and closes the
+// PeerConnection; before that the Asterisk leg stayed up until its RTP
+// timeout. A call without a dialog needs nothing here: a pending outbound
+// INVITE is cancelled when the session's context ends.
+func (s *Server) HandleICEEnded(sess *session.Session, reason string) {
+	if sess == nil || s.sipMaker == nil || !sess.HasDialogState() {
+		return
+	}
+	if !sess.TryBeginTerminalAction("bye") {
+		return
+	}
+	s.logTerminalAction(sess, "bye", 0, reason, "gateway")
+	log.Printf("[%s] Ending SIP dialog after ICE ended (reason=%s)", sess.ID, reason)
+	if err := s.sipMaker.Hangup(sess); err != nil {
+		log.Printf("[%s] BYE after ICE end failed: %v", sess.ID, err)
+	}
+	s.releaseSessionAccount(sess)
 }

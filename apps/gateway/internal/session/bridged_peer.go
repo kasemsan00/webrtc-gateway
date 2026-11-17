@@ -29,6 +29,12 @@ func bridgedSIPUser(value string) string {
 // FindBridgedGatewayPeer returns the other WebRTC session on a queue-bridged
 // call. An outbound caller maps to the inbound agent with the same caller
 // username, and an inbound agent maps back to that outbound caller.
+//
+// The caller username is only a guess: one caller can have several calls (a
+// second line, call waiting). The pairing is therefore made only when it is
+// unambiguous both ways, or when the @switch agent of the outbound call names
+// the agent session. Otherwise it returns nil, so hanging up or relaying for one
+// call never reaches the agent of another call from the same caller.
 func FindBridgedGatewayPeer(sessions []*Session, origin *Session) *Session {
 	if origin == nil {
 		return nil
@@ -36,28 +42,66 @@ func FindBridgedGatewayPeer(sessions []*Session, origin *Session) *Session {
 	dir, from, _, _ := origin.GetCallInfo()
 	dir = strings.ToLower(strings.TrimSpace(dir))
 	user := bridgedSIPUser(from)
-	if user == "" {
+	if user == "" || (dir != "inbound" && dir != "outbound") {
 		return nil
 	}
+	candidates := bridgedCandidates(sessions, origin, user)
+	var linked []*Session
+	for _, sess := range candidates {
+		if bridgedBySwitchAgent(origin, sess) {
+			linked = append(linked, sess)
+		}
+	}
+	if len(linked) == 1 {
+		return linked[0]
+	}
+	if len(candidates) != 1 {
+		return nil
+	}
+	peer := candidates[0]
+	for _, other := range bridgedCandidates(sessions, peer, user) {
+		if other.ID != origin.ID {
+			// The peer could belong to another call of the same caller.
+			return nil
+		}
+	}
+	return peer
+}
+
+// bridgedCandidates lists live sessions in the opposite direction of origin
+// whose caller username is user.
+func bridgedCandidates(sessions []*Session, origin *Session, user string) []*Session {
+	dir, _, _, _ := origin.GetCallInfo()
 	want := "inbound"
-	if dir == "inbound" {
+	if strings.EqualFold(strings.TrimSpace(dir), "inbound") {
 		want = "outbound"
-	} else if dir != "outbound" {
-		return nil
 	}
+	var out []*Session
 	for _, sess := range sessions {
 		if sess == nil || sess.ID == origin.ID || sess.GetState() == StateEnded {
 			continue
 		}
 		peerDir, peerFrom, _, _ := sess.GetCallInfo()
-		if !strings.EqualFold(strings.TrimSpace(peerDir), want) {
-			continue
-		}
-		if bridgedSIPUser(peerFrom) == user {
-			return sess
+		if strings.EqualFold(strings.TrimSpace(peerDir), want) && bridgedSIPUser(peerFrom) == user {
+			out = append(out, sess)
 		}
 	}
-	return nil
+	return out
+}
+
+// bridgedBySwitchAgent reports whether the outbound one of a and b was
+// switched (@switch) to the agent whose SIP user owns the inbound one.
+func bridgedBySwitchAgent(a, b *Session) bool {
+	outbound, inbound := a, b
+	if dir, _, _, _ := a.GetCallInfo(); strings.EqualFold(strings.TrimSpace(dir), "inbound") {
+		outbound, inbound = b, a
+	}
+	agent := bridgedSIPUser(outbound.ChatMessageDestination())
+	if agent == "" {
+		return false
+	}
+	_, _, _, _, sipUser, _, _ := inbound.GetSIPAuthContext()
+	return bridgedSIPUser(sipUser) == agent
 }
 
 // RequestBridgedBrowserKeyframe sends a forced PLI/FIR burst to this session's

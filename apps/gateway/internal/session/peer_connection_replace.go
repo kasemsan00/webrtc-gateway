@@ -5,7 +5,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pion/rtcp"
 	"github.com/pion/webrtc/v4"
 
 	"webrtc-sip-gateway/internal/config"
@@ -24,22 +23,45 @@ func (s *Session) createReplacementPeerConnection(
 ) (*webrtc.PeerConnection, error) {
 	var videoOnTrackObserved atomic.Bool
 
+	// Resume tears the live PeerConnection down. Detach its tracks while
+	// holding videoEgressMu so no RTP write is in flight on them when it
+	// closes: writing a TrackLocalStaticRTP concurrently with Close can
+	// deadlock pion (see video_egress.go). Lock order: videoEgressMu, s.mu.
+	//
+	// The PeerConnection parked by an unfinished @switch is dropped here too:
+	// resume clears it, and a second @switch parks oldPC in its place. It is
+	// detached together with its tracks in this same section, so nothing
+	// writes to it or can restore it (AbortMakeBeforeBreak) once it closes.
+	s.videoEgressMu.Lock()
+	s.audioEgressMu.Lock()
 	s.mu.Lock()
 	oldPC := s.PeerConnection
 	oldAudio := s.AudioTrack
 	oldVideo := s.VideoTrack
+	parkedPC := s.legacyPeerConnection
+	dropParked := parkedPC != nil && parkedPC != oldPC && (!keepExisting || oldPC != nil)
 	s.pendingRemoteICE = nil
 	if !keepExisting {
 		s.PeerConnection = nil
+		s.AudioTrack = nil
+		s.VideoTrack = nil
+	}
+	if !keepExisting || dropParked {
 		s.legacyPeerConnection = nil
 		s.legacyAudioTrack = nil
 		s.legacyVideoTrack = nil
 	}
 	s.mu.Unlock()
+	s.audioEgressMu.Unlock()
+	s.videoEgressMu.Unlock()
 
 	if !keepExisting && oldPC != nil {
 		fmt.Printf("[%s] 🔄 Closing old PeerConnection\n", s.ID)
-		oldPC.Close()
+		ClosePeerConnectionAsync(oldPC, s.ID)
+	}
+	if dropParked {
+		fmt.Printf("[%s] 🔄 Closing parked make-before-break PeerConnection\n", s.ID)
+		ClosePeerConnectionAsync(parkedPC, s.ID)
 	}
 
 	iceServers := pkg_webrtc.BuildICEServers(turnConfig)
@@ -92,39 +114,10 @@ func (s *Session) createReplacementPeerConnection(
 	s.VideoTrack = videoTrack
 	s.mu.Unlock()
 
-	go func() {
-		rtcpBuf := make([]byte, s.RTPBufferSize)
-		for {
-			if _, _, err := audioSender.Read(rtcpBuf); err != nil {
-				return
-			}
-		}
-	}()
-
-	go func() {
-		rtcpBuf := make([]byte, s.RTPBufferSize)
-		for {
-			if s.GetState() == StateEnded {
-				return
-			}
-			n, _, rtcpErr := videoSender.Read(rtcpBuf)
-			if rtcpErr != nil {
-				return
-			}
-			packets, err := rtcp.Unmarshal(rtcpBuf[:n])
-			if err != nil {
-				continue
-			}
-			for _, p := range packets {
-				switch pkt := p.(type) {
-				case *rtcp.PictureLossIndication, *rtcp.FullIntraRequest:
-					s.SendBrowserRecoveryToAsterisk("browser-rtcp")
-				case *rtcp.TransportLayerNack:
-					_ = pkt
-				}
-			}
-		}
-	}()
+	// Same browser RTCP handling as the first PeerConnection: PLI/FIR use the
+	// browser-pli/browser-fir triggers and NACKs are retransmitted from cache.
+	go s.drainSenderRTCP(audioSender)
+	go s.readVideoSenderRTCP(videoSender)
 
 	if debugTURN {
 		newPC.OnICEGatheringStateChange(func(state webrtc.ICEGatheringState) {
@@ -224,13 +217,31 @@ func (s *Session) createReplacementPeerConnection(
 				s.SendPLIToAsteriskForced("renegotiated-ice")
 				s.SendPLItoWebRTC()
 			}()
+		} else if connectionState == webrtc.ICEConnectionStateDisconnected {
+			// Same grace as the first PeerConnection: a resumed call whose
+			// network drops again stays reconnecting and can resume again.
+			s.mu.Lock()
+			entered := false
+			if !isTerminalCleanupState(s.State, s.TerminalAction) {
+				entered = s.enterICEReconnectGraceLocked(iceReconnectGracePeriod, "disconnected (renegotiated)")
+			}
+			s.mu.Unlock()
+			if entered {
+				s.StartVideoRecoveryBurst("ice-reconnecting")
+			}
 		} else if connectionState == webrtc.ICEConnectionStateFailed {
 			if s.AbortMakeBeforeBreak() {
 				fmt.Printf("[%s] ❌ Renegotiated connection failed; restored previous PeerConnection\n", id)
 				return
 			}
 			fmt.Printf("[%s] ❌ Renegotiated connection failed\n", id)
-			s.SetState(StateEnded)
+			s.mu.Lock()
+			var after func()
+			if s.State != StateEnded {
+				after = s.endForICELocked("ice_failed_renegotiated")
+			}
+			s.mu.Unlock()
+			runICEEndedHook(after)
 		}
 	})
 
@@ -245,6 +256,7 @@ func (s *Session) createReplacementPeerConnection(
 		if kind == "video" {
 			fmt.Printf("[%s] 🎬 WebRTC video codec details (renegotiated): %s (fmtp: %s)\n", id, codec.MimeType, codec.SDPFmtpLine)
 		}
+		go s.readReceiverRTCP(receiver, kind)
 		go s.forwardRTPToAsterisk(track, kind)
 	})
 

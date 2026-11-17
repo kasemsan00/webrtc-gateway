@@ -6,6 +6,9 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"time"
+
+	"webrtc-sip-gateway/internal/session"
 
 	"webrtc-sip-gateway/internal/sip"
 )
@@ -194,13 +197,76 @@ func (s *Server) cleanupAgentDevicePresence(client *WSClient) {
 		s.unbindClientSession(client, sessionID)
 	}
 	s.unbindAgentClient(client, false)
+	// A dropped socket is usually a network switch, not a hang-up: the phone
+	// reconnects, registers again and resumes within seconds. Keep each call
+	// for the same grace the WebRTC side gets, then end what nobody resumed.
 	for _, sessionID := range sessionIDs {
-		if s.sessionMgr != nil {
-			if sess, ok := s.sessionMgr.GetSession(sessionID); ok && sess != nil {
-				s.forceEndSession(sess, "agent_device_disconnect")
-			}
-		}
+		s.endUnresumedSessionAfter(sessionID, agentDeviceResumeGrace, "agent_device_disconnect")
 	}
+}
+
+// agentDeviceResumeGrace matches the session's ICE reconnect grace.
+var agentDeviceResumeGrace = 30 * time.Second
+
+// endUnresumedSessionAfter ends sessionID after grace unless a live
+// connection has resumed it by then.
+func (s *Server) endUnresumedSessionAfter(sessionID string, grace time.Duration, reason string) {
+	if s.sessionMgr == nil {
+		return
+	}
+	if sess, ok := s.sessionMgr.GetSession(sessionID); !ok || sess == nil || sess.GetState() == session.StateEnded {
+		return
+	}
+	log.Printf("[%s] Agent-device socket closed; call kept %s for resume", sessionID, grace)
+	time.AfterFunc(grace, func() {
+		if s.sessionResumedByLiveClient(sessionID) {
+			return
+		}
+		if sess, ok := s.sessionMgr.GetSession(sessionID); ok && sess != nil {
+			log.Printf("[%s] No resume within %s; ending call (reason=%s)", sessionID, grace, reason)
+			s.forceEndSession(sess, reason)
+		}
+	})
+}
+
+// sessionResumedByLiveClient reports whether a connected client owns sessionID.
+func (s *Server) sessionResumedByLiveClient(sessionID string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	owner := s.wsClients[sessionID]
+	if owner == nil {
+		return false
+	}
+	_, live := s.wsConnections[owner]
+	return live
+}
+
+// agentDeviceCanResume allows resume of a call that belongs to the trunk
+// this agent-device socket registered. Without it any socket that learned a
+// session ID could take the call over.
+func (s *Server) agentDeviceCanResume(client *WSClient, msg WSMessage) (bool, string) {
+	sessionID := strings.TrimSpace(msg.SessionID)
+	if sessionID == "" {
+		return false, "Session ID required"
+	}
+	if s.clientOwnsSession(client, sessionID) {
+		return true, ""
+	}
+	if client == nil || !client.trunkResolved || client.resolvedTrunkID <= 0 {
+		return false, "device_register is required before resume"
+	}
+	if s.sessionMgr == nil {
+		return false, "Session manager not available"
+	}
+	sess, ok := s.sessionMgr.GetSession(sessionID)
+	if !ok || sess == nil {
+		// Let the resume handler answer resume_failed / resume_redirect.
+		return true, ""
+	}
+	if _, _, trunkID, _, _, _, _ := sess.GetSIPAuthContext(); trunkID != client.resolvedTrunkID {
+		return false, "Agent-device WebSocket can only resume calls of its registered trunk"
+	}
+	return true, ""
 }
 
 func agentDeviceIdentitySubject(client *WSClient, username, domain string, port int) string {

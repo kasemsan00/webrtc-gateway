@@ -3,12 +3,10 @@ package sip
 import (
 	"context"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/emiago/sipgo"
 	sipgoSip "github.com/emiago/sipgo/sip"
-	"github.com/pion/webrtc/v4"
 
 	"webrtc-sip-gateway/internal/config"
 	"webrtc-sip-gateway/internal/logstore"
@@ -83,7 +81,6 @@ type Server struct {
 	config                     config.SIPConfig
 	rtpConfig                  config.RTPConfig
 	turnConfig                 config.TURNConfig // For creating sessions for incoming calls
-	audioTrack                 *webrtc.TrackLocalStaticRTP
 	unicastAddress             string
 	publicAddress              string // Public IP address for NAT traversal
 	sipPort                    int
@@ -98,8 +95,6 @@ type Server struct {
 	dtmfNotifier               DTMFNotifier         // For notifying received DTMF
 	logStore                   logstore.LogStore
 	logFullSIP                 bool
-	// Registration fields
-	mu sync.RWMutex
 	// SIP Public & Trunk management
 	publicRegistry *PublicAccountRegistry
 	trunkManager   *TrunkManager
@@ -111,7 +106,7 @@ type Server struct {
 }
 
 // NewServer creates a new SIP server
-func NewServer(cfg config.SIPConfig, rtpCfg config.RTPConfig, audioTrack *webrtc.TrackLocalStaticRTP, unicastAddress string, sipPort int) (*Server, error) {
+func NewServer(cfg config.SIPConfig, rtpCfg config.RTPConfig, unicastAddress string, sipPort int) (*Server, error) {
 	var server *Server
 	sipUserAgent, err := sipgo.NewUA(
 		sipgo.WithUserAgentTransactionLayerOptions(
@@ -146,7 +141,6 @@ func NewServer(cfg config.SIPConfig, rtpCfg config.RTPConfig, audioTrack *webrtc
 		sipUserAgent:   sipUserAgent,
 		config:         cfg,
 		rtpConfig:      rtpCfg,
-		audioTrack:     audioTrack,
 		unicastAddress: unicastAddress,
 		publicAddress:  publicAddr,
 		sipPort:        sipPort,

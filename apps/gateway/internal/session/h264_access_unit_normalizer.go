@@ -103,6 +103,12 @@ type H264AccessUnitNormalizer struct {
 	lastSeq     uint16
 	fuOpen      bool
 	fuNALType   uint8
+	// prevSeq is the last packet seen across access units; boundaryGap is set
+	// when the current AU's first packet does not follow it, i.e. a packet
+	// was lost at the AU boundary (possibly this AU's first slice).
+	havePrevSeq bool
+	prevSeq     uint16
+	boundaryGap bool
 
 	haveOutput               bool
 	nextSeq                  uint16
@@ -196,11 +202,16 @@ func (n *H264AccessUnitNormalizer) pushLocked(packet *rtp.Packet, result **Norma
 		n.startLocked(packet.Timestamp, now)
 	}
 
+	if !n.haveLastSeq {
+		n.boundaryGap = n.havePrevSeq && packet.SequenceNumber != n.prevSeq+1
+	}
 	if n.haveLastSeq && packet.SequenceNumber != n.lastSeq+1 {
 		n.invalid = true
 	}
 	n.haveLastSeq = true
 	n.lastSeq = packet.SequenceNumber
+	n.havePrevSeq = true
+	n.prevSeq = packet.SequenceNumber
 
 	n.bytes += packet.MarshalSize()
 	if len(n.packets) >= n.config.MaxPackets || n.bytes > n.config.MaxBytes {
@@ -219,7 +230,7 @@ func (n *H264AccessUnitNormalizer) pushLocked(packet *rtp.Packet, result **Norma
 	if !packet.Marker {
 		return
 	}
-	if n.invalid || n.fuOpen || len(n.packets) == 0 {
+	if n.invalid || n.fuOpen || len(n.packets) == 0 || n.missingFirstSliceLocked() {
 		n.dropCurrentLocked(n.overflow)
 		return
 	}
@@ -228,7 +239,16 @@ func (n *H264AccessUnitNormalizer) pushLocked(packet *rtp.Packet, result **Norma
 	*result = &au
 }
 
+// missingFirstSliceLocked reports an AU that followed a sequence gap and does
+// not start at macroblock 0: its first slice was the lost packet. Emitting it
+// as complete let a partial IDR be cached, replayed, and counted as healthy.
+// An unknown first_mb_in_slice (-1) is accepted.
+func (n *H264AccessUnitNormalizer) missingFirstSliceLocked() bool {
+	return n.boundaryGap && h264AccessUnitFirstMB(n.packets) > 0
+}
+
 func (n *H264AccessUnitNormalizer) startLocked(timestamp uint32, now time.Time) {
+	n.boundaryGap = false
 	n.haveAU = true
 	n.sourceTS = timestamp
 	n.startedAt = now
@@ -463,14 +483,6 @@ func (n *H264AccessUnitNormalizer) Stats() H264AccessUnitNormalizerStats {
 // Drain intentionally drops an unfinished access unit: no marker means it is
 // not safe to deliver to strict browser decoders.
 func (n *H264AccessUnitNormalizer) Drain() {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	n.dropCurrentLocked(false)
-}
-
-// ResetSource drops any partial source access unit while preserving cached
-// parameter sets and the continuous outbound sequence/timestamp timeline.
-func (n *H264AccessUnitNormalizer) ResetSource() {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.dropCurrentLocked(false)

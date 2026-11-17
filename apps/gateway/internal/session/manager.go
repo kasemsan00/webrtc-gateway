@@ -18,7 +18,16 @@ type Manager struct {
 	sessions        map[string]*Session
 	config          *config.Config
 	sipKeyframeINFO SIPKeyframeINFOSender
+	iceEnded        ICEEndedHandler
 	mu              sync.RWMutex
+}
+
+// SetICEEndedHandler is called from main once the API can end calls toward
+// SIP. New sessions inherit it.
+func (m *Manager) SetICEEndedHandler(fn ICEEndedHandler) {
+	m.mu.Lock()
+	m.iceEnded = fn
+	m.mu.Unlock()
 }
 
 // NewManager creates a new session manager
@@ -46,6 +55,9 @@ func (m *Manager) CreateSession(turnConfig config.TURNConfig) (*Session, error) 
 		session.SetSIPKeyframeINFOSender(func(reason string) {
 			info(session, reason)
 		})
+	}
+	if m.iceEnded != nil {
+		session.SetICEEndedHandler(m.iceEnded)
 	}
 
 	m.sessions[id] = session

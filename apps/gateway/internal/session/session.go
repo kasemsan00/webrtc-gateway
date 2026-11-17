@@ -11,7 +11,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pion/rtcp"
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
 
@@ -125,7 +124,6 @@ type Session struct {
 	VideoFeedbackTransport string       `json:"-"`
 	VideoRTCPFallbackUntil time.Time    `json:"-"`
 	SymmetricRTPTrustUntil time.Time    `json:"-"`
-	PLIBurstUntil          time.Time    `json:"-"`
 	LastSipPLISent         time.Time    `json:"-"`
 	LastSipFIRSent         time.Time    `json:"-"`
 	LastWebRTCPLISent      time.Time    `json:"-"`
@@ -137,7 +135,6 @@ type Session struct {
 	// without this flag they are dropped and the flush marks one incomplete slice.
 	uplinkIDRAccepted            bool          `json:"-"`
 	uplinkIDRInFlight            bool          `json:"-"`
-	uplinkIDRInFlightTS          uint32        `json:"-"`
 	uplinkIDRCompleteAt          time.Time     `json:"-"`
 	sipKeyframeRequestSeen       bool          `json:"-"`
 	sipKeyframeRequestAt         time.Time     `json:"-"`
@@ -223,6 +220,7 @@ type Session struct {
 	sipKeyframeINFO                       func(reason string)  `json:"-"`
 	uplinkVideoPacketSeen                 bool                 `json:"-"`
 	lastUplinkPacketMarker                bool                 `json:"-"`
+	lastUplinkPacketAt                    time.Time            `json:"-"`
 	pendingSIPRTCPKind                    string               `json:"-"`
 	pendingSIPRTCPTrigger                 string               `json:"-"`
 	pendingSIPRTCPForce                   bool                 `json:"-"`
@@ -247,7 +245,6 @@ type Session struct {
 	SwitchVideoGateReservedPackets        int                  `json:"-"`
 	SwitchVideoGateReservedSSRC           uint32               `json:"-"`
 	SwitchVideoGateReservedInjection      bool                 `json:"-"`
-	SwitchVideoGateReleasedAt             time.Time            `json:"-"`
 	SwitchVideoUndersizedIDRPLIScheduled  bool                 `json:"-"`
 	SwitchVideoUndersizedIDRPLIGeneration int                  `json:"-"`
 	SwitchVideoGateStillEmitted           bool                 `json:"-"`
@@ -285,7 +282,6 @@ type Session struct {
 	// Cached SPS/PPS for video injection (WebRTC→SIP direction, from browser's encoder)
 	CachedSPS               []byte    `json:"-"`
 	CachedPPS               []byte    `json:"-"`
-	LastSPSPPSInjectionTime time.Time `json:"-"` // Track last SPS/PPS injection for periodic re-injection
 	// Chrome packetization-mode 0 sends every IDR slice as its own NAL type 5.
 	// Inject parameter sets once per access unit, and skip that injection when
 	// this access unit already forwarded SPS and PPS. A second in-band copy
@@ -320,7 +316,6 @@ type Session struct {
 	// Only an IDR whose first slice is forwarded at or after this time
 	// satisfies the switch. Leftover slices of a pre-switch picture do not.
 	switchEpochAt              time.Time         `json:"-"`
-	proactivePLINotBefore      time.Time         `json:"-"`
 	proactivePLIWake           chan struct{}     `json:"-"`
 	proactiveBrowserPLIInitial time.Duration     `json:"-"`
 	proactiveBrowserPLISafety  time.Duration     `json:"-"`
@@ -351,13 +346,24 @@ type Session struct {
 	sipVideoIDR               *sipVideoIDRCache
 	sipVideoIDRReplayPending  bool
 	sipVideoIDRReplayNotify   chan struct{}
+	// iceGraceEpisode counts ICE disconnect episodes so a grace timer only
+	// ends the call for the episode that armed it (ice_grace.go).
+	iceGraceEpisode uint64
+	// iceEndedHandler finishes calls ended by ICE (ice_grace.go).
+	iceEndedHandler ICEEndedHandler
+	// switchRTPMinPacketDeltaSoftened lowers the stable-window packet count
+	// for the current switch recovery only (applyPostGateRecoverySofteningLocked).
+	switchRTPMinPacketDeltaSoftened bool
 	sipVideoIDRReplayRewriter func([]*rtp.Packet) []*rtp.Packet
 	sipVideoAUNumberer        func(*NormalizedH264AccessUnit)
 	videoEgressMu             sync.Mutex
+	// audioEgressMu fences WebRTC audio writes the way videoEgressMu fences
+	// video: hold it while detaching audio tracks before a PeerConnection
+	// closes. Lock order: videoEgressMu, audioEgressMu, mu.
+	audioEgressMu sync.Mutex
 	videoEgressClosed         bool
 	// @switch controlled SPS/PPS injection (inject 3 copies before each of first 3 IDRs after @switch)
 	SwitchSPSPPSInjectRemaining int       `json:"-"` // Number of IDR frames left to inject SPS/PPS (0 = disabled, 3 = inject next 3 IDRs)
-	SwitchReceivedAt            time.Time `json:"-"` // Timestamp when @switch message was received (for debugging)
 	// SIP Dialog state for BYE requests
 	SIPFromTag       string   `json:"-"` // Our local tag
 	SIPToTag         string   `json:"-"` // Remote tag from 200 OK
@@ -437,7 +443,6 @@ type Session struct {
 	LastNACKHandledLogSig string    `json:"-"`
 	LastNACKHandledLogAt  time.Time `json:"-"`
 	// Video optimization flags
-	PreserveSTAPA bool `json:"-"` // If true, preserve STAP-A packets (don't de-aggregate) when they contain SPS+PPS+IDR
 	// Speech-to-Speech translation pipeline
 	Translator                *translator.S2SPipeline   `json:"-"`
 	InboundTranslator         *translator.S2SPipeline   `json:"-"`
@@ -684,7 +689,6 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 		VideoRTCPSource:                      "unknown",
 		VideoFeedbackTransport:               cfg.SIP.VideoFeedbackTransport,
 		SymmetricRTPTrustUntil:               time.Now().Add(symmetricRTPTrustWindow),
-		PreserveSTAPA:                        cfg.SIP.VideoPreserveSTAPA, // Phase 2: preserve STAP-A if enabled
 		VideoRecoveryBurstEnabled:            cfg.SIP.VideoRecoveryBurstEnabled,
 		VideoRecoveryBurstWindow:             burstWindow,
 		VideoRecoveryBurstInterval:           burstInterval,
@@ -733,68 +737,10 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 	session.initVideoRTPHistory()
 	session.ctx, session.cancel = context.WithCancel(context.Background())
 
-	// Start reading RTCP packets from the audio sender
-	go func() {
-		rtcpBuf := make([]byte, session.RTPBufferSize)
-		for {
-			if _, _, err := audioSender.Read(rtcpBuf); err != nil {
-				return
-			}
-		}
-	}()
-
-	// Start reading RTCP packets from the video sender (to receive PLI/FIR)
-	go func() {
-		rtcpBuf := make([]byte, session.RTPBufferSize)
-		for {
-			if session.GetState() == StateEnded {
-				return
-			}
-
-			n, _, rtcpErr := videoSender.Read(rtcpBuf)
-			if rtcpErr != nil {
-				return
-			}
-
-			// Parse RTCP
-			packets, err := rtcp.Unmarshal(rtcpBuf[:n])
-			if err != nil {
-				continue
-			}
-
-			for _, p := range packets {
-				switch pkt := p.(type) {
-				case *rtcp.PictureLossIndication:
-					fmt.Printf("[%s] 📸 Received PLI from browser for video (RTPSender)\n", id)
-					// Forward to Asterisk to request keyframe
-					session.SendBrowserRecoveryToAsterisk("browser-pli")
-				case *rtcp.FullIntraRequest:
-					fmt.Printf("[%s] 📸 Received FIR from browser for video (RTPSender)\n", id)
-					// Forward to Asterisk to request keyframe
-					session.SendBrowserRecoveryToAsterisk("browser-fir")
-				case *rtcp.TransportLayerNack:
-					if len(pkt.Nacks) > 0 {
-						now := time.Now()
-						sig := buildNACKSignature(pkt.Nacks)
-						if session.shouldSuppressBrowserNACK(sig, now) {
-							continue
-						}
-						fmt.Printf("[%s] 🔄 Received NACK from browser for video (RTPSender) - Nacks=%v\n", id, pkt.Nacks)
-						sent, missing := session.RetransmitVideoNACK(pkt.Nacks)
-						if missing > 0 {
-							// Fallback: ask Asterisk to retransmit missing packets (if supported)
-							session.SendNACKToAsterisk(pkt.Nacks)
-						}
-						if sent > 0 || missing > 0 {
-							if !session.shouldSuppressNACKHandledLog(sig, sent, missing, now) {
-								fmt.Printf("[%s] 🔁 NACK handled (retransmit=%d, missing=%d)\n", id, sent, missing)
-							}
-						}
-					}
-				}
-			}
-		}
-	}()
+	// Read browser RTCP for our tracks (PLI/FIR/NACK on video). Shared with
+	// replacement PeerConnections (browser_rtcp.go).
+	go session.drainSenderRTCP(audioSender)
+	go session.readVideoSenderRTCP(videoSender)
 
 	// Set up TURN/ICE debug logging if enabled
 	if cfg.API.DebugTURN {
@@ -824,7 +770,6 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 	})
 
 	// Set ICE connection state change handler
-	reconnectGracePeriod := 30 * time.Second
 	peerConnection.OnICEConnectionStateChange(func(connectionState webrtc.ICEConnectionState) {
 		fmt.Printf("[%s] ICE Connection State: %s\n", id, connectionState.String())
 		if connectionState == webrtc.ICEConnectionStateConnected || connectionState == webrtc.ICEConnectionStateFailed {
@@ -840,6 +785,7 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 		session.UpdatedAt = time.Now()
 		startRecoveryBurstReason := ""
 		replayIDRReason := ""
+		var afterICEEnded func()
 		isTerminalCleanup := isTerminalCleanupState(session.State, session.TerminalAction)
 
 		switch connectionState {
@@ -932,45 +878,8 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 
 			// Keep session/media endpoints alive during transient ICE transitions.
 			// This allows WS resume + renegotiation to recover without losing SIP RTP sockets.
-			if session.State != StateReconnecting {
-				session.State = StateReconnecting
-				fmt.Printf("[%s] 📡 ICE %s - entering reconnection grace period (%s)\n", id, connectionState.String(), reconnectGracePeriod)
+			if session.enterICEReconnectGraceLocked(iceReconnectGracePeriod, connectionState.String()) {
 				startRecoveryBurstReason = "ice-reconnecting"
-
-				go func() {
-					select {
-					case <-time.After(reconnectGracePeriod):
-					case <-session.ctx.Done():
-						return
-					}
-					session.mu.Lock()
-					defer session.mu.Unlock()
-
-					// If still reconnecting after grace period, treat as terminal.
-					if session.State == StateReconnecting {
-						fmt.Printf("[%s] ⏰ Grace period expired - ending session\n", id)
-						session.State = StateEnded
-						if session.cancel != nil {
-							session.cancel()
-						}
-						if session.RTPConn != nil {
-							session.RTPConn.Close()
-							session.RTPConn = nil
-						}
-						if session.VideoRTPConn != nil {
-							session.VideoRTPConn.Close()
-							session.VideoRTPConn = nil
-						}
-						if session.AudioRTCPConn != nil {
-							session.AudioRTCPConn.Close()
-							session.AudioRTCPConn = nil
-						}
-						if session.VideoRTCPConn != nil {
-							session.VideoRTCPConn.Close()
-							session.VideoRTCPConn = nil
-						}
-					}
-				}()
 			}
 
 		case webrtc.ICEConnectionStateFailed:
@@ -982,28 +891,10 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 			// machine-readable cause so the API can distinguish pre-SIP failure
 			// from SIP cancellation after an INVITE has started.
 			session.TerminalReason = "ice_failed"
-			session.State = StateEnded
-			if session.cancel != nil {
-				session.cancel()
-			}
-			if session.RTPConn != nil {
-				session.RTPConn.Close()
-				session.RTPConn = nil
-			}
-			if session.VideoRTPConn != nil {
-				session.VideoRTPConn.Close()
-				session.VideoRTPConn = nil
-			}
-			if session.AudioRTCPConn != nil {
-				session.AudioRTCPConn.Close()
-				session.AudioRTCPConn = nil
-			}
-			if session.VideoRTCPConn != nil {
-				session.VideoRTCPConn.Close()
-				session.VideoRTCPConn = nil
-			}
+			afterICEEnded = session.endForICELocked("ice_failed")
 		}
 		session.mu.Unlock()
+		runICEEndedHook(afterICEEnded)
 		if replayIDRReason != "" {
 			session.RequestSIPVideoIDRReplay(replayIDRReason)
 		}
@@ -1055,49 +946,8 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 			}
 		}
 
-		// 1. Handle RTCP (PLI/FIR) from WebRTC (Sender Reports & Feedback)
-		go func() {
-			rtcpBuf := make([]byte, session.RTPBufferSize)
-			for {
-				if session.GetState() == StateEnded {
-					return
-				}
-
-				n, _, rtcpErr := receiver.Read(rtcpBuf)
-				if rtcpErr != nil {
-					return
-				}
-
-				// Parse RTCP
-				packets, err := rtcp.Unmarshal(rtcpBuf[:n])
-				if err != nil {
-					continue
-				}
-
-				for _, p := range packets {
-					switch pkt := p.(type) {
-					case *rtcp.PictureLossIndication:
-						fmt.Printf("[%s] 📸 Received PLI from browser for %s\n", id, kind)
-						// Forward PLI to Asterisk (video only)
-						if kind == "video" {
-							session.SendBrowserRecoveryToAsterisk("browser-pli")
-						}
-
-					case *rtcp.FullIntraRequest:
-						fmt.Printf("[%s] 📸 Received FIR from browser for %s\n", id, kind)
-						if kind == "video" {
-							session.SendBrowserRecoveryToAsterisk("browser-fir")
-						}
-
-					case *rtcp.TransportLayerNack:
-						fmt.Printf("[%s] 🔄 Received NACK from browser for %s - Nacks=%v\n", id, kind, pkt.Nacks)
-						if kind == "video" {
-							session.SendNACKToAsterisk(pkt.Nacks)
-						}
-					}
-				}
-			}
-		}()
+		// 1. Read receiver RTCP (sender reports and any routed feedback)
+		go session.readReceiverRTCP(receiver, kind)
 
 		// 2. Start goroutine to forward RTP packets to Asterisk
 		go session.forwardRTPToAsterisk(track, kind)
@@ -1496,41 +1346,6 @@ func (s *Session) GetCachedSPSPPS() ([]byte, []byte, bool) {
 	copy(sps, s.CachedSPS)
 	copy(pps, s.CachedPPS)
 	return sps, pps, true
-}
-
-// WaitForSPSPPS waits up to the specified timeout for SPS/PPS to be cached
-// Returns true if SPS/PPS are available, false if timeout
-func (s *Session) WaitForSPSPPS(timeout time.Duration) bool {
-	// Check immediately first
-	if s.HasCachedSPSPPS() {
-		fmt.Printf("[%s] ✅ SPS/PPS already cached (immediate check)\n", s.ID)
-		return true
-	}
-
-	fmt.Printf("[%s] ⏳ Waiting up to %v for SPS/PPS to be cached...\n", s.ID, timeout)
-
-	// Poll every 50ms for SPS/PPS availability
-	ticker := time.NewTicker(50 * time.Millisecond)
-	defer ticker.Stop()
-
-	timeoutChan := time.After(timeout)
-
-	for {
-		select {
-		case <-ticker.C:
-			if s.HasCachedSPSPPS() {
-				s.mu.RLock()
-				spsLen := len(s.CachedSPS)
-				ppsLen := len(s.CachedPPS)
-				s.mu.RUnlock()
-				fmt.Printf("[%s] ✅ SPS/PPS cached (SPS: %d bytes, PPS: %d bytes)\n", s.ID, spsLen, ppsLen)
-				return true
-			}
-		case <-timeoutChan:
-			fmt.Printf("[%s] ⚠️ SPS/PPS not ready after %v; proceeding without sprop-parameter-sets\n", s.ID, timeout)
-			return false
-		}
-	}
 }
 
 // PrimeWebRTCVideoForSIPOffer actively requests an early WebRTC keyframe while

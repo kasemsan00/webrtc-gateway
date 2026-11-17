@@ -56,50 +56,6 @@ func TestH264AccessUnitNormalizerDropsUnmarkedAndUnterminatedFUA(t *testing.T) {
 	}
 }
 
-func TestH264AccessUnitNormalizerRewritesContinuityAcrossSourceReset(t *testing.T) {
-	n, emitted := numberingH264Normalizer(H264AccessUnitNormalizerConfig{})
-
-	n.Push(h264Packet(65000, 900000, true, []byte{0x41, 0x01}))
-	n.ResetSource()
-	n.Push(h264Packet(7, 1000, true, []byte{0x41, 0x02}))
-
-	if len(*emitted) != 2 {
-		t.Fatalf("expected two access units, got %d", len(*emitted))
-	}
-	first := (*emitted)[0].Packets[0]
-	second := (*emitted)[1].Packets[0]
-	if second.SequenceNumber != first.SequenceNumber+1 {
-		t.Fatalf("outbound sequence discontinuity: %d then %d", first.SequenceNumber, second.SequenceNumber)
-	}
-	if int32(second.Timestamp-first.Timestamp) <= 0 {
-		t.Fatalf("outbound timestamp did not remain monotonic: %d then %d", first.Timestamp, second.Timestamp)
-	}
-}
-
-func TestH264AccessUnitNormalizerResetSourcePreservesParameterSetsAndGeneration(t *testing.T) {
-	var emitted []NormalizedH264AccessUnit
-	n := NewH264AccessUnitNormalizer(H264AccessUnitNormalizerConfig{}, func(au NormalizedH264AccessUnit) {
-		emitted = append(emitted, au)
-	})
-	n.ResetForSwitch(17)
-	n.SetParameterSets([]byte{0x67, 0x42, 0x00, 0x1f}, []byte{0x68, 0xce, 0x06, 0xe2})
-
-	n.Push(h264Packet(100, 9000, true, []byte{0x41, 0x01}))
-	n.ResetSource()
-	n.Push(h264Packet(7, 1000, true, []byte{0x65, 0xaa}))
-
-	if len(emitted) != 2 {
-		t.Fatalf("expected access units before and after source reset, got %d", len(emitted))
-	}
-	got := emitted[1]
-	if !got.ParameterSetsReady || got.Generation != 17 {
-		t.Fatalf("expected source reset to preserve generation-scoped parameter sets, got %+v", got)
-	}
-	if !got.InjectedParameterSets || len(got.Packets) != 3 {
-		t.Fatalf("expected preserved SPS/PPS to be injected after source reset, got %+v", got)
-	}
-}
-
 func TestH264AccessUnitNormalizerSwitchBeforeMediaUsesWallClock(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	n, emitted := clockedH264Normalizer(&now)
@@ -685,5 +641,36 @@ func assertH264NALTypeAbsent(t *testing.T, packets []*rtp.Packet, nalType byte) 
 		if len(packet.Payload) > 0 && packet.Payload[0]&0x1f == nalType {
 			t.Fatalf("unexpected NAL type %d payload in emitted access unit", nalType)
 		}
+	}
+}
+
+// The first slice of a two-slice AU is lost right after the previous AU's
+// marker. The remaining slice must not be emitted as a complete picture.
+func TestH264AccessUnitNormalizerDropsAUWithLostFirstSlice(t *testing.T) {
+	n, emitted := numberingH264Normalizer(H264AccessUnitNormalizerConfig{})
+
+	n.Push(h264Packet(10, 3000, true, sliceNAL(0x41, 0)))
+	// seq 11 (first_mb 0 of ts 6000) lost
+	n.Push(h264Packet(12, 6000, true, sliceNAL(0x41, 40)))
+
+	if len(*emitted) != 1 {
+		t.Fatalf("expected only the first AU, got %d", len(*emitted))
+	}
+	if stats := n.Stats(); stats.DroppedIncomplete != 1 {
+		t.Fatalf("DroppedIncomplete = %d, want 1", stats.DroppedIncomplete)
+	}
+}
+
+// A gap at the boundary can also be the previous AU's tail. An AU that starts
+// at macroblock 0 is whole and must still be emitted.
+func TestH264AccessUnitNormalizerKeepsAUStartingAtMBZeroAfterGap(t *testing.T) {
+	n, emitted := numberingH264Normalizer(H264AccessUnitNormalizerConfig{})
+
+	n.Push(h264Packet(10, 3000, true, sliceNAL(0x41, 0)))
+	n.Push(h264Packet(12, 6000, false, sliceNAL(0x41, 0)))
+	n.Push(h264Packet(13, 6000, true, sliceNAL(0x41, 40)))
+
+	if len(*emitted) != 2 {
+		t.Fatalf("expected both AUs, got %d", len(*emitted))
 	}
 }

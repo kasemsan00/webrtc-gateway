@@ -11,8 +11,3 @@ func NormalizeTrunkPublicID(publicID string) (string, bool) {
 	return parsed.String(), true
 }
 
-// IsValidTrunkPublicID checks whether a trunk public ID is a valid UUID.
-func IsValidTrunkPublicID(publicID string) bool {
-	_, ok := NormalizeTrunkPublicID(publicID)
-	return ok
-}

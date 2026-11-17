@@ -115,7 +115,6 @@ func (s *Session) uplinkIDRParameterSetPacketsLocked(pt uint8, sourceTS, outTS u
 			out = append(out, data)
 		}
 	}
-	s.LastSPSPPSInjectionTime = time.Now()
 	s.noteUplinkInBandParameterSetLocked(sourceTS, true, true)
 	return out
 }

@@ -17,6 +17,9 @@ type SIPKeyframeFeedbackInput struct {
 	LastRTCP         time.Time
 	PacketSeen       bool
 	LastPacketMarker bool
+	// LastPacketAt is when the last uplink video packet was forwarded. Zero
+	// means unknown and keeps the mid-frame wait.
+	LastPacketAt     time.Time
 	Guard            time.Duration
 	MinInterval      time.Duration
 	Now              time.Time
@@ -113,10 +116,20 @@ func DecideSIPKeyframeFeedback(in SIPKeyframeFeedbackInput) SIPKeyframeFeedbackD
 			return SIPKeyframeFeedbackDecision{SendINFO: wantINFO, Escalated: escalated, Reason: "rate-limit"}
 		}
 	}
-	if in.PacketSeen && !in.LastPacketMarker {
+	if in.PacketSeen && !in.LastPacketMarker && !uplinkStalledAfter(in.LastPacketAt, in.Now) {
 		return SIPKeyframeFeedbackDecision{SendINFO: wantINFO, PendingRTCP: true, Escalated: escalated, Reason: "mid-frame"}
 	}
 	return SIPKeyframeFeedbackDecision{SendRTCP: true, SendINFO: wantINFO, Escalated: escalated}
+}
+
+// sipRTCPMidFrameStall is how long after the last uplink packet a missing
+// marker stops meaning "mid-frame". The uplink can stop on an unmarked packet
+// (lost marker, camera muted, hold); waiting for a marker then parked every
+// SIP-leg PLI/FIR for good.
+const sipRTCPMidFrameStall = 200 * time.Millisecond
+
+func uplinkStalledAfter(lastPacketAt, now time.Time) bool {
+	return !lastPacketAt.IsZero() && now.Sub(lastPacketAt) >= sipRTCPMidFrameStall
 }
 
 func (s *Session) sipKeyframeFeedbackInputLocked(kind string, now time.Time) SIPKeyframeFeedbackInput {
@@ -132,6 +145,7 @@ func (s *Session) sipKeyframeFeedbackInputLocked(kind string, now time.Time) SIP
 		LastRTCP:         lastRTCP,
 		PacketSeen:       s.uplinkVideoPacketSeen,
 		LastPacketMarker: s.lastUplinkPacketMarker,
+		LastPacketAt:     s.lastUplinkPacketAt,
 		Guard:            s.sipRTCPFBGuard,
 		MinInterval:      s.sipRTCPFBMinInterval,
 		Now:              now,
@@ -175,6 +189,7 @@ func (s *Session) takePendingSIPRTCPLocked() (kind, trigger string, force bool, 
 func (s *Session) noteUplinkForwardMarkerLocked(marker bool) (kind, trigger string, force bool, authority *switchFeedbackAuthority, flush bool) {
 	s.uplinkVideoPacketSeen = true
 	s.lastUplinkPacketMarker = marker
+	s.lastUplinkPacketAt = time.Now()
 	if !marker {
 		return "", "", false, nil, false
 	}

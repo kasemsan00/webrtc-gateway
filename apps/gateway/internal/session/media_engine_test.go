@@ -319,3 +319,11 @@ func TestPreferWebRTCH264PacketizationModeAnswersAudioOnlyBrowserOffer(t *testin
 		t.Fatalf("browser must accept the audio-only answer: %v\n%s", err, answer.SDP)
 	}
 }
+
+// createCustomMediaEngine creates a MediaEngine with custom RTCPFeedback support.
+// TWCC feedback is included. Pair it with newGatewayWebRTCAPI so the header
+// extension and sender interceptor exist.
+func createCustomMediaEngine() (*webrtc.MediaEngine, error) {
+	return createCustomMediaEngineWithTWCC(true)
+}
+

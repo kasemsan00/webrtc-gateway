@@ -10,17 +10,6 @@ func (s *Session) BindH264AUParameterSetSeeder(seeder func(sps, pps []byte)) {
 	s.h264AUParameterSetSeeder = seeder
 }
 
-// ArmSwitchSPSPPSInject enables uplink SPS/PPS injection for the next count IDRs.
-func (s *Session) ArmSwitchSPSPPSInject(count int) {
-	if count <= 0 {
-		return
-	}
-	s.mu.Lock()
-	s.SwitchSPSPPSInjectRemaining = count
-	s.mu.Unlock()
-	fmt.Printf("[%s] switch_sps_pps_inject_armed remaining=%d\n", s.ID, count)
-}
-
 // ArmSwitchSPSPPSInjectIfAuthoritative arms injection only for the current switch token.
 func (s *Session) ArmSwitchSPSPPSInjectIfAuthoritative(generation int, mediaEpoch uint64, count int) bool {
 	if count <= 0 {

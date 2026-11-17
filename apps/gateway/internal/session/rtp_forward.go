@@ -443,9 +443,6 @@ func (s *Session) forwardRTPToAsteriskFrom(track rtpByteReader, kind string) {
 				if containsIDR && stapaCanWrite {
 					payload = s.prefixSTAPAIDRLocked(payload, packet.Timestamp)
 					uplinkAU.idrStarted = true
-					if !containsSPS || !containsPPS {
-						s.LastSPSPPSInjectionTime = time.Now()
-					}
 					if s.SwitchSPSPPSInjectRemaining > 0 {
 						s.SwitchSPSPPSInjectRemaining--
 					}

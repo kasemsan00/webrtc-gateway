@@ -1,7 +1,6 @@
 package sip
 
 import (
-	"crypto/rand"
 	"fmt"
 	"net"
 
@@ -13,29 +12,8 @@ import (
 
 // ICECredentials holds ICE-lite credentials for a session
 type ICECredentials struct {
-	LocalUfrag  string
-	LocalPwd    string
-	RemoteUfrag string
-	RemotePwd   string
-}
-
-// GenerateICECredentials generates random ICE credentials
-func GenerateICECredentials() *ICECredentials {
-	return &ICECredentials{
-		LocalUfrag: generateRandomString(8),  // 8 chars
-		LocalPwd:   generateRandomString(22), // 22+ chars as per RFC
-	}
-}
-
-// generateRandomString generates a random alphanumeric string
-func generateRandomString(length int) string {
-	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	bytes := make([]byte, length)
-	rand.Read(bytes)
-	for i := range bytes {
-		bytes[i] = charset[int(bytes[i])%len(charset)]
-	}
-	return string(bytes)
+	LocalUfrag string
+	LocalPwd   string
 }
 
 // IsSTUNPacket checks if a packet is a STUN message

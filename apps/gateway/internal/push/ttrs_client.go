@@ -132,19 +132,3 @@ func FilterByServiceID(entries []NotificationEntry, serviceID string) []Notifica
 	return filtered
 }
 
-// tokenSourceTransport is an http.RoundTripper that injects an OAuth2 bearer token.
-// This is kept internal; the public API only exposes NewTTRSClient.
-type tokenSourceTransport struct {
-	base   http.RoundTripper
-	source oauth2.TokenSource
-}
-
-func (t *tokenSourceTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	token, err := t.source.Token()
-	if err != nil {
-		return nil, fmt.Errorf("ttrs: obtain token: %w", err)
-	}
-	req = req.Clone(req.Context())
-	token.SetAuthHeader(req)
-	return t.base.RoundTrip(req)
-}

@@ -195,6 +195,10 @@ func TestDeviceDisconnectKeepsRegisterAndFCM(t *testing.T) {
 	sess.UpdateState(session.StateActive)
 	srv.bindClientSession(client, sess.ID)
 
+	restore := agentDeviceResumeGrace
+	agentDeviceResumeGrace = 30 * time.Millisecond
+	t.Cleanup(func() { agentDeviceResumeGrace = restore })
+
 	srv.cleanupAgentDevicePresence(client)
 	if tm.unregisterCount != 0 {
 		t.Fatalf("disconnect must not UNREGISTER, got %d", tm.unregisterCount)
@@ -202,8 +206,67 @@ func TestDeviceDisconnectKeepsRegisterAndFCM(t *testing.T) {
 	if tm.fcmCleared {
 		t.Fatalf("disconnect must not clear FCM")
 	}
-	if _, ok := srv.sessionMgr.GetSession(sess.ID); ok {
-		t.Fatalf("expected owned session ended on disconnect")
+	// A dropped socket is usually a network switch: the call waits for a
+	// resume, and only ends when nobody resumed it within the grace.
+	if _, ok := srv.sessionMgr.GetSession(sess.ID); !ok {
+		t.Fatalf("expected the call kept for resume right after disconnect")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, ok := srv.sessionMgr.GetSession(sess.ID); !ok {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("expected an unresumed call ended after the grace")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func TestDeviceDisconnectKeepsCallResumedByNewSocket(t *testing.T) {
+	tm := &agentTrunkManagerStub{
+		trunk: &sip.Trunk{ID: 100, PublicID: "agent-device-public-100", Name: "sipclient-agent-device-1001@sip.example.com:5060", Enabled: true},
+		owned: true,
+	}
+	srv := newAgentDeviceTestServer(t, tm)
+	oldSocket := newAgentDeviceWSClient()
+	oldSocket.trunkResolved = true
+	oldSocket.resolvedTrunkID = 100
+	_, _, _, _ = srv.bindAgentClient(oldSocket, 100)
+
+	sess, err := srv.sessionMgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	sess.UpdateState(session.StateActive)
+	sess.SetSIPAuthContext("trunk", "", 100, "sip.example.com", "1001", "secret", 5060)
+	srv.bindClientSession(oldSocket, sess.ID)
+
+	restore := agentDeviceResumeGrace
+	agentDeviceResumeGrace = 30 * time.Millisecond
+	t.Cleanup(func() { agentDeviceResumeGrace = restore })
+	srv.cleanupAgentDevicePresence(oldSocket)
+
+	newSocket := newAgentDeviceWSClient()
+	newSocket.trunkResolved = true
+	newSocket.resolvedTrunkID = 100
+	if ok, reason := srv.agentDeviceCanResume(newSocket, WSMessage{Type: "resume", SessionID: sess.ID}); !ok {
+		t.Fatalf("the same trunk's new socket must be allowed to resume: %s", reason)
+	}
+	stranger := newAgentDeviceWSClient()
+	stranger.trunkResolved = true
+	stranger.resolvedTrunkID = 999
+	if ok, _ := srv.agentDeviceCanResume(stranger, WSMessage{Type: "resume", SessionID: sess.ID}); ok {
+		t.Fatal("another trunk's socket must not resume the call")
+	}
+	srv.mu.Lock()
+	srv.wsConnections[newSocket] = struct{}{}
+	srv.mu.Unlock()
+	srv.bindClientSession(newSocket, sess.ID)
+
+	time.Sleep(100 * time.Millisecond)
+	if _, ok := srv.sessionMgr.GetSession(sess.ID); !ok {
+		t.Fatal("a call resumed by a live socket must not be ended by the old socket's grace timer")
 	}
 }
 

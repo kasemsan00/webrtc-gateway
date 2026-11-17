@@ -214,3 +214,24 @@ func waitFor(t *testing.T, d time.Duration, ok func() bool) {
 		time.Sleep(5 * time.Millisecond)
 	}
 }
+
+// The uplink stopped on an unmarked packet (marker lost, camera muted): after
+// the stall window the PLI must go out instead of waiting for a marker that
+// never comes.
+func TestDecideSIPKeyframeFeedback_MidFrameWaitExpiresWhenUplinkStalls(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	in := SIPKeyframeFeedbackInput{
+		Mode:         "rtcp",
+		Kind:         "pli",
+		PacketSeen:   true,
+		LastPacketAt: now.Add(-50 * time.Millisecond),
+		Now:          now,
+	}
+	if d := DecideSIPKeyframeFeedback(in); !d.PendingRTCP || d.SendRTCP {
+		t.Fatalf("fresh unmarked packet should park the PLI, got %+v", d)
+	}
+	in.LastPacketAt = now.Add(-sipRTCPMidFrameStall)
+	if d := DecideSIPKeyframeFeedback(in); !d.SendRTCP || d.PendingRTCP {
+		t.Fatalf("stalled uplink should send the PLI now, got %+v", d)
+	}
+}

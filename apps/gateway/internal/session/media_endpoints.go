@@ -105,6 +105,49 @@ func (s *Session) SetAsteriskEndpoints(audioAddr, videoAddr *net.UDPAddr) {
 	}
 }
 
+// UpdateAsteriskEndpointsFromOffer moves the SIP media destinations when a
+// mid-call offer names a different address or port. An unspecified address
+// (hold) or audio port 0 is ignored; video port 0 keeps the current video
+// destination. It reports whether anything changed.
+func (s *Session) UpdateAsteriskEndpointsFromOffer(ip net.IP, audioPort, videoPort int) bool {
+	if ip == nil || ip.IsUnspecified() || audioPort <= 0 {
+		return false
+	}
+	s.mu.RLock()
+	audio := cloneUDPAddr(s.AsteriskAudioAddr)
+	video := cloneUDPAddr(s.AsteriskVideoAddr)
+	s.mu.RUnlock()
+
+	newAudio := &net.UDPAddr{IP: ip, Port: audioPort}
+	newVideo := video
+	if videoPort > 0 {
+		newVideo = &net.UDPAddr{IP: ip, Port: videoPort}
+	}
+	if sameUDPAddr(audio, newAudio) && sameUDPAddr(video, newVideo) {
+		return false
+	}
+	s.SetAsteriskEndpoints(newAudio, newVideo)
+	if !sameUDPAddr(video, newVideo) {
+		// The learned video RTCP address belongs to the old endpoint, and
+		// RTCP/RTP learning only follows a new IP inside the trust window.
+		// Forget it and reopen the window so SIP-leg PLI/FIR reach the new one.
+		s.mu.Lock()
+		s.AsteriskVideoRTCPAddr = nil
+		s.VideoRTCPLearnedAt = time.Time{}
+		s.VideoRTCPSource = "unknown"
+		s.SymmetricRTPTrustUntil = time.Now().Add(symmetricRTPTrustWindow)
+		s.mu.Unlock()
+	}
+	return true
+}
+
+func sameUDPAddr(a, b *net.UDPAddr) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.Port == b.Port && a.IP.Equal(b.IP)
+}
+
 func cloneUDPAddr(addr *net.UDPAddr) *net.UDPAddr {
 	if addr == nil {
 		return nil
@@ -422,7 +465,6 @@ func (s *Session) ResetMediaState() {
 	s.LastUplinkKeyframe = time.Time{}
 	s.uplinkIDRAccepted = false
 	s.uplinkIDRInFlight = false
-	s.uplinkIDRInFlightTS = 0
 	s.uplinkIDRCompleteAt = time.Time{}
 	s.uplinkVideoPackets = 0
 	s.uplinkVideoWindowStart = time.Time{}
@@ -445,6 +487,7 @@ func (s *Session) ResetMediaState() {
 	s.returnPathKickArmed = false
 	s.uplinkVideoPacketSeen = false
 	s.lastUplinkPacketMarker = false
+	s.lastUplinkPacketAt = time.Time{}
 	s.pendingSIPRTCPKind = ""
 	s.pendingSIPRTCPTrigger = ""
 	s.pendingSIPRTCPForce = false
@@ -495,7 +538,6 @@ func (s *Session) ResetMediaState() {
 	s.SwitchVideoBlackoutMaxWait = time.Time{}
 	s.SwitchVideoFirstKeyframeAt = time.Time{}
 	s.SymmetricRTPTrustUntil = time.Now().Add(symmetricRTPTrustWindow)
-	s.PLIBurstUntil = time.Time{}
 
 	// Reset negotiated SIP media endpoints so a new call cannot reuse stale addresses.
 	s.AsteriskAudioAddr = nil
@@ -504,7 +546,6 @@ func (s *Session) ResetMediaState() {
 	// NOTE: Do NOT clear CachedSPS/CachedPPS here.
 	// We keep Offer/SDP-derived SPS/PPS as a fallback so SIP SDP can include sprop-parameter-sets
 	// even before RTP starts flowing. Early RTP parsing will still overwrite within the first packets.
-	s.LastSPSPPSInjectionTime = time.Time{}
 	s.uplinkSPSPPSTimestamp = 0
 	s.uplinkSPSPPSTimestampSet = false
 	s.uplinkParameterObservation = uplinkParameterObservation{}
@@ -526,7 +567,6 @@ func (s *Session) ResetMediaState() {
 	s.switchKeyframeIDRPending = false
 	s.switchKeyframeBurstGen++
 	s.switchEpochAt = time.Time{}
-	s.proactivePLINotBefore = time.Time{}
 	s.sipInfoFIRAt = time.Time{}
 	s.sipAnswerSDP = nil
 	s.lastBrowserPLIReason = ""

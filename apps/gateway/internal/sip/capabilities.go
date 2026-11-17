@@ -1,9 +1,12 @@
 package sip
 
 const (
-	sipAllowHeader = "INVITE, ACK, CANCEL, OPTIONS, BYE, MESSAGE, INFO, UPDATE"
-	// Keep Supported conservative: do not advertise 100rel, REFER/transfer, or
-	// session timers before those flows are implemented as first-class behavior.
+	// NOTIFY is accepted for the refer event of transfers the gateway sends.
+	// REFER is only sent, not accepted (an inbound REFER gets 501), so it is
+	// not advertised.
+	sipAllowHeader = "INVITE, ACK, CANCEL, OPTIONS, BYE, MESSAGE, INFO, UPDATE, NOTIFY"
+	// Keep Supported conservative: do not advertise 100rel or session timers
+	// before those flows are implemented as first-class behavior.
 	sipSupportedHeader = "outbound"
 )
 

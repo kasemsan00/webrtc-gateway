@@ -171,10 +171,13 @@ func (s *Server) handleWSClientState(client *WSClient, msg WSMessage) {
 	s.mu.Lock()
 	client.availability = availability
 	client.callState = callState
-	if (client.agentOnly || client.agentDeviceOnly) && msg.MultiCall {
+	// Any authenticated socket may opt into multi-call (call waiting): the
+	// agent sockets and the mobile /ws. The unauthenticated /ws-public stays
+	// single-call.
+	if !client.publicOnly && msg.MultiCall {
 		client.multiCall = true
 	}
-	if (client.agentOnly || client.agentDeviceOnly) && client.multiCall {
+	if client.multiCall {
 		client.activeCalls = max(msg.ActiveCalls, 0)
 	}
 	s.mu.Unlock()

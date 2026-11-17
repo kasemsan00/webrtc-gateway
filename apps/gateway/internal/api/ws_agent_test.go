@@ -1000,3 +1000,14 @@ func TestAgentHoldFailureAndUnownedSessionReturnErrors(t *testing.T) {
 		t.Fatalf("expected SIP hold failure detail, got %q", msgs[0].Error)
 	}
 }
+
+func (s *Server) activeOwnedSessionCount(client *WSClient) int {
+	count := 0
+	for _, id := range s.ownedClientSessionIDs(client) {
+		if sess, ok := s.sessionMgr.GetSession(id); ok && sess != nil && sess.GetState() != session.StateEnded {
+			count++
+		}
+	}
+	return count
+}
+

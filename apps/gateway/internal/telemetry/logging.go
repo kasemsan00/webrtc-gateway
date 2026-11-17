@@ -70,10 +70,6 @@ func Int64Measurement(name string, value int64) Measurement {
 	return Measurement{Name: name, Value: value}
 }
 
-func Float64Measurement(name string, value float64) Measurement {
-	return Measurement{Name: name, Value: value}
-}
-
 func DurationMilliseconds(name string, value time.Duration) Measurement {
 	return Measurement{Name: name, Value: float64(value) / float64(time.Millisecond)}
 }
