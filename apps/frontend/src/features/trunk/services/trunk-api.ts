@@ -1,5 +1,6 @@
 import type {
   CreateTrunkPayload,
+  TestIncomingPushChannel,
   TestIncomingPushResponse,
   TestIncomingPushStyle,
   Trunk,
@@ -103,6 +104,7 @@ export async function registerTrunk(
 export async function testIncomingPush(
   id: number,
   style: TestIncomingPushStyle = 'data',
+  channel: TestIncomingPushChannel = 'device',
 ): Promise<TestIncomingPushResponse> {
   return fetchJson<TestIncomingPushResponse>(
     `${API_BASE}/trunk/${id}/test-incoming-push`,
@@ -111,7 +113,7 @@ export async function testIncomingPush(
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ style }),
+      body: JSON.stringify({ style, channel }),
     },
   )
 }

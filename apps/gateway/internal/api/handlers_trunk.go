@@ -555,7 +555,8 @@ func (s *Server) handleTrunkTestIncomingPush(w http.ResponseWriter, r *http.Requ
 	}
 
 	var req struct {
-		Style string `json:"style"`
+		Style   string `json:"style"`
+		Channel string `json:"channel"`
 	}
 	if r.Body != nil && r.ContentLength != 0 {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -564,6 +565,11 @@ func (s *Server) handleTrunkTestIncomingPush(w http.ResponseWriter, r *http.Requ
 		}
 	}
 	style, err := push.NormalizeTestPushStyle(req.Style)
+	if err != nil {
+		s.respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	channel, err := normalizeTestPushChannel(req.Channel)
 	if err != nil {
 		s.respondError(w, http.StatusBadRequest, err.Error())
 		return
@@ -578,11 +584,15 @@ func (s *Server) handleTrunkTestIncomingPush(w http.ResponseWriter, r *http.Requ
 		to = "sip:" + to + "@" + domain
 	}
 
-	channels, sendErr := s.sendTestIncomingPush(trunk, sessionID, from, to, style)
+	channels, sendErr := s.sendTestIncomingPush(trunk, sessionID, from, to, style, channel)
 	if sendErr != nil {
 		switch {
 		case errors.Is(sendErr, errTestPushNoTarget):
 			s.respondError(w, http.StatusConflict, "Trunk has no incoming push target")
+		case errors.Is(sendErr, errTestPushNoFirebase):
+			s.respondError(w, http.StatusConflict, "Trunk has no Firebase push target")
+		case errors.Is(sendErr, errTestPushNoAPNS):
+			s.respondError(w, http.StatusConflict, "Trunk has no APNs push target")
 		case errors.Is(sendErr, push.ErrPushNotConfigured):
 			s.respondError(w, http.StatusServiceUnavailable, "Push sender not configured")
 		default:
@@ -598,6 +608,7 @@ func (s *Server) handleTrunkTestIncomingPush(w http.ResponseWriter, r *http.Requ
 		Data: map[string]interface{}{
 			"trunkId":   trunkID,
 			"sessionId": sessionID,
+			"channel":   channel,
 			"channels":  channels,
 			"style":     style,
 		},
@@ -606,15 +617,80 @@ func (s *Server) handleTrunkTestIncomingPush(w http.ResponseWriter, r *http.Requ
 	s.respondJSON(w, http.StatusOK, map[string]interface{}{
 		"trunkId":   trunkID,
 		"sessionId": sessionID,
+		"channel":   channel,
 		"channels":  channels,
 		"style":     style,
 		"status":    "sent",
 	})
 }
 
-var errTestPushNoTarget = errors.New("no incoming push target")
+const (
+	testPushChannelDevice   = "device"
+	testPushChannelFirebase = "firebase"
+	testPushChannelAPNS     = "apns"
+)
 
-func (s *Server) sendTestIncomingPush(trunk *sip.Trunk, sessionID, from, to, style string) ([]string, error) {
+func normalizeTestPushChannel(channel string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(channel)) {
+	case "", testPushChannelDevice:
+		return testPushChannelDevice, nil
+	case testPushChannelFirebase:
+		return testPushChannelFirebase, nil
+	case testPushChannelAPNS:
+		return testPushChannelAPNS, nil
+	default:
+		return "", fmt.Errorf("channel must be device, firebase, or apns")
+	}
+}
+
+var (
+	errTestPushNoTarget   = errors.New("no incoming push target")
+	errTestPushNoFirebase = errors.New("no firebase push target")
+	errTestPushNoAPNS     = errors.New("no apns push target")
+)
+
+func (s *Server) sendTestIncomingPush(trunk *sip.Trunk, sessionID, from, to, style, channel string) ([]string, error) {
+	switch channel {
+	case testPushChannelFirebase:
+		return s.sendTestFirebasePush(trunk, sessionID, from, to, style)
+	case testPushChannelAPNS:
+		return s.sendTestAPNSPush(trunk, sessionID, from, to)
+	default:
+		return s.sendTestDevicePush(trunk, sessionID, from, to, style)
+	}
+}
+
+func (s *Server) sendTestFirebasePush(trunk *sip.Trunk, sessionID, from, to, style string) ([]string, error) {
+	if token := trunkStoredFcmToken(trunk); token != "" {
+		if err := s.pushService.SendIncomingCallFCMTokenStyled(token, sessionID, from, to, false, style); err != nil {
+			return nil, err
+		}
+		return []string{"fcm"}, nil
+	}
+	if !trunkHasFCMPushTarget(trunk) {
+		return nil, errTestPushNoFirebase
+	}
+	userID := strings.TrimSpace(*trunk.NotifyUserID)
+	if err := s.pushService.SendIncomingCallStyled(userID, sessionID, from, to, false, style); err != nil {
+		return nil, err
+	}
+	return []string{"ttrs_fcm"}, nil
+}
+
+func (s *Server) sendTestAPNSPush(trunk *sip.Trunk, sessionID, from, to string) ([]string, error) {
+	if !trunkHasApplePushKitTarget(trunk, s.config.TrunkPNAppID) || trunk.PNToken == nil {
+		return nil, errTestPushNoAPNS
+	}
+	if !s.pushService.CanSendAPNS() {
+		return nil, push.ErrPushNotConfigured
+	}
+	if err := s.pushService.SendIncomingCallAPNS(strings.TrimSpace(*trunk.PNToken), sessionID, from, to, false); err != nil {
+		return nil, err
+	}
+	return []string{"apns"}, nil
+}
+
+func (s *Server) sendTestDevicePush(trunk *sip.Trunk, sessionID, from, to, style string) ([]string, error) {
 	if token := trunkStoredFcmToken(trunk); token != "" {
 		if err := s.pushService.SendIncomingCallFCMTokenStyled(token, sessionID, from, to, false, style); err != nil {
 			return nil, err

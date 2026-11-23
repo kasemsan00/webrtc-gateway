@@ -67,7 +67,7 @@ describe('gateway smoke route and action contracts', () => {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ style: 'message' }),
+        body: JSON.stringify({ style: 'message', channel: 'device' }),
       },
     )
 
@@ -107,6 +107,8 @@ describe('gateway smoke route and action contracts', () => {
       sections: {},
     })
     await fetchGatewayConfig()
-    expect(fetchJsonMock).toHaveBeenCalledWith('http://gateway.local/api/config')
+    expect(fetchJsonMock).toHaveBeenCalledWith(
+      'http://gateway.local/api/config',
+    )
   })
 })

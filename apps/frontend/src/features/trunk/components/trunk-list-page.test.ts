@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  canTestFirebasePush,
   canTestIncomingPush,
+  formatLastOnlinePlatform,
   getTrunkLeaseView,
   getTrunkLifecycleActionLabel,
   getTrunkRegistrationView,
@@ -149,6 +151,35 @@ describe('canTestIncomingPush', () => {
 
   it('disables when the trunk has no push target', () => {
     expect(canTestIncomingPush(makeTrunk())).toBe(false)
+  })
+})
+
+describe('canTestFirebasePush', () => {
+  it('is ready for a stored FCM token or a notify user', () => {
+    expect(canTestFirebasePush(makeTrunk({ fcmTokenReady: true }))).toBe(true)
+    expect(canTestFirebasePush(makeTrunk({ notifyUserBound: true }))).toBe(true)
+  })
+
+  it('is not ready from an Apple push contact alone', () => {
+    expect(
+      canTestFirebasePush(
+        makeTrunk({
+          pushContactReady: true,
+          pnAppId: 'th.or.ttrs.video.prod',
+          pnType: 'apple',
+          pnTokenMasked: 'abcd…wxyz',
+        }),
+      ),
+    ).toBe(false)
+  })
+})
+
+describe('formatLastOnlinePlatform', () => {
+  it('names the known mobile platforms', () => {
+    expect(formatLastOnlinePlatform('android')).toBe('Android')
+    expect(formatLastOnlinePlatform(' IOS ')).toBe('iOS')
+    expect(formatLastOnlinePlatform('')).toBe('not recorded')
+    expect(formatLastOnlinePlatform(undefined)).toBe('not recorded')
   })
 })
 

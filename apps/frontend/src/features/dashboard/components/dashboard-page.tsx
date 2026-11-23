@@ -50,7 +50,7 @@ import Header from '@/components/Header'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
+import { DatePicker } from '@/components/ui/date-picker'
 import { Progress } from '@/components/ui/progress'
 import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -1113,11 +1113,10 @@ export function DashboardPage() {
         subBar={
           <div className="flex items-center gap-2 text-xs">
             <span className="text-muted-foreground">Anchor date</span>
-            <Input
+            <DatePicker
               className="h-8 flex-1 text-xs"
-              type="date"
               value={anchorDate}
-              onChange={(event) => setAnchorDate(event.target.value)}
+              onChange={setAnchorDate}
               aria-label="Anchor date"
             />
           </div>
@@ -1141,13 +1140,13 @@ export function DashboardPage() {
             </TabsList>
           </Tabs>
 
-          <Input
-            className="hidden h-7 w-36 text-xs sm:block md:w-40"
-            type="date"
+          <DatePicker
+            className="hidden h-7 w-36 text-xs sm:inline-flex md:w-40"
+            align="end"
             aria-label="Anchor date"
             title="Day/month/year containing this date (Asia/Bangkok)"
             value={anchorDate}
-            onChange={(event) => setAnchorDate(event.target.value)}
+            onChange={setAnchorDate}
           />
 
           <Separator orientation="vertical" className="hidden h-4 sm:block" />

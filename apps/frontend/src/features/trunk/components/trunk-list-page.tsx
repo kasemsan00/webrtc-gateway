@@ -22,6 +22,7 @@ import type {
 import type { LiveFilter } from '@/features/trunk/live-board'
 import type {
   CreateTrunkPayload,
+  TestIncomingPushChannel,
   TestIncomingPushStyle,
   Trunk,
   TrunkListParams,
@@ -159,6 +160,24 @@ export function canTestIncomingPush(trunk: Trunk) {
   return Boolean(
     trunk.fcmTokenReady || trunk.notifyUserBound || isPushContactReady(trunk),
   )
+}
+
+export function canTestFirebasePush(trunk: Trunk) {
+  return Boolean(trunk.fcmTokenReady || trunk.notifyUserBound)
+}
+
+export function formatLastOnlinePlatform(platform?: string) {
+  const value = platform?.trim().toLowerCase()
+  if (value === 'android') return 'Android'
+  if (value === 'ios') return 'iOS'
+  if (value) return value
+  return 'not recorded'
+}
+
+const testPushChannelLabels: Record<TestIncomingPushChannel, string> = {
+  device: 'latest device',
+  firebase: 'Firebase',
+  apns: 'APNs',
 }
 
 /** Secondary line under Push Contact badge (SIP PN vs FCM/notify paths). */
@@ -370,6 +389,8 @@ export function TrunkListPage() {
   const [testPushTarget, setTestPushTarget] = useState<Trunk | null>(null)
   const [testPushStyle, setTestPushStyle] =
     useState<TestIncomingPushStyle>('data')
+  const [testPushChannel, setTestPushChannel] =
+    useState<TestIncomingPushChannel>('device')
   const [testingPush, setTestingPush] = useState(false)
   const [softDeleteTarget, setSoftDeleteTarget] = useState<Trunk | null>(null)
   const [softDeleting, setSoftDeleting] = useState(false)
@@ -572,6 +593,7 @@ export function TrunkListPage() {
 
   const openTestPushModal = useCallback((trunk: Trunk) => {
     setTestPushStyle('data')
+    setTestPushChannel('device')
     setTestPushTarget(trunk)
   }, [])
 
@@ -579,12 +601,19 @@ export function TrunkListPage() {
     if (!testPushTarget) return
     setTestingPush(true)
     try {
-      const result = await testIncomingPush(testPushTarget.id, testPushStyle)
+      const result = await testIncomingPush(
+        testPushTarget.id,
+        testPushStyle,
+        testPushChannel,
+      )
       setTestPushTarget(null)
       const channels = result.channels?.filter(Boolean).join(', ') || 'unknown'
       const style = result.style || testPushStyle
+      const channel =
+        testPushChannelLabels[result.channel || testPushChannel] ||
+        testPushChannel
       toast.success('Test push sent', {
-        description: `${trunkIdentityText(testPushTarget)} via ${channels} (${style})`,
+        description: `${trunkIdentityText(testPushTarget)} via ${channels} (${channel}, ${style})`,
       })
     } catch (err) {
       toast.error('Test push failed', {
@@ -593,7 +622,7 @@ export function TrunkListPage() {
     } finally {
       setTestingPush(false)
     }
-  }, [testPushStyle, testPushTarget])
+  }, [testPushChannel, testPushStyle, testPushTarget])
 
   const confirmUnregister = useCallback(async () => {
     if (!unregisterTarget) return
@@ -1193,10 +1222,65 @@ export function TrunkListPage() {
             <DialogTitle>Test incoming push</DialogTitle>
             <DialogDescription>
               Send a fake incoming-call notification to{' '}
-              <strong>{trunkIdentityText(testPushTarget)}</strong>? This is not
-              a real SIP call, so answering will expire.
+              <strong>{trunkIdentityText(testPushTarget)}</strong>? Last device:{' '}
+              {formatLastOnlinePlatform(testPushTarget?.lastOnlinePlatform)}.
+              This is not a real SIP call, so answering will expire.
             </DialogDescription>
           </DialogHeader>
+          <div className="grid gap-2">
+            <p className="text-sm font-medium">Channel</p>
+            <div className="grid min-w-0 gap-2">
+              <Button
+                type="button"
+                variant={testPushChannel === 'device' ? 'default' : 'outline'}
+                className="h-auto w-full min-w-0 shrink whitespace-normal flex-col items-start gap-1 px-3 py-2 text-left"
+                onClick={() => setTestPushChannel('device')}
+                disabled={testingPush}
+              >
+                <span className="text-sm font-medium">Latest device</span>
+                <span className="block w-full text-[11px] font-normal leading-snug opacity-80">
+                  Android uses Firebase and iOS uses APNs. An unrecorded
+                  platform sends every available channel.
+                </span>
+              </Button>
+              <Button
+                type="button"
+                variant={testPushChannel === 'firebase' ? 'default' : 'outline'}
+                className="h-auto w-full min-w-0 shrink whitespace-normal flex-col items-start gap-1 px-3 py-2 text-left"
+                onClick={() => setTestPushChannel('firebase')}
+                disabled={
+                  testingPush ||
+                  !testPushTarget ||
+                  !canTestFirebasePush(testPushTarget)
+                }
+              >
+                <span className="text-sm font-medium">Firebase</span>
+                <span className="block w-full text-[11px] font-normal leading-snug opacity-80">
+                  {testPushTarget && canTestFirebasePush(testPushTarget)
+                    ? 'Sends Firebase only, including when the last device was iOS.'
+                    : 'No Firebase token or notify user on this trunk.'}
+                </span>
+              </Button>
+              <Button
+                type="button"
+                variant={testPushChannel === 'apns' ? 'default' : 'outline'}
+                className="h-auto w-full min-w-0 shrink whitespace-normal flex-col items-start gap-1 px-3 py-2 text-left"
+                onClick={() => setTestPushChannel('apns')}
+                disabled={
+                  testingPush ||
+                  !testPushTarget ||
+                  !isPushContactReady(testPushTarget)
+                }
+              >
+                <span className="text-sm font-medium">APNs (iOS)</span>
+                <span className="block w-full text-[11px] font-normal leading-snug opacity-80">
+                  {testPushTarget && isPushContactReady(testPushTarget)
+                    ? 'Sends the iOS PushKit notification only. Payload style applies to Firebase.'
+                    : 'No Apple push contact on this trunk.'}
+                </span>
+              </Button>
+            </div>
+          </div>
           <div className="grid gap-2">
             <p className="text-sm font-medium">Payload style</p>
             <div className="grid min-w-0 gap-2 sm:grid-cols-2">
@@ -1205,7 +1289,7 @@ export function TrunkListPage() {
                 variant={testPushStyle === 'data' ? 'default' : 'outline'}
                 className="h-auto w-full min-w-0 shrink whitespace-normal flex-col items-start gap-1 px-3 py-2 text-left"
                 onClick={() => setTestPushStyle('data')}
-                disabled={testingPush}
+                disabled={testingPush || testPushChannel === 'apns'}
               >
                 <span className="text-sm font-medium">Data</span>
                 <span className="block w-full text-[11px] font-normal leading-snug opacity-80">
@@ -1217,7 +1301,7 @@ export function TrunkListPage() {
                 variant={testPushStyle === 'message' ? 'default' : 'outline'}
                 className="h-auto w-full min-w-0 shrink whitespace-normal flex-col items-start gap-1 px-3 py-2 text-left"
                 onClick={() => setTestPushStyle('message')}
-                disabled={testingPush}
+                disabled={testingPush || testPushChannel === 'apns'}
               >
                 <span className="text-sm font-medium">Message</span>
                 <span className="block w-full text-[11px] font-normal leading-snug opacity-80">

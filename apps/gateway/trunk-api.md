@@ -465,24 +465,31 @@ POST /api/trunk/{id}/test-incoming-push
 
 ### Request Body (optional)
 
-| Field   | Type   | Default  | Description                                                                                      |
-| ------- | ------ | -------- | ------------------------------------------------------------------------------------------------ |
-| `style` | string | `"data"` | `"data"` (Android data-only VoIP wake) or `"message"` (also includes visible notification alert) |
+| Field     | Type   | Default    | Description                                                                                      |
+| --------- | ------ | ---------- | ------------------------------------------------------------------------------------------------ |
+| `style`   | string | `"data"`   | `"data"` (Android data-only VoIP wake) or `"message"` (also includes visible notification alert). Applies to Firebase sends. APNs PushKit ignores it. |
+| `channel` | string | `"device"` | `"device"` follows the trunk's last platform, `"firebase"` sends Firebase only, `"apns"` sends APNs PushKit only |
 
 ```json
 {
-  "style": "data"
+  "style": "data",
+  "channel": "device"
 }
 ```
 
 ### Routing & Response (`200 OK`)
 
-If the trunk has a stored `/ws-agent-device` FCM token, sends directly via FCM (`channels: ["fcm"]`); otherwise routes via `selectIncomingPushRoute` using stored APNs PushKit (`"apns"`) and/or TTRS Notification API FCM (`"ttrs_fcm"`).
+`channel` selects the delivery path:
+
+- `"device"` (default) keeps the production test route. A stored `/ws-agent-device` FCM token sends directly via FCM (`channels: ["fcm"]`). Otherwise `selectIncomingPushRoute` uses the trunk's last platform: Android goes to TTRS Notification API FCM (`"ttrs_fcm"`), iOS goes to stored APNs PushKit (`"apns"`), and an unrecorded platform sends every available channel.
+- `"firebase"` sends Firebase only. A stored FCM token is used when present; otherwise the notify-user TTRS path is used. The last platform is ignored.
+- `"apns"` sends the trunk's APNs PushKit token only. A stored FCM token and the last platform are ignored.
 
 ```json
 {
   "trunkId": 5,
   "sessionId": "push-test-8c4f1d2e-9b10-4e55-a123-456789abcdef",
+  "channel": "device",
   "channels": ["ttrs_fcm"],
   "style": "data",
   "status": "sent"
@@ -491,9 +498,9 @@ If the trunk has a stored `/ws-agent-device` FCM token, sends directly via FCM (
 
 ### Error Statuses
 
-- `400 Bad Request` — invalid trunk ID, malformed JSON, or unsupported `style`
+- `400 Bad Request` — invalid trunk ID, malformed JSON, unsupported `style`, or unsupported `channel`
 - `404 Not Found` — trunk does not exist
-- `409 Conflict` — `Trunk has no incoming push target`
+- `409 Conflict` — `Trunk has no incoming push target`, `Trunk has no Firebase push target`, or `Trunk has no APNs push target`
 - `502 Bad Gateway` — upstream push delivery failed (`Failed to send test push: ...`)
 - `503 Service Unavailable` — trunk manager, push service (`PUSH_ENABLE=false`), or required push sender is not configured
 

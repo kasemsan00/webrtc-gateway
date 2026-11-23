@@ -18,6 +18,7 @@ import Header from '@/components/Header'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { DataTable } from '@/components/ui/data-table'
+import { DatePicker } from '@/components/ui/date-picker'
 import { Input } from '@/components/ui/input'
 import { ServerPaginationControls } from '@/components/ui/server-pagination-controls'
 import {
@@ -422,26 +423,28 @@ export function SessionHistoryPage() {
           </option>
         ))}
       </select>
-      <label className="flex items-center gap-1 text-muted-foreground">
-        From
-        <Input
-          type="date"
+      <div className="flex items-center gap-1 text-muted-foreground">
+        <span>From</span>
+        <DatePicker
           className="h-7 w-36 text-xs"
           value={search.from ?? ''}
-          onChange={(e) => updateSearch({ from: e.target.value || undefined })}
+          onChange={(next) => updateSearch({ from: next || undefined })}
+          placeholder="Start date"
+          clearable
           aria-label="Started on or after (Bangkok date)"
         />
-      </label>
-      <label className="flex items-center gap-1 text-muted-foreground">
-        To
-        <Input
-          type="date"
+      </div>
+      <div className="flex items-center gap-1 text-muted-foreground">
+        <span>To</span>
+        <DatePicker
           className="h-7 w-36 text-xs"
           value={search.to ?? ''}
-          onChange={(e) => updateSearch({ to: e.target.value || undefined })}
+          onChange={(next) => updateSearch({ to: next || undefined })}
+          placeholder="End date"
+          clearable
           aria-label="Started on or before (Bangkok date)"
         />
-      </label>
+      </div>
       {activeFilterCount > 0 ? (
         <Button
           size="sm"

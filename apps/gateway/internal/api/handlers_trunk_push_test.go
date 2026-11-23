@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"webrtc-sip-gateway/internal/config"
 	"webrtc-sip-gateway/internal/push"
 	"webrtc-sip-gateway/internal/sip"
 )
@@ -254,6 +255,130 @@ func TestHandleTrunkTestIncomingPush_SendFailed(t *testing.T) {
 	if strings.Contains(rr.Body.String(), fcmToken) {
 		t.Fatalf("FCM token leaked in error JSON: %s", rr.Body.String())
 	}
+}
+
+func TestHandleTrunkTestIncomingPush_FirebaseIgnoresIOSPlatform(t *testing.T) {
+	fcmToken := "fcm-secret-token-do-not-echo"
+	platform := "ios"
+	appID := config.DefaultTrunkPNAppID
+	pnType := trunkPNType
+	pnToken := "apple-push-token"
+	tm := &apiHandlerTrunkManagerStub{
+		byID: map[int64]*sip.Trunk{
+			17: {
+				ID:                 17,
+				Username:           "1001",
+				FcmToken:           &fcmToken,
+				LastOnlinePlatform: &platform,
+				PNAppID:            &appID,
+				PNType:             &pnType,
+				PNToken:            &pnToken,
+				CreatedAt:          time.Now(),
+				UpdatedAt:          time.Now(),
+			},
+		},
+	}
+	fcm := &stubFCMClient{}
+	srv, _ := newAPIHandlerTestServer(t, tm, nil, nil)
+	srv.SetPushService(push.NewServiceWithFCM(nil, fcm, nil))
+
+	rr := doRequest(t, srv.handleTrunkTestIncomingPush, http.MethodPost, "/trunk/17/test-incoming-push", `{"channel":"firebase","style":"data"}`, map[string]string{"id": "17"})
+	out := assertJSONDecode[map[string]interface{}](t, rr, http.StatusOK)
+	if out["channel"] != "firebase" {
+		t.Fatalf("expected firebase channel, got %#v", out["channel"])
+	}
+	channels, _ := out["channels"].([]interface{})
+	if len(channels) != 1 || channels[0] != "fcm" || fcm.calls != 1 || fcm.token != fcmToken {
+		t.Fatalf("expected stored FCM only, channels=%#v calls=%d token=%q", out["channels"], fcm.calls, fcm.token)
+	}
+}
+
+func TestHandleTrunkTestIncomingPush_FirebaseRequiresFirebaseTarget(t *testing.T) {
+	appID := config.DefaultTrunkPNAppID
+	pnType := trunkPNType
+	pnToken := "apple-push-token"
+	tm := &apiHandlerTrunkManagerStub{
+		byID: map[int64]*sip.Trunk{
+			18: {
+				ID:        18,
+				Username:  "1001",
+				PNAppID:   &appID,
+				PNType:    &pnType,
+				PNToken:   &pnToken,
+				CreatedAt: time.Now(),
+				UpdatedAt: time.Now(),
+			},
+		},
+	}
+	srv, _ := newAPIHandlerTestServer(t, tm, nil, nil)
+	srv.SetPushService(push.NewServiceWithFCM(nil, &stubFCMClient{}, nil))
+
+	rr := doRequest(t, srv.handleTrunkTestIncomingPush, http.MethodPost, "/trunk/18/test-incoming-push", `{"channel":"firebase"}`, map[string]string{"id": "18"})
+	assertJSONError(t, rr, http.StatusConflict, "no Firebase push target")
+}
+
+func TestHandleTrunkTestIncomingPush_APNSIgnoresStoredFCM(t *testing.T) {
+	fcmToken := "fcm-secret-token-do-not-echo"
+	platform := "android"
+	tm := &apiHandlerTrunkManagerStub{
+		byID: map[int64]*sip.Trunk{
+			19: {
+				ID:                 19,
+				Username:           "1001",
+				FcmToken:           &fcmToken,
+				LastOnlinePlatform: &platform,
+				CreatedAt:          time.Now(),
+				UpdatedAt:          time.Now(),
+			},
+		},
+	}
+	fcm := &stubFCMClient{}
+	srv, _ := newAPIHandlerTestServer(t, tm, nil, nil)
+	srv.SetPushService(push.NewServiceWithFCM(nil, fcm, nil))
+
+	rr := doRequest(t, srv.handleTrunkTestIncomingPush, http.MethodPost, "/trunk/19/test-incoming-push", `{"channel":"apns"}`, map[string]string{"id": "19"})
+	assertJSONError(t, rr, http.StatusConflict, "no APNs push target")
+	if fcm.calls != 0 {
+		t.Fatalf("APNs request sent FCM, calls=%d", fcm.calls)
+	}
+}
+
+func TestHandleTrunkTestIncomingPush_APNSRequiresSender(t *testing.T) {
+	appID := config.DefaultTrunkPNAppID
+	pnType := trunkPNType
+	pnToken := "apple-push-token"
+	tm := &apiHandlerTrunkManagerStub{
+		byID: map[int64]*sip.Trunk{
+			20: {
+				ID:        20,
+				Username:  "1001",
+				PNAppID:   &appID,
+				PNType:    &pnType,
+				PNToken:   &pnToken,
+				CreatedAt: time.Now(),
+				UpdatedAt: time.Now(),
+			},
+		},
+	}
+	srv, _ := newAPIHandlerTestServer(t, tm, nil, nil)
+	srv.SetPushService(push.NewServiceWithFCM(nil, &stubFCMClient{}, nil))
+
+	rr := doRequest(t, srv.handleTrunkTestIncomingPush, http.MethodPost, "/trunk/20/test-incoming-push", `{"channel":"APNS"}`, map[string]string{"id": "20"})
+	assertJSONError(t, rr, http.StatusServiceUnavailable, "Push sender not configured")
+}
+
+func TestHandleTrunkTestIncomingPush_InvalidChannel(t *testing.T) {
+	fcmToken := "fcm-secret-token"
+	tm := &apiHandlerTrunkManagerStub{
+		byID: map[int64]*sip.Trunk{
+			21: {ID: 21, Username: "1001", FcmToken: &fcmToken, CreatedAt: time.Now(), UpdatedAt: time.Now()},
+		},
+	}
+	srv, _ := newAPIHandlerTestServer(t, tm, nil, nil)
+	srv.SetPushService(push.NewServiceWithFCM(nil, &stubFCMClient{}, nil))
+
+	rr := doRequest(t, srv.handleTrunkTestIncomingPush, http.MethodPost, "/trunk/21/test-incoming-push", `{"channel":"both"}`, map[string]string{"id": "21"})
+	assertJSONError(t, rr, http.StatusBadRequest, "channel must be device, firebase, or apns")
 }
 
 func TestHandleTrunkTestIncomingPush_InvalidAndMissingTrunk(t *testing.T) {

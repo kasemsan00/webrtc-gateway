@@ -37,9 +37,12 @@ export interface Trunk {
 
 export type TestIncomingPushStyle = 'data' | 'message'
 
+export type TestIncomingPushChannel = 'device' | 'firebase' | 'apns'
+
 export interface TestIncomingPushResponse {
   trunkId: number
   sessionId: string
+  channel?: TestIncomingPushChannel
   channels: Array<string>
   style?: TestIncomingPushStyle
   status: string
