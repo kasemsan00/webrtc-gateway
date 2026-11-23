@@ -69,26 +69,96 @@ func TestSeedSIPCachedSPSPPSFromSDP_SeedsCacheAndLiveNormalizer(t *testing.T) {
 	})
 	t.Cleanup(func() { sess.BindH264AUParameterSetSeeder(nil) })
 
-	sps := []byte{0x67, 0x42, 0x00, 0x1f}
-	pps := []byte{0x68, 0xce, 0x06, 0xe2}
-	if !sess.SeedSIPCachedSPSPPSFromSDP(sps, pps, "sip-200-ok") {
+	sps183 := []byte{0x67, 0x42, 0x00, 0x1f}
+	pps183 := []byte{0x68, 0xce, 0x06, 0xe2}
+	if !sess.SeedSIPCachedSPSPPSFromSDP(sps183, pps183, "sip-183") {
 		t.Fatal("expected SDP seed to populate empty SIP cache")
 	}
 	gotSPS, gotPPS, ok := sess.GetSIPCachedSPSPPS()
-	if !ok || len(gotSPS) != len(sps) || len(gotPPS) != len(pps) {
+	if !ok || len(gotSPS) != len(sps183) || len(gotPPS) != len(pps183) {
 		t.Fatalf("unexpected cached sets: ok=%v sps=%x pps=%x", ok, gotSPS, gotPPS)
 	}
-	if len(seededSPS) != len(sps) || len(seededPPS) != len(pps) {
+	if len(seededSPS) != len(sps183) || len(seededPPS) != len(pps183) {
 		t.Fatalf("expected live normalizer seeder to run even when switch gate inactive: sps=%x pps=%x", seededSPS, seededPPS)
 	}
 
-	// Must not overwrite already-populated SIP parameter sets.
-	if sess.SeedSIPCachedSPSPPSFromSDP([]byte{0x67, 0x64, 0x00, 0x28}, []byte{0x68, 0xee, 0x3c, 0x80}, "late-sdp") {
-		t.Fatal("expected second SDP seed not to overwrite existing SIP cache")
+	// Identical SDP re-seed is a no-op.
+	if sess.SeedSIPCachedSPSPPSFromSDP(sps183, pps183, "sip-183-dup") {
+		t.Fatal("expected identical SDP seed to be a no-op")
 	}
-	gotSPS, _, _ = sess.GetSIPCachedSPSPPS()
-	if gotSPS[1] != 0x42 {
-		t.Fatalf("existing SIP SPS was overwritten: %x", gotSPS)
+
+	// 200 OK SDP with different parameter sets may overwrite 183 SDP-seeded cache
+	// while no live SIP RTP SPS/PPS has been seen yet.
+	sps200 := []byte{0x67, 0x64, 0x00, 0x28}
+	pps200 := []byte{0x68, 0xee, 0x3c, 0x80}
+	if !sess.SeedSIPCachedSPSPPSFromSDP(sps200, pps200, "sip-200-ok") {
+		t.Fatal("expected 200 OK SDP seed to overwrite 183 SDP-seeded SIP cache")
+	}
+	gotSPS, gotPPS, ok = sess.GetSIPCachedSPSPPS()
+	if !ok || gotSPS[1] != 0x64 || gotPPS[1] != 0xee {
+		t.Fatalf("expected 200 OK SDP sets to replace 183 sets, got sps=%x pps=%x", gotSPS, gotPPS)
+	}
+	if len(seededSPS) != len(sps200) || seededSPS[1] != 0x64 || seededPPS[1] != 0xee {
+		t.Fatalf("expected live normalizer to be re-seeded with 200 OK sets, got sps=%x pps=%x", seededSPS, seededPPS)
+	}
+
+	// Once live SIP RTP populates SPS/PPS, SDP must NEVER overwrite it.
+	rtpSPS := []byte{0x67, 0x4d, 0x00, 0x1e}
+	rtpPPS := []byte{0x68, 0xeb, 0xe3, 0xcb}
+	sess.CacheSIPSPS(rtpSPS)
+	sess.CacheSIPPPS(rtpPPS)
+	if sess.SeedSIPCachedSPSPPSFromSDP([]byte{0x67, 0x58, 0x00, 0x1f}, []byte{0x68, 0xaa, 0xbb, 0xcc}, "late-sdp") {
+		t.Fatal("expected SDP seed not to overwrite live RTP-learned SIP cache")
+	}
+	gotSPS, gotPPS, _ = sess.GetSIPCachedSPSPPS()
+	if gotSPS[1] != 0x4d || gotPPS[1] != 0xeb {
+		t.Fatalf("live RTP SIP SPS/PPS was overwritten by SDP: sps=%x pps=%x", gotSPS, gotPPS)
+	}
+
+	// Clearing SIP video parameter sets (e.g. on @switch) resets RTP provenance so
+	// fresh SDP seeding can populate the new stream again.
+	sess.ClearSIPVideoParameterSets()
+	if !sess.SeedSIPCachedSPSPPSFromSDP(sps200, pps200, "post-switch-sdp") {
+		t.Fatal("expected SDP seed to succeed after ClearSIPVideoParameterSets")
+	}
+}
+
+func TestPublicAccountRefOwnership_AtomicBindAndRelease(t *testing.T) {
+	// Active session binds once and releases exactly once.
+	sess := &Session{ID: "pub-1", State: StateConnecting}
+	if !sess.BindPublicAccountKeyIfActive("userA@example.com:5060") {
+		t.Fatal("expected BindPublicAccountKeyIfActive to succeed on active session")
+	}
+	if key := sess.TakePublicAccountKeyForRelease(); key != "userA@example.com:5060" {
+		t.Fatalf("expected first TakePublicAccountKeyForRelease to return key, got %q", key)
+	}
+	if key := sess.TakePublicAccountKeyForRelease(); key != "" {
+		t.Fatalf("expected second TakePublicAccountKeyForRelease to return empty, got %q", key)
+	}
+	if sess.BindPublicAccountKeyIfActive("userA@example.com:5060") {
+		t.Fatal("expected BindPublicAccountKeyIfActive to fail after release")
+	}
+
+	// Refuses bind after PendingCancelRequested, StateEnded, or TerminalAction.
+	for _, tc := range []struct {
+		name  string
+		setup func(*Session)
+	}{
+		{"pending_cancel", func(s *Session) { s.MarkPendingCancelRequested() }},
+		{"state_ended", func(s *Session) { s.SetState(StateEnded) }},
+		{"terminal_action", func(s *Session) { s.TryBeginTerminalAction("cancel") }},
+		{"already_released", func(s *Session) { _ = s.TakePublicAccountKeyForRelease() }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &Session{ID: "pub-" + tc.name, State: StateConnecting}
+			tc.setup(s)
+			if s.BindPublicAccountKeyIfActive("userA@example.com:5060") {
+				t.Fatalf("expected BindPublicAccountKeyIfActive to return false for %s", tc.name)
+			}
+			if key := s.TakePublicAccountKeyForRelease(); key != "" {
+				t.Fatalf("expected empty release key for %s, got %q", tc.name, key)
+			}
+		})
 	}
 }
 

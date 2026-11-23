@@ -341,6 +341,7 @@ type Session struct {
 	// Used to inject parameter sets before keyframes forwarded to browser for decoder recovery.
 	SIPCachedSPS             []byte                `json:"-"`
 	SIPCachedPPS             []byte                `json:"-"`
+	sipSPSPPSFromRTP         bool                  `json:"-"` // True once live SIP RTP populates SPS/PPS; prevents SDP overwrite
 	h264AUParameterSetSeeder func(sps, pps []byte) `json:"-"`
 	// Last complete SIP→WebRTC IDR. Queue/wait video is often a still with one
 	// IDR; if that frame is missed because DTLS/ICE is not writable yet, PLI to
@@ -392,11 +393,13 @@ type Session struct {
 	OutboundSIPReq         interface{} `json:"-"`
 	PendingCancelRequested bool        `json:"-"`
 	// SIP Authentication Context (independent of WS connection)
-	SIPAuthMode   string `json:"-"` // "public" | "trunk" | ""
-	SIPAccountKey string `json:"-"` // For public mode: "username@domain:port"
-	SIPTrunkID    int64  `json:"-"` // For trunk mode: trunk ID from DB
-	SIPUsername   string `json:"-"` // SIP username (for public mode)
-	SIPPassword   string `json:"-"` // SIP password (for public mode, not logged)
+	SIPAuthMode              string `json:"-"` // "public" | "trunk" | ""
+	SIPAccountKey            string `json:"-"` // For public mode: "username@domain:port"
+	SIPTrunkID               int64  `json:"-"` // For trunk mode: trunk ID from DB
+	SIPUsername              string `json:"-"` // SIP username (for public mode)
+	SIPPassword              string `json:"-"` // SIP password (for public mode, not logged)
+	publicAccountRefHeld     bool   `json:"-"` // True while this session owns a public registry refcount
+	publicAccountRefReleased bool   `json:"-"` // Latches true on first release so late binds cannot leak
 	// Incoming call claim (first-accept-wins)
 	IncomingClaimed   bool   `json:"-"` // True if this incoming call has been claimed
 	IncomingClaimedBy string `json:"-"` // WS client ID that claimed this call
@@ -1171,7 +1174,52 @@ func (s *Session) SetSIPAuthContext(mode string, accountKey string, trunkID int6
 	s.SIPUsername = username
 	s.SIPPassword = password
 	s.SIPPort = port
+	if mode == "public" && accountKey != "" && !s.publicAccountRefReleased {
+		s.publicAccountRefHeld = true
+	} else if mode != "public" || accountKey == "" {
+		s.publicAccountRefHeld = false
+	}
 	s.UpdatedAt = time.Now()
+}
+
+// BindPublicAccountKeyIfActive atomically binds a registered public account key
+// onto an active session and marks the public registry refcount as owned by
+// this session. Returns false if the session has already been canceled, ended,
+// claimed by a terminal action, or had its public refcount released.
+func (s *Session) BindPublicAccountKeyIfActive(accountKey string) bool {
+	if s == nil || accountKey == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.PendingCancelRequested || s.State == StateEnded || s.TerminalAction != "" || s.publicAccountRefReleased {
+		return false
+	}
+	s.SIPAuthMode = "public"
+	s.SIPAccountKey = accountKey
+	s.publicAccountRefHeld = true
+	s.UpdatedAt = time.Now()
+	return true
+}
+
+// TakePublicAccountKeyForRelease atomically marks this session's public account
+// refcount as released and returns the bound account key at most once. Subsequent
+// calls return "", and subsequent BindPublicAccountKeyIfActive calls return false.
+func (s *Session) TakePublicAccountKeyForRelease() string {
+	if s == nil {
+		return ""
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.publicAccountRefReleased = true
+	if !s.publicAccountRefHeld {
+		return ""
+	}
+	s.publicAccountRefHeld = false
+	if s.SIPAuthMode != "public" || s.SIPAccountKey == "" {
+		return ""
+	}
+	return s.SIPAccountKey
 }
 
 // GetSIPAuthContext returns the SIP authentication context (thread-safe).

@@ -949,3 +949,44 @@ func TestUnregisterTrunk_ConsolidatesToTwoDBQueries(t *testing.T) {
 		t.Fatalf("expected RAM registration state cleared after UnregisterTrunk: %+v", tm.trunks[15])
 	}
 }
+
+func TestUpdateRegistrationSuccess_StaleConfigGenPreservesNeedsReRegister(t *testing.T) {
+	t.Parallel()
+
+	tm, _ := newHealthyRegisteredTrunkFixture()
+	contact := trunkPushContactFromTrunk(tm.trunks[42])
+
+	// Snapshot config generation before an in-flight REGISTER starts.
+	tm.mu.RLock()
+	inflightGen := tm.trunkConfigGen[42]
+	tm.mu.RUnlock()
+
+	// Concurrent credential update (same push contact, different password) lands
+	// while the earlier REGISTER is still in flight.
+	tm.mu.Lock()
+	tm.trunks[42].Password = "rotated-secret"
+	if tm.needsReRegister == nil {
+		tm.needsReRegister = make(map[int64]bool)
+	}
+	tm.needsReRegister[42] = true
+	currentGen := tm.bumpTrunkConfigGenLocked(42)
+	tm.mu.Unlock()
+
+	// The stale in-flight REGISTER completes with the old configGen: must NOT clear needsReRegister.
+	tm.updateRegistrationSuccessWithContact(42, contact, inflightGen)
+	tm.mu.RLock()
+	stillNeeds := tm.needsReRegister[42]
+	tm.mu.RUnlock()
+	if !stillNeeds {
+		t.Fatalf("stale REGISTER completion (gen=%d vs current=%d) must not clear needsReRegister", inflightGen, currentGen)
+	}
+
+	// A fresh REGISTER started at currentGen completes: MUST clear needsReRegister.
+	tm.updateRegistrationSuccessWithContact(42, contact, currentGen)
+	tm.mu.RLock()
+	stillNeeds = tm.needsReRegister[42]
+	tm.mu.RUnlock()
+	if stillNeeds {
+		t.Fatalf("current REGISTER completion (gen=%d) must clear needsReRegister", currentGen)
+	}
+}

@@ -922,10 +922,7 @@ func (s *Server) handleWSReject(client *WSClient, msg WSMessage) {
 	s.logTerminalAction(sess, "reject", statusCode, reason, "client:"+reasonSource)
 
 	// Decrement public account refcount if applicable (before deleting session)
-	authMode, accountKey, _, _, _, _, _ := sess.GetSIPAuthContext()
-	if authMode == "public" && accountKey != "" && s.publicRegistry != nil {
-		s.publicRegistry.DecrementRefCount(accountKey)
-	}
+	s.releasePublicAccountRef(sess)
 
 	// Reject the incoming call
 	if s.sipMaker != nil {

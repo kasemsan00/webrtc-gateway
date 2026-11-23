@@ -1,6 +1,7 @@
 package session
 
 import (
+	"bytes"
 	"fmt"
 	"net"
 	"time"
@@ -757,6 +758,7 @@ func (s *Session) CacheSIPSPS(sps []byte) {
 	s.mu.Lock()
 	s.SIPCachedSPS = make([]byte, len(sps))
 	copy(s.SIPCachedSPS, sps)
+	s.sipSPSPPSFromRTP = true
 	seeder, seedSPS, seedPPS := s.maybeSeedH264AUNormalizerFromSIPCacheLocked()
 	s.mu.Unlock()
 	if seeder != nil {
@@ -773,6 +775,7 @@ func (s *Session) CacheSIPPPS(pps []byte) {
 	s.mu.Lock()
 	s.SIPCachedPPS = make([]byte, len(pps))
 	copy(s.SIPCachedPPS, pps)
+	s.sipSPSPPSFromRTP = true
 	seeder, seedSPS, seedPPS := s.maybeSeedH264AUNormalizerFromSIPCacheLocked()
 	s.mu.Unlock()
 	if seeder != nil {
@@ -781,7 +784,9 @@ func (s *Session) CacheSIPPPS(pps []byte) {
 }
 
 // SeedSIPCachedSPSPPSFromSDP seeds SIP-side cached SPS/PPS from remote SIP SDP
-// (INVITE, 183, or 200 OK) when live SIP RTP has not yet populated both sets.
+// (INVITE, 183, or 200 OK) when live SIP RTP has not yet populated parameter
+// sets. A later SDP (e.g. 200 OK after 183 early media) may overwrite an
+// earlier SDP-seeded pair, but live RTP-learned SPS/PPS are never overwritten.
 // Also seeds any bound H264AccessUnitNormalizer so the first IDR can decode
 // immediately even if the SIP peer omits in-band SPS/PPS.
 func (s *Session) SeedSIPCachedSPSPPSFromSDP(sps, pps []byte, source string) bool {
@@ -789,7 +794,11 @@ func (s *Session) SeedSIPCachedSPSPPSFromSDP(sps, pps []byte, source string) boo
 		return false
 	}
 	s.mu.Lock()
-	if len(s.SIPCachedSPS) > 0 && len(s.SIPCachedPPS) > 0 {
+	if s.sipSPSPPSFromRTP {
+		s.mu.Unlock()
+		return false
+	}
+	if bytes.Equal(s.SIPCachedSPS, sps) && bytes.Equal(s.SIPCachedPPS, pps) {
 		s.mu.Unlock()
 		return false
 	}
@@ -821,6 +830,7 @@ func (s *Session) ClearSIPVideoParameterSets() {
 func (s *Session) clearSIPVideoParameterSetsLocked() {
 	s.SIPCachedSPS = nil
 	s.SIPCachedPPS = nil
+	s.sipSPSPPSFromRTP = false
 }
 
 // GetSIPCachedSPSPPS returns copies of SIP-side cached SPS/PPS (thread-safe).

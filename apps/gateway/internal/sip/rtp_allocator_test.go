@@ -246,6 +246,53 @@ func TestApplyEarlyMediaSDP_SetsEndpointsPayloadTypesAndSeedsSPSPPS(t *testing.T
 	}
 }
 
+func TestApplyEarlyMediaSDP_200OKOverwrites183UntilLiveRTP(t *testing.T) {
+	sps183 := []byte{0x67, 0x42, 0xe0, 0x1f}
+	pps183 := []byte{0x68, 0xce, 0x3c, 0x80}
+	sprop183 := base64.StdEncoding.EncodeToString(sps183) + "," + base64.StdEncoding.EncodeToString(pps183)
+
+	sps200 := []byte{0x67, 0x64, 0x00, 0x28}
+	pps200 := []byte{0x68, 0xee, 0x3c, 0x80}
+	sprop200 := base64.StdEncoding.EncodeToString(sps200) + "," + base64.StdEncoding.EncodeToString(pps200)
+
+	makeSDP := func(sprop string) []byte {
+		return []byte("v=0\r\n" +
+			"o=- 1 1 IN IP4 198.51.100.20\r\n" +
+			"s=Call\r\n" +
+			"c=IN IP4 198.51.100.20\r\n" +
+			"t=0 0\r\n" +
+			"m=audio 20000 RTP/AVP 111\r\n" +
+			"a=rtpmap:111 opus/48000/2\r\n" +
+			"m=video 20002 RTP/AVPF 102\r\n" +
+			"a=rtpmap:102 H264/90000\r\n" +
+			"a=fmtp:102 packetization-mode=1;sprop-parameter-sets=" + sprop + "\r\n")
+	}
+
+	srv := &Server{}
+
+	// Case 1: 183 ringback SDP followed by 200 OK SDP (no live RTP SPS/PPS yet) -> 200 OK overwrites.
+	sess1 := &session.Session{ID: "sdp-183-then-200"}
+	srv.applyEarlyMediaSDP(makeSDP(sprop183), sess1)
+	srv.parseAsteriskSDPAndSetEndpoints(makeSDP(sprop200), sess1)
+	gotSPS, gotPPS, ok := sess1.GetSIPCachedSPSPPS()
+	if !ok || string(gotSPS) != string(sps200) || string(gotPPS) != string(pps200) {
+		t.Fatalf("expected 200 OK SDP to overwrite 183 SDP, got ok=%v sps=%x pps=%x", ok, gotSPS, gotPPS)
+	}
+
+	// Case 2: 183 SDP -> live RTP SPS/PPS -> 200 OK SDP -> live RTP SPS/PPS must be preserved.
+	sess2 := &session.Session{ID: "sdp-183-rtp-then-200"}
+	srv.applyEarlyMediaSDP(makeSDP(sprop183), sess2)
+	liveSPS := []byte{0x67, 0x4d, 0x00, 0x1e}
+	livePPS := []byte{0x68, 0xeb, 0xe3, 0xcb}
+	sess2.CacheSIPSPS(liveSPS)
+	sess2.CacheSIPPPS(livePPS)
+	srv.parseAsteriskSDPAndSetEndpoints(makeSDP(sprop200), sess2)
+	gotSPS, gotPPS, ok = sess2.GetSIPCachedSPSPPS()
+	if !ok || string(gotSPS) != string(liveSPS) || string(gotPPS) != string(livePPS) {
+		t.Fatalf("expected live RTP SPS/PPS to survive 200 OK SDP, got ok=%v sps=%x pps=%x", ok, gotSPS, gotPPS)
+	}
+}
+
 func TestDetachedSnapshotContext_SurvivesCanceledParent(t *testing.T) {
 	parent, cancel := context.WithCancel(context.Background())
 	cancel()

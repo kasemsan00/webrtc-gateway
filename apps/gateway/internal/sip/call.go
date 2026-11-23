@@ -587,11 +587,21 @@ func (s *Server) hangup(sess *session.Session) error {
 
 	if s.sipClient == nil {
 		fmt.Printf("[%s] ❌ Cannot send BYE: sipClient is nil\n", sess.ID)
+		sess.UpdateState(session.StateEnded)
+		s.notifySessionStateChange(sess, session.StateEnded)
+		sess.CloseMediaTransports()
+		session.ClosePeerConnectionAsync(sess.DetachPeerConnection(), sess.ID)
+		s.logSessionSnapshot(context.Background(), sess, "sip_hangup")
 		return nil
 	}
 
 	if sipCallID == "" {
 		fmt.Printf("[%s] ❌ Cannot send BYE: SIPCallID is empty\n", sess.ID)
+		sess.UpdateState(session.StateEnded)
+		s.notifySessionStateChange(sess, session.StateEnded)
+		sess.CloseMediaTransports()
+		session.ClosePeerConnectionAsync(sess.DetachPeerConnection(), sess.ID)
+		s.logSessionSnapshot(context.Background(), sess, "sip_hangup")
 		return nil
 	}
 
@@ -694,6 +704,7 @@ func (s *Server) CancelPendingCall(sess *session.Session) error {
 		sess.UpdateState(session.StateEnded)
 		s.notifySessionStateChange(sess, session.StateEnded)
 		sess.CloseMediaTransports()
+		s.logSessionSnapshot(context.Background(), sess, "sip_cancel_pre_invite")
 		return nil
 	}
 	if s.sipClient == nil {

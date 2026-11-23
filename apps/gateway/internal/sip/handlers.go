@@ -862,9 +862,10 @@ func (s *Server) handleBYE(req *sip.Request, tx sip.ServerTransaction) {
 
 	if sess != nil {
 		fmt.Printf("🔔 Cleaning up session %s after remote BYE\n", sess.ID)
-		authMode, accountKey, _, _, _, _, _ := sess.GetSIPAuthContext()
-		if authMode == "public" && accountKey != "" && s.publicRegistry != nil {
-			s.publicRegistry.DecrementRefCount(accountKey)
+		if s.publicRegistry != nil {
+			if accountKey := sess.TakePublicAccountKeyForRelease(); accountKey != "" {
+				s.publicRegistry.DecrementRefCount(accountKey)
+			}
 		}
 		sess.CloseMediaTransports()
 		session.ClosePeerConnectionAsync(sess.DetachPeerConnection(), sess.ID)
@@ -967,6 +968,11 @@ func (s *Server) applyIncomingCallerCancel(sess *session.Session, cancelReq *sip
 		s.tryRespondInviteTerminated(sess)
 	}
 
+	if s.publicRegistry != nil {
+		if accountKey := sess.TakePublicAccountKeyForRelease(); accountKey != "" {
+			s.publicRegistry.DecrementRefCount(accountKey)
+		}
+	}
 	authMode, _, trunkID, _, _, _, _ := sess.GetSIPAuthContext()
 	if authMode == "trunk" && trunkID > 0 && s.incomingNotifier != nil {
 		s.incomingNotifier.NotifyIncomingCancel(sess.ID, trunkID, "caller_cancelled")

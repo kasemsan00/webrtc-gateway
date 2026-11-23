@@ -167,6 +167,12 @@ type TrunkManager struct {
 	// contact changed since the last successful SIP REGISTER so
 	// EnsureTrunkRegistered cannot skip re-registration.
 	needsReRegister map[int64]bool
+	// trunkConfigGen is a monotonic per-trunk generation incremented whenever
+	// registration-relevant credentials, endpoint, transport, enabled state, or
+	// push contact change. registerTrunk snapshots this before sending REGISTER
+	// so updateRegistrationSuccessWithContact will not clear needsReRegister if
+	// a newer config update landed while REGISTER was in flight.
+	trunkConfigGen map[int64]uint64
 	// registeredPushContacts records the push contact parameters included in
 	// the last successful SIP REGISTER for each trunk.
 	registeredPushContacts map[int64]TrunkPushContact
@@ -339,6 +345,7 @@ func NewTrunkManager(db *pgxpool.Pool, cfg *config.Config, userAgent *sipgo.User
 		leaseRetryRuns:         make(map[int64]int),
 		registrationAnnounced:  make(map[int64]bool),
 		needsReRegister:        make(map[int64]bool),
+		trunkConfigGen:         make(map[int64]uint64),
 		registeredPushContacts: make(map[int64]TrunkPushContact),
 		registrarIdentities:    make(map[int64]*registrarIdentity),
 		registrarGenerations:   make(map[int64]uint64),
@@ -563,6 +570,7 @@ func (tm *TrunkManager) cacheUpsertedTrunk(trunk *Trunk) {
 				tm.needsReRegister = make(map[int64]bool)
 			}
 			tm.needsReRegister[trunk.ID] = true
+			tm.bumpTrunkConfigGenLocked(trunk.ID)
 		}
 	} else {
 		delete(tm.trunks, trunk.ID)
@@ -571,6 +579,7 @@ func (tm *TrunkManager) cacheUpsertedTrunk(trunk *Trunk) {
 		}
 		delete(tm.needsReRegister, trunk.ID)
 		delete(tm.registeredPushContacts, trunk.ID)
+		tm.bumpTrunkConfigGenLocked(trunk.ID)
 	}
 
 	if trunkRegistrarIdentityChanged(previous, trunk) || !trunk.Enabled {
@@ -664,6 +673,7 @@ func (tm *TrunkManager) Stop() {
 	tm.registrarIdentities = make(map[int64]*registrarIdentity)
 	tm.registrarGenerations = make(map[int64]uint64)
 	tm.needsReRegister = make(map[int64]bool)
+	tm.trunkConfigGen = make(map[int64]uint64)
 	tm.registeredPushContacts = make(map[int64]TrunkPushContact)
 	tm.mu.Unlock()
 
@@ -781,6 +791,9 @@ func (tm *TrunkManager) replaceLoadedTrunks(loaded map[int64]*Trunk, trunkByPubl
 		updated, exists := loaded[id]
 		if !exists || trunkRegistrarIdentityChanged(previous, updated) || !updated.Enabled {
 			invalidate(id)
+		}
+		if !exists || trunkRegistrationConfigChanged(previous, updated) || !updated.Enabled {
+			tm.bumpTrunkConfigGenLocked(id)
 		}
 	}
 	for id := range tm.registrarIdentities {
@@ -1006,11 +1019,13 @@ func (tm *TrunkManager) registerTrunk(trunkID int64) (err error) {
 	tm.mu.Lock()
 	trunk, ok := tm.trunks[trunkID]
 	var generation uint64
+	var configGen uint64
 	previouslyAnnounced := false
 	if ok {
 		copied := *trunk
 		trunk = &copied
 		generation = tm.nextRegistrarGenerationLocked(trunkID)
+		configGen = tm.trunkConfigGen[trunkID]
 		previouslyAnnounced = tm.registrationAnnounced[trunkID]
 	}
 	tm.mu.Unlock()
@@ -1157,7 +1172,7 @@ func (tm *TrunkManager) registerTrunk(trunkID int64) (err error) {
 	tm.publishRegistrarIdentityFromRegister(trunk, generation, res, expires)
 
 	// Success
-	tm.updateRegistrationSuccessWithContact(trunkID, trunkPushContactFromTrunk(trunk))
+	tm.updateRegistrationSuccessWithContact(trunkID, trunkPushContactFromTrunk(trunk), configGen)
 
 	// Start refresh worker if not already running
 	tm.startRefreshWorker(trunkID, expires)
@@ -1548,15 +1563,24 @@ func (tm *TrunkManager) renewOwnedLeasesBatch(ownedIDs []int64) {
 	}
 }
 
+func (tm *TrunkManager) bumpTrunkConfigGenLocked(trunkID int64) uint64 {
+	if tm.trunkConfigGen == nil {
+		tm.trunkConfigGen = make(map[int64]uint64)
+	}
+	tm.trunkConfigGen[trunkID]++
+	return tm.trunkConfigGen[trunkID]
+}
+
 // updateRegistrationSuccess updates DB with successful registration timestamp
 func (tm *TrunkManager) updateRegistrationSuccess(trunkID int64) {
 	tm.mu.RLock()
 	contact := trunkPushContactFromTrunk(tm.trunks[trunkID])
+	configGen := tm.trunkConfigGen[trunkID]
 	tm.mu.RUnlock()
-	tm.updateRegistrationSuccessWithContact(trunkID, contact)
+	tm.updateRegistrationSuccessWithContact(trunkID, contact, configGen)
 }
 
-func (tm *TrunkManager) updateRegistrationSuccessWithContact(trunkID int64, registeredContact TrunkPushContact) {
+func (tm *TrunkManager) updateRegistrationSuccessWithContact(trunkID int64, registeredContact TrunkPushContact, registeredConfigGen uint64) {
 	now := time.Now()
 	ctx, cancel := tm.dbContext()
 	defer cancel()
@@ -1579,7 +1603,7 @@ func (tm *TrunkManager) updateRegistrationSuccessWithContact(trunkID int64, regi
 	if trunk, ok := tm.trunks[trunkID]; ok {
 		trunk.LastRegisteredAt = &now
 		trunk.LastError = nil
-		if trunkPushContactFromTrunk(trunk) == registeredContact {
+		if tm.trunkConfigGen[trunkID] == registeredConfigGen && trunkPushContactFromTrunk(trunk) == registeredContact {
 			delete(tm.needsReRegister, trunkID)
 		}
 	} else {
@@ -2126,6 +2150,7 @@ func (tm *TrunkManager) UpdateTrunk(ctx context.Context, trunkID int64, patch Tr
 				tm.needsReRegister = make(map[int64]bool)
 			}
 			tm.needsReRegister[trunkID] = true
+			tm.bumpTrunkConfigGenLocked(trunkID)
 		}
 	} else {
 		delete(tm.trunks, trunkID)
@@ -2134,6 +2159,7 @@ func (tm *TrunkManager) UpdateTrunk(ctx context.Context, trunkID int64, patch Tr
 		}
 		delete(tm.needsReRegister, trunkID)
 		delete(tm.registeredPushContacts, trunkID)
+		tm.bumpTrunkConfigGenLocked(trunkID)
 	}
 	if identityChanged || !updated.Enabled {
 		tm.invalidateRegistrarIdentityLocked(trunkID)
@@ -2311,6 +2337,9 @@ func (tm *TrunkManager) RegisterTrunk(trunkID int64, force bool) error {
 	delete(tm.leaseRetryRuns, trunkID)
 	if trunkRegistrarIdentityChanged(previous, trunk) {
 		tm.invalidateRegistrarIdentityLocked(trunkID)
+	}
+	if trunkRegistrationConfigChanged(previous, trunk) {
+		tm.bumpTrunkConfigGenLocked(trunkID)
 	}
 	tm.mu.Unlock()
 
@@ -2931,6 +2960,7 @@ func (tm *TrunkManager) SetTrunkPushContact(ctx context.Context, trunkID int64, 
 			tm.needsReRegister = make(map[int64]bool)
 		}
 		tm.needsReRegister[trunkID] = true
+		tm.bumpTrunkConfigGenLocked(trunkID)
 	}
 	tm.mu.Unlock()
 

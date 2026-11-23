@@ -513,8 +513,8 @@ func (s *Server) handleWSCall(client *WSClient, msg WSMessage) {
 
 func (s *Server) runWSCall(client *WSClient, msg WSMessage, sess *session.Session, authMode, accountKey string) {
 	if authMode == "public" && s.publicRegistry != nil && accountKey == "" {
-		if sess.IsPendingCancelRequested() {
-			log.Printf("[%s] Skipping public SIP REGISTER after local CANCEL", sess.ID)
+		if sess.IsPendingCancelRequested() || sess.GetState() == session.StateEnded || sess.GetTerminalAction() != "" {
+			log.Printf("[%s] Skipping public SIP REGISTER after local CANCEL/end", sess.ID)
 			return
 		}
 		if s.sessionMgr != nil {
@@ -524,10 +524,19 @@ func (s *Server) runWSCall(client *WSClient, msg WSMessage, sess *session.Sessio
 			}
 		}
 
-		registeredKey, err := s.publicRegistry.AcquireAndRegister(context.Background(), msg.SIPDomain, msg.SIPUsername, msg.SIPPassword, msg.SIPPort)
+		regCtx, cancelReg := context.WithCancel(context.Background())
+		go func() {
+			select {
+			case <-sess.Done():
+				cancelReg()
+			case <-regCtx.Done():
+			}
+		}()
+		registeredKey, err := s.publicRegistry.AcquireAndRegister(regCtx, msg.SIPDomain, msg.SIPUsername, msg.SIPPassword, msg.SIPPort)
+		cancelReg()
 		if err != nil {
-			if sess.IsPendingCancelRequested() {
-				log.Printf("[%s] Suppressing public SIP REGISTER error after local CANCEL: %v", sess.ID, err)
+			if sess.IsPendingCancelRequested() || sess.GetState() == session.StateEnded || sess.GetTerminalAction() != "" {
+				log.Printf("[%s] Suppressing public SIP REGISTER error after local CANCEL/end: %v", sess.ID, err)
 				return
 			}
 			if s.sessionMgr != nil {
@@ -547,8 +556,11 @@ func (s *Server) runWSCall(client *WSClient, msg WSMessage, sess *session.Sessio
 			return
 		}
 
-		if sess.IsPendingCancelRequested() {
-			log.Printf("[%s] Skipping MakeCall after public SIP REGISTER due to local CANCEL", sess.ID)
+		if s.sipMaker == nil {
+			return
+		}
+		if sess.IsPendingCancelRequested() || sess.GetState() == session.StateEnded || sess.GetTerminalAction() != "" {
+			log.Printf("[%s] Skipping MakeCall after public SIP REGISTER due to local CANCEL/end", sess.ID)
 			return
 		}
 		if s.sessionMgr != nil {
@@ -558,10 +570,24 @@ func (s *Server) runWSCall(client *WSClient, msg WSMessage, sess *session.Sessio
 			}
 		}
 
-		accountKey = registeredKey
-		s.publicRegistry.IncrementRefCount(accountKey)
-		sess.SetSIPAuthContext("public", accountKey, 0, msg.SIPDomain, msg.SIPUsername, msg.SIPPassword, msg.SIPPort)
-		log.Printf("📞 [WS Call] Session %s registered public account=%s port=%d", sess.ID, accountKey, msg.SIPPort)
+		// Increment refcount before publishing ownership on the session so a
+		// concurrent hangup/cleanup cannot run DecrementRefCount before
+		// IncrementRefCount (PublicAccountRegistry clamps DecrementRefCount at 0).
+		// If the session became inactive concurrently, release immediately.
+		s.publicRegistry.IncrementRefCount(registeredKey)
+		if !sess.BindPublicAccountKeyIfActive(registeredKey) {
+			s.publicRegistry.DecrementRefCount(registeredKey)
+			log.Printf("[%s] Skipping MakeCall after public SIP REGISTER due to concurrent cancel/end", sess.ID)
+			return
+		}
+		if s.sessionMgr != nil {
+			if _, ok := s.sessionMgr.GetSession(sess.ID); !ok {
+				s.releasePublicAccountRef(sess)
+				log.Printf("[%s] Skipping MakeCall after public SIP REGISTER due to concurrent session cleanup", sess.ID)
+				return
+			}
+		}
+		log.Printf("📞 [WS Call] Session %s registered public account=%s port=%d", sess.ID, registeredKey, msg.SIPPort)
 	}
 
 	if s.sipMaker == nil {
@@ -569,6 +595,8 @@ func (s *Server) runWSCall(client *WSClient, msg WSMessage, sess *session.Sessio
 	}
 
 	if err := s.sipMaker.MakeCall(msg.Destination, msg.From, sess); err != nil {
+		s.releasePublicAccountRef(sess)
+
 		if sess.IsPendingCancelRequested() {
 			log.Printf("[%s] Suppressing MakeCall error after local CANCEL: %v", sess.ID, err)
 			return
@@ -578,10 +606,6 @@ func (s *Server) runWSCall(client *WSClient, msg WSMessage, sess *session.Sessio
 				log.Printf("[%s] Suppressing MakeCall error after session cleanup: %v", sess.ID, err)
 				return
 			}
-		}
-
-		if authMode == "public" && accountKey != "" && s.publicRegistry != nil {
-			s.publicRegistry.DecrementRefCount(accountKey)
 		}
 
 		if sess.GetTerminalReason() == "ice_failed" && !sess.HasOutboundInviteStarted() {
@@ -687,14 +711,16 @@ func (s *Server) handleWSHangup(client *WSClient, msg WSMessage) {
 	} else {
 		sess.UpdateState(session.StateEnded)
 	}
+	if sess.GetState() != session.StateEnded {
+		sess.UpdateState(session.StateEnded)
+	}
+	s.logSessionSnapshot(context.Background(), sess, "ws_hangup")
 
 	// Decrement public account refcount if applicable (before deleting session)
-	authMode, accountKey, trunkID, _, _, _, _ := sess.GetSIPAuthContext()
-	if authMode == "public" && accountKey != "" && s.publicRegistry != nil {
-		s.publicRegistry.DecrementRefCount(accountKey)
-	}
+	s.releasePublicAccountRef(sess)
 
 	// Clear in_use_by for trunk sessions.
+	authMode, _, trunkID, _, _, _, _ := sess.GetSIPAuthContext()
 	if authMode == "trunk" && trunkID > 0 && s.trunkManager != nil {
 		if err := s.trunkManager.SetTrunkInUseBy(context.Background(), trunkID, nil); err != nil {
 			log.Printf("⚠️ [WS Hangup] Failed to clear in_use_by for trunk %d: %v", trunkID, err)
@@ -737,11 +763,13 @@ func (s *Server) hangupBridgedPeerSession(origin *session.Session, reason string
 	} else {
 		peer.UpdateState(session.StateEnded)
 	}
-
-	authMode, accountKey, trunkID, _, _, _, _ := peer.GetSIPAuthContext()
-	if authMode == "public" && accountKey != "" && s.publicRegistry != nil {
-		s.publicRegistry.DecrementRefCount(accountKey)
+	if peer.GetState() != session.StateEnded {
+		peer.UpdateState(session.StateEnded)
 	}
+	s.logSessionSnapshot(context.Background(), peer, reason)
+
+	s.releasePublicAccountRef(peer)
+	authMode, _, trunkID, _, _, _, _ := peer.GetSIPAuthContext()
 	if authMode == "trunk" && trunkID > 0 && s.trunkManager != nil {
 		if err := s.trunkManager.SetTrunkInUseBy(context.Background(), trunkID, nil); err != nil {
 			log.Printf("⚠️ [Bridged Hangup] Failed to clear in_use_by for trunk %d: %v", trunkID, err)

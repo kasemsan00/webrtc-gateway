@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gorilla/mux"
 	"github.com/pion/webrtc/v4"
 
 	"webrtc-sip-gateway/internal/auth"
@@ -597,6 +598,8 @@ type blockingPublicRegistryStub struct {
 	mu           sync.Mutex
 	started      chan struct{}
 	unblock      chan struct{}
+	ctxCanceled  chan struct{}
+	respectCtx   bool
 	accountKey   string
 	regErr       error
 	incRefCalls  int
@@ -604,7 +607,7 @@ type blockingPublicRegistryStub struct {
 	lastIncKey   string
 }
 
-func (s *blockingPublicRegistryStub) AcquireAndRegister(_ context.Context, _, _, _ string, _ int) (string, error) {
+func (s *blockingPublicRegistryStub) AcquireAndRegister(ctx context.Context, _, _, _ string, _ int) (string, error) {
 	if s.started != nil {
 		select {
 		case s.started <- struct{}{}:
@@ -612,7 +615,21 @@ func (s *blockingPublicRegistryStub) AcquireAndRegister(_ context.Context, _, _,
 		}
 	}
 	if s.unblock != nil {
-		<-s.unblock
+		if s.respectCtx {
+			select {
+			case <-ctx.Done():
+				if s.ctxCanceled != nil {
+					select {
+					case s.ctxCanceled <- struct{}{}:
+					default:
+					}
+				}
+				return "", ctx.Err()
+			case <-s.unblock:
+			}
+		} else {
+			<-s.unblock
+		}
 	}
 	return s.accountKey, s.regErr
 }
@@ -847,5 +864,354 @@ func TestHandleOffer_FlushesPendingRemoteICEAndUsesBoundedICEGather(t *testing.T
 	}
 	if len(store.asyncPayloads) != 2 || store.syncStoreCalls != 0 {
 		t.Fatalf("expected offer+answer payloads via AsyncLogStore, got asyncPayloads=%d syncStore=%d", len(store.asyncPayloads), store.syncStoreCalls)
+	}
+}
+
+type blockingMakeCallStub struct {
+	stubSIPCallMaker
+	mu             sync.Mutex
+	makeCallStart  chan struct{}
+	makeCallDone   chan struct{}
+	waitForSessEnd bool
+}
+
+func (s *blockingMakeCallStub) MakeCall(destination, from string, sess *session.Session) error {
+	s.mu.Lock()
+	s.makeCallCount++
+	s.mu.Unlock()
+	if s.makeCallStart != nil {
+		select {
+		case s.makeCallStart <- struct{}{}:
+		default:
+		}
+	}
+	if s.waitForSessEnd && sess != nil {
+		<-sess.Done()
+	}
+	defer func() {
+		if s.makeCallDone != nil {
+			close(s.makeCallDone)
+		}
+	}()
+	return s.makeCallErr
+}
+
+func (s *blockingMakeCallStub) CancelPendingCall(sess *session.Session) error {
+	if sess != nil {
+		sess.MarkPendingCancelRequested()
+		sess.UpdateState(session.StateEnded)
+	}
+	return nil
+}
+
+func TestHandleWSCall_ConcurrentHangupDuringAcquireAndRegisterCancelsContextAndDoesNotLeakRefCount(t *testing.T) {
+	t.Run("cancels_inflight_register_context", func(t *testing.T) {
+		mgr := newTestSessionManager()
+		sess, err := mgr.CreateSession(config.TURNConfig{})
+		if err != nil {
+			t.Fatalf("CreateSession error: %v", err)
+		}
+
+		reg := &blockingPublicRegistryStub{
+			started:     make(chan struct{}, 1),
+			unblock:     make(chan struct{}),
+			ctxCanceled: make(chan struct{}, 1),
+			respectCtx:  true,
+			accountKey:  "userA@example.com:5060",
+		}
+		sipMaker := &blockingMakeCallStub{}
+		srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, sipMaker, reg, nil, nil)
+		client := &WSClient{send: make(chan []byte, 8), publicOnly: true, sessionID: sess.ID}
+
+		srv.handleWSCall(client, WSMessage{
+			Type:        "call",
+			SessionID:   sess.ID,
+			Destination: "1002",
+			From:        "callerA",
+			SIPDomain:   "example.com",
+			SIPUsername: "userA",
+			SIPPassword: "secret",
+			SIPPort:     5060,
+		})
+
+		select {
+		case <-reg.started:
+		case <-time.After(500 * time.Millisecond):
+			t.Fatal("expected runWSCall to invoke AcquireAndRegister")
+		}
+
+		// Hangup while AcquireAndRegister is still in flight.
+		srv.handleWSHangup(client, WSMessage{Type: "hangup", SessionID: sess.ID})
+
+		select {
+		case <-reg.ctxCanceled:
+		case <-time.After(500 * time.Millisecond):
+			t.Fatal("expected AcquireAndRegister context to be canceled immediately on hangup")
+		}
+
+		time.Sleep(20 * time.Millisecond)
+		reg.mu.Lock()
+		inc, dec := reg.incRefCalls, reg.decRefCalls
+		reg.mu.Unlock()
+		if inc != 0 || dec != 0 {
+			t.Fatalf("expected 0 refcount ops after canceled register, got inc=%d dec=%d", inc, dec)
+		}
+		sipMaker.mu.Lock()
+		calls := sipMaker.makeCallCount
+		sipMaker.mu.Unlock()
+		if calls != 0 {
+			t.Fatalf("expected MakeCall not to run after hangup, got %d", calls)
+		}
+	})
+
+	t.Run("hangup_races_register_completion_no_leak", func(t *testing.T) {
+		mgr := newTestSessionManager()
+		sess, err := mgr.CreateSession(config.TURNConfig{})
+		if err != nil {
+			t.Fatalf("CreateSession error: %v", err)
+		}
+
+		// Simulate AcquireAndRegister finishing right as hangup arrives (ignoring ctx cancel).
+		reg := &blockingPublicRegistryStub{
+			started:    make(chan struct{}, 1),
+			unblock:    make(chan struct{}),
+			respectCtx: false,
+			accountKey: "userA@example.com:5060",
+		}
+		sipMaker := &blockingMakeCallStub{}
+		srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, sipMaker, reg, nil, nil)
+		client := &WSClient{send: make(chan []byte, 8), publicOnly: true, sessionID: sess.ID}
+
+		srv.handleWSCall(client, WSMessage{
+			Type:        "call",
+			SessionID:   sess.ID,
+			Destination: "1002",
+			From:        "callerA",
+			SIPDomain:   "example.com",
+			SIPUsername: "userA",
+			SIPPassword: "secret",
+			SIPPort:     5060,
+		})
+
+		select {
+		case <-reg.started:
+		case <-time.After(500 * time.Millisecond):
+			t.Fatal("expected runWSCall to invoke AcquireAndRegister")
+		}
+
+		srv.handleWSHangup(client, WSMessage{Type: "hangup", SessionID: sess.ID})
+		close(reg.unblock)
+		time.Sleep(30 * time.Millisecond)
+
+		reg.mu.Lock()
+		inc, dec := reg.incRefCalls, reg.decRefCalls
+		reg.mu.Unlock()
+		if inc-dec != 0 {
+			t.Fatalf("expected net refcount == 0 (no leak), got inc=%d dec=%d", inc, dec)
+		}
+		sipMaker.mu.Lock()
+		calls := sipMaker.makeCallCount
+		sipMaker.mu.Unlock()
+		if calls != 0 {
+			t.Fatalf("expected MakeCall not to run after concurrent hangup, got %d", calls)
+		}
+	})
+
+	t.Run("hangup_during_inflight_makecall_decrements_once", func(t *testing.T) {
+		mgr := newTestSessionManager()
+		sess, err := mgr.CreateSession(config.TURNConfig{})
+		if err != nil {
+			t.Fatalf("CreateSession error: %v", err)
+		}
+
+		reg := &blockingPublicRegistryStub{
+			accountKey: "userA@example.com:5060",
+		}
+		sipMaker := &blockingMakeCallStub{
+			stubSIPCallMaker: stubSIPCallMaker{makeCallErr: errors.New("canceled")},
+			makeCallStart:    make(chan struct{}, 1),
+			makeCallDone:     make(chan struct{}),
+			waitForSessEnd:   true,
+		}
+		srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, sipMaker, reg, nil, nil)
+		client := &WSClient{send: make(chan []byte, 8), publicOnly: true, sessionID: sess.ID}
+
+		srv.handleWSCall(client, WSMessage{
+			Type:        "call",
+			SessionID:   sess.ID,
+			Destination: "1002",
+			From:        "callerA",
+			SIPDomain:   "example.com",
+			SIPUsername: "userA",
+			SIPPassword: "secret",
+			SIPPort:     5060,
+		})
+
+		select {
+		case <-sipMaker.makeCallStart:
+		case <-time.After(500 * time.Millisecond):
+			t.Fatal("expected MakeCall to start")
+		}
+
+		srv.handleWSHangup(client, WSMessage{Type: "hangup", SessionID: sess.ID})
+
+		select {
+		case <-sipMaker.makeCallDone:
+		case <-time.After(500 * time.Millisecond):
+			t.Fatal("expected MakeCall to finish after hangup")
+		}
+		time.Sleep(20 * time.Millisecond)
+
+		reg.mu.Lock()
+		inc, dec := reg.incRefCalls, reg.decRefCalls
+		reg.mu.Unlock()
+		if inc != 1 || dec != 1 {
+			t.Fatalf("expected exact 1:1 refcount inc=1 dec=1, got inc=%d dec=%d", inc, dec)
+		}
+	})
+
+	t.Run("nil_sipMaker_does_not_increment_refcount", func(t *testing.T) {
+		mgr := newTestSessionManager()
+		sess, err := mgr.CreateSession(config.TURNConfig{})
+		if err != nil {
+			t.Fatalf("CreateSession error: %v", err)
+		}
+
+		reg := &blockingPublicRegistryStub{
+			started:    make(chan struct{}, 1),
+			accountKey: "userA@example.com:5060",
+		}
+		srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, nil, reg, nil, nil)
+		client := &WSClient{send: make(chan []byte, 8), publicOnly: true, sessionID: sess.ID}
+
+		srv.handleWSCall(client, WSMessage{
+			Type:        "call",
+			SessionID:   sess.ID,
+			Destination: "1002",
+			From:        "callerA",
+			SIPDomain:   "example.com",
+			SIPUsername: "userA",
+			SIPPassword: "secret",
+			SIPPort:     5060,
+		})
+
+		select {
+		case <-reg.started:
+		case <-time.After(500 * time.Millisecond):
+			t.Fatal("expected AcquireAndRegister to be called")
+		}
+		time.Sleep(20 * time.Millisecond)
+
+		reg.mu.Lock()
+		inc, dec := reg.incRefCalls, reg.decRefCalls
+		reg.mu.Unlock()
+		if inc != 0 || dec != 0 {
+			t.Fatalf("expected no refcount increment when sipMaker is nil, got inc=%d dec=%d", inc, dec)
+		}
+	})
+}
+
+func TestHandleWSHangup_PreInvitePersistsEndedSnapshot(t *testing.T) {
+	mgr := newTestSessionManager()
+	sess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("CreateSession error: %v", err)
+	}
+
+	store := &asyncTestLogStore{}
+	reg := &blockingPublicRegistryStub{
+		started:     make(chan struct{}, 1),
+		unblock:     make(chan struct{}),
+		ctxCanceled: make(chan struct{}, 1),
+		respectCtx:  true,
+		accountKey:  "userA@example.com:5060",
+	}
+	sipMaker := &blockingMakeCallStub{}
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, sipMaker, reg, nil, store)
+	client := &WSClient{send: make(chan []byte, 8), publicOnly: true, sessionID: sess.ID}
+
+	srv.handleWSCall(client, WSMessage{
+		Type:        "call",
+		SessionID:   sess.ID,
+		Destination: "1002",
+		From:        "callerA",
+		SIPDomain:   "example.com",
+		SIPUsername: "userA",
+		SIPPassword: "secret",
+		SIPPort:     5060,
+	})
+
+	select {
+	case <-reg.started:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected AcquireAndRegister to start")
+	}
+
+	srv.handleWSHangup(client, WSMessage{Type: "hangup", SessionID: sess.ID})
+
+	store.mu.Lock()
+	snaps := append([]*logstore.SessionRecord(nil), store.asyncSessions...)
+	syncCalls := store.syncSessionCall
+	store.mu.Unlock()
+
+	if syncCalls != 0 {
+		t.Fatalf("expected async session persistence only, got syncSessionCall=%d", syncCalls)
+	}
+	if len(snaps) < 2 {
+		t.Fatalf("expected initial connecting snapshot + terminal ended snapshot, got %d", len(snaps))
+	}
+	last := snaps[len(snaps)-1]
+	if last.SessionID != sess.ID || last.FinalState != string(session.StateEnded) || last.EndedAt == nil {
+		t.Fatalf("expected final ended snapshot with EndedAt != nil, got %+v", last)
+	}
+}
+
+func TestHandleRESTHangup_PreDialogPersistsEndedSnapshot(t *testing.T) {
+	mgr := newTestSessionManager()
+	sess, err := mgr.CreateSession(config.TURNConfig{})
+	if err != nil {
+		t.Fatalf("CreateSession error: %v", err)
+	}
+	sess.SetCallInfo("outbound", "1000", "2000", "")
+	sess.UpdateState(session.StateConnecting)
+
+	store := &asyncTestLogStore{}
+	reg := &blockingPublicRegistryStub{accountKey: "userA@example.com:5060"}
+	if !sess.BindPublicAccountKeyIfActive("userA@example.com:5060") {
+		t.Fatal("expected BindPublicAccountKeyIfActive to succeed")
+	}
+	reg.IncrementRefCount("userA@example.com:5060")
+
+	srv := NewServer(config.APIConfig{}, config.TURNConfig{}, config.GatewayConfig{}, config.TranslatorConfig{}, mgr, &stubSIPCallMaker{}, reg, nil, store)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/hangup/"+sess.ID, nil)
+	req = mux.SetURLVars(req, map[string]string{"sessionId": sess.ID})
+	rr := httptest.NewRecorder()
+	srv.handleHangup(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d body=%s", rr.Code, rr.Body.String())
+	}
+
+	store.mu.Lock()
+	snaps := append([]*logstore.SessionRecord(nil), store.asyncSessions...)
+	syncCalls := store.syncSessionCall
+	store.mu.Unlock()
+
+	if syncCalls != 0 {
+		t.Fatalf("expected async session persistence only, got syncSessionCall=%d", syncCalls)
+	}
+	if len(snaps) != 1 {
+		t.Fatalf("expected 1 terminal ended snapshot, got %d", len(snaps))
+	}
+	if snaps[0].SessionID != sess.ID || snaps[0].FinalState != string(session.StateEnded) || snaps[0].EndedAt == nil {
+		t.Fatalf("expected ended snapshot with EndedAt != nil, got %+v", snaps[0])
+	}
+
+	reg.mu.Lock()
+	inc, dec := reg.incRefCalls, reg.decRefCalls
+	reg.mu.Unlock()
+	if inc != 1 || dec != 1 {
+		t.Fatalf("expected REST hangup to release public account refcount (1:1), got inc=%d dec=%d", inc, dec)
 	}
 }

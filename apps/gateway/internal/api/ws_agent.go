@@ -333,18 +333,31 @@ func (s *Server) forceEndSession(sess *session.Session, reason string) {
 	} else {
 		sess.UpdateState(session.StateEnded)
 	}
+	if sess.GetState() != session.StateEnded {
+		sess.UpdateState(session.StateEnded)
+	}
+	s.logSessionSnapshot(context.Background(), sess, reason)
 
 	s.releaseSessionAccount(sess)
 	s.sessionMgr.DeleteSession(sess.ID)
 }
 
+// releasePublicAccountRef atomically decrements the public SIP registry
+// refcount for this session at most once.
+func (s *Server) releasePublicAccountRef(sess *session.Session) {
+	if s.publicRegistry == nil || sess == nil {
+		return
+	}
+	if accountKey := sess.TakePublicAccountKeyForRelease(); accountKey != "" {
+		s.publicRegistry.DecrementRefCount(accountKey)
+	}
+}
+
 // releaseSessionAccount drops the call's hold on its SIP account: the public
 // registry reference or the trunk's in_use_by.
 func (s *Server) releaseSessionAccount(sess *session.Session) {
-	authMode, accountKey, trunkID, _, _, _, _ := sess.GetSIPAuthContext()
-	if authMode == "public" && accountKey != "" && s.publicRegistry != nil {
-		s.publicRegistry.DecrementRefCount(accountKey)
-	}
+	s.releasePublicAccountRef(sess)
+	authMode, _, trunkID, _, _, _, _ := sess.GetSIPAuthContext()
 	if authMode == "trunk" && trunkID > 0 && s.trunkManager != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()

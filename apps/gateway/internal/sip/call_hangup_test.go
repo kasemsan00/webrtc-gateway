@@ -1,9 +1,14 @@
 package sip
 
 import (
+	"context"
+	"sync"
 	"testing"
 
+	"github.com/emiago/sipgo"
+
 	"webrtc-sip-gateway/internal/config"
+	"webrtc-sip-gateway/internal/logstore"
 	"webrtc-sip-gateway/internal/session"
 )
 
@@ -112,5 +117,82 @@ func TestCreateBYERequest_InboundBYEAdvancesPastInDialogCSeq(t *testing.T) {
 	cseq := req.CSeq()
 	if cseq == nil || cseq.SeqNo != 7 || cseq.MethodName != "BYE" {
 		t.Fatalf("expected inbound BYE CSeq=7 BYE after in-dialog CSeq 6, got %#v", cseq)
+	}
+}
+
+type sipAsyncSnapshotStoreStub struct {
+	logstore.LogStore
+	mu       sync.Mutex
+	sessions []*logstore.SessionRecord
+}
+
+func (s *sipAsyncSnapshotStoreStub) LogEvent(_ *logstore.Event) {}
+func (s *sipAsyncSnapshotStoreStub) StorePayloadAndLogEventAsync(_ *logstore.PayloadRecord, _ *logstore.Event) {
+}
+func (s *sipAsyncSnapshotStoreStub) UpsertSessionAsync(sess *logstore.SessionRecord) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sessions = append(s.sessions, sess)
+}
+func (s *sipAsyncSnapshotStoreStub) UpsertDialogAsync(_ *logstore.DialogRecord)                 {}
+func (s *sipAsyncSnapshotStoreStub) UpsertSessionDirectoryAsync(_, _, _ string, _ int)          {}
+func (s *sipAsyncSnapshotStoreStub) UpsertSession(_ context.Context, _ *logstore.SessionRecord) error {
+	return nil
+}
+
+func TestCancelPendingCall_PreInvitePersistsEndedSnapshot(t *testing.T) {
+	store := &sipAsyncSnapshotStoreStub{}
+	srv := &Server{logStore: store}
+	sess := &session.Session{ID: "pre-invite-cancel"}
+	sess.SetCallInfo("outbound", "1000", "2000", "")
+	sess.UpdateState(session.StateConnecting)
+
+	if err := srv.CancelPendingCall(sess); err != nil {
+		t.Fatalf("CancelPendingCall returned error: %v", err)
+	}
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if len(store.sessions) != 1 {
+		t.Fatalf("expected 1 async session snapshot, got %d", len(store.sessions))
+	}
+	got := store.sessions[0]
+	if got.SessionID != sess.ID || got.FinalState != string(session.StateEnded) || got.EndedAt == nil {
+		t.Fatalf("expected ended snapshot with EndedAt != nil, got %+v", got)
+	}
+}
+
+func TestHangup_PreDialogPersistsEndedSnapshot(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		sipClient *sipgo.Client
+	}{
+		{"nil_sip_client", nil},
+		{"empty_sip_call_id", &sipgo.Client{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &sipAsyncSnapshotStoreStub{}
+			srv := &Server{logStore: store, sipClient: tc.sipClient}
+			sess := &session.Session{ID: "pre-dialog-" + tc.name}
+			sess.SetCallInfo("outbound", "1000", "2000", "")
+			sess.UpdateState(session.StateConnecting)
+
+			if err := srv.Hangup(sess); err != nil {
+				t.Fatalf("Hangup returned error: %v", err)
+			}
+			if sess.GetState() != session.StateEnded {
+				t.Fatalf("expected session state ended, got %s", sess.GetState())
+			}
+
+			store.mu.Lock()
+			defer store.mu.Unlock()
+			if len(store.sessions) != 1 {
+				t.Fatalf("expected 1 async session snapshot, got %d", len(store.sessions))
+			}
+			got := store.sessions[0]
+			if got.SessionID != sess.ID || got.FinalState != string(session.StateEnded) || got.EndedAt == nil {
+				t.Fatalf("expected ended snapshot with EndedAt != nil, got %+v", got)
+			}
+		})
 	}
 }

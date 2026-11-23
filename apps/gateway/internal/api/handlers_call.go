@@ -291,10 +291,16 @@ func (s *Server) handleHangup(w http.ResponseWriter, r *http.Request) {
 
 	// Send SIP BYE
 	if s.sipMaker != nil {
-		s.sipMaker.Hangup(sess)
+		_ = s.sipMaker.Hangup(sess)
+	}
+	if sess.GetState() != session.StateEnded {
+		sess.UpdateState(session.StateEnded)
 	}
 
 	ctx := r.Context()
+
+	// Release public account refcount if applicable (before deleting session)
+	s.releasePublicAccountRef(sess)
 
 	// Clear in_use_by for trunk sessions.
 	authMode, _, trunkID, _, _, _, _ := sess.GetSIPAuthContext()
@@ -310,6 +316,7 @@ func (s *Server) handleHangup(w http.ResponseWriter, r *http.Request) {
 		Category:  "rest",
 		Name:      "rest_hangup_request",
 	})
+	s.logSessionSnapshot(ctx, sess, "rest_hangup")
 
 	// Delete session
 	s.sessionMgr.DeleteSession(sessionID)
