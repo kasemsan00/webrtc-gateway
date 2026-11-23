@@ -60,6 +60,38 @@ func TestArmSwitchSPSPPSInjectIfAuthoritative(t *testing.T) {
 	}
 }
 
+func TestSeedSIPCachedSPSPPSFromSDP_SeedsCacheAndLiveNormalizer(t *testing.T) {
+	sess := &Session{ID: "seed-sdp"}
+	var seededSPS, seededPPS []byte
+	sess.BindH264AUParameterSetSeeder(func(sps, pps []byte) {
+		seededSPS = append([]byte(nil), sps...)
+		seededPPS = append([]byte(nil), pps...)
+	})
+	t.Cleanup(func() { sess.BindH264AUParameterSetSeeder(nil) })
+
+	sps := []byte{0x67, 0x42, 0x00, 0x1f}
+	pps := []byte{0x68, 0xce, 0x06, 0xe2}
+	if !sess.SeedSIPCachedSPSPPSFromSDP(sps, pps, "sip-200-ok") {
+		t.Fatal("expected SDP seed to populate empty SIP cache")
+	}
+	gotSPS, gotPPS, ok := sess.GetSIPCachedSPSPPS()
+	if !ok || len(gotSPS) != len(sps) || len(gotPPS) != len(pps) {
+		t.Fatalf("unexpected cached sets: ok=%v sps=%x pps=%x", ok, gotSPS, gotPPS)
+	}
+	if len(seededSPS) != len(sps) || len(seededPPS) != len(pps) {
+		t.Fatalf("expected live normalizer seeder to run even when switch gate inactive: sps=%x pps=%x", seededSPS, seededPPS)
+	}
+
+	// Must not overwrite already-populated SIP parameter sets.
+	if sess.SeedSIPCachedSPSPPSFromSDP([]byte{0x67, 0x64, 0x00, 0x28}, []byte{0x68, 0xee, 0x3c, 0x80}, "late-sdp") {
+		t.Fatal("expected second SDP seed not to overwrite existing SIP cache")
+	}
+	gotSPS, _, _ = sess.GetSIPCachedSPSPPS()
+	if gotSPS[1] != 0x42 {
+		t.Fatalf("existing SIP SPS was overwritten: %x", gotSPS)
+	}
+}
+
 func testSeedNow() time.Time {
 	return time.Unix(1_700_000_000, 0)
 }

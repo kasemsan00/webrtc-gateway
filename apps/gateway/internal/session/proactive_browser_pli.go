@@ -121,9 +121,7 @@ func (s *Session) SendProactivePLIToWebRTC() bool {
 		return false
 	}
 	snapshot := s.prepareWebRTCFeedbackLocked("pli", true, nil)
-	if snapshot.ready && !snapshot.throttled {
-		s.lastBrowserIDRRequest = now
-	} else if snapshot.throttled {
+	if snapshot.throttled {
 		s.lastBrowserIDRRequest = now
 	}
 	id := s.ID
@@ -131,7 +129,11 @@ func (s *Session) SendProactivePLIToWebRTC() bool {
 	if snapshot.throttled || !snapshot.ready {
 		return false
 	}
-	return sendPreparedWebRTCFeedback(id, snapshot)
+	if !sendPreparedWebRTCFeedback(id, snapshot) {
+		return false
+	}
+	s.recordWebRTCFeedbackSent(snapshot, time.Now(), true)
+	return true
 }
 
 func (s *Session) proactiveInitialInterval() time.Duration {
@@ -516,17 +518,8 @@ func (s *Session) SIPInfoKeyframePending() bool {
 // the switch. Non-switch requesters still coalesce against lastBrowserIDRRequest.
 func (s *Session) SendSwitchKeyframePLI(attempt int) bool {
 	s.mu.Lock()
-	now := time.Now()
 	s.lastBrowserPLIReason = "switch"
-	saved := s.LastWebRTCPLISent
-	s.LastWebRTCPLISent = time.Time{}
-	snapshot := s.prepareWebRTCFeedbackLocked("pli", true, nil)
-	if snapshot.ready && !snapshot.throttled {
-		s.lastBrowserIDRRequest = now
-	}
-	if !snapshot.ready {
-		s.LastWebRTCPLISent = saved
-	}
+	snapshot := s.prepareWebRTCFeedbackLockedWithBypass("pli", true, true, nil)
 	id := s.ID
 	throttled := snapshot.throttled
 	ready := snapshot.ready
@@ -538,6 +531,7 @@ func (s *Session) SendSwitchKeyframePLI(attempt int) bool {
 	if !ready || !sendPreparedWebRTCFeedback(id, snapshot) {
 		return false
 	}
+	s.recordWebRTCFeedbackSent(snapshot, time.Now(), true)
 	fmt.Printf("[%s] switch_keyframe_pli sent attempt=%d\n", id, attempt)
 	return true
 }
@@ -554,15 +548,7 @@ func (s *Session) SendBrowserPLIImmediate(reason string) bool {
 		return false
 	}
 	s.lastBrowserPLIReason = reason
-	saved := s.LastWebRTCPLISent
-	s.LastWebRTCPLISent = time.Time{}
-	snapshot := s.prepareWebRTCFeedbackLocked("pli", true, nil)
-	if snapshot.ready && !snapshot.throttled {
-		s.lastBrowserIDRRequest = now
-	}
-	if !snapshot.ready {
-		s.LastWebRTCPLISent = saved
-	}
+	snapshot := s.prepareWebRTCFeedbackLockedWithBypass("pli", true, true, nil)
 	id := s.ID
 	throttled := snapshot.throttled
 	ready := snapshot.ready
@@ -574,6 +560,7 @@ func (s *Session) SendBrowserPLIImmediate(reason string) bool {
 	if !ready || !sendPreparedWebRTCFeedback(id, snapshot) {
 		return false
 	}
+	s.recordWebRTCFeedbackSent(snapshot, time.Now(), true)
 	fmt.Printf("[%s] browser_pli sent reason=%s\n", id, reason)
 	return true
 }
@@ -591,9 +578,6 @@ func (s *Session) SendBrowserPLI(reason string) bool {
 	}
 	s.lastBrowserPLIReason = reason
 	snapshot := s.prepareWebRTCFeedbackLocked("pli", true, nil)
-	if snapshot.ready && !snapshot.throttled {
-		s.lastBrowserIDRRequest = now
-	}
 	id := s.ID
 	throttled := snapshot.throttled
 	ready := snapshot.ready
@@ -605,6 +589,7 @@ func (s *Session) SendBrowserPLI(reason string) bool {
 	if !ready || !sendPreparedWebRTCFeedback(id, snapshot) {
 		return false
 	}
+	s.recordWebRTCFeedbackSent(snapshot, time.Now(), true)
 	fmt.Printf("[%s] browser_pli sent reason=%s\n", id, reason)
 	return true
 }

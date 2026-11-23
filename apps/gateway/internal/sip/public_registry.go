@@ -569,7 +569,7 @@ func resolveSIPDestination(domain string, port int, transport string) (string, e
 		protoName = "tcp"
 	}
 
-	_, addrs, err := net.LookupSRV(serviceName, protoName, domain)
+	_, addrs, err := cachedLookupSRV(serviceName, protoName, domain)
 	if err == nil && len(addrs) > 0 {
 		// Sort by priority (lower is better), then by weight (higher is better)
 		// net.LookupSRV already returns sorted records

@@ -38,31 +38,53 @@ func NewManager(cfg *config.Config) *Manager {
 	}
 }
 
-// CreateSession creates a new session with a WebRTC peer connection
+// CreateSession creates a new session with a WebRTC peer connection.
+// NewSession (Pion API + DTLS cert + tracks) runs outside m.mu.Lock so
+// concurrent call setups do not serialize on the manager mutex.
 func (m *Manager) CreateSession(turnConfig config.TURNConfig) (*Session, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.mu.RLock()
+	cfg := m.config
+	info := m.sipKeyframeINFO
+	iceEnded := m.iceEnded
+	m.mu.RUnlock()
 
 	// Generate session ID (12 characters, base62)
 	id := generateShortID()
 
-	session, err := NewSession(id, m.config, turnConfig)
+	session, err := NewSession(id, cfg, turnConfig)
 	if err != nil {
 		return nil, err
 	}
-	if m.sipKeyframeINFO != nil {
-		info := m.sipKeyframeINFO
+	if info != nil {
 		session.SetSIPKeyframeINFOSender(func(reason string) {
 			info(session, reason)
 		})
 	}
-	if m.iceEnded != nil {
-		session.SetICEEndedHandler(m.iceEnded)
+	if iceEnded != nil {
+		session.SetICEEndedHandler(iceEnded)
 	}
 
+	m.mu.Lock()
+	if _, exists := m.sessions[id]; exists {
+		m.mu.Unlock()
+		session.SetState(StateEnded)
+		session.CloseMediaTransports()
+		ClosePeerConnectionAsync(session.DetachPeerConnection(), session.ID)
+		return nil, fmt.Errorf("session ID collision: %s", id)
+	}
+	if info == nil && m.sipKeyframeINFO != nil {
+		latestInfo := m.sipKeyframeINFO
+		session.SetSIPKeyframeINFOSender(func(reason string) {
+			latestInfo(session, reason)
+		})
+	}
+	if iceEnded == nil && m.iceEnded != nil {
+		session.SetICEEndedHandler(m.iceEnded)
+	}
 	m.sessions[id] = session
-	fmt.Printf("[%s] Created new session\n", id)
+	m.mu.Unlock()
 
+	fmt.Printf("[%s] Created new session\n", id)
 	return session, nil
 }
 

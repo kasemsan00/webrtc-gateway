@@ -568,20 +568,17 @@ func (s *Session) tryReturnRecoveryUplinkKick(trigger string, now time.Time) (bo
 // own rate.
 func (s *Session) sendBrowserPLIPastForcedCap() bool {
 	s.mu.Lock()
-	saved := s.LastWebRTCPLISent
-	s.LastWebRTCPLISent = time.Time{}
-	snapshot := s.prepareWebRTCFeedbackLocked("pli", true, nil)
-	if !snapshot.ready {
-		s.LastWebRTCPLISent = saved
-	} else {
-		s.lastBrowserIDRRequest = time.Now()
-	}
+	snapshot := s.prepareWebRTCFeedbackLockedWithBypass("pli", true, true, nil)
 	id := s.ID
 	s.mu.Unlock()
 	if !snapshot.authorized || !snapshot.ready || snapshot.throttled {
 		return false
 	}
-	return sendPreparedWebRTCFeedback(id, snapshot)
+	if !sendPreparedWebRTCFeedback(id, snapshot) {
+		return false
+	}
+	s.recordWebRTCFeedbackSent(snapshot, time.Now(), true)
+	return true
 }
 
 type returnRecoveryUplinkKickInput struct {

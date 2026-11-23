@@ -40,6 +40,7 @@ type webRTCFeedbackSnapshot struct {
 	throttled  bool
 	kind       string
 	pc         *webrtc.PeerConnection
+	writeRTCP  func([]rtcp.Packet) error
 	ssrc       uint32
 	firSeq     uint8
 	count      int
@@ -173,49 +174,97 @@ func sendPreparedSIPFeedback(id string, snapshot sipFeedbackSnapshot) {
 }
 
 func (s *Session) prepareWebRTCFeedbackLocked(kind string, force bool, authority *switchFeedbackAuthority) webRTCFeedbackSnapshot {
+	return s.prepareWebRTCFeedbackLockedWithBypass(kind, force, false, authority)
+}
+
+func (s *Session) prepareWebRTCFeedbackLockedWithBypass(kind string, force, bypassThrottle bool, authority *switchFeedbackAuthority) webRTCFeedbackSnapshot {
 	snapshot := webRTCFeedbackSnapshot{authorized: s.feedbackAuthorityLocked(authority), kind: kind}
 	if !snapshot.authorized {
 		return snapshot
 	}
 	pc := s.PeerConnection
-	if pc == nil {
+	writeRTCP := s.writeWebRTCRTCP
+	if pc == nil && writeRTCP == nil {
 		return snapshot
 	}
 	now := time.Now()
-	if kind == "pli" && webrtcPLIThrottled(force, s.LastWebRTCPLISent, now) {
-		snapshot.throttled = true
-		return snapshot
-	}
-	if !force && kind == "fir" && !s.LastWebRTCFIRSent.IsZero() && now.Sub(s.LastWebRTCFIRSent) < webrtcFIRMinInterval {
-		snapshot.throttled = true
-		return snapshot
-	}
-	for _, receiver := range pc.GetReceivers() {
-		track := receiver.Track()
-		if track == nil || track.Kind() != webrtc.RTPCodecTypeVideo {
-			continue
+	if !bypassThrottle {
+		if kind == "pli" && webrtcPLIThrottled(force, s.LastWebRTCPLISent, now) {
+			snapshot.throttled = true
+			return snapshot
 		}
-		snapshot.pc = pc
-		snapshot.ssrc = uint32(track.SSRC())
+		if !force && kind == "fir" && !s.LastWebRTCFIRSent.IsZero() && now.Sub(s.LastWebRTCFIRSent) < webrtcFIRMinInterval {
+			snapshot.throttled = true
+			return snapshot
+		}
+	}
+	if pc != nil {
+		for _, receiver := range pc.GetReceivers() {
+			track := receiver.Track()
+			if track == nil || track.Kind() != webrtc.RTPCodecTypeVideo {
+				continue
+			}
+			snapshot.pc = pc
+			if writeRTCP != nil {
+				snapshot.writeRTCP = writeRTCP
+			} else {
+				snapshot.writeRTCP = pc.WriteRTCP
+			}
+			snapshot.ssrc = uint32(track.SSRC())
+			snapshot.ready = true
+			if kind == "fir" {
+				snapshot.firSeq = s.FIRSeq
+				snapshot.count = s.PLISent + 1
+			}
+			break
+		}
+	} else if writeRTCP != nil {
+		// Test-only path when a custom RTCP writer is injected without a live PeerConnection.
+		snapshot.writeRTCP = writeRTCP
+		snapshot.ssrc = s.VideoSSRC
+		if snapshot.ssrc == 0 {
+			snapshot.ssrc = 1
+		}
 		snapshot.ready = true
-		if kind == "pli" {
-			s.LastWebRTCPLISent = now
-		}
 		if kind == "fir" {
 			snapshot.firSeq = s.FIRSeq
-			s.FIRSeq++
-			s.PLISent++
-			s.LastPLISent = now
-			s.LastWebRTCFIRSent = now
-			snapshot.count = s.PLISent
+			snapshot.count = s.PLISent + 1
 		}
-		break
 	}
 	return snapshot
 }
 
+// recordWebRTCFeedbackSent updates PLI/FIR timestamps and counters only after
+// WriteRTCP succeeds so failed pre-DTLS kicks do not burn throttle windows.
+func (s *Session) recordWebRTCFeedbackSent(snapshot webRTCFeedbackSnapshot, sentAt time.Time, recordBrowserIDRRequest bool) {
+	if s == nil || !snapshot.ready {
+		return
+	}
+	s.mu.Lock()
+	if snapshot.kind == "pli" {
+		s.LastWebRTCPLISent = sentAt
+	}
+	if snapshot.kind == "fir" {
+		s.FIRSeq++
+		s.PLISent++
+		s.LastPLISent = sentAt
+		s.LastWebRTCFIRSent = sentAt
+	}
+	if recordBrowserIDRRequest {
+		s.lastBrowserIDRRequest = sentAt
+	}
+	s.mu.Unlock()
+}
+
 func sendPreparedWebRTCFeedback(id string, snapshot webRTCFeedbackSnapshot) bool {
 	if !snapshot.ready {
+		return false
+	}
+	writeFn := snapshot.writeRTCP
+	if writeFn == nil && snapshot.pc != nil {
+		writeFn = snapshot.pc.WriteRTCP
+	}
+	if writeFn == nil {
 		return false
 	}
 	var packet rtcp.Packet
@@ -227,7 +276,7 @@ func sendPreparedWebRTCFeedback(id string, snapshot webRTCFeedbackSnapshot) bool
 	} else {
 		packet = &rtcp.PictureLossIndication{MediaSSRC: snapshot.ssrc}
 	}
-	if err := snapshot.pc.WriteRTCP([]rtcp.Packet{packet}); err != nil {
+	if err := writeFn([]rtcp.Packet{packet}); err != nil {
 		if !strings.Contains(err.Error(), "DTLS transport has not started yet") &&
 			!strings.Contains(err.Error(), "read/write on closed pipe") {
 			fmt.Printf("[%s] error sending switch %s to WebRTC: %v\n", id, snapshot.kind, err)
@@ -293,7 +342,9 @@ func (s *Session) sendWebRTCFeedbackWithForce(kind string, force bool, authority
 		fmt.Printf("[%s] webrtc_%s_throttled force=%v\n", id, kind, force)
 		return true
 	}
-	sendPreparedWebRTCFeedback(id, snapshot)
+	if sendPreparedWebRTCFeedback(id, snapshot) {
+		s.recordWebRTCFeedbackSent(snapshot, time.Now(), false)
+	}
 	return true
 }
 

@@ -50,6 +50,22 @@ func (s *Session) AddRemoteICECandidate(candidate webrtc.ICECandidateInit) (queu
 	return true, nil
 }
 
+// FlushPendingRemoteICE applies any early trickled remote ICE candidates
+// queued before SetRemoteDescription completed on the current PeerConnection.
+// Returns the number of queued candidates dequeued for application.
+func (s *Session) FlushPendingRemoteICE() int {
+	if s == nil {
+		return 0
+	}
+	s.mu.RLock()
+	pc := s.PeerConnection
+	s.mu.RUnlock()
+	if pc == nil || pc.RemoteDescription() == nil {
+		return 0
+	}
+	return s.flushPendingRemoteICE(pc)
+}
+
 func (s *Session) flushPendingRemoteICE(pc *webrtc.PeerConnection) int {
 	s.mu.Lock()
 	queued := s.pendingRemoteICE

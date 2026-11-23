@@ -126,13 +126,37 @@ func logVideoSameTimestampSplit(sessionID string, d *session.H264SameTimestampSp
 		sessionID, d.Incoming, d.Outgoing, d.FirstMB, d.Packets, d.PreviousPackets, d.Count, d.Wall.Milliseconds())
 }
 
-// startRTPListenerForSession starts audio and video RTP listeners for a session
-func (s *Server) startRTPListenerForSession(sess *session.Session) (int, error) {
-	// Try ports in configured range (need 4 ports: audioRTP, audioRTCP, videoRTP, videoRTCP)
-	for port := s.rtpConfig.PortMin; port <= s.rtpConfig.PortMax-3; port += 4 {
+const (
+	rtpPortSlotStep         = 4
+	periodicPLIInitialDelay = 150 * time.Millisecond
+)
+
+func rtpPortSlotCount(portMin, portMax int) int {
+	if portMax < portMin+(rtpPortSlotStep-1) {
+		return 0
+	}
+	return ((portMax - (rtpPortSlotStep - 1) - portMin) / rtpPortSlotStep) + 1
+}
+
+// bindRTPPortQuad allocates 4 consecutive UDP ports (audioRTP, audioRTCP,
+// videoRTP, videoRTCP) starting from an atomic round-robin cursor across
+// [PortMin, PortMax] and wrapping around cleanly.
+func (s *Server) bindRTPPortQuad() (port int, audioConn, audioRTCPConn, videoConn, videoRTCPConn *net.UDPConn, err error) {
+	slotCount := rtpPortSlotCount(s.rtpConfig.PortMin, s.rtpConfig.PortMax)
+	if slotCount <= 0 {
+		return 0, nil, nil, nil, nil, fmt.Errorf("failed to find available RTP port in range %d-%d", s.rtpConfig.PortMin, s.rtpConfig.PortMax)
+	}
+
+	seq := s.rtpPortCursor.Add(1) - 1
+	startSlot := int(seq % uint64(slotCount))
+
+	for offset := 0; offset < slotCount; offset++ {
+		slot := (startSlot + offset) % slotCount
+		candidatePort := s.rtpConfig.PortMin + slot*rtpPortSlotStep
+
 		// Create audio RTP listener (port)
-		audioConn, err := net.ListenUDP("udp", &net.UDPAddr{
-			Port: port,
+		aConn, err := net.ListenUDP("udp", &net.UDPAddr{
+			Port: candidatePort,
 			IP:   net.ParseIP("0.0.0.0"),
 		})
 		if err != nil {
@@ -140,76 +164,90 @@ func (s *Server) startRTPListenerForSession(sess *session.Session) (int, error) 
 		}
 
 		// Create audio RTCP listener (port + 1)
-		audioRTCPPort := port + 1
-		audioRTCPConn, err := net.ListenUDP("udp", &net.UDPAddr{
-			Port: audioRTCPPort,
+		aRTCPConn, err := net.ListenUDP("udp", &net.UDPAddr{
+			Port: candidatePort + 1,
 			IP:   net.ParseIP("0.0.0.0"),
 		})
 		if err != nil {
-			audioConn.Close()
+			aConn.Close()
 			continue
 		}
 
 		// Create video RTP listener (port + 2)
-		videoPort := port + 2
-		videoConn, err := net.ListenUDP("udp", &net.UDPAddr{
-			Port: videoPort,
+		vConn, err := net.ListenUDP("udp", &net.UDPAddr{
+			Port: candidatePort + 2,
 			IP:   net.ParseIP("0.0.0.0"),
 		})
 		if err != nil {
-			audioConn.Close()
-			audioRTCPConn.Close()
+			aConn.Close()
+			aRTCPConn.Close()
 			continue
 		}
 
 		// Create video RTCP listener (port + 3)
-		videoRTCPPort := port + 3
-		videoRTCPConn, err := net.ListenUDP("udp", &net.UDPAddr{
-			Port: videoRTCPPort,
+		vRTCPConn, err := net.ListenUDP("udp", &net.UDPAddr{
+			Port: candidatePort + 3,
 			IP:   net.ParseIP("0.0.0.0"),
 		})
 		if err != nil {
-			audioConn.Close()
-			audioRTCPConn.Close()
-			videoConn.Close()
+			aConn.Close()
+			aRTCPConn.Close()
+			vConn.Close()
 			continue
 		}
 
-		// Store connections in session
-		sess.SetRTPConnection(audioConn, port)
-		sess.SetAudioRTCPConnection(audioRTCPConn, audioRTCPPort)
-		sess.SetVideoRTPConnection(videoConn, videoPort)
-		sess.SetVideoRTCPConnection(videoRTCPConn, videoRTCPPort)
-
-		// Rescue channel: some SIP peers deliver video RTP to the dedicated RTCP
-		// port (RTP+1). Demux those into the same SIP→WebRTC video path.
-		videoRTPRescue := make(chan videoUDPIngress, 128)
-
-		// Start forwarding RTP to session's tracks
-		go s.handleAudioRTPPacketsForSession(audioConn, sess)
-		go s.handleVideoRTPPacketsForSession(videoConn, sess, videoRTPRescue)
-
-		// Start forwarding RTCP (dedicated ports) to session handlers
-		go s.handleAudioRTCPPacketsForSession(audioRTCPConn, sess)
-		go s.handleVideoRTCPPacketsForSession(videoRTCPConn, sess, videoRTPRescue)
-
-		// Start periodic PLI sender for fast video start
-		go s.startPeriodicPLIForSession(sess)
-		// Ask the browser for an IDR until one is forwarded, then only as a
-		// long safety net. Linphone recovery is SIP INFO FIR / RTCP FIR/PLI.
-		go s.startProactiveBrowserPLIForSession(sess)
-		// Start keyframe watchdog to recover from stalled decoders (iOS VideoToolbox)
-		go s.startKeyframeWatchdogForSession(sess)
-
-		fmt.Printf("[%s] 📞 Audio RTP listener started on port: %d\n", sess.ID, port)
-		fmt.Printf("[%s] 📞 Audio RTCP listener started on port: %d\n", sess.ID, audioRTCPPort)
-		fmt.Printf("[%s] 📞 Video RTP listener started on port: %d\n", sess.ID, videoPort)
-		fmt.Printf("[%s] 📞 Video RTCP listener started on port: %d\n", sess.ID, videoRTCPPort)
-		sess.MarkMediaForwardReady()
-		return port, nil
+		if offset > 0 {
+			s.rtpPortCursor.CompareAndSwap(seq+1, seq+uint64(offset)+1)
+		}
+		return candidatePort, aConn, aRTCPConn, vConn, vRTCPConn, nil
 	}
 
-	return 0, fmt.Errorf("failed to find available RTP port in range %d-%d", s.rtpConfig.PortMin, s.rtpConfig.PortMax)
+	return 0, nil, nil, nil, nil, fmt.Errorf("failed to find available RTP port in range %d-%d", s.rtpConfig.PortMin, s.rtpConfig.PortMax)
+}
+
+// startRTPListenerForSession starts audio and video RTP listeners for a session
+func (s *Server) startRTPListenerForSession(sess *session.Session) (int, error) {
+	port, audioConn, audioRTCPConn, videoConn, videoRTCPConn, err := s.bindRTPPortQuad()
+	if err != nil {
+		return 0, err
+	}
+
+	audioRTCPPort := port + 1
+	videoPort := port + 2
+	videoRTCPPort := port + 3
+
+	// Store connections in session
+	sess.SetRTPConnection(audioConn, port)
+	sess.SetAudioRTCPConnection(audioRTCPConn, audioRTCPPort)
+	sess.SetVideoRTPConnection(videoConn, videoPort)
+	sess.SetVideoRTCPConnection(videoRTCPConn, videoRTCPPort)
+
+	// Rescue channel: some SIP peers deliver video RTP to the dedicated RTCP
+	// port (RTP+1). Demux those into the same SIP→WebRTC video path.
+	videoRTPRescue := make(chan videoUDPIngress, 128)
+
+	// Start forwarding RTP to session's tracks
+	go s.handleAudioRTPPacketsForSession(audioConn, sess)
+	go s.handleVideoRTPPacketsForSession(videoConn, sess, videoRTPRescue)
+
+	// Start forwarding RTCP (dedicated ports) to session handlers
+	go s.handleAudioRTCPPacketsForSession(audioRTCPConn, sess)
+	go s.handleVideoRTCPPacketsForSession(videoRTCPConn, sess, videoRTPRescue)
+
+	// Start periodic PLI sender for fast video start
+	go s.startPeriodicPLIForSession(sess)
+	// Ask the browser for an IDR until one is forwarded, then only as a
+	// long safety net. Linphone recovery is SIP INFO FIR / RTCP FIR/PLI.
+	go s.startProactiveBrowserPLIForSession(sess)
+	// Start keyframe watchdog to recover from stalled decoders (iOS VideoToolbox)
+	go s.startKeyframeWatchdogForSession(sess)
+
+	fmt.Printf("[%s] 📞 Audio RTP listener started on port: %d\n", sess.ID, port)
+	fmt.Printf("[%s] 📞 Audio RTCP listener started on port: %d\n", sess.ID, audioRTCPPort)
+	fmt.Printf("[%s] 📞 Video RTP listener started on port: %d\n", sess.ID, videoPort)
+	fmt.Printf("[%s] 📞 Video RTCP listener started on port: %d\n", sess.ID, videoRTCPPort)
+	sess.MarkMediaForwardReady()
+	return port, nil
 }
 
 // logAudioWriteError logs the first few consecutive audio write errors, then
@@ -1193,7 +1231,7 @@ func (s *Server) startPeriodicPLIForSession(sess *session.Session) {
 	epoch := sess.PeriodicBrowserPLIEpoch()
 	fmt.Printf("[%s] periodic_pli_start epoch=%d\n", sess.ID, epoch)
 
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(periodicPLIInitialDelay)
 
 	pliDeadline := time.Now().Add(session.PeriodicBrowserPLISafetyNet)
 	ticker := time.NewTicker(2 * time.Second)

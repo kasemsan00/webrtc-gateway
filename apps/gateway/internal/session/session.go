@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/pion/rtcp"
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
 
@@ -126,8 +127,9 @@ type Session struct {
 	SymmetricRTPTrustUntil time.Time    `json:"-"`
 	LastSipPLISent         time.Time    `json:"-"`
 	LastSipFIRSent         time.Time    `json:"-"`
-	LastWebRTCPLISent      time.Time    `json:"-"`
-	LastWebRTCFIRSent      time.Time    `json:"-"`
+	LastWebRTCPLISent      time.Time                 `json:"-"`
+	LastWebRTCFIRSent      time.Time                 `json:"-"`
+	writeWebRTCRTCP        func([]rtcp.Packet) error `json:"-"` // nil in production; test hook for WriteRTCP errors
 	LastUplinkKeyframe     time.Time    `json:"-"`
 	// uplinkIDRAccepted is set when an IDR is handed to the picture hold,
 	// before that packet is written. The hold delays RecordUplinkKeyframe,
@@ -851,10 +853,13 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 			if recoveryReason != "" {
 				startRecoveryBurstReason = recoveryReason
 			}
+			immediateICEConnectedFIR := session.RemoteVideoSSRC != 0 && session.LastKeyframe.IsZero()
 			replayIDRReason = "ice-connected"
-			go func() {
-				fmt.Printf("[%s] 🚀 ICE Connected - Sending conservative FIR + PLI startup recovery\n", id)
-				time.Sleep(300 * time.Millisecond)
+			go func(sendImmediateFIR bool) {
+				fmt.Printf("[%s] 🚀 ICE Connected - Sending conservative FIR + PLI startup recovery (immediateFIR=%v)\n", id, sendImmediateFIR)
+				if !sendImmediateFIR {
+					time.Sleep(150 * time.Millisecond)
+				}
 				if session.GetState() == StateEnded {
 					return
 				}
@@ -868,7 +873,7 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 				if skip, _ := session.SkipUplinkKeyframeRequest("startup", time.Now()); !skip {
 					session.SendPLItoWebRTC()
 				}
-			}()
+			}(immediateICEConnectedFIR)
 
 		case webrtc.ICEConnectionStateDisconnected, webrtc.ICEConnectionStateClosed:
 			if isTerminalCleanup {
@@ -1354,6 +1359,10 @@ func (s *Session) PrimeWebRTCVideoForSIPOffer(ctx context.Context, timeout time.
 	if s.HasCachedSPSPPS() {
 		fmt.Printf("[%s] 📈 video_prime_spspps_ready source=cache phase=immediate\n", s.ID)
 		return true
+	}
+	if timeout <= 0 {
+		fmt.Printf("[%s] 📈 video_prime_skip reason=timeout-disabled\n", s.ID)
+		return false
 	}
 
 	fmt.Printf("[%s] 📈 video_prime_start timeout=%s\n", s.ID, timeout)

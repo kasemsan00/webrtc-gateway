@@ -160,9 +160,14 @@ func (s *Server) makeCall(destination, from string, sess *session.Session) error
 	includeVideo := session.ShouldPrimeVideoForSIPOffer(remoteSDP)
 	sess.SetSIPOfferIncludeVideo(includeVideo)
 	if includeVideo {
-		// Actively prime the WebRTC encoder before SIP INVITE so the outbound SDP
-		// can include H.264 sprop-parameter-sets on cold first calls.
-		sess.PrimeWebRTCVideoForSIPOffer(ctx, 5*time.Second)
+		primeTimeout := s.OfferVideoPrimeTimeout()
+		if primeTimeout > 0 {
+			// Actively prime the WebRTC encoder before SIP INVITE so the outbound SDP
+			// can include H.264 sprop-parameter-sets on cold first calls.
+			sess.PrimeWebRTCVideoForSIPOffer(ctx, primeTimeout)
+		} else {
+			fmt.Printf("[%s] 📈 video_prime_skip reason=timeout-disabled\n", sess.ID)
+		}
 	} else {
 		fmt.Printf("[%s] 📈 video_prime_skip reason=no-video-uplink\n", sess.ID)
 	}
@@ -294,6 +299,9 @@ func (s *Server) awaitOutboundInvite(
 			case res.StatusCode == 180 || res.StatusCode == 183:
 				sess.UpdateState(session.StateRinging)
 				s.notifySessionStateChange(sess, session.StateRinging)
+				if res.StatusCode == 183 && len(res.Body()) > 0 {
+					s.applyEarlyMediaSDP(res.Body(), sess)
+				}
 				s.logEvent(&logstore.Event{
 					Timestamp:     time.Now(),
 					SessionID:     sess.ID,
@@ -379,7 +387,9 @@ func (s *Server) awaitOutboundInvite(
 					Name:      "sip_invite_transaction_error",
 					Data:      map[string]interface{}{"error": err.Error(), "authenticated": authenticated},
 				})
-				s.logSessionSnapshot(ctx, sess, "sip_invite_transaction_error")
+				snapCtx, snapCancel := detachedSnapshotContext(ctx)
+				s.logSessionSnapshot(snapCtx, sess, "sip_invite_transaction_error")
+				snapCancel()
 				return false, fmt.Errorf("transaction error: %w", err)
 			}
 			return true, nil
@@ -400,10 +410,48 @@ func (s *Server) awaitOutboundInvite(
 				Category:  "sip",
 				Name:      "sip_invite_timeout",
 			})
-			s.logSessionSnapshot(ctx, sess, "sip_invite_timeout")
+			snapCtx, snapCancel := detachedSnapshotContext(ctx)
+			s.logSessionSnapshot(snapCtx, sess, "sip_invite_timeout")
+			snapCancel()
 			return false, fmt.Errorf("call timed out")
 		}
 	}
+}
+
+const detachedSnapshotTimeout = 3 * time.Second
+
+func detachedSnapshotContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		return context.WithTimeout(context.Background(), detachedSnapshotTimeout)
+	}
+	return context.WithTimeout(context.WithoutCancel(ctx), detachedSnapshotTimeout)
+}
+
+// applyEarlyMediaSDP configures outbound RTP endpoints, payload types, and
+// SIP-side SPS/PPS from a 183 Session Progress SDP body so media warms up
+// during early media instead of waiting for 200 OK.
+func (s *Server) applyEarlyMediaSDP(sdpBody []byte, sess *session.Session) {
+	if sess == nil || len(sdpBody) == 0 {
+		return
+	}
+	if opusPT := parseOpusPayloadType(sdpBody); opusPT > 0 && opusPT != sess.GetSIPOpusPT() {
+		fmt.Printf("[%s] 🎵 Updated Opus PT from 183 early media: %d → %d\n", sess.ID, sess.GetSIPOpusPT(), opusPT)
+		sess.SetSIPOpusPT(opusPT)
+	}
+	if videoPT, ok := parseH264PayloadType(sdpBody); ok {
+		previousVideoPT := sess.GetSIPVideoPayloadType()
+		sess.SetSIPVideoPayloadType(videoPT)
+		if previousVideoPT != videoPT {
+			fmt.Printf("[%s] 🎬 Updated H264 PT from 183 early media: %d → %d\n", sess.ID, previousVideoPT, videoPT)
+		}
+	}
+	seedSIPVideoSPSPPSFromSDP(sdpBody, sess, "sip-183")
+	asteriskIP, audioPort, _, _ := parseSDPMediaEndpoints(strings.Split(string(sdpBody), "\n"))
+	ip := net.ParseIP(strings.TrimSpace(asteriskIP))
+	if ip == nil || ip.IsUnspecified() || audioPort <= 0 {
+		return
+	}
+	s.parseAsteriskSDPAndSetEndpoints(sdpBody, sess)
 }
 
 // handleInviteAuth re-sends the INVITE with digest credentials and waits for
@@ -626,7 +674,9 @@ func (s *Server) hangup(sess *session.Session) error {
 		Category:  "sip",
 		Name:      "session_ended",
 	})
-	s.logSessionSnapshot(ctx, sess, "sip_hangup")
+	snapCtx, snapCancel := detachedSnapshotContext(ctx)
+	s.logSessionSnapshot(snapCtx, sess, "sip_hangup")
+	snapCancel()
 	fmt.Printf("[%s] Call terminated\n", sess.ID)
 
 	return nil
@@ -1042,8 +1092,8 @@ func (s *Server) createInviteRequestWithParams(destination, from string, sdpBody
 	transportLower := strings.ToLower(params.Transport)
 	fromUser := normalizeSIPUser(from)
 
-	// Resolve destination domain
-	ips, err := net.LookupIP(domain)
+	// Resolve destination domain (30s TTL cache)
+	ips, err := cachedLookupIP(domain)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve SIP domain %s: %w", domain, err)
 	}
@@ -1324,8 +1374,8 @@ func (s *Server) createBYERequest(sess *session.Session) (*sip.Request, error) {
 	transportUpper, transportLower := s.dialogTransport(sess)
 	fmt.Printf("[%s] BYE target source=%s domain=%s port=%d transport=%s\n", sess.ID, source, domain, port, transportLower)
 
-	// Resolve destination domain
-	ips, err := net.LookupIP(domain)
+	// Resolve destination domain (30s TTL cache)
+	ips, err := cachedLookupIP(domain)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve SIP domain %s: %w", domain, err)
 	}

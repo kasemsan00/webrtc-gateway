@@ -375,6 +375,9 @@ func (s *Server) handleINVITE(req *sip.Request, tx sip.ServerTransaction) {
 		// Store SIP transaction, request, and INVITE body for later response
 		sess.SetIncomingInvite(tx, req, req.Body(), fromURI, toURI)
 		sess.SetSIPVideoPacketizationMode(sipVideoPacketizationMode(req.Body()))
+		if len(req.Body()) > 0 {
+			seedSIPVideoSPSPPSFromSDP(req.Body(), sess, "sip-invite")
+		}
 		s.registerIncomingCancelHandler(sess, tx)
 
 		// Let the API admission layer decide whether to fan out, push, or

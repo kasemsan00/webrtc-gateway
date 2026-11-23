@@ -780,6 +780,36 @@ func (s *Session) CacheSIPPPS(pps []byte) {
 	}
 }
 
+// SeedSIPCachedSPSPPSFromSDP seeds SIP-side cached SPS/PPS from remote SIP SDP
+// (INVITE, 183, or 200 OK) when live SIP RTP has not yet populated both sets.
+// Also seeds any bound H264AccessUnitNormalizer so the first IDR can decode
+// immediately even if the SIP peer omits in-band SPS/PPS.
+func (s *Session) SeedSIPCachedSPSPPSFromSDP(sps, pps []byte, source string) bool {
+	if s == nil || len(sps) <= 1 || len(pps) <= 1 {
+		return false
+	}
+	s.mu.Lock()
+	if len(s.SIPCachedSPS) > 0 && len(s.SIPCachedPPS) > 0 {
+		s.mu.Unlock()
+		return false
+	}
+	s.SIPCachedSPS = append([]byte(nil), sps...)
+	s.SIPCachedPPS = append([]byte(nil), pps...)
+	seeder := s.h264AUParameterSetSeeder
+	var seedSPS, seedPPS []byte
+	if seeder != nil {
+		seedSPS = append([]byte(nil), s.SIPCachedSPS...)
+		seedPPS = append([]byte(nil), s.SIPCachedPPS...)
+	}
+	id := s.ID
+	s.mu.Unlock()
+	if seeder != nil {
+		seeder(seedSPS, seedPPS)
+	}
+	fmt.Printf("[%s] 💾 Seeded SIP SPS/PPS from SDP (%s) (SPS=%d bytes, PPS=%d bytes)\n", id, source, len(sps), len(pps))
+	return true
+}
+
 // ClearSIPVideoParameterSets clears parameter sets learned from SIP-side RTP
 // without affecting the WebRTC-to-SIP SDP/RTP fallback cache.
 func (s *Session) ClearSIPVideoParameterSets() {

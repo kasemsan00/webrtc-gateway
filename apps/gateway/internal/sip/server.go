@@ -3,6 +3,7 @@ package sip
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/emiago/sipgo"
@@ -73,6 +74,12 @@ type DTMFNotifier interface {
 	NotifyDTMF(sessionID, digit string)
 }
 
+// DefaultOfferVideoPrimeTimeout bounds how long outbound MakeCall waits for
+// WebRTC H.264 SPS/PPS before sending SIP INVITE when not already cached from
+// SDP. Set to 0 via SetOfferVideoPrimeTimeout(0) to skip blocking entirely and
+// rely on in-band SPS+PPS+IDR injection.
+const DefaultOfferVideoPrimeTimeout = 300 * time.Millisecond
+
 // Server represents a SIP server
 type Server struct {
 	sipServer                  *sipgo.Server
@@ -100,6 +107,11 @@ type Server struct {
 	trunkManager   *TrunkManager
 	// Static registration state (ensures single refresh goroutine)
 	regState *registrationState
+	// Outbound video priming wait budget (0 disables blocking wait).
+	offerVideoPrimeTimeoutNS  atomic.Int64
+	offerVideoPrimeTimeoutSet atomic.Bool
+	// Lock-free round-robin slot cursor for O(1) RTP port allocation.
+	rtpPortCursor atomic.Uint64
 	// switchHandlerTestHook is nil in production. Tests use it to pause a
 	// handler after atomic acceptance and observe stale-token cancellation.
 	switchHandlerTestHook func(stage string, decision session.SwitchTargetDecision)
@@ -156,6 +168,28 @@ func NewServer(cfg config.SIPConfig, rtpCfg config.RTPConfig, unicastAddress str
 // SetSessionManager sets the session manager for the server
 func (s *Server) SetSessionManager(mgr SessionManager) {
 	s.sessionMgr = mgr
+}
+
+// SetOfferVideoPrimeTimeout configures how long outbound calls wait for
+// WebRTC SPS/PPS before sending SIP INVITE. Passing <= 0 disables waiting.
+func (s *Server) SetOfferVideoPrimeTimeout(d time.Duration) {
+	if s == nil {
+		return
+	}
+	if d < 0 {
+		d = 0
+	}
+	s.offerVideoPrimeTimeoutNS.Store(int64(d))
+	s.offerVideoPrimeTimeoutSet.Store(true)
+}
+
+// OfferVideoPrimeTimeout returns the active outbound video prime timeout,
+// defaulting to DefaultOfferVideoPrimeTimeout (300ms) when unset.
+func (s *Server) OfferVideoPrimeTimeout() time.Duration {
+	if s == nil || !s.offerVideoPrimeTimeoutSet.Load() {
+		return DefaultOfferVideoPrimeTimeout
+	}
+	return time.Duration(s.offerVideoPrimeTimeoutNS.Load())
 }
 
 // SetStateNotifier sets the state notifier for the server

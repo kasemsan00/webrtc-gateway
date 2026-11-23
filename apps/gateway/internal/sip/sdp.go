@@ -432,9 +432,22 @@ func (s *Server) updateAsteriskEndpointsFromMidCallOffer(sdpBody []byte, sess *s
 	}
 }
 
+func seedSIPVideoSPSPPSFromSDP(sdpBody []byte, sess *session.Session, source string) bool {
+	if sess == nil || len(sdpBody) == 0 {
+		return false
+	}
+	sps, pps, ok := session.ExtractH264SpropParameterSets(string(sdpBody))
+	if !ok {
+		return false
+	}
+	return sess.SeedSIPCachedSPSPPSFromSDP(sps, pps, source)
+}
+
 func (s *Server) parseAsteriskSDPAndSetEndpoints(sdpBody []byte, sess *session.Session) {
 	sdpStr := string(sdpBody)
 	lines := strings.Split(sdpStr, "\n")
+
+	seedSIPVideoSPSPPSFromSDP(sdpBody, sess, "sip-sdp")
 
 	// Store full SDP for debugging if video is rejected
 	fullSDP := sdpStr
