@@ -154,15 +154,22 @@ type TrunkManager struct {
 	localPort  int
 
 	mu             sync.RWMutex
-	trunks         map[int64]*Trunk                 // All loaded trunks
-	trunkByPublic  map[string]int64                 // public_id -> trunk ID
-	ownedLeases    map[int64]bool                   // Trunks we currently own
-	refreshWorkers map[int64]chan struct{}          // Stop signals for refresh workers
-	leaseRetryRuns map[int64]int                    // Consecutive lease-renew transient failures
+	trunks         map[int64]*Trunk        // All loaded trunks
+	trunkByPublic  map[string]int64        // public_id -> trunk ID
+	ownedLeases    map[int64]bool          // Trunks we currently own
+	refreshWorkers map[int64]chan struct{} // Stop signals for refresh workers
+	leaseRetryRuns map[int64]int           // Consecutive lease-renew transient failures
 	// registrationAnnounced is log state only: true after this process has
 	// completed a healthy REGISTER. Cleared on error, lease loss, or unregister
 	// so the next success is a visible recovery. It does not affect SIP.
 	registrationAnnounced map[int64]bool
+	// needsReRegister marks trunks whose credentials, enabled state, or push
+	// contact changed since the last successful SIP REGISTER so
+	// EnsureTrunkRegistered cannot skip re-registration.
+	needsReRegister map[int64]bool
+	// registeredPushContacts records the push contact parameters included in
+	// the last successful SIP REGISTER for each trunk.
+	registeredPushContacts map[int64]TrunkPushContact
 
 	registrarIdentities  map[int64]*registrarIdentity
 	registrarGenerations map[int64]uint64
@@ -204,6 +211,88 @@ type TrunkInviteMatchResult struct {
 
 const trunkManagerDBTimeout = 5 * time.Second
 
+const sipTrunkSelectColumns = `id, public_id, name, domain, port, username, password, transport, enabled, is_default,
+		       lease_owner, lease_until, last_registered_at, last_unregistered_at, last_error, sip_auto_register, in_use_by, notify_user_id,
+		       last_online_platform, last_online_at,
+		       pn_app_id, pn_type, pn_token, pn_updated_at, created_at, updated_at, fcm_token, fcm_updated_at`
+
+const sipTrunkUpsertNoOpSafeSQL = `
+	WITH upserted AS (
+		INSERT INTO sip_trunks (
+			public_id, name, domain, port, username, password, transport, enabled, is_default
+		)
+		VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, false)
+		ON CONFLICT (name) DO UPDATE
+		SET domain = EXCLUDED.domain,
+		    port = EXCLUDED.port,
+		    username = EXCLUDED.username,
+		    password = EXCLUDED.password,
+		    transport = EXCLUDED.transport,
+		    enabled = true,
+		    updated_at = NOW()
+		WHERE (sip_trunks.domain, sip_trunks.port, sip_trunks.username, sip_trunks.password, sip_trunks.transport, sip_trunks.enabled)
+		   IS DISTINCT FROM (EXCLUDED.domain, EXCLUDED.port, EXCLUDED.username, EXCLUDED.password, EXCLUDED.transport, true)
+		RETURNING ` + sipTrunkSelectColumns + `
+	)
+	SELECT ` + sipTrunkSelectColumns + `
+	FROM upserted
+	UNION ALL
+	SELECT ` + sipTrunkSelectColumns + `
+	FROM sip_trunks
+	WHERE name = $1
+	  AND NOT EXISTS (SELECT 1 FROM upserted)
+	LIMIT 1
+`
+
+type trunkRowScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanTrunkRow(row trunkRowScanner, trunk *Trunk) error {
+	return row.Scan(
+		&trunk.ID, &trunk.PublicID, &trunk.Name, &trunk.Domain, &trunk.Port,
+		&trunk.Username, &trunk.Password, &trunk.Transport,
+		&trunk.Enabled, &trunk.IsDefault,
+		&trunk.LeaseOwner, &trunk.LeaseUntil,
+		&trunk.LastRegisteredAt, &trunk.LastUnregisteredAt, &trunk.LastError, &trunk.SipAutoRegister, &trunk.InUseBy, &trunk.NotifyUserID,
+		&trunk.LastOnlinePlatform, &trunk.LastOnlineAt,
+		&trunk.PNAppID, &trunk.PNType, &trunk.PNToken, &trunk.PNUpdatedAt,
+		&trunk.CreatedAt, &trunk.UpdatedAt,
+		&trunk.FcmToken, &trunk.FcmUpdatedAt,
+	)
+}
+
+func dbContextWithTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if _, hasDeadline := ctx.Deadline(); hasDeadline {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, trunkManagerDBTimeout)
+}
+
+func trunkPushContactFromTrunk(trunk *Trunk) TrunkPushContact {
+	if trunk == nil {
+		return TrunkPushContact{}
+	}
+	return TrunkPushContact{
+		PNAppID: trimStringPtr(trunk.PNAppID),
+		PNType:  trimStringPtr(trunk.PNType),
+		PNToken: trimStringPtr(trunk.PNToken),
+	}
+}
+
+func trunkRegistrationConfigChanged(previous, updated *Trunk) bool {
+	if previous == nil || updated == nil {
+		return false
+	}
+	return trunkRegistrarIdentityChanged(previous, updated) ||
+		previous.Password != updated.Password ||
+		previous.Enabled != updated.Enabled ||
+		trunkPushContactFromTrunk(previous) != trunkPushContactFromTrunk(updated)
+}
+
 // TrunkListChangeFunc is invoked when trunk list rows change in ways visible to admin UI.
 type TrunkListChangeFunc func(eventType string, trunkIDs []int64)
 
@@ -219,30 +308,43 @@ func (tm *TrunkManager) emitTrunkListChange(eventType string, trunkIDs ...int64)
 }
 
 func (tm *TrunkManager) dbContext() (context.Context, context.CancelFunc) {
-	return context.WithTimeout(tm.ctx, trunkManagerDBTimeout)
+	base := tm.ctx
+	if base == nil {
+		base = context.Background()
+	}
+	return context.WithTimeout(base, trunkManagerDBTimeout)
+}
+
+func (tm *TrunkManager) leaseTTLDuration() time.Duration {
+	if tm != nil && tm.cfg != nil && tm.cfg.SIPTrunk.LeaseTTLSeconds > 0 {
+		return time.Duration(tm.cfg.SIPTrunk.LeaseTTLSeconds) * time.Second
+	}
+	return 60 * time.Second
 }
 
 // NewTrunkManager creates a new trunk manager
 func NewTrunkManager(db *pgxpool.Pool, cfg *config.Config, userAgent *sipgo.UserAgent, instanceID string) *TrunkManager {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &TrunkManager{
-		db:                    db,
-		cfg:                   cfg,
-		userAgent:             userAgent,
-		instanceID:            instanceID,
-		publicIP:              cfg.SIP.PublicIP,
-		localPort:             cfg.SIP.LocalPort,
-		trunks:                make(map[int64]*Trunk),
-		trunkByPublic:         make(map[string]int64),
-		ownedLeases:           make(map[int64]bool),
-		refreshWorkers:        make(map[int64]chan struct{}),
-		leaseRetryRuns:        make(map[int64]int),
-		registrationAnnounced: make(map[int64]bool),
-		registrarIdentities:   make(map[int64]*registrarIdentity),
-		registrarGenerations:  make(map[int64]uint64),
-		resolver:              defaultRegistrarResolver{},
-		ctx:                   ctx,
-		cancel:                cancel,
+		db:                     db,
+		cfg:                    cfg,
+		userAgent:              userAgent,
+		instanceID:             instanceID,
+		publicIP:               cfg.SIP.PublicIP,
+		localPort:              cfg.SIP.LocalPort,
+		trunks:                 make(map[int64]*Trunk),
+		trunkByPublic:          make(map[string]int64),
+		ownedLeases:            make(map[int64]bool),
+		refreshWorkers:         make(map[int64]chan struct{}),
+		leaseRetryRuns:         make(map[int64]int),
+		registrationAnnounced:  make(map[int64]bool),
+		needsReRegister:        make(map[int64]bool),
+		registeredPushContacts: make(map[int64]TrunkPushContact),
+		registrarIdentities:    make(map[int64]*registrarIdentity),
+		registrarGenerations:   make(map[int64]uint64),
+		resolver:               defaultRegistrarResolver{},
+		ctx:                    ctx,
+		cancel:                 cancel,
 	}
 }
 
@@ -283,41 +385,9 @@ func (tm *TrunkManager) UpsertMobileTrunk(ctx context.Context, payload MobileTru
 		transport = "tcp"
 	)
 
-	trunk := &Trunk{}
-	err = tm.db.QueryRow(ctx, `
-		INSERT INTO sip_trunks (
-			public_id, name, domain, port, username, password, transport, enabled, is_default
-		)
-		VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, false)
-		ON CONFLICT (name) DO UPDATE
-		SET domain = EXCLUDED.domain,
-		    port = EXCLUDED.port,
-		    username = EXCLUDED.username,
-		    password = EXCLUDED.password,
-		    transport = EXCLUDED.transport,
-		    enabled = true,
-		    updated_at = NOW()
-		RETURNING id, public_id, name, domain, port, username, password, transport, enabled, is_default,
-		          lease_owner, lease_until, last_registered_at, last_unregistered_at, last_error, sip_auto_register, in_use_by, notify_user_id,
-		          last_online_platform, last_online_at,
-		          pn_app_id, pn_type, pn_token, pn_updated_at, created_at, updated_at, fcm_token, fcm_updated_at
-	`, name, domain, port, username, password, transport, true).Scan(
-		&trunk.ID, &trunk.PublicID, &trunk.Name, &trunk.Domain, &trunk.Port,
-		&trunk.Username, &trunk.Password, &trunk.Transport,
-		&trunk.Enabled, &trunk.IsDefault,
-		&trunk.LeaseOwner, &trunk.LeaseUntil,
-		&trunk.LastRegisteredAt, &trunk.LastUnregisteredAt, &trunk.LastError, &trunk.SipAutoRegister, &trunk.InUseBy, &trunk.NotifyUserID,
-		&trunk.LastOnlinePlatform, &trunk.LastOnlineAt,
-		&trunk.PNAppID, &trunk.PNType, &trunk.PNToken, &trunk.PNUpdatedAt,
-		&trunk.CreatedAt, &trunk.UpdatedAt,
-		&trunk.FcmToken, &trunk.FcmUpdatedAt,
-	)
+	trunk, err := tm.upsertTrunkByName(ctx, name, domain, port, username, password, transport, "upsert mobile trunk failed")
 	if err != nil {
-		msg := strings.ToLower(err.Error())
-		if strings.Contains(msg, "check constraint") {
-			return nil, fmt.Errorf("%w: %v", ErrTrunkValidation, err)
-		}
-		return nil, fmt.Errorf("upsert mobile trunk failed: %w", err)
+		return nil, err
 	}
 
 	tm.cacheUpsertedTrunk(trunk)
@@ -396,41 +466,9 @@ func (tm *TrunkManager) UpsertAgentTrunk(ctx context.Context, payload AgentTrunk
 
 	const transport = "tcp"
 
-	trunk := &Trunk{}
-	err = tm.db.QueryRow(ctx, `
-		INSERT INTO sip_trunks (
-			public_id, name, domain, port, username, password, transport, enabled, is_default
-		)
-		VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, false)
-		ON CONFLICT (name) DO UPDATE
-		SET domain = EXCLUDED.domain,
-		    port = EXCLUDED.port,
-		    username = EXCLUDED.username,
-		    password = EXCLUDED.password,
-		    transport = EXCLUDED.transport,
-		    enabled = true,
-		    updated_at = NOW()
-		RETURNING id, public_id, name, domain, port, username, password, transport, enabled, is_default,
-		          lease_owner, lease_until, last_registered_at, last_unregistered_at, last_error, sip_auto_register, in_use_by, notify_user_id,
-		          last_online_platform, last_online_at,
-		          pn_app_id, pn_type, pn_token, pn_updated_at, created_at, updated_at, fcm_token, fcm_updated_at
-	`, name, domain, port, username, password, transport, true).Scan(
-		&trunk.ID, &trunk.PublicID, &trunk.Name, &trunk.Domain, &trunk.Port,
-		&trunk.Username, &trunk.Password, &trunk.Transport,
-		&trunk.Enabled, &trunk.IsDefault,
-		&trunk.LeaseOwner, &trunk.LeaseUntil,
-		&trunk.LastRegisteredAt, &trunk.LastUnregisteredAt, &trunk.LastError, &trunk.SipAutoRegister, &trunk.InUseBy, &trunk.NotifyUserID,
-		&trunk.LastOnlinePlatform, &trunk.LastOnlineAt,
-		&trunk.PNAppID, &trunk.PNType, &trunk.PNToken, &trunk.PNUpdatedAt,
-		&trunk.CreatedAt, &trunk.UpdatedAt,
-		&trunk.FcmToken, &trunk.FcmUpdatedAt,
-	)
+	trunk, err := tm.upsertTrunkByName(ctx, name, domain, port, username, password, transport, "upsert agent trunk failed")
 	if err != nil {
-		msg := strings.ToLower(err.Error())
-		if strings.Contains(msg, "check constraint") {
-			return nil, fmt.Errorf("%w: %v", ErrTrunkValidation, err)
-		}
-		return nil, fmt.Errorf("upsert agent trunk failed: %w", err)
+		return nil, err
 	}
 
 	tm.cacheUpsertedTrunk(trunk)
@@ -461,45 +499,40 @@ func (tm *TrunkManager) UpsertAgentDeviceTrunk(ctx context.Context, payload Agen
 
 	const transport = "tcp"
 
+	trunk, err := tm.upsertTrunkByName(ctx, name, domain, port, username, password, transport, "upsert agent-device trunk failed")
+	if err != nil {
+		return nil, err
+	}
+
+	tm.cacheUpsertedTrunk(trunk)
+
+	return trunk, nil
+}
+
+func (tm *TrunkManager) upsertTrunkByName(ctx context.Context, name, domain string, port int, username, password, transport, errPrefix string) (*Trunk, error) {
+	dbCtx, cancel := dbContextWithTimeout(ctx)
+	defer cancel()
+
 	trunk := &Trunk{}
-	err = tm.db.QueryRow(ctx, `
-		INSERT INTO sip_trunks (
-			public_id, name, domain, port, username, password, transport, enabled, is_default
-		)
-		VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, false)
-		ON CONFLICT (name) DO UPDATE
-		SET domain = EXCLUDED.domain,
-		    port = EXCLUDED.port,
-		    username = EXCLUDED.username,
-		    password = EXCLUDED.password,
-		    transport = EXCLUDED.transport,
-		    enabled = true,
-		    updated_at = NOW()
-		RETURNING id, public_id, name, domain, port, username, password, transport, enabled, is_default,
-		          lease_owner, lease_until, last_registered_at, last_unregistered_at, last_error, sip_auto_register, in_use_by, notify_user_id,
-		          last_online_platform, last_online_at,
-		          pn_app_id, pn_type, pn_token, pn_updated_at, created_at, updated_at, fcm_token, fcm_updated_at
-	`, name, domain, port, username, password, transport, true).Scan(
-		&trunk.ID, &trunk.PublicID, &trunk.Name, &trunk.Domain, &trunk.Port,
-		&trunk.Username, &trunk.Password, &trunk.Transport,
-		&trunk.Enabled, &trunk.IsDefault,
-		&trunk.LeaseOwner, &trunk.LeaseUntil,
-		&trunk.LastRegisteredAt, &trunk.LastUnregisteredAt, &trunk.LastError, &trunk.SipAutoRegister, &trunk.InUseBy, &trunk.NotifyUserID,
-		&trunk.LastOnlinePlatform, &trunk.LastOnlineAt,
-		&trunk.PNAppID, &trunk.PNType, &trunk.PNToken, &trunk.PNUpdatedAt,
-		&trunk.CreatedAt, &trunk.UpdatedAt,
-		&trunk.FcmToken, &trunk.FcmUpdatedAt,
+	err := scanTrunkRow(
+		tm.db.QueryRow(dbCtx, sipTrunkUpsertNoOpSafeSQL, name, domain, port, username, password, transport, true),
+		trunk,
 	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// Rare concurrent first-insert race where ON CONFLICT saw a newly committed
+		// identical row invisible to the CTE's statement snapshot; re-read with fresh snapshot.
+		err = scanTrunkRow(
+			tm.db.QueryRow(dbCtx, `SELECT `+sipTrunkSelectColumns+` FROM sip_trunks WHERE name = $1 LIMIT 1`, name),
+			trunk,
+		)
+	}
 	if err != nil {
 		msg := strings.ToLower(err.Error())
 		if strings.Contains(msg, "check constraint") {
 			return nil, fmt.Errorf("%w: %v", ErrTrunkValidation, err)
 		}
-		return nil, fmt.Errorf("upsert agent-device trunk failed: %w", err)
+		return nil, fmt.Errorf("%s: %w", errPrefix, err)
 	}
-
-	tm.cacheUpsertedTrunk(trunk)
-
 	return trunk, nil
 }
 
@@ -519,16 +552,25 @@ func (tm *TrunkManager) cacheUpsertedTrunk(trunk *Trunk) {
 	}
 
 	previous := tm.trunks[trunk.ID]
+	configChanged := trunkRegistrationConfigChanged(previous, trunk)
 	if trunk.Enabled {
 		tm.trunks[trunk.ID] = trunk
 		if trunk.PublicID != "" {
 			tm.trunkByPublic[trunk.PublicID] = trunk.ID
+		}
+		if configChanged {
+			if tm.needsReRegister == nil {
+				tm.needsReRegister = make(map[int64]bool)
+			}
+			tm.needsReRegister[trunk.ID] = true
 		}
 	} else {
 		delete(tm.trunks, trunk.ID)
 		if trunk.PublicID != "" {
 			delete(tm.trunkByPublic, trunk.PublicID)
 		}
+		delete(tm.needsReRegister, trunk.ID)
+		delete(tm.registeredPushContacts, trunk.ID)
 	}
 
 	if trunkRegistrarIdentityChanged(previous, trunk) || !trunk.Enabled {
@@ -612,8 +654,8 @@ func (tm *TrunkManager) Stop() {
 
 	for _, id := range ownedIDs {
 		tm.unregisterTrunk(id)
-		tm.releaseLease(id)
 	}
+	tm.releaseAllLeases(ownedIDs)
 
 	// Wait for workers to finish
 	tm.wg.Wait()
@@ -621,9 +663,49 @@ func (tm *TrunkManager) Stop() {
 	tm.mu.Lock()
 	tm.registrarIdentities = make(map[int64]*registrarIdentity)
 	tm.registrarGenerations = make(map[int64]uint64)
+	tm.needsReRegister = make(map[int64]bool)
+	tm.registeredPushContacts = make(map[int64]TrunkPushContact)
 	tm.mu.Unlock()
 
 	fmt.Printf("✅ [TrunkManager] Stopped\n")
+}
+
+// releaseAllLeases releases all leases owned by this instance in a single SQL statement.
+func (tm *TrunkManager) releaseAllLeases(ownedIDs []int64) {
+	if len(ownedIDs) == 0 {
+		return
+	}
+
+	if tm.db != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), trunkManagerDBTimeout)
+		defer cancel()
+
+		_, err := tm.db.Exec(ctx, `
+			UPDATE sip_trunks
+			SET lease_owner = NULL, lease_until = NULL, updated_at = NOW()
+			WHERE lease_owner = $1
+		`, tm.instanceID)
+		if err != nil {
+			fmt.Printf("⚠️ [TrunkManager] Failed to release leases for instance %s: %v\n", tm.instanceID, err)
+		} else {
+			fmt.Printf("📞 [TrunkManager] Released %d lease(s) for instance %s\n", len(ownedIDs), tm.instanceID)
+		}
+	}
+
+	tm.mu.Lock()
+	for _, id := range ownedIDs {
+		delete(tm.ownedLeases, id)
+		delete(tm.leaseRetryRuns, id)
+		delete(tm.needsReRegister, id)
+		delete(tm.registeredPushContacts, id)
+		if trunk, ok := tm.trunks[id]; ok {
+			trunk.LeaseOwner = nil
+			trunk.LeaseUntil = nil
+		}
+	}
+	tm.mu.Unlock()
+
+	tm.emitTrunkListChange("lease_updated", ownedIDs...)
 }
 
 // loadTrunks loads enabled trunks from database
@@ -778,18 +860,19 @@ func (tm *TrunkManager) acquireLease(trunkID int64) error {
 		return fmt.Errorf("%w: trunk %d lease held by another instance or trunk disabled", ErrTrunkLeaseLost, trunkID)
 	}
 
-	tm.mu.RLock()
-	wasOwned := tm.ownedLeases[trunkID]
-	tm.mu.RUnlock()
-
 	// Successfully acquired/renewed lease
 	tm.mu.Lock()
+	wasOwned := tm.ownedLeases[trunkID]
+	if tm.ownedLeases == nil {
+		tm.ownedLeases = make(map[int64]bool)
+	}
 	tm.ownedLeases[trunkID] = true
 	delete(tm.leaseRetryRuns, trunkID)
 	if trunk, ok := tm.trunks[trunkID]; ok {
 		lo := tm.instanceID
+		lu := leaseUntil
 		trunk.LeaseOwner = &lo
-		trunk.LeaseUntil = &leaseUntil
+		trunk.LeaseUntil = &lu
 	}
 	tm.mu.Unlock()
 
@@ -839,8 +922,7 @@ func (tm *TrunkManager) logTrunkInfoOrDebug(info bool, format string, args ...an
 	tm.logTrunkDebug(format, args...)
 }
 
-func (tm *TrunkManager) markLeaseLost(trunkID int64) {
-	tm.mu.Lock()
+func (tm *TrunkManager) markLeaseLostLocked(trunkID int64) {
 	if stopCh, exists := tm.refreshWorkers[trunkID]; exists {
 		close(stopCh)
 		delete(tm.refreshWorkers, trunkID)
@@ -849,7 +931,18 @@ func (tm *TrunkManager) markLeaseLost(trunkID int64) {
 	delete(tm.ownedLeases, trunkID)
 	delete(tm.registerRetries, trunkID)
 	delete(tm.leaseRetryRuns, trunkID)
+	delete(tm.needsReRegister, trunkID)
+	delete(tm.registeredPushContacts, trunkID)
 	tm.setRegistrationAnnouncedLocked(trunkID, false)
+	if trunk, ok := tm.trunks[trunkID]; ok {
+		trunk.LeaseOwner = nil
+		trunk.LeaseUntil = nil
+	}
+}
+
+func (tm *TrunkManager) markLeaseLost(trunkID int64) {
+	tm.mu.Lock()
+	tm.markLeaseLostLocked(trunkID)
 	tm.mu.Unlock()
 
 	tm.emitTrunkListChange("lease_updated", trunkID)
@@ -1064,7 +1157,7 @@ func (tm *TrunkManager) registerTrunk(trunkID int64) (err error) {
 	tm.publishRegistrarIdentityFromRegister(trunk, generation, res, expires)
 
 	// Success
-	tm.updateRegistrationSuccess(trunkID)
+	tm.updateRegistrationSuccessWithContact(trunkID, trunkPushContactFromTrunk(trunk))
 
 	// Start refresh worker if not already running
 	tm.startRefreshWorker(trunkID, expires)
@@ -1352,18 +1445,7 @@ func (tm *TrunkManager) leaseHeartbeatWorker() {
 			}
 			tm.mu.RUnlock()
 
-			for _, id := range ownedIDs {
-				if err := tm.acquireLease(id); err != nil {
-					leaseLost, retryCount := tm.handleLeaseRenewResult(id, err)
-					if leaseLost {
-						fmt.Printf("⚠️ [TrunkManager] Lease lost for trunk %d on instance %s: %v\n", id, tm.instanceID, err)
-						continue
-					}
-					fmt.Printf("⚠️ [TrunkManager] Lease renew transient failure (retry=%d) for trunk %d on instance %s: %v\n", retryCount, id, tm.instanceID, err)
-					continue
-				}
-				tm.handleLeaseRenewResult(id, nil)
-			}
+			tm.renewOwnedLeasesBatch(ownedIDs)
 			tm.retryFailedRegistrations(time.Now())
 
 		case <-tm.ctx.Done():
@@ -1373,8 +1455,108 @@ func (tm *TrunkManager) leaseHeartbeatWorker() {
 	}
 }
 
+// renewOwnedLeasesBatch renews all owned trunk leases in a single SQL statement
+// and reconciles renewed vs lost leases under one tm.mu.Lock() pass.
+func (tm *TrunkManager) renewOwnedLeasesBatch(ownedIDs []int64) {
+	if len(ownedIDs) == 0 || tm.db == nil {
+		return
+	}
+
+	leaseUntil := time.Now().Add(tm.leaseTTLDuration())
+	ctx, cancel := tm.dbContext()
+	defer cancel()
+
+	rows, err := tm.db.Query(ctx, `
+		UPDATE sip_trunks
+		SET lease_owner = $3, lease_until = $1, updated_at = NOW()
+		WHERE id = ANY($2)
+		  AND enabled = true
+		  AND (lease_until IS NULL OR lease_until < NOW() OR lease_owner = $3)
+		RETURNING id
+	`, leaseUntil, ownedIDs, tm.instanceID)
+
+	var renewed map[int64]bool
+	if err == nil {
+		defer rows.Close()
+		renewed = make(map[int64]bool, len(ownedIDs))
+		for rows.Next() {
+			var id int64
+			if scanErr := rows.Scan(&id); scanErr != nil {
+				err = scanErr
+				break
+			}
+			renewed[id] = true
+		}
+		if err == nil {
+			err = rows.Err()
+		}
+	}
+
+	if err != nil {
+		// Transient DB failure: retain ownership and increment retry counters in one lock pass.
+		type retryLog struct {
+			id    int64
+			count int
+		}
+		logs := make([]retryLog, 0, len(ownedIDs))
+		tm.mu.Lock()
+		if tm.leaseRetryRuns == nil {
+			tm.leaseRetryRuns = make(map[int64]int)
+		}
+		for _, id := range ownedIDs {
+			if !tm.ownedLeases[id] {
+				continue
+			}
+			tm.leaseRetryRuns[id]++
+			logs = append(logs, retryLog{id: id, count: tm.leaseRetryRuns[id]})
+		}
+		tm.mu.Unlock()
+
+		retryErr := fmt.Errorf("%w: batched lease update failed on instance %s: %v", ErrTrunkLeaseRetry, tm.instanceID, err)
+		for _, item := range logs {
+			fmt.Printf("⚠️ [TrunkManager] Lease renew transient failure (retry=%d) for trunk %d on instance %s: %v\n", item.count, item.id, tm.instanceID, retryErr)
+		}
+		return
+	}
+
+	lostIDs := make([]int64, 0)
+	tm.mu.Lock()
+	for _, id := range ownedIDs {
+		if !tm.ownedLeases[id] {
+			continue
+		}
+		if renewed[id] {
+			delete(tm.leaseRetryRuns, id)
+			if trunk, ok := tm.trunks[id]; ok {
+				lo := tm.instanceID
+				lu := leaseUntil
+				trunk.LeaseOwner = &lo
+				trunk.LeaseUntil = &lu
+			}
+			continue
+		}
+		tm.markLeaseLostLocked(id)
+		lostIDs = append(lostIDs, id)
+	}
+	tm.mu.Unlock()
+
+	if len(lostIDs) > 0 {
+		for _, id := range lostIDs {
+			fmt.Printf("⚠️ [TrunkManager] Lease lost for trunk %d on instance %s: %v\n", id, tm.instanceID, ErrTrunkLeaseLost)
+		}
+		tm.emitTrunkListChange("lease_updated", lostIDs...)
+	}
+}
+
 // updateRegistrationSuccess updates DB with successful registration timestamp
 func (tm *TrunkManager) updateRegistrationSuccess(trunkID int64) {
+	tm.mu.RLock()
+	contact := trunkPushContactFromTrunk(tm.trunks[trunkID])
+	tm.mu.RUnlock()
+	tm.updateRegistrationSuccessWithContact(trunkID, contact)
+}
+
+func (tm *TrunkManager) updateRegistrationSuccessWithContact(trunkID int64, registeredContact TrunkPushContact) {
 	now := time.Now()
 	ctx, cancel := tm.dbContext()
 	defer cancel()
@@ -1390,9 +1572,18 @@ func (tm *TrunkManager) updateRegistrationSuccess(trunkID int64) {
 	}
 
 	tm.mu.Lock()
+	if tm.registeredPushContacts == nil {
+		tm.registeredPushContacts = make(map[int64]TrunkPushContact)
+	}
+	tm.registeredPushContacts[trunkID] = registeredContact
 	if trunk, ok := tm.trunks[trunkID]; ok {
 		trunk.LastRegisteredAt = &now
 		trunk.LastError = nil
+		if trunkPushContactFromTrunk(trunk) == registeredContact {
+			delete(tm.needsReRegister, trunkID)
+		}
+	} else {
+		delete(tm.needsReRegister, trunkID)
 	}
 	tm.setRegistrationAnnouncedLocked(trunkID, true)
 	tm.mu.Unlock()
@@ -1470,7 +1661,7 @@ func (tm *TrunkManager) GetTrunkIDByPublicID(publicID string) (int64, bool) {
 	err := tm.db.QueryRow(ctx, `
 		SELECT id
 		FROM sip_trunks
-		WHERE lower(public_id::text) = $1
+		WHERE public_id = $1::uuid
 		  AND enabled = true
 		LIMIT 1
 	`, normalizedPublicID).Scan(&trunkID)
@@ -1482,6 +1673,9 @@ func (tm *TrunkManager) GetTrunkIDByPublicID(publicID string) (int64, bool) {
 	}
 
 	tm.mu.Lock()
+	if tm.trunkByPublic == nil {
+		tm.trunkByPublic = make(map[string]int64)
+	}
 	tm.trunkByPublic[normalizedPublicID] = trunkID
 	tm.mu.Unlock()
 
@@ -1577,10 +1771,13 @@ func (tm *TrunkManager) ListTrunks(ctx context.Context, params TrunkListParams) 
 		argIdx++
 	}
 
+	dbCtx, cancel := dbContextWithTimeout(ctx)
+	defer cancel()
+
 	// Count total matching rows
 	countSQL := "SELECT COUNT(*) FROM sip_trunks " + where
 	var total int
-	if err := tm.db.QueryRow(ctx, countSQL, args...).Scan(&total); err != nil {
+	if err := tm.db.QueryRow(dbCtx, countSQL, args...).Scan(&total); err != nil {
 		return nil, fmt.Errorf("count query failed: %w", err)
 	}
 
@@ -1621,7 +1818,7 @@ func (tm *TrunkManager) ListTrunks(ctx context.Context, params TrunkListParams) 
 	`, where, sortColumn, sortDirection, argIdx, argIdx+1)
 	args = append(args, params.PageSize, offset)
 
-	rows, err := tm.db.Query(ctx, dataSQL, args...)
+	rows, err := tm.db.Query(dbCtx, dataSQL, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query failed: %w", err)
 	}
@@ -1630,18 +1827,7 @@ func (tm *TrunkManager) ListTrunks(ctx context.Context, params TrunkListParams) 
 	trunks := make([]*Trunk, 0)
 	for rows.Next() {
 		trunk := &Trunk{}
-		err := rows.Scan(
-			&trunk.ID, &trunk.PublicID, &trunk.Name, &trunk.Domain, &trunk.Port,
-			&trunk.Username, &trunk.Password, &trunk.Transport,
-			&trunk.Enabled, &trunk.IsDefault,
-			&trunk.LeaseOwner, &trunk.LeaseUntil,
-			&trunk.LastRegisteredAt, &trunk.LastUnregisteredAt, &trunk.LastError, &trunk.SipAutoRegister, &trunk.InUseBy, &trunk.NotifyUserID,
-			&trunk.LastOnlinePlatform, &trunk.LastOnlineAt,
-			&trunk.PNAppID, &trunk.PNType, &trunk.PNToken, &trunk.PNUpdatedAt,
-			&trunk.CreatedAt, &trunk.UpdatedAt,
-			&trunk.FcmToken, &trunk.FcmUpdatedAt,
-		)
-		if err != nil {
+		if err := scanTrunkRow(rows, trunk); err != nil {
 			return nil, fmt.Errorf("scan failed: %w", err)
 		}
 		trunks = append(trunks, trunk)
@@ -1689,17 +1875,20 @@ func (tm *TrunkManager) CreateTrunk(ctx context.Context, payload CreateTrunkPayl
 		payload.Transport = "tcp"
 	}
 
-	tx, err := tm.db.BeginTx(ctx, pgx.TxOptions{})
+	dbCtx, cancel := dbContextWithTimeout(ctx)
+	defer cancel()
+
+	tx, err := tm.db.BeginTx(dbCtx, pgx.TxOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("begin transaction failed: %w", err)
 	}
 	defer func() {
-		_ = tx.Rollback(ctx)
+		_ = tx.Rollback(dbCtx)
 	}()
 
 	// If setting as default, clear other defaults.
 	if payload.IsDefault {
-		if _, err := tx.Exec(ctx, `
+		if _, err := tx.Exec(dbCtx, `
 			UPDATE sip_trunks
 			SET is_default = false, updated_at = NOW()
 			WHERE is_default = true
@@ -1710,7 +1899,7 @@ func (tm *TrunkManager) CreateTrunk(ctx context.Context, payload CreateTrunkPayl
 
 	created := &Trunk{}
 	publicID := uuid.NewString()
-	err = tx.QueryRow(ctx, `
+	err = tx.QueryRow(dbCtx, `
 		INSERT INTO sip_trunks (public_id, name, domain, port, username, password, transport, enabled, is_default, sip_auto_register)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, false)
 		RETURNING id, public_id, name, domain, port, username, password, transport, enabled, is_default,
@@ -1736,7 +1925,7 @@ func (tm *TrunkManager) CreateTrunk(ctx context.Context, payload CreateTrunkPayl
 		return nil, fmt.Errorf("insert trunk failed: %w", err)
 	}
 
-	if err := tx.Commit(ctx); err != nil {
+	if err := tx.Commit(dbCtx); err != nil {
 		return nil, fmt.Errorf("commit create failed: %w", err)
 	}
 
@@ -1810,34 +1999,24 @@ func (tm *TrunkManager) UpdateTrunk(ctx context.Context, trunkID int64, patch Tr
 		}
 	}
 
-	tx, err := tm.db.BeginTx(ctx, pgx.TxOptions{})
+	dbCtx, cancel := dbContextWithTimeout(ctx)
+	defer cancel()
+
+	tx, err := tm.db.BeginTx(dbCtx, pgx.TxOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("begin transaction failed: %w", err)
 	}
 	defer func() {
-		_ = tx.Rollback(ctx)
+		_ = tx.Rollback(dbCtx)
 	}()
 
 	current := &Trunk{}
-	err = tx.QueryRow(ctx, `
-		SELECT id, public_id, name, domain, port, username, password, transport, enabled, is_default,
-		       lease_owner, lease_until, last_registered_at, last_unregistered_at, last_error, sip_auto_register, in_use_by, notify_user_id,
-		       last_online_platform, last_online_at,
-		       pn_app_id, pn_type, pn_token, pn_updated_at, created_at, updated_at, fcm_token, fcm_updated_at
+	err = scanTrunkRow(tx.QueryRow(dbCtx, `
+		SELECT `+sipTrunkSelectColumns+`
 		FROM sip_trunks
 		WHERE id = $1
 		FOR UPDATE
-	`, trunkID).Scan(
-		&current.ID, &current.PublicID, &current.Name, &current.Domain, &current.Port,
-		&current.Username, &current.Password, &current.Transport,
-		&current.Enabled, &current.IsDefault,
-		&current.LeaseOwner, &current.LeaseUntil,
-		&current.LastRegisteredAt, &current.LastUnregisteredAt, &current.LastError, &current.SipAutoRegister, &current.InUseBy, &current.NotifyUserID,
-		&current.LastOnlinePlatform, &current.LastOnlineAt,
-		&current.PNAppID, &current.PNType, &current.PNToken, &current.PNUpdatedAt,
-		&current.CreatedAt, &current.UpdatedAt,
-		&current.FcmToken, &current.FcmUpdatedAt,
-	)
+	`, trunkID), current)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, fmt.Errorf("%w: trunk %d", ErrTrunkNotFound, trunkID)
@@ -1846,7 +2025,7 @@ func (tm *TrunkManager) UpdateTrunk(ctx context.Context, trunkID int64, patch Tr
 	}
 
 	if patch.IsDefault != nil && *patch.IsDefault {
-		if _, err := tx.Exec(ctx, `
+		if _, err := tx.Exec(dbCtx, `
 			UPDATE sip_trunks
 			SET is_default = false, updated_at = NOW()
 			WHERE id <> $1 AND is_default = true
@@ -1894,15 +2073,18 @@ func (tm *TrunkManager) UpdateTrunk(ctx context.Context, trunkID int64, patch Tr
 		_ = *patch.UpdatedBy
 	}
 
+	updated := current
 	if len(setClauses) > 0 {
 		setClauses = append(setClauses, "updated_at = NOW()")
 		updateSQL := fmt.Sprintf(
-			"UPDATE sip_trunks SET %s WHERE id = $%d",
+			"UPDATE sip_trunks SET %s WHERE id = $%d RETURNING %s",
 			strings.Join(setClauses, ", "),
 			argIdx,
+			sipTrunkSelectColumns,
 		)
 		args = append(args, trunkID)
-		if _, err := tx.Exec(ctx, updateSQL, args...); err != nil {
+		updated = &Trunk{}
+		if err := scanTrunkRow(tx.QueryRow(dbCtx, updateSQL, args...), updated); err != nil {
 			msg := strings.ToLower(err.Error())
 			if strings.Contains(msg, "duplicate key") || strings.Contains(msg, "unique constraint") {
 				return nil, fmt.Errorf("%w: %v", ErrTrunkConflict, err)
@@ -1914,34 +2096,12 @@ func (tm *TrunkManager) UpdateTrunk(ctx context.Context, trunkID int64, patch Tr
 		}
 	}
 
-	updated := &Trunk{}
-	err = tx.QueryRow(ctx, `
-		SELECT id, public_id, name, domain, port, username, password, transport, enabled, is_default,
-		       lease_owner, lease_until, last_registered_at, last_unregistered_at, last_error, sip_auto_register, in_use_by, notify_user_id,
-		       last_online_platform, last_online_at,
-		       pn_app_id, pn_type, pn_token, pn_updated_at, created_at, updated_at, fcm_token, fcm_updated_at
-		FROM sip_trunks
-		WHERE id = $1
-	`, trunkID).Scan(
-		&updated.ID, &updated.PublicID, &updated.Name, &updated.Domain, &updated.Port,
-		&updated.Username, &updated.Password, &updated.Transport,
-		&updated.Enabled, &updated.IsDefault,
-		&updated.LeaseOwner, &updated.LeaseUntil,
-		&updated.LastRegisteredAt, &updated.LastUnregisteredAt, &updated.LastError, &updated.SipAutoRegister, &updated.InUseBy, &updated.NotifyUserID,
-		&updated.LastOnlinePlatform, &updated.LastOnlineAt,
-		&updated.PNAppID, &updated.PNType, &updated.PNToken, &updated.PNUpdatedAt,
-		&updated.CreatedAt, &updated.UpdatedAt,
-		&updated.FcmToken, &updated.FcmUpdatedAt,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("reload trunk failed: %w", err)
-	}
-
-	if err := tx.Commit(ctx); err != nil {
+	if err := tx.Commit(dbCtx); err != nil {
 		return nil, fmt.Errorf("commit update failed: %w", err)
 	}
 
 	identityChanged := trunkRegistrarIdentityChanged(current, updated)
+	configChanged := trunkRegistrationConfigChanged(current, updated)
 	tm.mu.Lock()
 	if patch.IsDefault != nil && *patch.IsDefault {
 		for id, trunk := range tm.trunks {
@@ -1951,15 +2111,29 @@ func (tm *TrunkManager) UpdateTrunk(ctx context.Context, trunkID int64, patch Tr
 		}
 	}
 	if updated.Enabled {
+		if tm.trunks == nil {
+			tm.trunks = make(map[int64]*Trunk)
+		}
+		if tm.trunkByPublic == nil {
+			tm.trunkByPublic = make(map[string]int64)
+		}
 		tm.trunks[trunkID] = updated
 		if updated.PublicID != "" {
 			tm.trunkByPublic[updated.PublicID] = trunkID
+		}
+		if configChanged {
+			if tm.needsReRegister == nil {
+				tm.needsReRegister = make(map[int64]bool)
+			}
+			tm.needsReRegister[trunkID] = true
 		}
 	} else {
 		delete(tm.trunks, trunkID)
 		if updated.PublicID != "" {
 			delete(tm.trunkByPublic, updated.PublicID)
 		}
+		delete(tm.needsReRegister, trunkID)
+		delete(tm.registeredPushContacts, trunkID)
 	}
 	if identityChanged || !updated.Enabled {
 		tm.invalidateRegistrarIdentityLocked(trunkID)
@@ -1979,47 +2153,174 @@ func (tm *TrunkManager) UpdateTrunk(ctx context.Context, trunkID int64, patch Tr
 	return updated, nil
 }
 
-// UnregisterTrunk unregisters a trunk and releases lease
+// EnsureTrunkRegistered is a push-wake fast-path that avoids redundant DB writes
+// and SIP REGISTER round-trips when this instance already holds an unexpired lease,
+// has an active refresh worker and fresh registration with no errors, and neither
+// credentials nor push contact parameters have changed. Otherwise it delegates to
+// RegisterTrunk(trunkID, forceLeaseSteal) to preserve multi-instance failover.
+func (tm *TrunkManager) EnsureTrunkRegistered(trunkID int64, forceLeaseSteal bool) error {
+	if tm.canSkipRegister(trunkID, time.Now()) {
+		tm.logTrunkDebug("📞 [TrunkManager] Trunk %d already leased and registered on %s; skipping redundant REGISTER\n", trunkID, tm.instanceID)
+		return nil
+	}
+	return tm.RegisterTrunk(trunkID, forceLeaseSteal)
+}
+
+func (tm *TrunkManager) canSkipRegister(trunkID int64, now time.Time) bool {
+	if tm == nil || tm.db == nil {
+		return false
+	}
+
+	leaseMargin := 5 * time.Second
+	if ttl := tm.leaseTTLDuration(); ttl > 0 {
+		quarterTTL := ttl / 4
+		if quarterTTL > 0 && quarterTTL < leaseMargin {
+			leaseMargin = quarterTTL
+		}
+	}
+
+	registerExpires := 300 * time.Second
+	if tm.cfg != nil && tm.cfg.SIPPublic.RegisterExpiresSeconds > 0 {
+		registerExpires = time.Duration(tm.cfg.SIPPublic.RegisterExpiresSeconds) * time.Second
+	}
+	freshWindow := time.Duration(float64(registerExpires) * 0.9)
+	if freshWindow <= 0 {
+		freshWindow = registerExpires
+	}
+
+	tm.mu.RLock()
+	defer tm.mu.RUnlock()
+
+	if !tm.ownedLeases[trunkID] {
+		return false
+	}
+	if tm.needsReRegister[trunkID] {
+		return false
+	}
+	if _, hasWorker := tm.refreshWorkers[trunkID]; !hasWorker {
+		return false
+	}
+	if tm.registerRetries[trunkID] != nil {
+		return false
+	}
+
+	trunk, ok := tm.trunks[trunkID]
+	if !ok || trunk == nil || !trunk.Enabled || !trunk.SipAutoRegister {
+		return false
+	}
+	if trunk.LeaseOwner == nil || strings.TrimSpace(*trunk.LeaseOwner) != tm.instanceID {
+		return false
+	}
+	if trunk.LeaseUntil == nil || !trunk.LeaseUntil.After(now.Add(leaseMargin)) {
+		return false
+	}
+	if trunk.LastError != nil && strings.TrimSpace(*trunk.LastError) != "" {
+		return false
+	}
+	if trunk.LastRegisteredAt == nil {
+		return false
+	}
+	age := now.Sub(*trunk.LastRegisteredAt)
+	if age >= freshWindow {
+		return false
+	}
+
+	// Verify push contact parameters match what was registered when tracked.
+	if registeredContact, tracked := tm.registeredPushContacts[trunkID]; tracked {
+		if registeredContact != trunkPushContactFromTrunk(trunk) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// RegisterTrunk acquires/renews the trunk lease, enables auto-registration, and performs SIP REGISTER.
 func (tm *TrunkManager) RegisterTrunk(trunkID int64, force bool) error {
 	if tm.db == nil {
 		return fmt.Errorf("database not available for trunk manager")
 	}
 
+	leaseUntil := time.Now().Add(tm.leaseTTLDuration())
 	ctx, cancel := tm.dbContext()
 	defer cancel()
 
-	trunk, err := tm.getTrunkByIDFromDB(ctx, trunkID)
-	if err != nil {
-		return err
-	}
-	if !trunk.Enabled {
-		return fmt.Errorf("trunk %d is disabled", trunkID)
+	var updateSQL string
+	if force {
+		updateSQL = `
+			UPDATE sip_trunks
+			SET sip_auto_register = true,
+			    lease_owner = $1,
+			    lease_until = $2,
+			    updated_at = NOW()
+			WHERE id = $3
+			  AND enabled = true
+			RETURNING ` + sipTrunkSelectColumns
+	} else {
+		updateSQL = `
+			UPDATE sip_trunks
+			SET sip_auto_register = true,
+			    lease_owner = $1,
+			    lease_until = $2,
+			    updated_at = NOW()
+			WHERE id = $3
+			  AND enabled = true
+			  AND (lease_until IS NULL OR lease_until < NOW() OR lease_owner = $1)
+			RETURNING ` + sipTrunkSelectColumns
 	}
 
-	if err := tm.setSipAutoRegister(trunkID, true); err != nil {
-		return err
+	trunk := &Trunk{}
+	err := scanTrunkRow(tm.db.QueryRow(ctx, updateSQL, tm.instanceID, leaseUntil, trunkID), trunk)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			existing, getErr := tm.getTrunkByIDFromDB(ctx, trunkID)
+			if getErr != nil {
+				return getErr
+			}
+			if !existing.Enabled {
+				return fmt.Errorf("trunk %d is disabled", trunkID)
+			}
+			if force {
+				return fmt.Errorf("trunk %d not found or disabled", trunkID)
+			}
+			return fmt.Errorf("%w: trunk %d lease held by another instance or trunk disabled", ErrTrunkLeaseLost, trunkID)
+		}
+		if force {
+			return fmt.Errorf("force lease update failed: %w", err)
+		}
+		return fmt.Errorf("%w: lease update failed for trunk %d on instance %s: %v", ErrTrunkLeaseRetry, trunkID, tm.instanceID, err)
 	}
-	trunk.SipAutoRegister = true
 
 	tm.mu.Lock()
+	if tm.trunks == nil {
+		tm.trunks = make(map[int64]*Trunk)
+	}
+	if tm.trunkByPublic == nil {
+		tm.trunkByPublic = make(map[string]int64)
+	}
+	if tm.ownedLeases == nil {
+		tm.ownedLeases = make(map[int64]bool)
+	}
 	previous := tm.trunks[trunkID]
+	wasOwned := tm.ownedLeases[trunkID]
 	tm.trunks[trunkID] = trunk
 	if trunk.PublicID != "" {
 		tm.trunkByPublic[trunk.PublicID] = trunkID
 	}
+	tm.ownedLeases[trunkID] = true
+	delete(tm.leaseRetryRuns, trunkID)
 	if trunkRegistrarIdentityChanged(previous, trunk) {
 		tm.invalidateRegistrarIdentityLocked(trunkID)
 	}
 	tm.mu.Unlock()
 
 	if force {
-		if err := tm.acquireLeaseForce(trunkID); err != nil {
-			return err
-		}
+		fmt.Printf("📞 [TrunkManager] Force-acquired lease for trunk %d (until %s)\n", trunkID, leaseUntil.Format(time.RFC3339))
 	} else {
-		if err := tm.acquireLease(trunkID); err != nil {
-			return err
+		if !wasOwned {
+			tm.emitTrunkListChange("lease_updated", trunkID)
 		}
+		tm.logTrunkInfoOrDebug(!wasOwned, "📞 [TrunkManager] Acquired lease for trunk %d (until %s)\n", trunkID, leaseUntil.Format(time.RFC3339))
 	}
 
 	if err := tm.registerTrunk(trunkID); err != nil {
@@ -2038,13 +2339,19 @@ func (tm *TrunkManager) UnregisterTrunk(trunkID int64, force bool) error {
 	ctx, cancel := tm.dbContext()
 	defer cancel()
 
-	trunk, err := tm.getTrunkByIDFromDB(ctx, trunkID)
+	// Persist logout intent and load trunk in a single statement before releasing
+	// SIP so a refresh/restart cannot register the trunk again if later cleanup fails.
+	trunk := &Trunk{}
+	err := scanTrunkRow(tm.db.QueryRow(ctx, `
+		UPDATE sip_trunks
+		SET sip_auto_register = false, updated_at = NOW()
+		WHERE id = $1
+		RETURNING `+sipTrunkSelectColumns+`
+	`, trunkID), trunk)
 	if err != nil {
-		return err
-	}
-	// Persist logout intent before releasing SIP so a refresh/restart cannot
-	// register the trunk again if later cleanup fails.
-	if err := tm.setSipAutoRegister(trunkID, false); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("trunk %d not found", trunkID)
+		}
 		return fmt.Errorf("disable automatic registration: %w", err)
 	}
 	trunk.SipAutoRegister = false
@@ -2059,133 +2366,119 @@ func (tm *TrunkManager) UnregisterTrunk(trunkID int64, force bool) error {
 	delete(tm.ownedLeases, trunkID)
 	delete(tm.leaseRetryRuns, trunkID)
 	delete(tm.registerRetries, trunkID)
+	delete(tm.needsReRegister, trunkID)
+	delete(tm.registeredPushContacts, trunkID)
 	tm.setRegistrationAnnouncedLocked(trunkID, false)
 	if loaded, ok := tm.trunks[trunkID]; ok {
+		loaded.SipAutoRegister = false
 		loaded.LeaseOwner = nil
 		loaded.LeaseUntil = nil
 	}
 	tm.mu.Unlock()
 
 	unregisterErr := tm.releaseTrunkContact(trunk)
-	if force {
-		tm.releaseLeaseForce(trunkID)
-	} else {
-		tm.releaseLease(trunkID)
-	}
-
-	if unregisterErr != nil {
-		tm.updateRegistrationError(trunkID, unregisterErr.Error())
-		return unregisterErr
-	}
-	return tm.updateUnregisteredStatus(trunkID)
+	return tm.finalizeUnregisterInDB(trunkID, force, unregisterErr)
 }
 
-func (tm *TrunkManager) releaseLeaseForce(trunkID int64) {
+func (tm *TrunkManager) finalizeUnregisterInDB(trunkID int64, force bool, unregisterErr error) error {
 	ctx, cancel := tm.dbContext()
 	defer cancel()
 
-	_, err := tm.db.Exec(ctx, `
-		UPDATE sip_trunks
-		SET lease_owner = NULL, lease_until = NULL, updated_at = NOW()
-		WHERE id = $1
-	`, trunkID)
-	if err != nil {
-		fmt.Printf("⚠️ [TrunkManager] Failed to release lease for trunk %d: %v\n", trunkID, err)
+	now := time.Now()
+	var dbErr error
+	if unregisterErr != nil {
+		errMsg := unregisterErr.Error()
+		if force {
+			_, dbErr = tm.db.Exec(ctx, `
+				UPDATE sip_trunks
+				SET lease_owner = NULL,
+				    lease_until = NULL,
+				    last_error = $1,
+				    updated_at = NOW()
+				WHERE id = $2
+			`, errMsg, trunkID)
+		} else {
+			_, dbErr = tm.db.Exec(ctx, `
+				UPDATE sip_trunks
+				SET lease_owner = CASE WHEN lease_owner = $3 THEN NULL ELSE lease_owner END,
+				    lease_until = CASE WHEN lease_owner = $3 THEN NULL ELSE lease_until END,
+				    last_error = $1,
+				    updated_at = NOW()
+				WHERE id = $2
+			`, errMsg, trunkID, tm.instanceID)
+		}
+		if dbErr != nil {
+			fmt.Printf("⚠️ [TrunkManager] Failed to update unregister error/lease for trunk %d: %v\n", trunkID, dbErr)
+		}
+
+		tm.mu.Lock()
+		delete(tm.ownedLeases, trunkID)
+		delete(tm.leaseRetryRuns, trunkID)
+		if loaded, ok := tm.trunks[trunkID]; ok {
+			loaded.LeaseOwner = nil
+			loaded.LeaseUntil = nil
+			loaded.LastError = &errMsg
+		}
+		tm.setRegistrationAnnouncedLocked(trunkID, false)
+		tm.mu.Unlock()
+
+		tm.emitTrunkListChange("lease_updated", trunkID)
+		tm.emitTrunkListChange("registration_updated", trunkID)
+		return unregisterErr
+	}
+
+	if force {
+		_, dbErr = tm.db.Exec(ctx, `
+			UPDATE sip_trunks
+			SET lease_owner = NULL,
+			    lease_until = NULL,
+			    last_registered_at = NULL,
+			    last_unregistered_at = $1,
+			    last_error = NULL,
+			    sip_auto_register = false,
+			    updated_at = NOW()
+			WHERE id = $2
+		`, now, trunkID)
 	} else {
+		_, dbErr = tm.db.Exec(ctx, `
+			UPDATE sip_trunks
+			SET lease_owner = CASE WHEN lease_owner = $3 THEN NULL ELSE lease_owner END,
+			    lease_until = CASE WHEN lease_owner = $3 THEN NULL ELSE lease_until END,
+			    last_registered_at = NULL,
+			    last_unregistered_at = $1,
+			    last_error = NULL,
+			    sip_auto_register = false,
+			    updated_at = NOW()
+			WHERE id = $2
+		`, now, trunkID, tm.instanceID)
+	}
+	if dbErr != nil {
+		fmt.Printf("⚠️ [TrunkManager] Failed to release lease and clear registration status for trunk %d: %v\n", trunkID, dbErr)
+		tm.emitTrunkListChange("lease_updated", trunkID)
+		return fmt.Errorf("persist unregistered status: %w", dbErr)
+	}
+
+	if force {
 		fmt.Printf("📞 [TrunkManager] Released lease for trunk %d (force)\n", trunkID)
+	} else {
+		fmt.Printf("📞 [TrunkManager] Released lease for trunk %d\n", trunkID)
 	}
 
 	tm.mu.Lock()
 	delete(tm.ownedLeases, trunkID)
 	delete(tm.leaseRetryRuns, trunkID)
-	if trunk, ok := tm.trunks[trunkID]; ok {
-		trunk.LeaseOwner = nil
-		trunk.LeaseUntil = nil
-	}
-	tm.mu.Unlock()
-
-	tm.emitTrunkListChange("lease_updated", trunkID)
-}
-
-func (tm *TrunkManager) updateUnregisteredStatus(trunkID int64) error {
-	ctx, cancel := tm.dbContext()
-	defer cancel()
-
-	now := time.Now()
-	_, err := tm.db.Exec(ctx, `
-		UPDATE sip_trunks
-		SET last_registered_at = NULL, last_unregistered_at = $1, last_error = NULL, sip_auto_register = false, updated_at = NOW()
-		WHERE id = $2
-	`, now, trunkID)
-	if err != nil {
-		fmt.Printf("⚠️ [TrunkManager] Failed to clear registration status for trunk %d: %v\n", trunkID, err)
-		return fmt.Errorf("persist unregistered status: %w", err)
-	}
-
-	tm.mu.Lock()
-	if trunk, ok := tm.trunks[trunkID]; ok {
-		trunk.LastRegisteredAt = nil
-		trunk.LastUnregisteredAt = &now
-		trunk.LastError = nil
-		trunk.SipAutoRegister = false
+	if loaded, ok := tm.trunks[trunkID]; ok {
+		loaded.LeaseOwner = nil
+		loaded.LeaseUntil = nil
+		loaded.LastRegisteredAt = nil
+		loaded.LastUnregisteredAt = &now
+		loaded.LastError = nil
+		loaded.SipAutoRegister = false
 	}
 	tm.setRegistrationAnnouncedLocked(trunkID, false)
 	tm.mu.Unlock()
-	return nil
-}
 
-func (tm *TrunkManager) setSipAutoRegister(trunkID int64, enabled bool) error {
-	ctx, cancel := tm.dbContext()
-	defer cancel()
-
-	_, err := tm.db.Exec(ctx, `
-		UPDATE sip_trunks
-		SET sip_auto_register = $1, updated_at = NOW()
-		WHERE id = $2
-	`, enabled, trunkID)
-	if err != nil {
-		return fmt.Errorf("set sip_auto_register failed: %w", err)
-	}
-
-	tm.mu.Lock()
-	if trunk, ok := tm.trunks[trunkID]; ok {
-		trunk.SipAutoRegister = enabled
-	}
-	tm.mu.Unlock()
-
-	return nil
-}
-
-func (tm *TrunkManager) acquireLeaseForce(trunkID int64) error {
-	leaseTTL := time.Duration(tm.cfg.SIPTrunk.LeaseTTLSeconds) * time.Second
-	leaseUntil := time.Now().Add(leaseTTL)
-
-	ctx, cancel := tm.dbContext()
-	defer cancel()
-
-	result, err := tm.db.Exec(ctx, `
-		UPDATE sip_trunks
-		SET lease_owner = $1, lease_until = $2, updated_at = NOW()
-		WHERE id = $3
-		  AND enabled = true
-	`, tm.instanceID, leaseUntil, trunkID)
-	if err != nil {
-		return fmt.Errorf("force lease update failed: %w", err)
-	}
-	if result.RowsAffected() == 0 {
-		return fmt.Errorf("trunk %d not found or disabled", trunkID)
-	}
-
-	tm.mu.Lock()
-	tm.ownedLeases[trunkID] = true
-	if trunk, ok := tm.trunks[trunkID]; ok {
-		lo := tm.instanceID
-		trunk.LeaseOwner = &lo
-		trunk.LeaseUntil = &leaseUntil
-	}
-	tm.mu.Unlock()
-
-	fmt.Printf("📞 [TrunkManager] Force-acquired lease for trunk %d (until %s)\n", trunkID, leaseUntil.Format(time.RFC3339))
+	tm.emitTrunkListChange("lease_updated", trunkID)
 	return nil
 }
 
@@ -2194,38 +2487,200 @@ func (tm *TrunkManager) GetTrunkByIDFromDB(ctx context.Context, trunkID int64) (
 	return tm.getTrunkByIDFromDB(ctx, trunkID)
 }
 
-func (tm *TrunkManager) getTrunkByIDFromDB(ctx context.Context, trunkID int64) (*Trunk, error) {
+func (tm *TrunkManager) queryTrunkByIDFromDB(ctx context.Context, trunkID int64) (*Trunk, error) {
 	if tm.db == nil {
 		return nil, fmt.Errorf("database not available for trunk manager")
 	}
 
+	dbCtx, cancel := dbContextWithTimeout(ctx)
+	defer cancel()
+
 	trunk := &Trunk{}
-	err := tm.db.QueryRow(ctx, `
-		SELECT id, public_id, name, domain, port, username, password, transport, enabled, is_default,
-		       lease_owner, lease_until, last_registered_at, last_unregistered_at, last_error, sip_auto_register, in_use_by, notify_user_id,
-		       last_online_platform, last_online_at,
-		       pn_app_id, pn_type, pn_token, pn_updated_at, created_at, updated_at, fcm_token, fcm_updated_at
+	err := scanTrunkRow(tm.db.QueryRow(dbCtx, `
+		SELECT `+sipTrunkSelectColumns+`
 		FROM sip_trunks
 		WHERE id = $1
-	`, trunkID).Scan(
-		&trunk.ID, &trunk.PublicID, &trunk.Name, &trunk.Domain, &trunk.Port,
-		&trunk.Username, &trunk.Password, &trunk.Transport,
-		&trunk.Enabled, &trunk.IsDefault,
-		&trunk.LeaseOwner, &trunk.LeaseUntil,
-		&trunk.LastRegisteredAt, &trunk.LastUnregisteredAt, &trunk.LastError, &trunk.SipAutoRegister, &trunk.InUseBy, &trunk.NotifyUserID,
-		&trunk.LastOnlinePlatform, &trunk.LastOnlineAt,
-		&trunk.PNAppID, &trunk.PNType, &trunk.PNToken, &trunk.PNUpdatedAt,
-		&trunk.CreatedAt, &trunk.UpdatedAt,
-		&trunk.FcmToken, &trunk.FcmUpdatedAt,
-	)
+	`, trunkID), trunk)
+	if err != nil {
+		return nil, err
+	}
+	return trunk, nil
+}
+
+func (tm *TrunkManager) getTrunkByIDFromDB(ctx context.Context, trunkID int64) (*Trunk, error) {
+	trunk, err := tm.queryTrunkByIDFromDB(ctx, trunkID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, fmt.Errorf("trunk %d not found", trunkID)
 		}
 		return nil, fmt.Errorf("query failed: %w", err)
 	}
-
 	return trunk, nil
+}
+
+// GetTrunksByIDsFromDB fetches all matching trunks in a single SQL query (`WHERE id = ANY($1)`).
+// Matching trunks are returned in the order of unique positive IDs requested.
+func (tm *TrunkManager) GetTrunksByIDsFromDB(ctx context.Context, trunkIDs []int64) ([]*Trunk, error) {
+	seen := make(map[int64]struct{}, len(trunkIDs))
+	uniqueIDs := make([]int64, 0, len(trunkIDs))
+	for _, id := range trunkIDs {
+		if id <= 0 {
+			continue
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		uniqueIDs = append(uniqueIDs, id)
+	}
+	if len(uniqueIDs) == 0 {
+		return []*Trunk{}, nil
+	}
+	if tm.db == nil {
+		return nil, fmt.Errorf("database not available for trunk manager")
+	}
+
+	dbCtx, cancel := dbContextWithTimeout(ctx)
+	defer cancel()
+
+	rows, err := tm.db.Query(dbCtx, `
+		SELECT `+sipTrunkSelectColumns+`
+		FROM sip_trunks
+		WHERE id = ANY($1)
+	`, uniqueIDs)
+	if err != nil {
+		return nil, fmt.Errorf("batch trunk query failed: %w", err)
+	}
+	defer rows.Close()
+
+	byID := make(map[int64]*Trunk, len(uniqueIDs))
+	for rows.Next() {
+		trunk := &Trunk{}
+		if err := scanTrunkRow(rows, trunk); err != nil {
+			return nil, fmt.Errorf("batch trunk scan failed: %w", err)
+		}
+		byID[trunk.ID] = trunk
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("batch trunk rows iteration failed: %w", err)
+	}
+
+	ordered := make([]*Trunk, 0, len(byID))
+	for _, id := range uniqueIDs {
+		if trunk, ok := byID[id]; ok {
+			ordered = append(ordered, trunk)
+		}
+	}
+	return ordered, nil
+}
+
+// ValidateAndClaimTrunkForOutboundCall validates that trunkID has an active lease on
+// instanceID and, when claimUsername is non-nil, atomically sets in_use_by in a single
+// UPDATE ... RETURNING query. On 0 matched rows it falls back to reading the trunk so
+// callers receive exact notFound / lease-owner diagnostics.
+func (tm *TrunkManager) ValidateAndClaimTrunkForOutboundCall(
+	ctx context.Context,
+	trunkID int64,
+	instanceID string,
+	claimUsername *string,
+) (trunk *Trunk, notFound bool, notReadyReason string, err error) {
+	if tm == nil || tm.db == nil {
+		return nil, false, "", fmt.Errorf("database not available for trunk manager")
+	}
+
+	instanceID = strings.TrimSpace(instanceID)
+	if instanceID == "" {
+		instanceID = tm.instanceID
+	}
+
+	dbCtx, cancel := dbContextWithTimeout(ctx)
+	defer cancel()
+
+	if claimUsername != nil {
+		claimed, claimErr := tm.atomicClaimOutboundTrunk(dbCtx, trunkID, instanceID, claimUsername)
+		if claimErr == nil {
+			return claimed, false, "", nil
+		}
+		if !errors.Is(claimErr, pgx.ErrNoRows) {
+			return nil, false, "", fmt.Errorf("validate and claim trunk failed: %w", claimErr)
+		}
+
+		// 0 rows matched: inspect current DB state to return exact notFound / lease reason.
+		existing, queryErr := tm.queryTrunkByIDFromDB(dbCtx, trunkID)
+		if queryErr != nil {
+			if errors.Is(queryErr, pgx.ErrNoRows) {
+				return nil, true, fmt.Sprintf("Trunk %d not found", trunkID), nil
+			}
+			return nil, false, "", fmt.Errorf("query failed: %w", queryErr)
+		}
+		if reason := validateTrunkLeaseForOutbound(existing, instanceID, time.Now()); reason != "" {
+			return nil, false, reason, nil
+		}
+		// Rare race: lease became valid between UPDATE and fallback SELECT; retry claim once.
+		claimed, retryErr := tm.atomicClaimOutboundTrunk(dbCtx, trunkID, instanceID, claimUsername)
+		if retryErr == nil {
+			return claimed, false, "", nil
+		}
+		if errors.Is(retryErr, pgx.ErrNoRows) {
+			return nil, false, "Trunk lease not active", nil
+		}
+		return nil, false, "", fmt.Errorf("validate and claim trunk failed: %w", retryErr)
+	}
+
+	existing, queryErr := tm.queryTrunkByIDFromDB(dbCtx, trunkID)
+	if queryErr != nil {
+		if errors.Is(queryErr, pgx.ErrNoRows) {
+			return nil, true, fmt.Sprintf("Trunk %d not found", trunkID), nil
+		}
+		return nil, false, "", fmt.Errorf("query failed: %w", queryErr)
+	}
+	if reason := validateTrunkLeaseForOutbound(existing, instanceID, time.Now()); reason != "" {
+		return nil, false, reason, nil
+	}
+	return existing, false, "", nil
+}
+
+func (tm *TrunkManager) atomicClaimOutboundTrunk(ctx context.Context, trunkID int64, instanceID string, claimUsername *string) (*Trunk, error) {
+	trunk := &Trunk{}
+	err := scanTrunkRow(tm.db.QueryRow(ctx, `
+		UPDATE sip_trunks
+		SET in_use_by = $1, updated_at = NOW()
+		WHERE id = $2
+		  AND enabled = true
+		  AND lease_owner = $3
+		  AND lease_until > NOW()
+		RETURNING `+sipTrunkSelectColumns+`
+	`, claimUsername, trunkID, instanceID), trunk)
+	if err != nil {
+		return nil, err
+	}
+
+	claimedCopy := *claimUsername
+	tm.mu.Lock()
+	if cached, ok := tm.trunks[trunkID]; ok {
+		cached.InUseBy = &claimedCopy
+	}
+	tm.mu.Unlock()
+
+	tm.emitTrunkListChange("usage_updated", trunkID)
+	return trunk, nil
+}
+
+func validateTrunkLeaseForOutbound(trunk *Trunk, instanceID string, now time.Time) string {
+	if trunk == nil {
+		return "Trunk lease not active"
+	}
+	if trunk.LeaseOwner == nil || strings.TrimSpace(*trunk.LeaseOwner) == "" || trunk.LeaseUntil == nil || trunk.LeaseUntil.Before(now) {
+		return "Trunk lease not active"
+	}
+	leaseOwner := strings.TrimSpace(*trunk.LeaseOwner)
+	if leaseOwner != instanceID {
+		return fmt.Sprintf("Trunk is owned by another gateway instance (%s)", leaseOwner)
+	}
+	if !trunk.Enabled {
+		return fmt.Sprintf("Trunk %d is disabled", trunk.ID)
+	}
+	return ""
 }
 
 // SetTrunkInUseBy sets or clears the in_use_by field for a trunk.
@@ -2235,7 +2690,7 @@ func (tm *TrunkManager) SetTrunkInUseBy(ctx context.Context, trunkID int64, user
 		return fmt.Errorf("database not available for trunk manager")
 	}
 
-	dbCtx, cancel := context.WithTimeout(ctx, trunkManagerDBTimeout)
+	dbCtx, cancel := dbContextWithTimeout(ctx)
 	defer cancel()
 
 	_, err := tm.db.Exec(dbCtx, `
@@ -2288,68 +2743,93 @@ func (tm *TrunkManager) setTrunkNotifyUserIDAndPlatform(ctx context.Context, tru
 		}
 	}
 
-	dbCtx, cancel := context.WithTimeout(ctx, trunkManagerDBTimeout)
+	dbCtx, cancel := dbContextWithTimeout(ctx)
 	defer cancel()
-
-	tx, err := tm.db.BeginTx(dbCtx, pgx.TxOptions{})
-	if err != nil {
-		return fmt.Errorf("begin transaction failed: %w", err)
-	}
-	defer func() {
-		_ = tx.Rollback(dbCtx)
-	}()
 
 	var targetUsername, targetDomain string
 	var targetPort int
-	err = tx.QueryRow(dbCtx, `
-		SELECT username, domain, port
-		FROM sip_trunks
-		WHERE id = $1
-		FOR UPDATE
-	`, trunkID).Scan(&targetUsername, &targetDomain, &targetPort)
+	var err error
+
+	switch {
+	case normalizedUserID != nil && normalizedPlatform != nil:
+		err = tm.db.QueryRow(dbCtx, `
+			WITH target AS (
+				SELECT id, username, domain, port
+				FROM sip_trunks
+				WHERE id = $1
+				FOR UPDATE
+			),
+			cleared AS (
+				UPDATE sip_trunks s
+				SET notify_user_id = NULL, updated_at = NOW()
+				FROM target t
+				WHERE s.notify_user_id = $2
+				  AND s.id <> t.id
+				  AND (s.username <> t.username OR s.domain <> t.domain OR s.port <> t.port)
+				RETURNING s.id
+			),
+			updated AS (
+				UPDATE sip_trunks s
+				SET notify_user_id = $2,
+				    last_online_platform = $3,
+				    last_online_at = NOW(),
+				    updated_at = NOW()
+				FROM target t
+				WHERE s.id = t.id
+				RETURNING t.username, t.domain, t.port
+			)
+			SELECT username, domain, port FROM updated
+		`, trunkID, *normalizedUserID, *normalizedPlatform).Scan(&targetUsername, &targetDomain, &targetPort)
+	case normalizedUserID != nil:
+		err = tm.db.QueryRow(dbCtx, `
+			WITH target AS (
+				SELECT id, username, domain, port
+				FROM sip_trunks
+				WHERE id = $1
+				FOR UPDATE
+			),
+			cleared AS (
+				UPDATE sip_trunks s
+				SET notify_user_id = NULL, updated_at = NOW()
+				FROM target t
+				WHERE s.notify_user_id = $2
+				  AND s.id <> t.id
+				  AND (s.username <> t.username OR s.domain <> t.domain OR s.port <> t.port)
+				RETURNING s.id
+			),
+			updated AS (
+				UPDATE sip_trunks s
+				SET notify_user_id = $2,
+				    updated_at = NOW()
+				FROM target t
+				WHERE s.id = t.id
+				RETURNING t.username, t.domain, t.port
+			)
+			SELECT username, domain, port FROM updated
+		`, trunkID, *normalizedUserID).Scan(&targetUsername, &targetDomain, &targetPort)
+	case normalizedPlatform != nil:
+		err = tm.db.QueryRow(dbCtx, `
+			UPDATE sip_trunks
+			SET notify_user_id = NULL,
+			    last_online_platform = $1,
+			    last_online_at = NOW(),
+			    updated_at = NOW()
+			WHERE id = $2
+			RETURNING username, domain, port
+		`, *normalizedPlatform, trunkID).Scan(&targetUsername, &targetDomain, &targetPort)
+	default:
+		err = tm.db.QueryRow(dbCtx, `
+			UPDATE sip_trunks
+			SET notify_user_id = NULL, updated_at = NOW()
+			WHERE id = $1
+			RETURNING username, domain, port
+		`, trunkID).Scan(&targetUsername, &targetDomain, &targetPort)
+	}
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return fmt.Errorf("%w: trunk %d", ErrTrunkNotFound, trunkID)
 		}
-		return fmt.Errorf("load target trunk failed: %w", err)
-	}
-
-	if normalizedUserID != nil {
-		_, err = tx.Exec(dbCtx, `
-			UPDATE sip_trunks
-			SET notify_user_id = NULL, updated_at = NOW()
-			WHERE notify_user_id = $1
-			  AND id <> $2
-			  AND (username <> $3 OR domain <> $4 OR port <> $5)
-		`, *normalizedUserID, trunkID, targetUsername, targetDomain, targetPort)
-		if err != nil {
-			return fmt.Errorf("clear conflicting notify_user_id failed: %w", err)
-		}
-	}
-
-	if normalizedPlatform != nil {
-		_, err = tx.Exec(dbCtx, `
-			UPDATE sip_trunks
-			SET notify_user_id = $1,
-			    last_online_platform = $2,
-			    last_online_at = NOW(),
-			    updated_at = NOW()
-			WHERE id = $3
-		`, normalizedUserID, *normalizedPlatform, trunkID)
-		if err != nil {
-			return fmt.Errorf("set notify_user_id and platform failed: %w", err)
-		}
-	} else {
-		_, err = tx.Exec(dbCtx, `
-			UPDATE sip_trunks SET notify_user_id = $1, updated_at = NOW() WHERE id = $2
-		`, normalizedUserID, trunkID)
-		if err != nil {
-			return fmt.Errorf("set notify_user_id failed: %w", err)
-		}
-	}
-
-	if err := tx.Commit(dbCtx); err != nil {
-		return fmt.Errorf("commit set notify_user_id failed: %w", err)
+		return fmt.Errorf("set notify_user_id failed: %w", err)
 	}
 
 	tm.mu.Lock()
@@ -2399,62 +2879,42 @@ func (tm *TrunkManager) SetTrunkPushContact(ctx context.Context, trunkID int64, 
 	}
 
 	now := time.Now()
-	dbCtx, cancel := context.WithTimeout(ctx, trunkManagerDBTimeout)
+	dbCtx, cancel := dbContextWithTimeout(ctx)
 	defer cancel()
 
-	tx, err := tm.db.BeginTx(dbCtx, pgx.TxOptions{})
-	if err != nil {
-		return false, fmt.Errorf("begin transaction failed: %w", err)
-	}
-	defer func() {
-		_ = tx.Rollback(dbCtx)
-	}()
-
-	var currentAppID, currentPNType, currentPNToken *string
-	err = tx.QueryRow(dbCtx, `
-		SELECT pn_app_id, pn_type, pn_token
-		FROM sip_trunks
-		WHERE id = $1
-		  AND enabled = true
-		FOR UPDATE
-	`, trunkID).Scan(&currentAppID, &currentPNType, &currentPNToken)
+	var changed bool
+	err := tm.db.QueryRow(dbCtx, `
+		WITH target AS (
+			SELECT id, pn_app_id, pn_type, pn_token
+			FROM sip_trunks
+			WHERE id = $5
+			  AND enabled = true
+			FOR UPDATE
+		),
+		updated AS (
+			UPDATE sip_trunks s
+			SET pn_app_id = $1,
+			    pn_type = $2,
+			    pn_token = $3,
+			    pn_updated_at = $4,
+			    updated_at = NOW()
+			FROM target t
+			WHERE s.id = t.id
+			  AND (
+				COALESCE(btrim(t.pn_app_id), '') <> $1
+				OR COALESCE(btrim(t.pn_type), '') <> $2
+				OR COALESCE(btrim(t.pn_token), '') <> $3
+			  )
+			RETURNING s.id
+		)
+		SELECT EXISTS(SELECT 1 FROM updated) AS changed
+		FROM target
+	`, appID, pnType, pnToken, now, trunkID).Scan(&changed)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return false, fmt.Errorf("%w: trunk %d", ErrTrunkNotFound, trunkID)
 		}
-		return false, fmt.Errorf("load trunk push contact failed: %w", err)
-	}
-
-	changed := !trunkPushContactMatches(currentAppID, currentPNType, currentPNToken, normalizedContact)
-	if !changed {
-		if err := tx.Commit(dbCtx); err != nil {
-			return false, fmt.Errorf("commit unchanged push contact failed: %w", err)
-		}
-		tm.mu.Lock()
-		if trunk, ok := tm.trunks[trunkID]; ok {
-			trunk.PNAppID = &normalizedContact.PNAppID
-			trunk.PNType = &normalizedContact.PNType
-			trunk.PNToken = &normalizedContact.PNToken
-		}
-		tm.mu.Unlock()
-		return false, nil
-	}
-
-	result, err := tx.Exec(dbCtx, `
-		UPDATE sip_trunks
-		SET pn_app_id = $1, pn_type = $2, pn_token = $3, pn_updated_at = $4, updated_at = NOW()
-		WHERE id = $5
-		  AND enabled = true
-	`, appID, pnType, pnToken, now, trunkID)
-	if err != nil {
 		return false, fmt.Errorf("set trunk push contact failed: %w", err)
-	}
-	if result.RowsAffected() == 0 {
-		return false, fmt.Errorf("%w: trunk %d", ErrTrunkNotFound, trunkID)
-	}
-
-	if err := tx.Commit(dbCtx); err != nil {
-		return false, fmt.Errorf("commit set trunk push contact failed: %w", err)
 	}
 
 	tm.mu.Lock()
@@ -2462,11 +2922,19 @@ func (tm *TrunkManager) SetTrunkPushContact(ctx context.Context, trunkID int64, 
 		trunk.PNAppID = &normalizedContact.PNAppID
 		trunk.PNType = &normalizedContact.PNType
 		trunk.PNToken = &normalizedContact.PNToken
-		trunk.PNUpdatedAt = &now
+		if changed {
+			trunk.PNUpdatedAt = &now
+		}
+	}
+	if changed {
+		if tm.needsReRegister == nil {
+			tm.needsReRegister = make(map[int64]bool)
+		}
+		tm.needsReRegister[trunkID] = true
 	}
 	tm.mu.Unlock()
 
-	return true, nil
+	return changed, nil
 }
 
 func (tm *TrunkManager) SetTrunkFcmToken(ctx context.Context, trunkID int64, token string) error {
@@ -2478,7 +2946,7 @@ func (tm *TrunkManager) SetTrunkFcmToken(ctx context.Context, trunkID int64, tok
 		return fmt.Errorf("%w: fcm token is required", ErrTrunkValidation)
 	}
 	now := time.Now()
-	dbCtx, cancel := context.WithTimeout(ctx, trunkManagerDBTimeout)
+	dbCtx, cancel := dbContextWithTimeout(ctx)
 	defer cancel()
 	result, err := tm.db.Exec(dbCtx, `
 		UPDATE sip_trunks
@@ -2505,7 +2973,7 @@ func (tm *TrunkManager) ClearTrunkFcmToken(ctx context.Context, trunkID int64) e
 	if tm.db == nil {
 		return fmt.Errorf("database not available for trunk manager")
 	}
-	dbCtx, cancel := context.WithTimeout(ctx, trunkManagerDBTimeout)
+	dbCtx, cancel := dbContextWithTimeout(ctx)
 	defer cancel()
 	_, err := tm.db.Exec(dbCtx, `
 		UPDATE sip_trunks
@@ -2544,13 +3012,10 @@ func (tm *TrunkManager) ListAgentDeviceTrunksByNotifyUserID(ctx context.Context,
 		}
 		return out, nil
 	}
-	dbCtx, cancel := context.WithTimeout(ctx, trunkManagerDBTimeout)
+	dbCtx, cancel := dbContextWithTimeout(ctx)
 	defer cancel()
 	rows, err := tm.db.Query(dbCtx, `
-		SELECT id, public_id, name, domain, port, username, password, transport, enabled, is_default,
-		       lease_owner, lease_until, last_registered_at, last_unregistered_at, last_error, sip_auto_register, in_use_by, notify_user_id,
-		       last_online_platform, last_online_at,
-		       pn_app_id, pn_type, pn_token, pn_updated_at, created_at, updated_at, fcm_token, fcm_updated_at
+		SELECT `+sipTrunkSelectColumns+`
 		FROM sip_trunks
 		WHERE notify_user_id = $1 AND name LIKE 'sipclient-agent-device-%'
 	`, userID)
@@ -2561,17 +3026,7 @@ func (tm *TrunkManager) ListAgentDeviceTrunksByNotifyUserID(ctx context.Context,
 	out := make([]*Trunk, 0)
 	for rows.Next() {
 		trunk := &Trunk{}
-		if err := rows.Scan(
-			&trunk.ID, &trunk.PublicID, &trunk.Name, &trunk.Domain, &trunk.Port,
-			&trunk.Username, &trunk.Password, &trunk.Transport,
-			&trunk.Enabled, &trunk.IsDefault,
-			&trunk.LeaseOwner, &trunk.LeaseUntil,
-			&trunk.LastRegisteredAt, &trunk.LastUnregisteredAt, &trunk.LastError, &trunk.SipAutoRegister, &trunk.InUseBy, &trunk.NotifyUserID,
-			&trunk.LastOnlinePlatform, &trunk.LastOnlineAt,
-			&trunk.PNAppID, &trunk.PNType, &trunk.PNToken, &trunk.PNUpdatedAt,
-			&trunk.CreatedAt, &trunk.UpdatedAt,
-			&trunk.FcmToken, &trunk.FcmUpdatedAt,
-		); err != nil {
+		if err := scanTrunkRow(rows, trunk); err != nil {
 			return nil, fmt.Errorf("scan agent-device trunk failed: %w", err)
 		}
 		out = append(out, trunk)
@@ -2604,12 +3059,6 @@ func (tm *TrunkManager) IdentityGroupTrunkIDs(trunkID int64) []int64 {
 	return ids
 }
 
-func trunkPushContactMatches(currentAppID, currentPNType, currentPNToken *string, contact TrunkPushContact) bool {
-	return trimStringPtr(currentAppID) == strings.TrimSpace(contact.PNAppID) &&
-		trimStringPtr(currentPNType) == strings.TrimSpace(contact.PNType) &&
-		trimStringPtr(currentPNToken) == strings.TrimSpace(contact.PNToken)
-}
-
 func trimStringPtr(value *string) string {
 	if value == nil {
 		return ""
@@ -2624,29 +3073,16 @@ func (tm *TrunkManager) FindTrunkByInUseBy(ctx context.Context, inUseBy string) 
 		return nil, fmt.Errorf("database not available for trunk manager")
 	}
 
-	dbCtx, cancel := context.WithTimeout(ctx, trunkManagerDBTimeout)
+	dbCtx, cancel := dbContextWithTimeout(ctx)
 	defer cancel()
 
 	trunk := &Trunk{}
-	err := tm.db.QueryRow(dbCtx, `
-		SELECT id, public_id, name, domain, port, username, password, transport, enabled, is_default,
-		       lease_owner, lease_until, last_registered_at, last_unregistered_at, last_error, sip_auto_register, in_use_by, notify_user_id,
-		       last_online_platform, last_online_at,
-		       pn_app_id, pn_type, pn_token, pn_updated_at, created_at, updated_at, fcm_token, fcm_updated_at
+	err := scanTrunkRow(tm.db.QueryRow(dbCtx, `
+		SELECT `+sipTrunkSelectColumns+`
 		FROM sip_trunks
 		WHERE in_use_by = $1
 		LIMIT 1
-	`, inUseBy).Scan(
-		&trunk.ID, &trunk.PublicID, &trunk.Name, &trunk.Domain, &trunk.Port,
-		&trunk.Username, &trunk.Password, &trunk.Transport,
-		&trunk.Enabled, &trunk.IsDefault,
-		&trunk.LeaseOwner, &trunk.LeaseUntil,
-		&trunk.LastRegisteredAt, &trunk.LastUnregisteredAt, &trunk.LastError, &trunk.SipAutoRegister, &trunk.InUseBy, &trunk.NotifyUserID,
-		&trunk.LastOnlinePlatform, &trunk.LastOnlineAt,
-		&trunk.PNAppID, &trunk.PNType, &trunk.PNToken, &trunk.PNUpdatedAt,
-		&trunk.CreatedAt, &trunk.UpdatedAt,
-		&trunk.FcmToken, &trunk.FcmUpdatedAt,
-	)
+	`, inUseBy), trunk)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil

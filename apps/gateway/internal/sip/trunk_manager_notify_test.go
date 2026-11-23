@@ -2,6 +2,7 @@ package sip
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -10,97 +11,54 @@ import (
 )
 
 type notifyTestDB struct {
-	tx *notifyTestTx
-}
-
-func (db *notifyTestDB) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
-	panic("unexpected Exec outside transaction")
-}
-
-func (db *notifyTestDB) Query(context.Context, string, ...any) (pgx.Rows, error) {
-	panic("unexpected Query outside transaction")
-}
-
-func (db *notifyTestDB) QueryRow(context.Context, string, ...any) pgx.Row {
-	panic("unexpected QueryRow outside transaction")
-}
-
-func (db *notifyTestDB) BeginTx(context.Context, pgx.TxOptions) (pgx.Tx, error) {
-	return db.tx, nil
-}
-
-type notifyTestTx struct {
 	targetUsername string
 	targetDomain   string
 	targetPort     int
-	execs          []notifyTestExec
-	committed      bool
-	rolledBack     bool
+	rowErr         error
+	queries        []notifyTestQuery
 }
 
-type notifyTestExec struct {
+type notifyTestQuery struct {
 	sql  string
 	args []any
 }
 
-func (tx *notifyTestTx) Begin(context.Context) (pgx.Tx, error) {
-	panic("unexpected nested transaction")
+func (db *notifyTestDB) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
+	panic("unexpected Exec")
 }
 
-func (tx *notifyTestTx) Commit(context.Context) error {
-	tx.committed = true
-	return nil
-}
-
-func (tx *notifyTestTx) Rollback(context.Context) error {
-	tx.rolledBack = true
-	return nil
-}
-
-func (tx *notifyTestTx) CopyFrom(context.Context, pgx.Identifier, []string, pgx.CopyFromSource) (int64, error) {
-	panic("unexpected CopyFrom")
-}
-
-func (tx *notifyTestTx) SendBatch(context.Context, *pgx.Batch) pgx.BatchResults {
-	panic("unexpected SendBatch")
-}
-
-func (tx *notifyTestTx) LargeObjects() pgx.LargeObjects {
-	panic("unexpected LargeObjects")
-}
-
-func (tx *notifyTestTx) Prepare(context.Context, string, string) (*pgconn.StatementDescription, error) {
-	panic("unexpected Prepare")
-}
-
-func (tx *notifyTestTx) Exec(_ context.Context, sql string, arguments ...any) (pgconn.CommandTag, error) {
-	tx.execs = append(tx.execs, notifyTestExec{sql: sql, args: append([]any(nil), arguments...)})
-	return pgconn.NewCommandTag("UPDATE 1"), nil
-}
-
-func (tx *notifyTestTx) Query(context.Context, string, ...any) (pgx.Rows, error) {
+func (db *notifyTestDB) Query(context.Context, string, ...any) (pgx.Rows, error) {
 	panic("unexpected Query")
 }
 
-func (tx *notifyTestTx) QueryRow(context.Context, string, ...any) pgx.Row {
+func (db *notifyTestDB) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
+	db.queries = append(db.queries, notifyTestQuery{
+		sql:  sql,
+		args: append([]any(nil), args...),
+	})
 	return notifyTestRow{
-		username: tx.targetUsername,
-		domain:   tx.targetDomain,
-		port:     tx.targetPort,
+		username: db.targetUsername,
+		domain:   db.targetDomain,
+		port:     db.targetPort,
+		err:      db.rowErr,
 	}
 }
 
-func (tx *notifyTestTx) Conn() *pgx.Conn {
-	return nil
+func (db *notifyTestDB) BeginTx(context.Context, pgx.TxOptions) (pgx.Tx, error) {
+	panic("unexpected BeginTx: SetTrunkNotifyUserIDAndPlatform should use a single statement")
 }
 
 type notifyTestRow struct {
 	username string
 	domain   string
 	port     int
+	err      error
 }
 
 func (r notifyTestRow) Scan(dest ...any) error {
+	if r.err != nil {
+		return r.err
+	}
 	*(dest[0].(*string)) = r.username
 	*(dest[1].(*string)) = r.domain
 	*(dest[2].(*int)) = r.port
@@ -110,13 +68,13 @@ func (r notifyTestRow) Scan(dest ...any) error {
 func TestSetTrunkNotifyUserID_ReassignsUserToTargetAndClearsConflictingIdentities(t *testing.T) {
 	oldUserID := "user-1"
 	otherUserID := "user-2"
-	tx := &notifyTestTx{
+	db := &notifyTestDB{
 		targetUsername: "1002",
 		targetDomain:   "sip.example.com",
 		targetPort:     5060,
 	}
 	tm := &TrunkManager{
-		db: &notifyTestDB{tx: tx},
+		db: db,
 		trunks: map[int64]*Trunk{
 			1: {ID: 1, Username: "1001", Domain: "sip.example.com", Port: 5060, NotifyUserID: &oldUserID},
 			2: {ID: 2, Username: "1002", Domain: "sip.example.com", Port: 5060, NotifyUserID: &otherUserID},
@@ -130,42 +88,15 @@ func TestSetTrunkNotifyUserID_ReassignsUserToTargetAndClearsConflictingIdentitie
 		t.Fatalf("SetTrunkNotifyUserID failed: %v", err)
 	}
 
-	if !tx.committed {
-		t.Fatalf("expected transaction commit")
+	if len(db.queries) != 1 {
+		t.Fatalf("expected 1 consolidated writable-CTE query, got %d", len(db.queries))
 	}
-	if len(tx.execs) != 2 {
-		t.Fatalf("expected clear + set execs, got %d", len(tx.execs))
+	q := db.queries[0]
+	if !strings.Contains(q.sql, "SET notify_user_id = NULL") || !strings.Contains(q.sql, "SET notify_user_id = $2") {
+		t.Fatalf("expected CTE clearing conflicting and setting target notify_user_id, got %s", q.sql)
 	}
-	clearExec := tx.execs[0]
-	if !strings.Contains(clearExec.sql, "SET notify_user_id = NULL") {
-		t.Fatalf("expected first exec to clear notify_user_id, got %s", clearExec.sql)
-	}
-	if got := clearExec.args[0]; got != "user-1" {
-		t.Fatalf("expected clear userID user-1, got %#v", got)
-	}
-	if got := clearExec.args[1]; got != int64(2) {
-		t.Fatalf("expected clear to exclude trunk 2, got %#v", got)
-	}
-	if got := clearExec.args[2]; got != "1002" {
-		t.Fatalf("expected target username 1002, got %#v", got)
-	}
-	if got := clearExec.args[3]; got != "sip.example.com" {
-		t.Fatalf("expected target domain sip.example.com, got %#v", got)
-	}
-	if got := clearExec.args[4]; got != 5060 {
-		t.Fatalf("expected target port 5060, got %#v", got)
-	}
-
-	setExec := tx.execs[1]
-	if !strings.Contains(setExec.sql, "UPDATE sip_trunks SET notify_user_id = $1") {
-		t.Fatalf("expected second exec to set notify_user_id, got %s", setExec.sql)
-	}
-	setUserID, ok := setExec.args[0].(*string)
-	if !ok || setUserID == nil || *setUserID != "user-1" {
-		t.Fatalf("expected normalized target userID user-1, got %#v", setExec.args[0])
-	}
-	if got := setExec.args[1]; got != int64(2) {
-		t.Fatalf("expected target trunk 2, got %#v", got)
+	if len(q.args) != 2 || q.args[0] != int64(2) || q.args[1] != "user-1" {
+		t.Fatalf("expected args [2, user-1], got %#v", q.args)
 	}
 
 	if tm.trunks[1].NotifyUserID != nil {
@@ -184,13 +115,13 @@ func TestSetTrunkNotifyUserID_ReassignsUserToTargetAndClearsConflictingIdentitie
 
 func TestSetTrunkNotifyUserID_BlankUserIDClearsOnlyTarget(t *testing.T) {
 	userID := "user-1"
-	tx := &notifyTestTx{
+	db := &notifyTestDB{
 		targetUsername: "1002",
 		targetDomain:   "sip.example.com",
 		targetPort:     5060,
 	}
 	tm := &TrunkManager{
-		db: &notifyTestDB{tx: tx},
+		db: db,
 		trunks: map[int64]*Trunk{
 			1: {ID: 1, Username: "1001", Domain: "sip.example.com", Port: 5060, NotifyUserID: &userID},
 			2: {ID: 2, Username: "1002", Domain: "sip.example.com", Port: 5060, NotifyUserID: &userID},
@@ -202,15 +133,18 @@ func TestSetTrunkNotifyUserID_BlankUserIDClearsOnlyTarget(t *testing.T) {
 		t.Fatalf("SetTrunkNotifyUserID failed: %v", err)
 	}
 
-	if len(tx.execs) != 1 {
-		t.Fatalf("expected only target set/clear exec, got %d", len(tx.execs))
+	if len(db.queries) != 1 {
+		t.Fatalf("expected 1 single-target clear query, got %d", len(db.queries))
 	}
-	userIDArg, ok := tx.execs[0].args[0].(*string)
-	if !ok {
-		t.Fatalf("expected userID arg to be *string, got %#v", tx.execs[0].args[0])
+	q := db.queries[0]
+	if strings.Contains(q.sql, "WITH target") {
+		t.Fatalf("blank userID clear should only update target row, got %s", q.sql)
 	}
-	if userIDArg != nil {
-		t.Fatalf("expected blank userID to be normalized to nil, got %#v", tx.execs[0].args[0])
+	if !strings.Contains(q.sql, "SET notify_user_id = NULL") {
+		t.Fatalf("expected notify_user_id = NULL update, got %s", q.sql)
+	}
+	if len(q.args) != 1 || q.args[0] != int64(2) {
+		t.Fatalf("expected target trunk id arg [2], got %#v", q.args)
 	}
 	if tm.trunks[1].NotifyUserID == nil || *tm.trunks[1].NotifyUserID != "user-1" {
 		t.Fatalf("expected non-target trunk to remain unchanged, got %#v", tm.trunks[1].NotifyUserID)
@@ -222,13 +156,13 @@ func TestSetTrunkNotifyUserID_BlankUserIDClearsOnlyTarget(t *testing.T) {
 
 func TestSetTrunkNotifyUserIDAndPlatform_PersistsPlatform(t *testing.T) {
 	userID := "user-1"
-	tx := &notifyTestTx{
+	db := &notifyTestDB{
 		targetUsername: "1002",
 		targetDomain:   "sip.example.com",
 		targetPort:     5060,
 	}
 	tm := &TrunkManager{
-		db: &notifyTestDB{tx: tx},
+		db: db,
 		trunks: map[int64]*Trunk{
 			2: {ID: 2, Username: "1002", Domain: "sip.example.com", Port: 5060},
 		},
@@ -239,20 +173,31 @@ func TestSetTrunkNotifyUserIDAndPlatform_PersistsPlatform(t *testing.T) {
 		t.Fatalf("SetTrunkNotifyUserIDAndPlatform failed: %v", err)
 	}
 
-	if len(tx.execs) != 2 {
-		t.Fatalf("expected clear + set execs, got %d", len(tx.execs))
+	if len(db.queries) != 1 {
+		t.Fatalf("expected 1 consolidated query, got %d", len(db.queries))
 	}
-	setExec := tx.execs[1]
-	if !strings.Contains(setExec.sql, "last_online_platform = $2") {
-		t.Fatalf("expected platform update SQL, got %s", setExec.sql)
+	q := db.queries[0]
+	if !strings.Contains(q.sql, "last_online_platform = $3") {
+		t.Fatalf("expected platform update SQL, got %s", q.sql)
 	}
-	if got := setExec.args[1]; got != "android" {
-		t.Fatalf("expected normalized platform android, got %#v", got)
+	if len(q.args) != 3 || q.args[0] != int64(2) || q.args[1] != "user-1" || q.args[2] != "android" {
+		t.Fatalf("expected args [2, user-1, android], got %#v", q.args)
 	}
 	if tm.trunks[2].LastOnlinePlatform == nil || *tm.trunks[2].LastOnlinePlatform != "android" {
 		t.Fatalf("expected in-memory platform android, got %#v", tm.trunks[2].LastOnlinePlatform)
 	}
 	if tm.trunks[2].LastOnlineAt == nil {
 		t.Fatalf("expected in-memory last_online_at to be set")
+	}
+}
+
+func TestSetTrunkNotifyUserID_NotFoundReturnsErrTrunkNotFound(t *testing.T) {
+	userID := "user-1"
+	db := &notifyTestDB{rowErr: pgx.ErrNoRows}
+	tm := &TrunkManager{db: db}
+
+	err := tm.SetTrunkNotifyUserID(context.Background(), 99, &userID)
+	if !errors.Is(err, ErrTrunkNotFound) {
+		t.Fatalf("expected ErrTrunkNotFound, got %v", err)
 	}
 }
