@@ -181,20 +181,15 @@ CREATE TABLE IF NOT EXISTS sip_trunks (
 
   created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
-);
+) WITH (fillfactor = 70, autovacuum_vacuum_scale_factor = 0.05, autovacuum_analyze_scale_factor = 0.05);
 
 CREATE INDEX IF NOT EXISTS idx_sip_trunks_enabled ON sip_trunks (enabled) WHERE enabled = true;
-CREATE INDEX IF NOT EXISTS idx_sip_trunks_lease ON sip_trunks (lease_owner, lease_until);
 CREATE INDEX IF NOT EXISTS idx_sip_trunks_default ON sip_trunks (is_default) WHERE is_default = true;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_sip_trunks_public_id ON sip_trunks (public_id);
-CREATE INDEX IF NOT EXISTS idx_sip_trunks_name ON sip_trunks (name);
 CREATE INDEX IF NOT EXISTS idx_sip_trunks_username ON sip_trunks (username);
-CREATE INDEX IF NOT EXISTS idx_sip_trunks_enabled_default ON sip_trunks (enabled, is_default);
+CREATE INDEX IF NOT EXISTS idx_sip_trunks_cred_lookup ON sip_trunks (username, domain, port) WHERE enabled = true;
 CREATE INDEX IF NOT EXISTS idx_sip_trunks_in_use_by ON sip_trunks (in_use_by) WHERE in_use_by IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_sip_trunks_notify_user_id ON sip_trunks (notify_user_id) WHERE notify_user_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_sip_trunks_last_online_platform ON sip_trunks (last_online_platform) WHERE last_online_platform IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_sip_trunks_pn_token ON sip_trunks (pn_token) WHERE pn_token IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_sip_trunks_fcm_token ON sip_trunks (fcm_token) WHERE fcm_token IS NOT NULL;
 
 
 -- ============================================================================
@@ -209,7 +204,6 @@ CREATE TABLE IF NOT EXISTS session_directory (
 );
 
 CREATE INDEX IF NOT EXISTS idx_session_directory_expires ON session_directory (expires_at);
-CREATE INDEX IF NOT EXISTS idx_session_directory_owner ON session_directory (owner_instance_id);
 
 
 -- ============================================================================

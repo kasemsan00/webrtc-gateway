@@ -146,6 +146,8 @@ func (s *logStore) GetPartitionInfo(ctx context.Context, tableName string) ([]Pa
 	if s.pool == nil {
 		return nil, fmt.Errorf("database pool not initialized")
 	}
+	ctx, cancel := withDefaultTimeout(ctx, defaultDBQueryTimeout)
+	defer cancel()
 
 	query := `
 		SELECT

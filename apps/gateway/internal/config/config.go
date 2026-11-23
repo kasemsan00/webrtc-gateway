@@ -214,10 +214,17 @@ const (
 	SIPSwitchVideoTransitionBlackout = "blackout" // default: blackout-until-safe-IDR on normalize path
 )
 
+const (
+	DefaultDBMaxConns = 25
+	MinDBMaxConns     = 4
+	MaxDBMaxConns     = 200
+)
+
 // DBConfig holds PostgreSQL database configuration
 type DBConfig struct {
 	Enable                 bool   // Enable database logging
 	DSN                    string // PostgreSQL connection string
+	MaxConns               int    // Maximum pgxpool connections (default: 25)
 	StatsIntervalMS        int    // Stats flush interval in milliseconds
 	LogFullSIP             bool   // Log full SIP messages (req.String())
 	BatchSize              int    // Number of events per batch insert
@@ -418,6 +425,7 @@ func Load() (*Config, error) {
 		DB: DBConfig{
 			Enable:                 getEnvAsBool("DB_ENABLE", false),
 			DSN:                    os.Getenv("DB_DSN"),
+			MaxConns:               clampInt(getEnvAsInt("DB_MAX_CONNS", DefaultDBMaxConns), MinDBMaxConns, MaxDBMaxConns),
 			StatsIntervalMS:        getEnvAsInt("DB_STATS_INTERVAL_MS", 5000),
 			LogFullSIP:             getEnvAsBool("DB_LOG_FULL_SIP", false),
 			BatchSize:              getEnvAsInt("DB_BATCH_SIZE", 100),
@@ -647,6 +655,7 @@ func (c *Config) Display() {
 	if c.DB.Enable {
 		fmt.Printf("  Enabled: %v\n", c.DB.Enable)
 		fmt.Printf("  DSN: %s\n", maskDSN(c.DB.DSN))
+		fmt.Printf("  Max Conns: %d\n", c.DB.MaxConns)
 		fmt.Printf("  Stats Interval: %d ms\n", c.DB.StatsIntervalMS)
 		fmt.Printf("  Log Full SIP: %v\n", c.DB.LogFullSIP)
 		fmt.Printf("  Batch Size: %d\n", c.DB.BatchSize)

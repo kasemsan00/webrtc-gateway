@@ -15,8 +15,17 @@ import (
 func (s *logStore) eventBatchWorker() {
 	defer s.wg.Done()
 
-	batch := make([]*Event, 0, s.config.BatchSize)
-	ticker := time.NewTicker(time.Duration(s.config.BatchIntervalMS) * time.Millisecond)
+	batchSize := s.config.BatchSize
+	if batchSize <= 0 {
+		batchSize = 100
+	}
+	batchIntervalMS := s.config.BatchIntervalMS
+	if batchIntervalMS <= 0 {
+		batchIntervalMS = 1000
+	}
+
+	batch := make([]*Event, 0, batchSize)
+	ticker := time.NewTicker(time.Duration(batchIntervalMS) * time.Millisecond)
 	defer ticker.Stop()
 
 	flush := func() {
@@ -28,9 +37,11 @@ func (s *logStore) eventBatchWorker() {
 		defer cancel()
 
 		started := time.Now()
-		err := s.batchInsertEvents(ctx, batch)
+		err := s.execBatchInsertEvents(ctx, batch)
 		if err != nil {
 			fmt.Printf("❌ Failed to insert event batch (%d events): %v\n", len(batch), err)
+		} else {
+			s.lastSuccessNS.Store(time.Now().UnixNano())
 		}
 		recordPersistenceBatchTelemetry("events", started, len(batch), err)
 
@@ -41,7 +52,7 @@ func (s *logStore) eventBatchWorker() {
 		select {
 		case event := <-s.eventQueue:
 			batch = append(batch, event)
-			if len(batch) >= s.config.BatchSize {
+			if len(batch) >= batchSize {
 				flush()
 			}
 
@@ -49,12 +60,34 @@ func (s *logStore) eventBatchWorker() {
 			flush()
 
 		case <-s.stopCh:
-			// Final flush before shutdown
-			flush()
-			fmt.Printf("📊 Event batch worker stopped\n")
-			return
+			// Drain all queued events before shutdown
+			deadline := time.Now().Add(defaultShutdownDrainTimeout)
+			for {
+				select {
+				case event := <-s.eventQueue:
+					batch = append(batch, event)
+					if len(batch) >= batchSize {
+						flush()
+						if time.Now().After(deadline) {
+							fmt.Printf("📊 Event batch worker stopped\n")
+							return
+						}
+					}
+				default:
+					flush()
+					fmt.Printf("📊 Event batch worker stopped\n")
+					return
+				}
+			}
 		}
 	}
+}
+
+func (s *logStore) execBatchInsertEvents(ctx context.Context, events []*Event) error {
+	if s.batchEventsHook != nil {
+		return s.batchEventsHook(ctx, events)
+	}
+	return s.batchInsertEvents(ctx, events)
 }
 
 // batchInsertEvents inserts multiple events using pgx Batch
@@ -105,8 +138,17 @@ func (s *logStore) batchInsertEvents(ctx context.Context, events []*Event) error
 func (s *logStore) statsBatchWorker() {
 	defer s.wg.Done()
 
-	batch := make([]*StatsRecord, 0, s.config.BatchSize)
-	ticker := time.NewTicker(time.Duration(s.config.BatchIntervalMS) * time.Millisecond)
+	batchSize := s.config.BatchSize
+	if batchSize <= 0 {
+		batchSize = 100
+	}
+	batchIntervalMS := s.config.BatchIntervalMS
+	if batchIntervalMS <= 0 {
+		batchIntervalMS = 1000
+	}
+
+	batch := make([]*StatsRecord, 0, batchSize)
+	ticker := time.NewTicker(time.Duration(batchIntervalMS) * time.Millisecond)
 	defer ticker.Stop()
 
 	flush := func() {
@@ -118,9 +160,11 @@ func (s *logStore) statsBatchWorker() {
 		defer cancel()
 
 		started := time.Now()
-		err := s.batchInsertStats(ctx, batch)
+		err := s.execBatchInsertStats(ctx, batch)
 		if err != nil {
 			fmt.Printf("❌ Failed to insert stats batch (%d records): %v\n", len(batch), err)
+		} else {
+			s.lastSuccessNS.Store(time.Now().UnixNano())
 		}
 		recordPersistenceBatchTelemetry("stats", started, len(batch), err)
 
@@ -131,7 +175,7 @@ func (s *logStore) statsBatchWorker() {
 		select {
 		case stats := <-s.statsQueue:
 			batch = append(batch, stats)
-			if len(batch) >= s.config.BatchSize {
+			if len(batch) >= batchSize {
 				flush()
 			}
 
@@ -139,12 +183,34 @@ func (s *logStore) statsBatchWorker() {
 			flush()
 
 		case <-s.stopCh:
-			// Final flush before shutdown
-			flush()
-			fmt.Printf("📊 Stats batch worker stopped\n")
-			return
+			// Drain all queued stats before shutdown
+			deadline := time.Now().Add(defaultShutdownDrainTimeout)
+			for {
+				select {
+				case stats := <-s.statsQueue:
+					batch = append(batch, stats)
+					if len(batch) >= batchSize {
+						flush()
+						if time.Now().After(deadline) {
+							fmt.Printf("📊 Stats batch worker stopped\n")
+							return
+						}
+					}
+				default:
+					flush()
+					fmt.Printf("📊 Stats batch worker stopped\n")
+					return
+				}
+			}
 		}
 	}
+}
+
+func (s *logStore) execBatchInsertStats(ctx context.Context, stats []*StatsRecord) error {
+	if s.batchStatsHook != nil {
+		return s.batchStatsHook(ctx, stats)
+	}
+	return s.batchInsertStats(ctx, stats)
 }
 
 func persistenceTelemetryReason(err error) string {

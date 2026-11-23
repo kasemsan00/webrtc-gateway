@@ -519,3 +519,43 @@ func TestSIPVideoTSRebaseConfig(t *testing.T) {
 		t.Fatalf("max base -> %d err=%v", cfg.SIP.VideoTSBase, err)
 	}
 }
+
+func TestDBMaxConnsConfig(t *testing.T) {
+	t.Setenv("DB_MAX_CONNS", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.DB.MaxConns != DefaultDBMaxConns {
+		t.Fatalf("default DB.MaxConns = %d, want %d", cfg.DB.MaxConns, DefaultDBMaxConns)
+	}
+
+	t.Setenv("DB_MAX_CONNS", "40")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.DB.MaxConns != 40 {
+		t.Fatalf("DB.MaxConns = %d, want 40", cfg.DB.MaxConns)
+	}
+
+	for _, low := range []string{"0", "-5", "1", "3"} {
+		t.Setenv("DB_MAX_CONNS", low)
+		cfg, err = Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+		if cfg.DB.MaxConns != MinDBMaxConns {
+			t.Fatalf("DB_MAX_CONNS=%q -> %d, want clamp %d", low, cfg.DB.MaxConns, MinDBMaxConns)
+		}
+	}
+
+	t.Setenv("DB_MAX_CONNS", "500")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.DB.MaxConns != MaxDBMaxConns {
+		t.Fatalf("DB_MAX_CONNS=500 -> %d, want clamp %d", cfg.DB.MaxConns, MaxDBMaxConns)
+	}
+}

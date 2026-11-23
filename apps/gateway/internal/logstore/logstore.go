@@ -14,11 +14,58 @@ import (
 	"webrtc-sip-gateway/internal/telemetry"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+const (
+	defaultDBOpTimeout        = 3 * time.Second
+	defaultDBQueryTimeout     = 5 * time.Second
+	defaultDBDashboardTimeout = 10 * time.Second
+)
+
 var ErrDisabled = errors.New("database logging disabled")
+
+// TrunkDetailsResolver is an optional interface implemented by LogStore
+// implementations that return public_id and username alongside trunk
+// credential resolution in a single database round-trip.
+type TrunkDetailsResolver interface {
+	ResolveTrunkDetailsByCredentials(ctx context.Context, domain string, port int, username, password string) (trunkID int64, publicID string, resolvedUsername string, leaseOwner *string, leaseUntil *time.Time, found bool, err error)
+}
+
+var (
+	_ TrunkDetailsResolver = (*logStore)(nil)
+	_ TrunkDetailsResolver = (*noopStore)(nil)
+)
+
+// withDefaultTimeout bounds deadline-less contexts (such as context.Background())
+// with timeout while preserving any existing caller deadline.
+func withDefaultTimeout(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if timeout <= 0 {
+		return ctx, func() {}
+	}
+	if _, hasDeadline := ctx.Deadline(); hasDeadline {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, timeout)
+}
+
+func effectivePoolMaxConns(configured int) int32 {
+	if configured <= 0 {
+		return int32(config.DefaultDBMaxConns)
+	}
+	if configured < config.MinDBMaxConns {
+		return int32(config.MinDBMaxConns)
+	}
+	if configured > config.MaxDBMaxConns {
+		return int32(config.MaxDBMaxConns)
+	}
+	return int32(configured)
+}
 
 // LogStore interface for database logging
 type LogStore interface {
@@ -79,17 +126,33 @@ type LogStore interface {
 
 // logStore implements LogStore interface
 type logStore struct {
-	config        config.DBConfig
-	pool          *pgxpool.Pool
-	eventQueue    chan *Event
-	statsQueue    chan *StatsRecord
-	eventAccepted atomic.Uint64
-	eventDropped  atomic.Uint64
-	statsAccepted atomic.Uint64
-	statsDropped  atomic.Uint64
-	lastSuccessNS atomic.Int64
-	wg            sync.WaitGroup
-	stopCh        chan struct{}
+	config           config.DBConfig
+	pool             *pgxpool.Pool
+	eventQueue       chan *Event
+	statsQueue       chan *StatsRecord
+	payloadQueue     chan payloadEventJob
+	sessionCoalescer *sessionCoalescer
+	miscQueue        chan asyncWriteJob
+	eventAccepted    atomic.Uint64
+	eventDropped     atomic.Uint64
+	statsAccepted    atomic.Uint64
+	statsDropped     atomic.Uint64
+	asyncAccepted    atomic.Uint64
+	asyncDropped     atomic.Uint64
+	lastSuccessNS    atomic.Int64
+	asyncWg          sync.WaitGroup
+	asyncStopCh      chan struct{}
+	wg               sync.WaitGroup
+	stopCh           chan struct{}
+	stopOnce         sync.Once
+
+	// Optional hooks for unit tests without a live PostgreSQL instance.
+	storePayloadHook     func(ctx context.Context, payload *PayloadRecord) (int64, error)
+	upsertSessionHook    func(ctx context.Context, sess *SessionRecord) error
+	upsertDialogHook     func(ctx context.Context, dialog *DialogRecord) error
+	upsertSessionDirHook func(ctx context.Context, sessionID, ownerInstanceID, wsURL string, ttlSeconds int) error
+	batchEventsHook      func(ctx context.Context, events []*Event) error
+	batchStatsHook       func(ctx context.Context, stats []*StatsRecord) error
 }
 
 // noopStore is a no-op implementation when DB is disabled
@@ -132,6 +195,9 @@ func (n *noopStore) LookupGatewayInstance(ctx context.Context, instanceID string
 }
 func (n *noopStore) ResolveTrunkByCredentials(ctx context.Context, domain string, port int, username, password string) (int64, *string, *time.Time, bool, error) {
 	return 0, nil, nil, false, nil
+}
+func (n *noopStore) ResolveTrunkDetailsByCredentials(ctx context.Context, domain string, port int, username, password string) (int64, string, string, *string, *time.Time, bool, error) {
+	return 0, "", "", nil, nil, false, nil
 }
 func (n *noopStore) ResolveOrCreateTrunk(ctx context.Context, domain string, port int, username, password, transport, instanceID string, leaseTTLSeconds int) (int64, *string, *time.Time, bool, error) {
 	return 0, nil, nil, false, nil
@@ -192,16 +258,17 @@ func New(cfg config.DBConfig) (LogStore, error) {
 		return &noopStore{}, nil
 	}
 
-	return &logStore{
-		config:     cfg,
-		eventQueue: make(chan *Event, 10000),      // Buffer 10k events
-		statsQueue: make(chan *StatsRecord, 1000), // Buffer 1k stats
-		stopCh:     make(chan struct{}),
-	}, nil
+	s := &logStore{
+		config: cfg,
+	}
+	s.ensureAsyncQueues()
+	return s, nil
 }
 
 // Start initializes database connection and background workers
 func (s *logStore) Start(ctx context.Context) error {
+	s.ensureAsyncQueues()
+
 	// Parse DSN
 	poolConfig, err := pgxpool.ParseConfig(s.config.DSN)
 	if err != nil {
@@ -209,7 +276,7 @@ func (s *logStore) Start(ctx context.Context) error {
 	}
 
 	// Configure connection pool
-	poolConfig.MaxConns = 10
+	poolConfig.MaxConns = effectivePoolMaxConns(s.config.MaxConns)
 	poolConfig.MinConns = 2
 	poolConfig.MaxConnLifetime = time.Hour
 	poolConfig.MaxConnIdleTime = 30 * time.Minute
@@ -230,12 +297,16 @@ func (s *logStore) Start(ctx context.Context) error {
 
 	fmt.Printf("✅ Database connection established\n")
 	fmt.Printf("📊 Database logging: Enabled\n")
+	fmt.Printf("   - Pool max conns: %d\n", poolConfig.MaxConns)
 	fmt.Printf("   - Batch size: %d events\n", s.config.BatchSize)
 	fmt.Printf("   - Batch interval: %d ms\n", s.config.BatchIntervalMS)
 	fmt.Printf("   - Stats interval: %d ms\n", s.config.StatsIntervalMS)
 	fmt.Printf("   - Log full SIP: %v\n", s.config.LogFullSIP)
 
-	// Start background workers
+	// Start async write workers (payloads, sessions, dialogs, session_directory)
+	s.startAsyncWorkers()
+
+	// Start background batch & maintenance workers
 	s.wg.Add(5)
 	go s.eventBatchWorker()
 	go s.statsBatchWorker()
@@ -248,20 +319,29 @@ func (s *logStore) Start(ctx context.Context) error {
 
 // Stop gracefully stops the log store
 func (s *logStore) Stop() error {
-	fmt.Printf("🛑 Stopping log store...\n")
+	s.stopOnce.Do(func() {
+		fmt.Printf("🛑 Stopping log store...\n")
 
-	// Signal workers to stop
-	close(s.stopCh)
+		// Phase 1: drain async write workers first so StorePayloadAndLogEventAsync
+		// finishes enqueuing linked call_events before eventBatchWorker drains.
+		if s.asyncStopCh != nil {
+			close(s.asyncStopCh)
+		}
+		s.asyncWg.Wait()
 
-	// Wait for workers to finish
-	s.wg.Wait()
+		// Phase 2: signal batch & maintenance workers to drain and stop.
+		if s.stopCh != nil {
+			close(s.stopCh)
+		}
+		s.wg.Wait()
 
-	// Close database pool
-	if s.pool != nil {
-		s.pool.Close()
-	}
+		// Phase 3: close database pool.
+		if s.pool != nil {
+			s.pool.Close()
+		}
 
-	fmt.Printf("✅ Log store stopped\n")
+		fmt.Printf("✅ Log store stopped\n")
+	})
 	return nil
 }
 
@@ -296,6 +376,8 @@ func (s *logStore) UpsertSession(ctx context.Context, sess *SessionRecord) error
 	if s.pool == nil {
 		return fmt.Errorf("database pool not initialized")
 	}
+	ctx, cancel := withDefaultTimeout(ctx, defaultDBOpTimeout)
+	defer cancel()
 
 	metaJSON, err := json.Marshal(sess.Meta)
 	if err != nil {
@@ -315,14 +397,21 @@ func (s *logStore) UpsertSession(ctx context.Context, sess *SessionRecord) error
 			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23
 		)
 		ON CONFLICT (session_id) DO UPDATE SET
-			updated_at = EXCLUDED.updated_at,
-			ended_at = EXCLUDED.ended_at,
+			updated_at = GREATEST(call_sessions.updated_at, EXCLUDED.updated_at),
+			ended_at = COALESCE(call_sessions.ended_at, EXCLUDED.ended_at),
 			direction = COALESCE(NULLIF(EXCLUDED.direction, ''), call_sessions.direction),
 			from_uri = COALESCE(NULLIF(EXCLUDED.from_uri, ''), call_sessions.from_uri),
 			to_uri = COALESCE(NULLIF(EXCLUDED.to_uri, ''), call_sessions.to_uri),
 			sip_call_id = COALESCE(NULLIF(EXCLUDED.sip_call_id, ''), call_sessions.sip_call_id),
-			final_state = EXCLUDED.final_state,
-			end_reason = EXCLUDED.end_reason,
+			final_state = CASE
+				WHEN call_sessions.final_state = 'ended' OR call_sessions.ended_at IS NOT NULL THEN 'ended'
+				ELSE EXCLUDED.final_state
+			END,
+			end_reason = CASE
+				WHEN call_sessions.final_state = 'ended' OR call_sessions.ended_at IS NOT NULL
+					THEN COALESCE(NULLIF(call_sessions.end_reason, ''), EXCLUDED.end_reason)
+				ELSE EXCLUDED.end_reason
+			END,
 			rtp_audio_port = EXCLUDED.rtp_audio_port,
 			rtp_video_port = EXCLUDED.rtp_video_port,
 			rtcp_audio_port = EXCLUDED.rtcp_audio_port,
@@ -348,6 +437,7 @@ func (s *logStore) UpsertSession(ctx context.Context, sess *SessionRecord) error
 		metaJSON,
 	)
 	if err == nil {
+		s.lastSuccessNS.Store(time.Now().UnixNano())
 		return nil
 	}
 
@@ -369,14 +459,21 @@ func (s *logStore) UpsertSession(ctx context.Context, sess *SessionRecord) error
 			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
 		)
 		ON CONFLICT (session_id) DO UPDATE SET
-			updated_at = EXCLUDED.updated_at,
-			ended_at = EXCLUDED.ended_at,
+			updated_at = GREATEST(call_sessions.updated_at, EXCLUDED.updated_at),
+			ended_at = COALESCE(call_sessions.ended_at, EXCLUDED.ended_at),
 			direction = COALESCE(NULLIF(EXCLUDED.direction, ''), call_sessions.direction),
 			from_uri = COALESCE(NULLIF(EXCLUDED.from_uri, ''), call_sessions.from_uri),
 			to_uri = COALESCE(NULLIF(EXCLUDED.to_uri, ''), call_sessions.to_uri),
 			sip_call_id = COALESCE(NULLIF(EXCLUDED.sip_call_id, ''), call_sessions.sip_call_id),
-			final_state = EXCLUDED.final_state,
-			end_reason = EXCLUDED.end_reason,
+			final_state = CASE
+				WHEN call_sessions.final_state = 'ended' OR call_sessions.ended_at IS NOT NULL THEN 'ended'
+				ELSE EXCLUDED.final_state
+			END,
+			end_reason = CASE
+				WHEN call_sessions.final_state = 'ended' OR call_sessions.ended_at IS NOT NULL
+					THEN COALESCE(NULLIF(call_sessions.end_reason, ''), EXCLUDED.end_reason)
+				ELSE EXCLUDED.end_reason
+			END,
 			rtp_audio_port = EXCLUDED.rtp_audio_port,
 			rtp_video_port = EXCLUDED.rtp_video_port,
 			rtcp_audio_port = EXCLUDED.rtcp_audio_port,
@@ -399,6 +496,7 @@ func (s *logStore) UpsertSession(ctx context.Context, sess *SessionRecord) error
 	if legacyErr != nil {
 		return fmt.Errorf("upsert session failed on new+legacy schema: new=%v legacy=%w", err, legacyErr)
 	}
+	s.lastSuccessNS.Store(time.Now().UnixNano())
 
 	return nil
 }
@@ -413,7 +511,7 @@ func isUndefinedColumnError(err error) bool {
 
 // LogEvent queues an event for async batch insert
 func (s *logStore) LogEvent(event *Event) {
-	if s.pool == nil {
+	if (s.pool == nil && s.batchEventsHook == nil) || event == nil || s.eventQueue == nil {
 		return
 	}
 
@@ -433,6 +531,8 @@ func (s *logStore) StorePayload(ctx context.Context, payload *PayloadRecord) (in
 	if s.pool == nil {
 		return 0, fmt.Errorf("database pool not initialized")
 	}
+	ctx, cancel := withDefaultTimeout(ctx, defaultDBOpTimeout)
+	defer cancel()
 
 	parsedJSON, err := json.Marshal(payload.Parsed)
 	if err != nil {
@@ -453,6 +553,9 @@ func (s *logStore) StorePayload(ctx context.Context, payload *PayloadRecord) (in
 		payload.ContentType, payload.BodyText, payload.BodyBytesB64,
 		parsedJSON,
 	).Scan(&payloadID)
+	if err == nil {
+		s.lastSuccessNS.Store(time.Now().UnixNano())
+	}
 
 	return payloadID, err
 }
@@ -465,6 +568,8 @@ func (s *logStore) StoreClientDiagnostic(ctx context.Context, diagnostic *Client
 	if diagnostic == nil {
 		return nil
 	}
+	ctx, cancel := withDefaultTimeout(ctx, defaultDBOpTimeout)
+	defer cancel()
 
 	dataJSON, err := json.Marshal(diagnostic.Data)
 	if err != nil {
@@ -501,6 +606,8 @@ func (s *logStore) ListClientDiagnostics(ctx context.Context, params ClientDiagn
 	if s.pool == nil {
 		return nil, fmt.Errorf("database pool not initialized")
 	}
+	ctx, cancel := withDefaultTimeout(ctx, defaultDBQueryTimeout)
+	defer cancel()
 
 	params.Page, params.PageSize = normalisePagination(params.Page, params.PageSize)
 	where := "WHERE 1=1"
@@ -581,7 +688,7 @@ func (s *logStore) ListClientDiagnostics(ctx context.Context, params ClientDiagn
 
 // RecordStats queues stats for async batch insert
 func (s *logStore) RecordStats(stats *StatsRecord) {
-	if s.pool == nil {
+	if (s.pool == nil && s.batchStatsHook == nil) || stats == nil || s.statsQueue == nil {
 		return
 	}
 
@@ -601,6 +708,8 @@ func (s *logStore) UpsertDialog(ctx context.Context, dialog *DialogRecord) error
 	if s.pool == nil {
 		return fmt.Errorf("database pool not initialized")
 	}
+	ctx, cancel := withDefaultTimeout(ctx, defaultDBOpTimeout)
+	defer cancel()
 
 	routeSetJSON, err := json.Marshal(dialog.RouteSet)
 	if err != nil {
@@ -620,6 +729,9 @@ func (s *logStore) UpsertDialog(ctx context.Context, dialog *DialogRecord) error
 		dialog.FromTag, dialog.ToTag, dialog.RemoteContact,
 		dialog.CSeq, routeSetJSON,
 	)
+	if err == nil {
+		s.lastSuccessNS.Store(time.Now().UnixNano())
+	}
 
 	return err
 }
@@ -629,6 +741,8 @@ func (s *logStore) UpsertSessionDirectory(ctx context.Context, sessionID, ownerI
 	if s.pool == nil {
 		return fmt.Errorf("database pool not initialized")
 	}
+	ctx, cancel := withDefaultTimeout(ctx, defaultDBOpTimeout)
+	defer cancel()
 
 	expiresAt := time.Now().Add(time.Duration(ttlSeconds) * time.Second)
 
@@ -644,6 +758,9 @@ func (s *logStore) UpsertSessionDirectory(ctx context.Context, sessionID, ownerI
 	`
 
 	_, err := s.pool.Exec(ctx, query, sessionID, ownerInstanceID, wsURL, expiresAt)
+	if err == nil {
+		s.lastSuccessNS.Store(time.Now().UnixNano())
+	}
 	return err
 }
 
@@ -652,6 +769,8 @@ func (s *logStore) LookupSessionDirectory(ctx context.Context, sessionID string)
 	if s.pool == nil {
 		return "", "", false, fmt.Errorf("database pool not initialized")
 	}
+	ctx, cancel := withDefaultTimeout(ctx, defaultDBOpTimeout)
+	defer cancel()
 
 	query := `
 		SELECT owner_instance_id, ws_url
@@ -661,7 +780,7 @@ func (s *logStore) LookupSessionDirectory(ctx context.Context, sessionID string)
 
 	err = s.pool.QueryRow(ctx, query, sessionID).Scan(&ownerInstanceID, &wsURL)
 	if err != nil {
-		if err.Error() == "no rows in result set" {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return "", "", false, nil
 		}
 		return "", "", false, err
@@ -675,6 +794,8 @@ func (s *logStore) DeleteSessionDirectory(ctx context.Context, sessionID string)
 	if s.pool == nil {
 		return fmt.Errorf("database pool not initialized")
 	}
+	ctx, cancel := withDefaultTimeout(ctx, defaultDBOpTimeout)
+	defer cancel()
 
 	query := `DELETE FROM session_directory WHERE session_id = $1`
 	_, err := s.pool.Exec(ctx, query, sessionID)
@@ -725,6 +846,8 @@ func (s *logStore) UpsertGatewayInstance(ctx context.Context, instanceID, wsURL 
 	if s.pool == nil {
 		return fmt.Errorf("database pool not initialized")
 	}
+	ctx, cancel := withDefaultTimeout(ctx, defaultDBOpTimeout)
+	defer cancel()
 
 	expiresAt := time.Now().Add(time.Duration(ttlSeconds) * time.Second)
 
@@ -747,6 +870,8 @@ func (s *logStore) LookupGatewayInstance(ctx context.Context, instanceID string)
 	if s.pool == nil {
 		return "", false, fmt.Errorf("database pool not initialized")
 	}
+	ctx, cancel := withDefaultTimeout(ctx, defaultDBOpTimeout)
+	defer cancel()
 
 	query := `
 		SELECT ws_url
@@ -756,7 +881,7 @@ func (s *logStore) LookupGatewayInstance(ctx context.Context, instanceID string)
 
 	err = s.pool.QueryRow(ctx, query, instanceID).Scan(&wsURL)
 	if err != nil {
-		if err.Error() == "no rows in result set" {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return "", false, nil
 		}
 		return "", false, err
@@ -765,26 +890,35 @@ func (s *logStore) LookupGatewayInstance(ctx context.Context, instanceID string)
 	return wsURL, true, nil
 }
 
-// ResolveTrunkByCredentials resolves trunk by credentials without creating a new trunk.
-func (s *logStore) ResolveTrunkByCredentials(ctx context.Context, domain string, port int, username, password string) (trunkID int64, leaseOwner *string, leaseUntil *time.Time, found bool, err error) {
+// ResolveTrunkDetailsByCredentials resolves trunk ID, public_id, username, and lease
+// metadata by credentials in a single database query without creating a new trunk.
+func (s *logStore) ResolveTrunkDetailsByCredentials(ctx context.Context, domain string, port int, username, password string) (trunkID int64, publicID string, resolvedUsername string, leaseOwner *string, leaseUntil *time.Time, found bool, err error) {
 	if s.pool == nil {
-		return 0, nil, nil, false, fmt.Errorf("database pool not initialized")
+		return 0, "", "", nil, nil, false, fmt.Errorf("database pool not initialized")
 	}
+	ctx, cancel := withDefaultTimeout(ctx, defaultDBOpTimeout)
+	defer cancel()
 
 	query := `
-		SELECT id, lease_owner, lease_until
+		SELECT id, COALESCE(public_id::text, ''), username, lease_owner, lease_until
 		FROM sip_trunks
 		WHERE enabled = true AND domain = $1 AND port = $2 AND username = $3 AND password = $4
 	`
 
-	err = s.pool.QueryRow(ctx, query, domain, port, username, password).Scan(&trunkID, &leaseOwner, &leaseUntil)
+	err = s.pool.QueryRow(ctx, query, domain, port, username, password).Scan(&trunkID, &publicID, &resolvedUsername, &leaseOwner, &leaseUntil)
 	if err == nil {
-		return trunkID, leaseOwner, leaseUntil, true, nil
+		return trunkID, publicID, resolvedUsername, leaseOwner, leaseUntil, true, nil
 	}
-	if err.Error() == "no rows in result set" {
-		return 0, nil, nil, false, nil
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, "", "", nil, nil, false, nil
 	}
-	return 0, nil, nil, false, err
+	return 0, "", "", nil, nil, false, err
+}
+
+// ResolveTrunkByCredentials resolves trunk by credentials without creating a new trunk.
+func (s *logStore) ResolveTrunkByCredentials(ctx context.Context, domain string, port int, username, password string) (trunkID int64, leaseOwner *string, leaseUntil *time.Time, found bool, err error) {
+	trunkID, _, _, leaseOwner, leaseUntil, found, err = s.ResolveTrunkDetailsByCredentials(ctx, domain, port, username, password)
+	return trunkID, leaseOwner, leaseUntil, found, err
 }
 
 // ResolveOrCreateTrunk resolves trunk by credentials or creates a new one
@@ -792,6 +926,8 @@ func (s *logStore) ResolveOrCreateTrunk(ctx context.Context, domain string, port
 	if s.pool == nil {
 		return 0, nil, nil, false, fmt.Errorf("database pool not initialized")
 	}
+	ctx, cancel := withDefaultTimeout(ctx, defaultDBOpTimeout)
+	defer cancel()
 
 	query := `
 		SELECT id, lease_owner, lease_until
@@ -803,7 +939,7 @@ func (s *logStore) ResolveOrCreateTrunk(ctx context.Context, domain string, port
 	if err == nil {
 		return trunkID, leaseOwner, leaseUntil, false, nil
 	}
-	if err.Error() != "no rows in result set" {
+	if !errors.Is(err, pgx.ErrNoRows) {
 		return 0, nil, nil, false, err
 	}
 
@@ -868,23 +1004,7 @@ func (s *logStore) gatewayInstanceCleanupWorker() {
 	}
 }
 
-// ListSessions returns call sessions from the database with pagination, search, and filtering.
-func (s *logStore) ListSessions(ctx context.Context, params SessionListParams) (*SessionListResult, error) {
-	if s.pool == nil {
-		return nil, fmt.Errorf("database pool not initialized")
-	}
-
-	// Normalise pagination defaults
-	if params.Page < 1 {
-		params.Page = 1
-	}
-	if params.PageSize < 1 {
-		params.PageSize = 20
-	}
-	if params.PageSize > 100 {
-		params.PageSize = 100
-	}
-
+func buildListSessionsQueries(params SessionListParams) (countSQL, dataSQL string, countArgs, dataArgs []interface{}) {
 	// Build dynamic WHERE clause
 	where := "WHERE 1=1"
 	args := []interface{}{}
@@ -927,22 +1047,28 @@ func (s *logStore) ListSessions(ctx context.Context, params SessionListParams) (
 		argIdx++
 	}
 
-	// Count total matching rows
-	countSQL := `
+	trunkJoin := `
+		LEFT JOIN sip_trunks st
+		  ON st.id = COALESCE(
+		    cs.trunk_id,
+		    CASE WHEN (cs.meta->>'trunkId') ~ '^[0-9]+$' THEN (cs.meta->>'trunkId')::bigint END
+		  )
+	`
+
+	if params.Search != "" {
+		countSQL = `
+		SELECT COUNT(*)
+		FROM call_sessions cs` + trunkJoin + where
+	} else {
+		countSQL = `
 		SELECT COUNT(*)
 		FROM call_sessions cs
-		LEFT JOIN sip_trunks st
-		  ON (cs.meta->>'trunkId') ~ '^[0-9]+$'
-		 AND (cs.meta->>'trunkId')::bigint = st.id
-	` + where
-	var total int
-	if err := s.pool.QueryRow(ctx, countSQL, args...).Scan(&total); err != nil {
-		return nil, fmt.Errorf("count query failed: %w", err)
+		` + where
 	}
+	countArgs = append([]interface{}{}, args...)
 
-	// Fetch page
 	offset := (params.Page - 1) * params.PageSize
-	dataSQL := fmt.Sprintf(`
+	dataSQL = fmt.Sprintf(`
 		SELECT cs.session_id, cs.created_at, cs.updated_at, cs.ended_at,
 		       cs.direction, COALESCE(NULLIF(cs.from_uri, ''), st.username, '') AS from_uri, cs.to_uri,
 		       cs.sip_call_id, cs.final_state, cs.end_reason,
@@ -950,17 +1076,35 @@ func (s *logStore) ListSessions(ctx context.Context, params SessionListParams) (
 		       cs.sip_opus_pt, COALESCE(cs.audio_profile,''), COALESCE(cs.video_profile,''), COALESCE(cs.video_rejected, false),
 		       COALESCE(cs.auth_mode,''), cs.trunk_id, COALESCE(cs.trunk_name,''), COALESCE(cs.sip_username,''),
 		       cs.meta
-		FROM call_sessions cs
-		LEFT JOIN sip_trunks st
-		  ON (cs.meta->>'trunkId') ~ '^[0-9]+$'
-		 AND (cs.meta->>'trunkId')::bigint = st.id
-		%s
+		FROM call_sessions cs%s%s
 		ORDER BY cs.created_at DESC
 		LIMIT $%d OFFSET $%d
-	`, where, argIdx, argIdx+1)
-	args = append(args, params.PageSize, offset)
+	`, trunkJoin, where, argIdx, argIdx+1)
+	dataArgs = append(args, params.PageSize, offset)
+	return countSQL, dataSQL, countArgs, dataArgs
+}
 
-	rows, err := s.pool.Query(ctx, dataSQL, args...)
+// ListSessions returns call sessions from the database with pagination, search, and filtering.
+func (s *logStore) ListSessions(ctx context.Context, params SessionListParams) (*SessionListResult, error) {
+	if s.pool == nil {
+		return nil, fmt.Errorf("database pool not initialized")
+	}
+	ctx, cancel := withDefaultTimeout(ctx, defaultDBQueryTimeout)
+	defer cancel()
+
+	// Normalise pagination defaults
+	params.Page, params.PageSize = normalisePagination(params.Page, params.PageSize)
+
+	countSQL, dataSQL, countArgs, dataArgs := buildListSessionsQueries(params)
+
+	// Count total matching rows
+	var total int
+	if err := s.pool.QueryRow(ctx, countSQL, countArgs...).Scan(&total); err != nil {
+		return nil, fmt.Errorf("count query failed: %w", err)
+	}
+
+	// Fetch page
+	rows, err := s.pool.Query(ctx, dataSQL, dataArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("query failed: %w", err)
 	}
@@ -1030,6 +1174,8 @@ func (s *logStore) ListEvents(ctx context.Context, params EventListParams) (*Eve
 	if s.pool == nil {
 		return nil, fmt.Errorf("database pool not initialized")
 	}
+	ctx, cancel := withDefaultTimeout(ctx, defaultDBQueryTimeout)
+	defer cancel()
 
 	params.Page, params.PageSize = normalisePagination(params.Page, params.PageSize)
 
@@ -1106,6 +1252,8 @@ func (s *logStore) ListPayloads(ctx context.Context, params PayloadListParams) (
 	if s.pool == nil {
 		return nil, fmt.Errorf("database pool not initialized")
 	}
+	ctx, cancel := withDefaultTimeout(ctx, defaultDBQueryTimeout)
+	defer cancel()
 
 	params.Page, params.PageSize = normalisePagination(params.Page, params.PageSize)
 
@@ -1170,6 +1318,8 @@ func (s *logStore) GetPayload(ctx context.Context, payloadID int64) (*PayloadRea
 	if s.pool == nil {
 		return nil, fmt.Errorf("database pool not initialized")
 	}
+	ctx, cancel := withDefaultTimeout(ctx, defaultDBOpTimeout)
+	defer cancel()
 
 	query := `
 		SELECT payload_id, ts, session_id, kind, COALESCE(content_type,''),
@@ -1199,6 +1349,8 @@ func (s *logStore) ListDialogs(ctx context.Context, params DialogListParams) (*D
 	if s.pool == nil {
 		return nil, fmt.Errorf("database pool not initialized")
 	}
+	ctx, cancel := withDefaultTimeout(ctx, defaultDBQueryTimeout)
+	defer cancel()
 
 	params.Page, params.PageSize = normalisePagination(params.Page, params.PageSize)
 
@@ -1259,6 +1411,8 @@ func (s *logStore) ListStats(ctx context.Context, params StatsListParams) (*Stat
 	if s.pool == nil {
 		return nil, fmt.Errorf("database pool not initialized")
 	}
+	ctx, cancel := withDefaultTimeout(ctx, defaultDBQueryTimeout)
+	defer cancel()
 
 	params.Page, params.PageSize = normalisePagination(params.Page, params.PageSize)
 
@@ -1325,6 +1479,8 @@ func (s *logStore) ListGatewayInstances(ctx context.Context, params GatewayInsta
 	if s.pool == nil {
 		return nil, fmt.Errorf("database pool not initialized")
 	}
+	ctx, cancel := withDefaultTimeout(ctx, defaultDBQueryTimeout)
+	defer cancel()
 
 	params.Page, params.PageSize = normalisePagination(params.Page, params.PageSize)
 
@@ -1382,6 +1538,8 @@ func (s *logStore) ListSessionDirectory(ctx context.Context, params SessionDirec
 	if s.pool == nil {
 		return nil, fmt.Errorf("database pool not initialized")
 	}
+	ctx, cancel := withDefaultTimeout(ctx, defaultDBQueryTimeout)
+	defer cancel()
 
 	params.Page, params.PageSize = normalisePagination(params.Page, params.PageSize)
 
@@ -1439,6 +1597,8 @@ func (s *logStore) GetDashboardSummary(ctx context.Context, params DashboardSumm
 	if s.pool == nil {
 		return nil, fmt.Errorf("database pool not initialized")
 	}
+	ctx, cancel := withDefaultTimeout(ctx, defaultDBDashboardTimeout)
+	defer cancel()
 
 	period := params.Period
 	switch period {
