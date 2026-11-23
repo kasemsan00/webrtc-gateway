@@ -256,6 +256,15 @@ func (s *Session) ProactivePLIWakeChan() <-chan struct{} {
 	return s.proactivePLIWakeChan()
 }
 
+// SignalProactivePLIWake wakes the SIP-side proactive browser PLI loop so it
+// re-evaluates readiness immediately instead of waiting out a backoff.
+func (s *Session) SignalProactivePLIWake() {
+	if s == nil {
+		return
+	}
+	s.signalProactivePLIWake()
+}
+
 // armSwitchKeyframeRequestLocked records a client request for a browser IDR.
 // The caller holds s.mu. The returned generation cancels an older follow-up burst.
 func (s *Session) armSwitchKeyframeRequestLocked(now time.Time) uint64 {

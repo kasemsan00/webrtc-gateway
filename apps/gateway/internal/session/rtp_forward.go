@@ -183,7 +183,7 @@ func (s *Session) forwardRTPToAsteriskFrom(track rtpByteReader, kind string) {
 				// STAP-A (Single-Time Aggregation Packet Type A) - multiple NALs in one RTP packet
 				// Common in some WebRTC implementations (especially mobile browsers)
 				isSTAPA = true
-				if packetCount <= 20 {
+				if packetCount <= 3 || (s.debugVideoPackets && packetCount <= 20) {
 					fmt.Printf("[%s] 📦 STAP-A detected in packet #%d (%d bytes) - will de-aggregate\n", s.ID, packetCount, len(packet.Payload))
 				}
 			} else if nalType == 28 && len(packet.Payload) > 1 {
@@ -223,7 +223,7 @@ func (s *Session) forwardRTPToAsteriskFrom(track rtpByteReader, kind string) {
 			}
 
 			// Debug logging for first few packets
-			if packetCount <= 5 {
+			if packetCount <= 3 {
 				fmt.Printf("[%s] 🎵 Audio packet #%d: PT=%d, payload=%d bytes\n",
 					s.ID, packetCount, packet.Header.PayloadType, len(packet.Payload))
 			}
@@ -268,7 +268,7 @@ func (s *Session) forwardRTPToAsteriskFrom(track rtpByteReader, kind string) {
 			// WebRTC sends Opus as PT=111, but SIP side may expect PT=107 (or other)
 			if s.SIPOpusPT > 0 && s.SIPOpusPT != 111 && packet.Header.PayloadType == 111 {
 				packet.Header.PayloadType = s.SIPOpusPT
-				if packetCount <= 5 {
+				if packetCount <= 3 {
 					fmt.Printf("[%s] 🔄 Rewrite audio PT: 111 → %d (packet #%d)\n", s.ID, s.SIPOpusPT, packetCount)
 				}
 			}
@@ -489,7 +489,7 @@ func (s *Session) forwardRTPToAsteriskFrom(track rtpByteReader, kind string) {
 						if out, err := nalPacket.Marshal(); err == nil {
 							if destAddr != nil && conn != nil {
 								pendingWrites = append(pendingWrites, out)
-								if packetCount <= 50 {
+								if packetCount <= 3 || (s.debugVideoPackets && packetCount <= 50) {
 									fmt.Printf("[%s] 📤 De-aggregated STAP-A NAL #%d type=%d (Seq=%d, Size=%d, Marker=%v)\n",
 										s.ID, nalCount, nalType, nalPacket.Header.SequenceNumber, len(out), nalPacket.Header.Marker)
 								}
@@ -596,8 +596,8 @@ func (s *Session) forwardRTPToAsteriskFrom(track rtpByteReader, kind string) {
 				continue
 			}
 
-			// Log first few forwarded packets
-			if packetCount <= 5 || packetCount%500 == 0 || isKeyframe {
+			// Log first few forwarded packets (plus keyframes and periodic heartbeat)
+			if packetCount <= 3 || (s.debugVideoPackets && packetCount <= 5) || packetCount%500 == 0 || isKeyframe {
 				fmt.Printf("[%s] 📤 Re-packetized %s #%d (Seq=%d, SSRC=%d, Size=%d) → %s\n",
 					s.ID, kind, packetCount, packet.Header.SequenceNumber, packet.Header.SSRC, len(outBuf), destAddr)
 			}

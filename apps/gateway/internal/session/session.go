@@ -930,6 +930,7 @@ func (s *Session) attachInitialPeerConnectionCallbacks(peerConnection *webrtc.Pe
 		s.UpdatedAt = time.Now()
 		startRecoveryBurstReason := ""
 		replayIDRReason := ""
+		wakeProactivePLI := false
 		var afterICEEnded func()
 		isTerminalCleanup := isTerminalCleanupState(s.State, s.TerminalAction)
 
@@ -998,6 +999,7 @@ func (s *Session) attachInitialPeerConnectionCallbacks(peerConnection *webrtc.Pe
 			}
 			immediateICEConnectedFIR := s.RemoteVideoSSRC != 0 && s.LastKeyframe.IsZero()
 			replayIDRReason = "ice-connected"
+			wakeProactivePLI = true
 			go func(sendImmediateFIR bool) {
 				fmt.Printf("[%s] 🚀 ICE Connected - Sending conservative FIR + PLI startup recovery (immediateFIR=%v)\n", id, sendImmediateFIR)
 				if !sendImmediateFIR {
@@ -1049,6 +1051,9 @@ func (s *Session) attachInitialPeerConnectionCallbacks(peerConnection *webrtc.Pe
 		if startRecoveryBurstReason != "" {
 			s.StartVideoRecoveryBurst(startRecoveryBurstReason)
 		}
+		if wakeProactivePLI {
+			s.signalProactivePLIWake()
+		}
 	})
 
 	// Set OnTrack handler to forward WebRTC RTP → Asterisk
@@ -1061,6 +1066,7 @@ func (s *Session) attachInitialPeerConnectionCallbacks(peerConnection *webrtc.Pe
 		// Extra logging for video codec
 		if kind == "video" {
 			fmt.Printf("[%s] 🎬 WebRTC video codec details: %s (fmtp: %s)\n", id, codec.MimeType, codec.SDPFmtpLine)
+			s.signalProactivePLIWake()
 		}
 
 		// Cache SPS/PPS if available (for Video)
@@ -1218,6 +1224,26 @@ func (s *Session) Done() <-chan struct{} {
 		return ch
 	}
 	return s.ctx.Done()
+}
+
+// DebugVideoPackets reports whether DEBUG_VIDEO_PACKETS is enabled for this session.
+func (s *Session) DebugVideoPackets() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.debugVideoPackets
+}
+
+// SetWriteWebRTCRTCPForTest installs a test RTCP writer hook on the session.
+func (s *Session) SetWriteWebRTCRTCPForTest(fn func([]rtcp.Packet) error) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.writeWebRTCRTCP = fn
+	s.mu.Unlock()
 }
 
 // TryClaimIncoming attempts to claim an incoming call (first-accept-wins).

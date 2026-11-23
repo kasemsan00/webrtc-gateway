@@ -1,8 +1,14 @@
 package push
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"log"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -135,5 +141,78 @@ func TestBuildIncomingCallPushDataDetectsIOSFallbackPlatform(t *testing.T) {
 	}
 	if data["hasVideo"] != "false" {
 		t.Fatalf("expected hasVideo false, got %q", data["hasVideo"])
+	}
+}
+
+func TestMaskToken(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"", "<redacted>"},
+		{"short-tok", "<redacted>"},
+		{"12345678901234", "<redacted>"},
+		{"123456789012345", "123456...2345"},
+		{"  abcdef_SECRET_MIDDLE_wxyz  ", "abcdef...wxyz"},
+	}
+	for _, tc := range cases {
+		if got := maskToken(tc.in); got != tc.want {
+			t.Fatalf("maskToken(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestNotifyIncomingCallRedactsFCMTokensInLogs(t *testing.T) {
+	longToken := "eXk9Ab_SUPER_SECRET_FCM_TOKEN_PAYLOAD_7890"
+	shortToken := "shortSecret12"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"status":"ok","data":[`+
+			`{"user_id":"u-42","service_id":%q,"token":%q,"mobile_device":"android_dev1"},`+
+			`{"user_id":"u-42","service_id":%q,"token":%q,"mobile_device":"ios_dev2"}`+
+			`]}`, pushServiceID, longToken, pushServiceID, shortToken)
+	}))
+	defer srv.Close()
+
+	ttrs := &TTRSClient{
+		baseURL:    srv.URL,
+		httpClient: srv.Client(),
+	}
+	fcm := &stubFCM{}
+	svc := NewServiceWithFCM(ttrs, fcm, nil)
+
+	var logBuf bytes.Buffer
+	origOut := log.Writer()
+	log.SetOutput(&logBuf)
+	defer log.SetOutput(origOut)
+
+	svc.NotifyIncomingCall("u-42", "sess-99", "1001", "2002", true)
+
+	logs := logBuf.String()
+	if fcm.calls != 2 {
+		t.Fatalf("expected 2 FCM sends, got %d", fcm.calls)
+	}
+	for _, forbidden := range []string{longToken, shortToken, "SUPER_SECRET_FCM_TOKEN", "FCM token:", "FCM tokens:"} {
+		if strings.Contains(logs, forbidden) {
+			t.Fatalf("sensitive or verbose token dump %q leaked into push logs:\n%s", forbidden, logs)
+		}
+	}
+	if !strings.Contains(logs, "token=eXk9Ab...7890") {
+		t.Fatalf("expected masked long token in logs, got:\n%s", logs)
+	}
+	if !strings.Contains(logs, "token=<redacted>") {
+		t.Fatalf("expected redacted short token in logs, got:\n%s", logs)
+	}
+
+	// Verify NotificationEntry.String() also redacts when formatted with %v.
+	entryStr := fmt.Sprintf("%v", NotificationEntry{
+		UserID:       "u-42",
+		ServiceID:    pushServiceID,
+		Token:        longToken,
+		MobileDevice: "android_dev1",
+	})
+	if strings.Contains(entryStr, longToken) {
+		t.Fatalf("NotificationEntry.String() leaked plaintext token: %s", entryStr)
 	}
 }

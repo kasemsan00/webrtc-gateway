@@ -208,6 +208,7 @@ func (s *Session) createReplacementPeerConnection(
 			s.commitMakeBeforeBreak(newPC)
 			s.StartVideoRecoveryBurst("renegotiated-ice-connected")
 			s.RequestSIPVideoIDRReplay("renegotiated-ice-connected")
+			s.signalProactivePLIWake()
 			go func() {
 				fmt.Printf("[%s] 🚀 Renegotiated - Sending FIR + PLI requests for fast video start (with SPS/PPS)\n", id)
 				if s.GetState() == StateEnded {
@@ -255,6 +256,7 @@ func (s *Session) createReplacementPeerConnection(
 			id, kind, codec.MimeType, track.PayloadType(), track.SSRC(), codec.ClockRate, codec.SDPFmtpLine)
 		if kind == "video" {
 			fmt.Printf("[%s] 🎬 WebRTC video codec details (renegotiated): %s (fmtp: %s)\n", id, codec.MimeType, codec.SDPFmtpLine)
+			s.signalProactivePLIWake()
 		}
 		go s.readReceiverRTCP(receiver, kind)
 		go s.forwardRTPToAsterisk(track, kind)

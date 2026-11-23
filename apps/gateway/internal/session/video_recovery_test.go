@@ -704,3 +704,76 @@ func TestHasHealthySIPVideoIDRAfterSwitchAcceptsSmallCompleteIDR(t *testing.T) {
 		t.Fatal("expected healthy after a small complete IDR")
 	}
 }
+
+func TestStopStartupVideoRecoveryBurstIfActiveSettlesStartupReasons(t *testing.T) {
+	baseInterval := 3 * time.Second
+	baseStale := 5 * time.Second
+	baseFIRStale := 10 * time.Second
+
+	for _, startReason := range []string{"initial-call", "sip-200-ok", "sip-accept-ok"} {
+		t.Run(startReason, func(t *testing.T) {
+			sess := newBurstTestSession("startup-settle-" + startReason)
+			sess.StartVideoRecoveryBurst(startReason)
+
+			if _, _, _, active := sess.GetVideoRecoveryPolicy(baseInterval, baseStale, baseFIRStale); !active {
+				t.Fatalf("expected burst active after %s", startReason)
+			}
+			if !sess.StopStartupVideoRecoveryBurstIfActive("keyframe-settled") {
+				t.Fatalf("expected startup burst %s to settle", startReason)
+			}
+			if _, _, _, active := sess.GetVideoRecoveryPolicy(baseInterval, baseStale, baseFIRStale); active {
+				t.Fatalf("expected burst inactive after keyframe-settled for %s", startReason)
+			}
+			// Idempotent once already ended.
+			if sess.StopStartupVideoRecoveryBurstIfActive("keyframe-settled") {
+				t.Fatalf("expected repeated settle to be a no-op for %s", startReason)
+			}
+		})
+	}
+}
+
+func TestStopStartupVideoRecoveryBurstIfActivePreservesSwitchAndResumeWindows(t *testing.T) {
+	baseInterval := 3 * time.Second
+	baseStale := 5 * time.Second
+	baseFIRStale := 10 * time.Second
+
+	for _, protectedReason := range []string{
+		"ws-resume-success",
+		"ice-reconnecting",
+		"ice-reconnected",
+		"renegotiated-ice-connected",
+	} {
+		t.Run(protectedReason, func(t *testing.T) {
+			sess := newBurstTestSession("protected-" + protectedReason)
+			sess.StartVideoRecoveryBurst(protectedReason)
+
+			if sess.StopStartupVideoRecoveryBurstIfActive("keyframe-settled") {
+				t.Fatalf("startup settle must not stop %s recovery window", protectedReason)
+			}
+			if _, _, _, active := sess.GetVideoRecoveryPolicy(baseInterval, baseStale, baseFIRStale); !active {
+				t.Fatalf("expected %s recovery window to remain active", protectedReason)
+			}
+		})
+	}
+
+	t.Run("active-switch-recovery", func(t *testing.T) {
+		sess := newBurstTestSession("protected-switch")
+		sess.StartSwitchVideoRecovery(2*time.Second, 500*time.Millisecond)
+
+		if sess.StopStartupVideoRecoveryBurstIfActive("keyframe-settled") {
+			t.Fatal("startup settle must not stop active switch recovery")
+		}
+		if !sess.IsSwitchVideoRecoveryActive() {
+			t.Fatal("expected switch recovery to remain active")
+		}
+		// Even if a startup burst reason later overwrites VideoRecoveryBurstLastReason,
+		// the active switch recovery must still be protected.
+		sess.StartVideoRecoveryBurst("sip-200-ok")
+		if sess.StopStartupVideoRecoveryBurstIfActive("keyframe-settled") {
+			t.Fatal("startup settle must not stop active switch recovery even after reason overwrite")
+		}
+		if !sess.IsSwitchVideoRecoveryActive() {
+			t.Fatal("expected switch recovery to remain active after reason overwrite")
+		}
+	})
+}

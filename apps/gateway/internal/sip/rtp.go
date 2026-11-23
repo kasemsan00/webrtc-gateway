@@ -380,7 +380,7 @@ func (s *Server) handleAudioRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 		}
 
 		// Regular audio RTP packet (packetCount already incremented above)
-		if packetCount <= 5 || packetCount%1000 == 0 {
+		if packetCount <= 3 || packetCount%1000 == 0 {
 			fmt.Printf("[%s] Audio RTP packet #%d received: %d bytes from %s\n", sess.ID, packetCount, n, remoteAddr.String())
 		}
 
@@ -450,7 +450,7 @@ func (s *Server) handleAudioRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 				originalPT := outPacket.Header.PayloadType
 				if originalPT != DTMFPayloadType && originalPT == sipOpusPT {
 					outPacket.Header.PayloadType = 111
-					if packetCount <= 5 {
+					if packetCount <= 3 {
 						fmt.Printf("[%s] 🔄 Rewrite audio PT: %d → 111 (packet #%d)\n", sess.ID, originalPT, packetCount)
 					}
 					if rewrittenBuf, marshalErr := outPacket.Marshal(); marshalErr == nil {
@@ -793,7 +793,7 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 		sess.UpdateSIPVideoRTPSource(remoteAddr)
 
 		// Debug: Log small RTP packets
-		if n < 50 && packetCount <= 20 {
+		if n < 50 && (packetCount <= 3 || (sess.DebugVideoPackets() && packetCount <= 20)) {
 			pt := buffer[1] & 0x7F
 			fmt.Printf("[%s] ⚠️ Small RTP video packet #%d: %d bytes, PT=%d from %s\n",
 				sess.ID, packetCount, n, pt, remoteAddr.String())
@@ -874,11 +874,19 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 						lastKeyframe, _ := sess.GetKeyframeTimes()
 						if !lastKeyframe.IsZero() && time.Since(lastKeyframe) <= startupKeyframeFresh {
 							fmt.Printf("[%s] ✅ Startup recovery settled after keyframe; stopping PLI burst\n", sess.ID)
+							sess.StopStartupVideoRecoveryBurstIfActive("keyframe-settled")
 							return
 						}
 
 						sess.SendPLIToAsteriskForced("ssrc-learn")
 						time.Sleep(startupPLIInterval)
+					}
+					if sess.GetState() != session.StateEnded {
+						lastKeyframe, _ := sess.GetKeyframeTimes()
+						if !lastKeyframe.IsZero() && time.Since(lastKeyframe) <= startupKeyframeFresh {
+							fmt.Printf("[%s] ✅ Startup recovery settled after keyframe; stopping PLI burst\n", sess.ID)
+							sess.StopStartupVideoRecoveryBurstIfActive("keyframe-settled")
+						}
 					}
 				}()
 			}
@@ -1003,13 +1011,13 @@ func (s *Server) handleVideoRTPPacketsForSession(conn *net.UDPConn, sess *sessio
 				case 7:
 					// SPS (Sequence Parameter Set) - cache for SIP→WebRTC injection and log
 					sess.CacheSIPSPS(packet.Payload)
-					if packetCount <= 20 || packetCount%1000 == 0 {
+					if packetCount <= 3 || (sess.DebugVideoPackets() && packetCount <= 20) || packetCount%1000 == 0 {
 						fmt.Printf("[%s] 📦 SPS (parameter set) received in packet #%d (size: %d bytes, seq=%d)\n", sess.ID, packetCount, len(packet.Payload), packet.Header.SequenceNumber)
 					}
 				case 8:
 					// PPS (Picture Parameter Set) - cache for SIP→WebRTC injection and log
 					sess.CacheSIPPPS(packet.Payload)
-					if packetCount <= 20 || packetCount%1000 == 0 {
+					if packetCount <= 3 || (sess.DebugVideoPackets() && packetCount <= 20) || packetCount%1000 == 0 {
 						fmt.Printf("[%s] 📦 PPS (parameter set) received in packet #%d (size: %d bytes, seq=%d)\n", sess.ID, packetCount, len(packet.Payload), packet.Header.SequenceNumber)
 					}
 				case 28:
@@ -1180,6 +1188,11 @@ func (s *Server) handleRTCPFromSIP(data []byte, sess *session.Session, rtcpCount
 	}
 }
 
+const (
+	proactivePLIThrottledBackoff   = 150 * time.Millisecond
+	proactivePLIThrottledLogMinGap = 2 * time.Second
+)
+
 // startProactiveBrowserPLIForSession asks the browser for an IDR until the
 // first one is forwarded to SIP, then only if none has been forwarded for
 // the safety-net interval and SIP has never asked, or the last SIP FIR/PLI
@@ -1187,22 +1200,52 @@ func (s *Server) handleRTCPFromSIP(data []byte, sess *session.Session, rtcpCount
 // between. RTP already flowing does not cancel it. After a skip the wait
 // is lastIDR+safety, not a short retry.
 func (s *Server) startProactiveBrowserPLIForSession(sess *session.Session) {
+	s.runProactiveBrowserPLILoop(sess, proactivePLIThrottledBackoff, proactivePLIThrottledLogMinGap)
+}
+
+func (s *Server) runProactiveBrowserPLILoop(sess *session.Session, throttledBackoffInterval, throttledLogMinGap time.Duration) {
 	fmt.Printf("[%s] proactive_browser_pli_start initial=%s safety=%s\n",
 		sess.ID,
 		sess.ProactiveBrowserPLIInitial(),
 		sess.ProactiveBrowserPLISafety())
 	started := time.Now()
 	wake := sess.ProactivePLIWakeChan()
+	done := sess.Done()
+	select {
+	case <-done:
+		if sess.GetState() == session.StateEnded {
+			fmt.Printf("[%s] proactive_browser_pli_stop reason=session-ended\n", sess.ID)
+			return
+		}
+		// Unit-test sessions created as &session.Session{} have nil ctx, so
+		// Done() is already closed even though the session has not ended.
+		done = nil
+	default:
+	}
+
 	timer := time.NewTimer(time.Hour)
+	defer timer.Stop()
 	if !timer.Stop() {
 		select {
 		case <-timer.C:
 		default:
 		}
 	}
+
+	var throttledBackoff time.Duration
+	throttledActive := false
+	var lastThrottledLog time.Time
+
 	for {
+		if sess.GetState() == session.StateEnded {
+			fmt.Printf("[%s] proactive_browser_pli_stop reason=session-ended\n", sess.ID)
+			return
+		}
 		now := time.Now()
 		wait := sess.ProactiveBrowserPLIWait(now)
+		if throttledBackoff > wait {
+			wait = throttledBackoff
+		}
 		if wait < time.Millisecond {
 			wait = time.Millisecond
 		}
@@ -1216,7 +1259,17 @@ func (s *Server) startProactiveBrowserPLIForSession(sess *session.Session) {
 				default:
 				}
 			}
+			throttledBackoff = 0
 			continue
+		case <-done:
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			fmt.Printf("[%s] proactive_browser_pli_stop reason=session-ended\n", sess.ID)
+			return
 		}
 		if sess.GetState() == session.StateEnded {
 			fmt.Printf("[%s] proactive_browser_pli_stop reason=session-ended\n", sess.ID)
@@ -1226,16 +1279,25 @@ func (s *Server) startProactiveBrowserPLIForSession(sess *session.Session) {
 		decision := sess.DecideSessionProactiveBrowserPLI(now)
 		callAge := time.Since(started).Round(time.Millisecond)
 		if !decision.Send {
+			throttledBackoff = 0
+			throttledActive = false
 			fmt.Printf("[%s] proactive_browser_pli skipped reason=%s interval=%s call_age=%s\n",
 				sess.ID, decision.Reason, wait, callAge)
 			continue
 		}
 		if sess.SendProactivePLIToWebRTC() {
+			throttledBackoff = 0
+			throttledActive = false
 			fmt.Printf("[%s] proactive_browser_pli sent reason=%s interval=%s call_age=%s\n",
 				sess.ID, decision.Reason, wait, callAge)
 		} else {
-			fmt.Printf("[%s] proactive_browser_pli throttled reason=%s interval=%s call_age=%s\n",
-				sess.ID, decision.Reason, wait, callAge)
+			throttledBackoff = throttledBackoffInterval
+			if !throttledActive || now.Sub(lastThrottledLog) >= throttledLogMinGap {
+				throttledActive = true
+				lastThrottledLog = now
+				fmt.Printf("[%s] proactive_browser_pli throttled reason=%s interval=%s call_age=%s\n",
+					sess.ID, decision.Reason, wait, callAge)
+			}
 		}
 	}
 }

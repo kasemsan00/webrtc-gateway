@@ -136,14 +136,8 @@ func (s *Service) NotifyIncomingCall(userID, sessionID, from, to string, hasVide
 			continue
 		}
 		sent++
-		log.Printf("🔔 [Push] FCM sent to user %s device %s (service_id=%s)", userID, entry.MobileDevice, pushServiceID)
-		log.Printf("🔔 [Push] FCM token: %s", entry.Token)
-		log.Printf("🔔 [Push] FCM mobile device: %s", entry.MobileDevice)
-		log.Printf("🔔 [Push] FCM service ID: %s", pushServiceID)
-		log.Printf("🔔 [Push] FCM user ID: %s", userID)
-		log.Printf("🔔 [Push] FCM session ID: %s", sessionID)
-		log.Printf("🔔 [Push] FCM sent: %d", sent)
-		log.Printf("🔔 [Push] FCM tokens: %v", tokens)
+		log.Printf("🔔 [Push] FCM sent: userID=%s sessionID=%s device=%s service_id=%s token=%s sent=%d/%d",
+			userID, sessionID, entry.MobileDevice, pushServiceID, maskToken(entry.Token), sent, len(tokens))
 	}
 
 	log.Printf("🔔 [Push] Incoming call push summary: userID=%s sessionID=%s sent=%d/%d", userID, sessionID, sent, len(tokens))
@@ -393,6 +387,16 @@ func callEndedPushOptions(reason string) DataPushOptions {
 		return DataPushOptions{Priority: "normal", TTL: callEndedStopRingingTTL}
 	}
 	return DataPushOptions{Priority: "high", TTL: callEndedMissedTTL}
+}
+
+// maskToken redacts a push token for safe logging, preserving at most the first
+// 6 and last 4 characters for tokens longer than 14 characters.
+func maskToken(tok string) string {
+	tok = strings.TrimSpace(tok)
+	if len(tok) <= 14 {
+		return "<redacted>"
+	}
+	return tok[:6] + "..." + tok[len(tok)-4:]
 }
 
 func pushPlatformFromMobileDevice(mobileDevice string) string {

@@ -26,6 +26,12 @@ type NotificationEntry struct {
 	MobileDevice string `json:"mobile_device"`
 }
 
+// String redacts the push token so accidental %v formatting cannot leak it to logs.
+func (e NotificationEntry) String() string {
+	return fmt.Sprintf("{UserID:%s ServiceID:%s Token:%s MobileDevice:%s}",
+		e.UserID, e.ServiceID, maskToken(e.Token), e.MobileDevice)
+}
+
 // NotificationResponse is the envelope returned by the TTRS Notification API.
 type NotificationResponse struct {
 	Data    []NotificationEntry `json:"data"`

@@ -59,6 +59,9 @@ func (s *Session) SetState(state SessionState) {
 		}
 	}
 	s.mu.Unlock()
+	if state == StateEnded {
+		s.signalProactivePLIWake()
+	}
 	if started {
 		s.emitCallStartedTelemetry(direction, startedAt)
 	}

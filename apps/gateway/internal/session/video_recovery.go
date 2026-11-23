@@ -82,6 +82,40 @@ func (s *Session) StopVideoRecoveryBurstIfActive(reason string) {
 	s.endVideoRecoveryBurst(now, reason)
 }
 
+func isStartupVideoRecoveryBurstReason(reason string) bool {
+	switch reason {
+	case "initial-call", "sip-200-ok", "sip-accept-ok":
+		return true
+	default:
+		return false
+	}
+}
+
+// StopStartupVideoRecoveryBurstIfActive ends an active startup recovery burst
+// window (initial-call, sip-200-ok, sip-accept-ok) once startup keyframe
+// recovery settles. Active switch, resume, or reconnect recovery windows are
+// left untouched so their own completion and RTP-stability checks remain
+// authoritative.
+func (s *Session) StopStartupVideoRecoveryBurstIfActive(reason string) bool {
+	if s == nil {
+		return false
+	}
+	now := time.Now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.VideoRecoveryBurstUntil.IsZero() {
+		return false
+	}
+	if s.isSwitchVideoRecoveryActiveLocked(now) {
+		return false
+	}
+	if !isStartupVideoRecoveryBurstReason(s.VideoRecoveryBurstLastReason) {
+		return false
+	}
+	return s.endVideoRecoveryBurst(now, reason)
+}
+
 func (s *Session) getVideoRecoveryPolicy(now time.Time, interval, stale, firStale time.Duration) (time.Duration, time.Duration, time.Duration, bool) {
 	if !s.VideoRecoveryBurstEnabled || s.VideoRecoveryBurstUntil.IsZero() {
 		return interval, stale, firStale, false
