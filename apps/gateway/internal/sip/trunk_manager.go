@@ -164,16 +164,20 @@ type TrunkManager struct {
 	publicIP   string
 	localPort  int
 
-	mu               sync.RWMutex
-	singleInstance   bool
-	asyncDBSem       chan struct{}
-	trunks           map[int64]*Trunk             // All loaded trunks (CoW immutable once stored)
-	trunkByPublic    map[string]int64             // normalized public_id -> trunk ID
-	trunksByUsername map[string][]int64           // lowercased trimmed username -> sorted trunk IDs
-	trunksByIdentity map[trunkIdentityKey][]int64 // lowercased trimmed (username, domain, port) -> sorted trunk IDs
-	ownedLeases      map[int64]bool               // Trunks we currently own
-	refreshWorkers   map[int64]chan struct{}      // Stop signals for refresh workers
-	leaseRetryRuns   map[int64]int                // Consecutive lease-renew transient failures
+	mu                sync.RWMutex
+	singleInstance    bool
+	stopping          bool
+	asyncDBSem        chan struct{}
+	inUseByGen        map[int64]uint64             // Monotonic per-trunk generation for in_use_by mutations
+	inUseByFlushedGen map[int64]uint64             // Highest inUseByGen successfully persisted to DB
+	inUseByWriteMu    map[int64]*sync.Mutex        // Per-trunk mutex serializing in_use_by DB writes
+	trunks            map[int64]*Trunk             // All loaded trunks (CoW immutable once stored)
+	trunkByPublic     map[string]int64             // normalized public_id -> trunk ID
+	trunksByUsername  map[string][]int64           // lowercased trimmed username -> sorted trunk IDs
+	trunksByIdentity  map[trunkIdentityKey][]int64 // lowercased trimmed (username, domain, port) -> sorted trunk IDs
+	ownedLeases       map[int64]bool               // Trunks we currently own
+	refreshWorkers    map[int64]chan struct{}      // Stop signals for refresh workers
+	leaseRetryRuns    map[int64]int                // Consecutive lease-renew transient failures
 	// registrationAnnounced is log state only: true after this process has
 	// completed a healthy REGISTER. Cleared on error, lease loss, or unregister
 	// so the next success is a visible recovery. It does not affect SIP.
@@ -354,6 +358,9 @@ func NewTrunkManager(db *pgxpool.Pool, cfg *config.Config, userAgent *sipgo.User
 		publicIP:               cfg.SIP.PublicIP,
 		localPort:              cfg.SIP.LocalPort,
 		asyncDBSem:             make(chan struct{}, asyncDBWriteConcurrency),
+		inUseByGen:             make(map[int64]uint64),
+		inUseByFlushedGen:      make(map[int64]uint64),
+		inUseByWriteMu:         make(map[int64]*sync.Mutex),
 		trunks:                 make(map[int64]*Trunk),
 		trunkByPublic:          make(map[string]int64),
 		trunksByUsername:       make(map[string][]int64),
@@ -677,7 +684,51 @@ func (tm *TrunkManager) getAsyncDBSem() chan struct{} {
 	return sem
 }
 
-func (tm *TrunkManager) enqueueAsyncInUseByUpdate(trunkID int64, claimUsername *string) {
+func (tm *TrunkManager) withLocalLeaseOwner(trunk *Trunk) *Trunk {
+	if trunk == nil {
+		return nil
+	}
+	if trunk.LeaseOwner != nil && *trunk.LeaseOwner == tm.instanceID {
+		return trunk
+	}
+	copied := cloneTrunk(trunk)
+	lo := tm.instanceID
+	copied.LeaseOwner = &lo
+	return copied
+}
+
+func (tm *TrunkManager) bumpInUseByGenLocked(trunkID int64) uint64 {
+	if tm.inUseByGen == nil {
+		tm.inUseByGen = make(map[int64]uint64)
+	}
+	tm.inUseByGen[trunkID]++
+	return tm.inUseByGen[trunkID]
+}
+
+func (tm *TrunkManager) getInUseByWriteMu(trunkID int64) *sync.Mutex {
+	tm.mu.RLock()
+	if tm.inUseByWriteMu != nil {
+		if mu := tm.inUseByWriteMu[trunkID]; mu != nil {
+			tm.mu.RUnlock()
+			return mu
+		}
+	}
+	tm.mu.RUnlock()
+
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	if tm.inUseByWriteMu == nil {
+		tm.inUseByWriteMu = make(map[int64]*sync.Mutex)
+	}
+	mu := tm.inUseByWriteMu[trunkID]
+	if mu == nil {
+		mu = &sync.Mutex{}
+		tm.inUseByWriteMu[trunkID] = mu
+	}
+	return mu
+}
+
+func (tm *TrunkManager) enqueueAsyncInUseByUpdate(trunkID int64, claimUsername *string, expectedGen uint64) {
 	if tm == nil || tm.db == nil {
 		return
 	}
@@ -688,18 +739,65 @@ func (tm *TrunkManager) enqueueAsyncInUseByUpdate(trunkID int64, claimUsername *
 		fmt.Printf("⚠️ [TrunkManager] Async in_use_by DB write dropped for trunk %d: concurrency limit reached\n", trunkID)
 		return
 	}
-	claimed := cloneStringPtr(claimUsername)
+
+	tm.mu.Lock()
+	if tm.stopping || (tm.inUseByFlushedGen != nil && tm.inUseByFlushedGen[trunkID] >= expectedGen) {
+		tm.mu.Unlock()
+		<-sem
+		return
+	}
 	tm.wg.Add(1)
+	tm.mu.Unlock()
+
+	fallbackVal := cloneStringPtr(claimUsername)
 	go func() {
 		defer tm.wg.Done()
 		defer func() { <-sem }()
+
+		writeMu := tm.getInUseByWriteMu(trunkID)
+		writeMu.Lock()
+		defer writeMu.Unlock()
+
+		tm.mu.RLock()
+		currentGen := uint64(0)
+		if tm.inUseByGen != nil {
+			currentGen = tm.inUseByGen[trunkID]
+		}
+		flushedGen := uint64(0)
+		if tm.inUseByFlushedGen != nil {
+			flushedGen = tm.inUseByFlushedGen[trunkID]
+		}
+		if currentGen != 0 && flushedGen >= currentGen {
+			tm.mu.RUnlock()
+			return
+		}
+		valToWrite := fallbackVal
+		targetGen := expectedGen
+		if currentGen > targetGen {
+			targetGen = currentGen
+		}
+		if trunk, ok := tm.trunks[trunkID]; ok && trunk != nil {
+			valToWrite = cloneStringPtr(trunk.InUseBy)
+		}
+		tm.mu.RUnlock()
+
 		ctx, cancel := context.WithTimeout(context.Background(), asyncDBWriteTimeout)
 		defer cancel()
 		if _, err := tm.db.Exec(ctx, `
 			UPDATE sip_trunks SET in_use_by = $1, updated_at = NOW() WHERE id = $2
-		`, claimed, trunkID); err != nil {
+		`, valToWrite, trunkID); err != nil {
 			fmt.Printf("⚠️ [TrunkManager] Async in_use_by update failed for trunk %d: %v\n", trunkID, err)
+			return
 		}
+
+		tm.mu.Lock()
+		if tm.inUseByFlushedGen == nil {
+			tm.inUseByFlushedGen = make(map[int64]uint64)
+		}
+		if targetGen > tm.inUseByFlushedGen[trunkID] {
+			tm.inUseByFlushedGen[trunkID] = targetGen
+		}
+		tm.mu.Unlock()
 	}()
 }
 
@@ -902,7 +1000,15 @@ func (tm *TrunkManager) cacheUpsertedTrunk(trunk *Trunk) {
 	previous := tm.trunks[trunk.ID]
 	configChanged := trunkRegistrationConfigChanged(previous, trunk)
 	if trunk.Enabled {
-		tm.setTrunkLocked(trunk)
+		toCache := trunk
+		if tm.singleInstance {
+			toCache = tm.withLocalLeaseOwner(trunk)
+			if tm.ownedLeases == nil {
+				tm.ownedLeases = make(map[int64]bool)
+			}
+			tm.ownedLeases[trunk.ID] = true
+		}
+		tm.setTrunkLocked(toCache)
 		if configChanged {
 			if tm.needsReRegister == nil {
 				tm.needsReRegister = make(map[int64]bool)
@@ -951,11 +1057,15 @@ func (tm *TrunkManager) Start() error {
 		fmt.Printf("⚠️ [TrunkManager] Failed to acquire/register some trunks: %v\n", err)
 	}
 
-	// Start lease heartbeat worker (skipped in single-instance mode to avoid DB lease churn)
-	if !tm.IsSingleInstance() {
+	// Start lease heartbeat / registration retry worker.
+	// In single-instance mode, DB lease renewal is skipped inside the worker
+	// while failed REGISTER retry backoff remains active.
+	tm.mu.Lock()
+	if !tm.stopping {
 		tm.wg.Add(1)
 		go tm.leaseHeartbeatWorker()
 	}
+	tm.mu.Unlock()
 
 	fmt.Printf("✅ [TrunkManager] Started with instance_id=%s (single_instance=%v)\n", tm.instanceID, tm.IsSingleInstance())
 	return nil
@@ -980,26 +1090,55 @@ func (tm *TrunkManager) RefreshTrunks() error {
 	return nil
 }
 
+// trunkHasActiveRegistrationLocked reports whether trunkID has an active SIP
+// registration that should be unregistered on shutdown.
+// Caller must hold tm.mu (read or write).
+func (tm *TrunkManager) trunkHasActiveRegistrationLocked(trunkID int64) bool {
+	if _, hasWorker := tm.refreshWorkers[trunkID]; hasWorker {
+		return true
+	}
+	if _, hasIdentity := tm.registrarIdentities[trunkID]; hasIdentity {
+		return true
+	}
+	if trunk := tm.trunks[trunkID]; trunk != nil && trunk.SipAutoRegister && trunk.LastRegisteredAt != nil {
+		return true
+	}
+	return false
+}
+
 // Stop releases all leases and stops workers
 func (tm *TrunkManager) Stop() {
-	if !tm.cfg.SIPTrunk.Enable {
+	if tm == nil {
+		return
+	}
+	if tm.cfg != nil && !tm.cfg.SIPTrunk.Enable {
 		return
 	}
 
 	fmt.Printf("📞 [TrunkManager] Stopping...\n")
 
-	// Cancel context to stop workers
-	tm.cancel()
-
-	// Unregister all owned trunks (best-effort)
-	tm.mu.RLock()
+	// Mark stopping before cancelling/waiting so no concurrent caller can call
+	// tm.wg.Add(1) while or after tm.wg.Wait() executes.
+	tm.mu.Lock()
+	tm.stopping = true
 	ownedIDs := make([]int64, 0, len(tm.ownedLeases))
+	unregisterIDs := make([]int64, 0, len(tm.ownedLeases))
 	for id := range tm.ownedLeases {
 		ownedIDs = append(ownedIDs, id)
+		if tm.trunkHasActiveRegistrationLocked(id) {
+			unregisterIDs = append(unregisterIDs, id)
+		}
 	}
-	tm.mu.RUnlock()
+	tm.mu.Unlock()
 
-	for _, id := range ownedIDs {
+	// Cancel context to stop workers
+	if tm.cancel != nil {
+		tm.cancel()
+	}
+
+	// Unregister only trunks with an active SIP registration (best-effort)
+	sort.Slice(unregisterIDs, func(i, j int) bool { return unregisterIDs[i] < unregisterIDs[j] })
+	for _, id := range unregisterIDs {
 		tm.unregisterTrunk(id)
 	}
 	tm.releaseAllLeases(ownedIDs)
@@ -1793,6 +1932,10 @@ func (tm *TrunkManager) trunkContactHeader(trunk *Trunk) *sip.ContactHeader {
 // startRefreshWorker starts a goroutine to refresh registration before expiry
 func (tm *TrunkManager) startRefreshWorker(trunkID int64, expiresSeconds int) {
 	tm.mu.Lock()
+	if tm.stopping {
+		tm.mu.Unlock()
+		return
+	}
 	// Stop existing worker if any
 	if stopCh, exists := tm.refreshWorkers[trunkID]; exists {
 		close(stopCh)
@@ -1800,9 +1943,9 @@ func (tm *TrunkManager) startRefreshWorker(trunkID int64, expiresSeconds int) {
 
 	stopCh := make(chan struct{})
 	tm.refreshWorkers[trunkID] = stopCh
+	tm.wg.Add(1)
 	tm.mu.Unlock()
 
-	tm.wg.Add(1)
 	go func() {
 		defer tm.wg.Done()
 
@@ -1840,25 +1983,31 @@ func (tm *TrunkManager) startRefreshWorker(trunkID int64, expiresSeconds int) {
 	}()
 }
 
-// leaseHeartbeatWorker periodically renews leases for owned trunks
+// leaseHeartbeatWorker periodically renews leases for owned trunks and retries failed registrations.
+// In single-instance mode, DB lease renewal is skipped while registration retry backoff remains active.
 func (tm *TrunkManager) leaseHeartbeatWorker() {
 	defer tm.wg.Done()
 
 	renewInterval := time.Duration(tm.cfg.SIPTrunk.LeaseRenewInterval) * time.Second
+	if renewInterval <= 0 {
+		renewInterval = 20 * time.Second
+	}
 	ticker := time.NewTicker(renewInterval)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ticker.C:
-			tm.mu.RLock()
-			ownedIDs := make([]int64, 0, len(tm.ownedLeases))
-			for id := range tm.ownedLeases {
-				ownedIDs = append(ownedIDs, id)
-			}
-			tm.mu.RUnlock()
+			if !tm.IsSingleInstance() {
+				tm.mu.RLock()
+				ownedIDs := make([]int64, 0, len(tm.ownedLeases))
+				for id := range tm.ownedLeases {
+					ownedIDs = append(ownedIDs, id)
+				}
+				tm.mu.RUnlock()
 
-			tm.renewOwnedLeasesBatch(ownedIDs)
+				tm.renewOwnedLeasesBatch(ownedIDs)
+			}
 			tm.retryFailedRegistrations(time.Now())
 
 		case <-tm.ctx.Done():
@@ -2455,7 +2604,15 @@ func (tm *TrunkManager) CreateTrunk(ctx context.Context, payload CreateTrunkPayl
 	// Update in-memory cache.
 	tm.mu.Lock()
 	if created.Enabled {
-		tm.setTrunkLocked(created)
+		toCache := created
+		if tm.singleInstance {
+			toCache = tm.withLocalLeaseOwner(created)
+			if tm.ownedLeases == nil {
+				tm.ownedLeases = make(map[int64]bool)
+			}
+			tm.ownedLeases[created.ID] = true
+		}
+		tm.setTrunkLocked(toCache)
 	}
 	if created.IsDefault {
 		for id, trunk := range tm.trunks {
@@ -2635,7 +2792,15 @@ func (tm *TrunkManager) UpdateTrunk(ctx context.Context, trunkID int64, patch Tr
 		}
 	}
 	if updated.Enabled {
-		tm.setTrunkLocked(updated)
+		toCache := updated
+		if tm.singleInstance {
+			toCache = tm.withLocalLeaseOwner(updated)
+			if tm.ownedLeases == nil {
+				tm.ownedLeases = make(map[int64]bool)
+			}
+			tm.ownedLeases[trunkID] = true
+		}
+		tm.setTrunkLocked(toCache)
 		if configChanged {
 			if tm.needsReRegister == nil {
 				tm.needsReRegister = make(map[int64]bool)
@@ -2645,6 +2810,7 @@ func (tm *TrunkManager) UpdateTrunk(ctx context.Context, trunkID int64, patch Tr
 		}
 	} else {
 		tm.removeTrunkLocked(trunkID, updated.PublicID)
+		delete(tm.ownedLeases, trunkID)
 		delete(tm.needsReRegister, trunkID)
 		delete(tm.registeredPushContacts, trunkID)
 		tm.bumpTrunkConfigGenLocked(trunkID)
@@ -2764,8 +2930,10 @@ func (tm *TrunkManager) RegisterTrunk(trunkID int64, force bool) error {
 	ctx, cancel := tm.dbContext()
 	defer cancel()
 
+	effectiveForce := force || tm.IsSingleInstance()
+
 	var updateSQL string
-	if force {
+	if effectiveForce {
 		updateSQL = `
 			UPDATE sip_trunks
 			SET sip_auto_register = true,
@@ -2799,12 +2967,12 @@ func (tm *TrunkManager) RegisterTrunk(trunkID int64, force bool) error {
 			if !existing.Enabled {
 				return fmt.Errorf("trunk %d is disabled", trunkID)
 			}
-			if force {
+			if effectiveForce {
 				return fmt.Errorf("trunk %d not found or disabled", trunkID)
 			}
 			return fmt.Errorf("%w: trunk %d lease held by another instance or trunk disabled", ErrTrunkLeaseLost, trunkID)
 		}
-		if force {
+		if effectiveForce {
 			return fmt.Errorf("force lease update failed: %w", err)
 		}
 		return fmt.Errorf("%w: lease update failed for trunk %d on instance %s: %v", ErrTrunkLeaseRetry, trunkID, tm.instanceID, err)
@@ -3121,16 +3289,79 @@ func (tm *TrunkManager) ValidateAndClaimTrunkForOutboundCall(
 				updated := tm.updateTrunkCoWLocked(trunkID, func(t *Trunk) {
 					t.InUseBy = &claimedCopy
 				})
+				gen := tm.bumpInUseByGenLocked(trunkID)
 				tm.mu.Unlock()
 				tm.emitTrunkListChange("usage_updated", trunkID)
-				tm.enqueueAsyncInUseByUpdate(trunkID, &claimedCopy)
+				tm.enqueueAsyncInUseByUpdate(trunkID, &claimedCopy, gen)
 				return updated, false, "", nil
 			}
 			tm.mu.Unlock()
 			return cached, false, "", nil
 		}
 		tm.mu.Unlock()
-		// Trunk missing from RAM: fall back to existing DB path below.
+
+		// Trunk missing from RAM in single-instance mode: fetch from DB without
+		// requiring DB lease_owner/lease_until, cache locally, and claim if requested.
+		if tm.db == nil {
+			return nil, false, "", fmt.Errorf("database not available for trunk manager")
+		}
+		dbCtx, cancel := dbContextWithTimeout(ctx)
+		defer cancel()
+
+		existing, queryErr := tm.queryTrunkByIDFromDB(dbCtx, trunkID)
+		if queryErr != nil {
+			if errors.Is(queryErr, pgx.ErrNoRows) {
+				return nil, true, fmt.Sprintf("Trunk %d not found", trunkID), nil
+			}
+			return nil, false, "", fmt.Errorf("query failed: %w", queryErr)
+		}
+		if !existing.Enabled {
+			return nil, false, fmt.Sprintf("Trunk %d is disabled", existing.ID), nil
+		}
+
+		lo := tm.instanceID
+		var claimedCopy *string
+		if claimUsername != nil {
+			c := *claimUsername
+			claimedCopy = &c
+		}
+
+		tm.mu.Lock()
+		if cached, exists := tm.trunks[trunkID]; exists && cached != nil {
+			if !cached.Enabled {
+				tm.mu.Unlock()
+				return nil, false, fmt.Sprintf("Trunk %d is disabled", cached.ID), nil
+			}
+		} else {
+			toCache := cloneTrunk(existing)
+			toCache.LeaseOwner = &lo
+			tm.setTrunkLocked(toCache)
+		}
+		if tm.ownedLeases == nil {
+			tm.ownedLeases = make(map[int64]bool)
+		}
+		tm.ownedLeases[trunkID] = true
+
+		var result *Trunk
+		var gen uint64
+		if claimedCopy != nil {
+			result = tm.updateTrunkCoWLocked(trunkID, func(t *Trunk) {
+				t.LeaseOwner = &lo
+				t.InUseBy = cloneStringPtr(claimedCopy)
+			})
+			gen = tm.bumpInUseByGenLocked(trunkID)
+		} else {
+			result = tm.updateTrunkCoWLocked(trunkID, func(t *Trunk) {
+				t.LeaseOwner = &lo
+			})
+		}
+		tm.mu.Unlock()
+
+		if claimedCopy != nil {
+			tm.emitTrunkListChange("usage_updated", trunkID)
+			tm.enqueueAsyncInUseByUpdate(trunkID, claimedCopy, gen)
+		}
+		return result, false, "", nil
 	}
 
 	if tm.db == nil {
@@ -3233,6 +3464,63 @@ func validateTrunkLeaseForOutbound(trunk *Trunk, instanceID string, now time.Tim
 func (tm *TrunkManager) SetTrunkInUseBy(ctx context.Context, trunkID int64, username *string) error {
 	if tm.db == nil {
 		return fmt.Errorf("database not available for trunk manager")
+	}
+
+	if tm.IsSingleInstance() {
+		desired := cloneStringPtr(username)
+		tm.mu.Lock()
+		tm.updateTrunkCoWLocked(trunkID, func(t *Trunk) {
+			t.InUseBy = cloneStringPtr(desired)
+		})
+		myGen := tm.bumpInUseByGenLocked(trunkID)
+		tm.mu.Unlock()
+
+		tm.emitTrunkListChange("usage_updated", trunkID)
+
+		writeMu := tm.getInUseByWriteMu(trunkID)
+		writeMu.Lock()
+		defer writeMu.Unlock()
+
+		tm.mu.RLock()
+		currentGen := tm.inUseByGen[trunkID]
+		flushedGen := uint64(0)
+		if tm.inUseByFlushedGen != nil {
+			flushedGen = tm.inUseByFlushedGen[trunkID]
+		}
+		if currentGen != 0 && flushedGen >= currentGen {
+			tm.mu.RUnlock()
+			return nil
+		}
+		valToWrite := desired
+		targetGen := myGen
+		if currentGen > targetGen {
+			targetGen = currentGen
+		}
+		if trunk, ok := tm.trunks[trunkID]; ok && trunk != nil {
+			valToWrite = cloneStringPtr(trunk.InUseBy)
+		}
+		tm.mu.RUnlock()
+
+		dbCtx, cancel := dbContextWithTimeout(ctx)
+		defer cancel()
+
+		_, err := tm.db.Exec(dbCtx, `
+			UPDATE sip_trunks SET in_use_by = $1, updated_at = NOW() WHERE id = $2
+		`, valToWrite, trunkID)
+		if err != nil {
+			return fmt.Errorf("set in_use_by failed: %w", err)
+		}
+
+		tm.mu.Lock()
+		if tm.inUseByFlushedGen == nil {
+			tm.inUseByFlushedGen = make(map[int64]uint64)
+		}
+		if targetGen > tm.inUseByFlushedGen[trunkID] {
+			tm.inUseByFlushedGen[trunkID] = targetGen
+		}
+		tm.mu.Unlock()
+
+		return nil
 	}
 
 	dbCtx, cancel := dbContextWithTimeout(ctx)
@@ -3647,7 +3935,8 @@ func (tm *TrunkManager) FindTrunkByInUseBy(ctx context.Context, inUseBy string) 
 	if tm == nil {
 		return nil, fmt.Errorf("database not available for trunk manager")
 	}
-	if tm.IsSingleInstance() {
+	singleInstance := tm.IsSingleInstance()
+	if singleInstance {
 		tm.mu.RLock()
 		var matched *Trunk
 		for _, trunk := range tm.trunks {
@@ -3688,6 +3977,18 @@ func (tm *TrunkManager) FindTrunkByInUseBy(ctx context.Context, inUseBy string) 
 			return nil, nil
 		}
 		return nil, fmt.Errorf("find trunk by in_use_by failed: %w", err)
+	}
+
+	if singleInstance {
+		tm.mu.RLock()
+		cached, inRAM := tm.trunks[trunk.ID]
+		tm.mu.RUnlock()
+		if inRAM && cached != nil {
+			if cached.InUseBy == nil || *cached.InUseBy != inUseBy {
+				return nil, nil
+			}
+			return cached, nil
+		}
 	}
 
 	return trunk, nil

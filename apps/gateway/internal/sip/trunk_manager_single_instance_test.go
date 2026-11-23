@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"reflect"
 	"strings"
 	"sync"
@@ -573,7 +574,7 @@ func TestSingleInstance_StartSkipsHeartbeatAndAcquireLease_StopSkipsLeaseRelease
 		t.Fatalf("expected trunk 1 RAM LeaseOwner=gw-single, got %#v", tm.trunks[1].LeaseOwner)
 	}
 
-	// Wait briefly past what would be a heartbeat tick check — no heartbeat worker should run.
+	// Stop() cancels the worker context cleanly and must NOT run DB lease_owner = NULL update.
 	tm.Stop()
 
 	// Stop() in single-instance mode must NOT run DB lease_owner = NULL update.
@@ -811,5 +812,792 @@ func TestSingleInstance_EnsureTrunkRegistered_SkipsLeaseExpiryCheck(t *testing.T
 	tm.mu.Unlock()
 	if err := tm.EnsureTrunkRegistered(42, true); !errors.Is(err, sentinel) {
 		t.Fatalf("expected delegation when needsReRegister=true, got %v", err)
+	}
+}
+
+// startTestUDPRegistrar starts a minimal local UDP SIP registrar that replies 200 OK
+// to REGISTER requests and forwards each raw SIP request onto the returned channel.
+func startTestUDPRegistrar(t *testing.T) (port int, received <-chan string, cleanup func()) {
+	t.Helper()
+
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.ListenPacket failed: %v", err)
+	}
+	addr := pc.LocalAddr().(*net.UDPAddr)
+	ch := make(chan string, 32)
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+		buf := make([]byte, 8192)
+		for {
+			n, raddr, readErr := pc.ReadFrom(buf)
+			if readErr != nil {
+				return
+			}
+			raw := string(buf[:n])
+			select {
+			case ch <- raw:
+			default:
+			}
+			// Extract Via, From, To, Call-ID, CSeq headers for a valid RFC 3261 200 OK.
+			var via, from, to, callID, cseq, expires string
+			for _, line := range strings.Split(raw, "\r\n") {
+				lower := strings.ToLower(line)
+				switch {
+				case strings.HasPrefix(lower, "via:") && via == "":
+					via = line
+				case strings.HasPrefix(lower, "from:") && from == "":
+					from = line
+				case strings.HasPrefix(lower, "to:") && to == "":
+					to = line
+				case strings.HasPrefix(lower, "call-id:") && callID == "":
+					callID = line
+				case strings.HasPrefix(lower, "cseq:") && cseq == "":
+					cseq = line
+				case strings.HasPrefix(lower, "expires:") && expires == "":
+					expires = line
+				}
+			}
+			if expires == "" {
+				expires = "Expires: 300"
+			}
+			if !strings.Contains(strings.ToLower(to), ";tag=") {
+				to += ";tag=reg-ok"
+			}
+			resp := fmt.Sprintf("SIP/2.0 200 OK\r\n%s\r\n%s\r\n%s\r\n%s\r\n%s\r\n%s\r\nContent-Length: 0\r\n\r\n",
+				via, from, to, callID, cseq, expires)
+			_, _ = pc.WriteTo([]byte(resp), raddr)
+		}
+	}()
+
+	return addr.Port, ch, func() {
+		_ = pc.Close()
+		<-done
+	}
+}
+
+func TestSingleInstance_HeartbeatSkipsLeaseRenewalButRetriesFailedRegistrations(t *testing.T) {
+	t.Parallel()
+
+	regPort, received, stopReg := startTestUDPRegistrar(t)
+	defer stopReg()
+
+	ua, err := sipgo.NewUA()
+	if err != nil {
+		t.Fatalf("NewUA failed: %v", err)
+	}
+	defer ua.Close()
+
+	var dbMu sync.Mutex
+	var leaseRenewQueries int
+	innerDB := &perfTestDB{
+		queryFn: func(_ context.Context, sql string, _ ...any) (pgx.Rows, error) {
+			if strings.Contains(sql, "lease_owner") && strings.Contains(sql, "UPDATE sip_trunks") {
+				leaseRenewQueries++
+			}
+			return &fakeRows{
+				rows: [][]any{
+					{Trunk{
+						ID:              1,
+						PublicID:        "550e8400-e29b-41d4-a716-446655440091",
+						Name:            "retry-trunk",
+						Domain:          "127.0.0.1",
+						Port:            regPort,
+						Username:        "retryuser",
+						Password:        "pw",
+						Transport:       "udp",
+						Enabled:         true,
+						SipAutoRegister: false,
+					}},
+				},
+			}, nil
+		},
+		execFn: func(_ context.Context, sql string, _ ...any) (pgconn.CommandTag, error) {
+			if strings.Contains(sql, "lease_owner") {
+				leaseRenewQueries++
+			}
+			return pgconn.NewCommandTag("UPDATE 1"), nil
+		},
+	}
+	db := &concurrentSafeTestDB{inner: innerDB, mu: &dbMu}
+
+	cfg := &config.Config{
+		SIP: config.SIPConfig{PublicIP: "127.0.0.1", LocalPort: 5060},
+		SIPTrunk: config.SIPTrunkConfig{
+			Enable:             true,
+			LeaseTTLSeconds:    60,
+			LeaseRenewInterval: 1,
+			RegisterTimeout:    2,
+		},
+		SIPPublic: config.SIPPublicConfig{RegisterExpiresSeconds: 300},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	tm := &TrunkManager{
+		db:                     db,
+		cfg:                    cfg,
+		userAgent:              ua,
+		instanceID:             "gw-single-retry",
+		publicIP:               cfg.SIP.PublicIP,
+		localPort:              cfg.SIP.LocalPort,
+		trunks:                 make(map[int64]*Trunk),
+		trunkByPublic:          make(map[string]int64),
+		trunksByUsername:       make(map[string][]int64),
+		trunksByIdentity:       make(map[trunkIdentityKey][]int64),
+		ownedLeases:            make(map[int64]bool),
+		refreshWorkers:         make(map[int64]chan struct{}),
+		leaseRetryRuns:         make(map[int64]int),
+		registrationAnnounced:  make(map[int64]bool),
+		needsReRegister:        make(map[int64]bool),
+		trunkConfigGen:         make(map[int64]uint64),
+		registeredPushContacts: make(map[int64]TrunkPushContact),
+		registrarIdentities:    make(map[int64]*registrarIdentity),
+		registrarGenerations:   make(map[int64]uint64),
+		resolver:               defaultRegistrarResolver{},
+		ctx:                    ctx,
+		cancel:                 cancel,
+	}
+	tm.SetSingleInstance(true)
+
+	if err := tm.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	defer tm.Stop()
+
+	// Schedule a failed-registration retry that is already due.
+	tm.mu.Lock()
+	tm.registerRetries = map[int64]*registerRetry{
+		1: {failures: 1, next: time.Now().Add(-time.Second)},
+	}
+	tm.mu.Unlock()
+
+	select {
+	case raw := <-received:
+		if !strings.HasPrefix(raw, "REGISTER ") || !strings.Contains(raw, "retryuser@127.0.0.1") {
+			t.Fatalf("unexpected SIP packet received on retry: %q", raw)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatalf("expected leaseHeartbeatWorker to retry failed registration in single-instance mode")
+	}
+
+	dbMu.Lock()
+	gotRenew := leaseRenewQueries
+	dbMu.Unlock()
+	if gotRenew != 0 {
+		t.Fatalf("expected 0 DB lease renewal queries in single-instance mode, got %d", gotRenew)
+	}
+}
+
+func TestSingleInstance_AsyncClaimVsSyncClear_NoStaleOverwriteAndNoGhostTrunk(t *testing.T) {
+	t.Parallel()
+
+	// Part A: In-flight async claim DB write must NEVER commit after a concurrent SetTrunkInUseBy(nil).
+	firstExecEntered := make(chan struct{})
+	allowFirstExecFinish := make(chan struct{})
+	var firstExecOnce sync.Once
+
+	var dbMu sync.Mutex
+	var dbInUseBy *string
+	var execHistory []*string
+
+	db := &concurrentSafeTestDB{
+		mu: &dbMu,
+		inner: &perfTestDB{
+			execFn: func(_ context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+				if !strings.Contains(sql, "SET in_use_by = $1") {
+					return pgconn.NewCommandTag("UPDATE 1"), nil
+				}
+				val, _ := args[0].(*string)
+				isFirst := false
+				firstExecOnce.Do(func() {
+					isFirst = true
+				})
+				if isFirst {
+					// Release dbMu while blocked so we do not artificially serialize on the test DB mock.
+					dbMu.Unlock()
+					close(firstExecEntered)
+					<-allowFirstExecFinish
+					dbMu.Lock()
+				}
+				dbInUseBy = cloneStringPtr(val)
+				execHistory = append(execHistory, cloneStringPtr(val))
+				return pgconn.NewCommandTag("UPDATE 1"), nil
+			},
+			queryRowFn: func(_ context.Context, sql string, _ ...any) pgx.Row {
+				if strings.Contains(sql, "WHERE in_use_by = $1") {
+					if dbInUseBy != nil {
+						return mobileTrunkTestRow{trunk: Trunk{ID: 5, Enabled: true, InUseBy: cloneStringPtr(dbInUseBy)}}
+					}
+					return errRow{err: pgx.ErrNoRows}
+				}
+				return errRow{err: pgx.ErrNoRows}
+			},
+		},
+	}
+
+	tm := &TrunkManager{
+		db:         db,
+		instanceID: "gw-single",
+	}
+	tm.SetSingleInstance(true)
+	tm.replaceLoadedTrunks(map[int64]*Trunk{
+		5: {ID: 5, PublicID: "pub-5", Enabled: true},
+	}, nil)
+
+	alice := "alice"
+	if _, _, _, err := tm.ValidateAndClaimTrunkForOutboundCall(context.Background(), 5, "gw-single", &alice); err != nil {
+		t.Fatalf("claim failed: %v", err)
+	}
+
+	// Wait until the async claim goroutine is actually in-flight inside db.Exec.
+	select {
+	case <-firstExecEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for async claim exec to start")
+	}
+
+	// Now hangup clears in_use_by synchronously while async claim is still in flight.
+	clearDone := make(chan error, 1)
+	go func() {
+		clearDone <- tm.SetTrunkInUseBy(context.Background(), 5, nil)
+	}()
+
+	// RAM must immediately reflect nil before the slow DB write even finishes.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		raw, _ := tm.GetTrunkByID(5)
+		if raw.(*Trunk).InUseBy == nil {
+			break
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	if raw, _ := tm.GetTrunkByID(5); raw.(*Trunk).InUseBy != nil {
+		t.Fatalf("expected RAM InUseBy cleared immediately during SetTrunkInUseBy(nil), got %#v", raw.(*Trunk).InUseBy)
+	}
+
+	close(allowFirstExecFinish)
+	if err := <-clearDone; err != nil {
+		t.Fatalf("SetTrunkInUseBy(nil) failed: %v", err)
+	}
+	tm.wg.Wait()
+
+	dbMu.Lock()
+	finalDB := cloneStringPtr(dbInUseBy)
+	dbMu.Unlock()
+	if finalDB != nil {
+		t.Fatalf("stale async claim overwrote DB in_use_by to %q after SetTrunkInUseBy(nil)", *finalDB)
+	}
+
+	// FindTrunkByInUseBy must NOT find a ghost trunk.
+	if ghost, err := tm.FindTrunkByInUseBy(context.Background(), "alice"); err != nil || ghost != nil {
+		t.Fatalf("expected no ghost trunk for alice, got (%+v, %v)", ghost, err)
+	}
+
+	// Part B: Even if DB somehow still holds a stale row for a cached trunk whose RAM InUseBy is nil,
+	// single-instance FindTrunkByInUseBy must NOT resurrect it.
+	dbMu.Lock()
+	stale := "alice"
+	dbInUseBy = &stale
+	dbMu.Unlock()
+	if ghost, err := tm.FindTrunkByInUseBy(context.Background(), "alice"); err != nil || ghost != nil {
+		t.Fatalf("expected FindTrunkByInUseBy to reject stale DB row contradicted by RAM, got (%+v, %v)", ghost, err)
+	}
+
+	// Part C: Rapid claim -> immediate clear stress loop always converges to nil in RAM and DB.
+	dbMu.Lock()
+	dbInUseBy = nil
+	dbMu.Unlock()
+	for i := 0; i < 40; i++ {
+		u := fmt.Sprintf("user-%d", i)
+		if _, _, _, err := tm.ValidateAndClaimTrunkForOutboundCall(context.Background(), 5, "gw-single", &u); err != nil {
+			t.Fatalf("iter %d claim failed: %v", i, err)
+		}
+		if err := tm.SetTrunkInUseBy(context.Background(), 5, nil); err != nil {
+			t.Fatalf("iter %d clear failed: %v", i, err)
+		}
+	}
+	tm.wg.Wait()
+	dbMu.Lock()
+	finalAfterLoop := cloneStringPtr(dbInUseBy)
+	dbMu.Unlock()
+	if finalAfterLoop != nil {
+		t.Fatalf("expected nil DB in_use_by after rapid claim/clear loop, got %q", *finalAfterLoop)
+	}
+}
+
+func TestSingleInstance_ConcurrentClaimAndStop_NoWaitGroupPanic(t *testing.T) {
+	t.Parallel()
+
+	for iter := 0; iter < 15; iter++ {
+		var dbMu sync.Mutex
+		db := &concurrentSafeTestDB{
+			mu: &dbMu,
+			inner: &perfTestDB{
+				execFn: func(context.Context, string, ...any) (pgconn.CommandTag, error) {
+					return pgconn.NewCommandTag("UPDATE 1"), nil
+				},
+			},
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		tm := &TrunkManager{
+			db:         db,
+			cfg:        &config.Config{SIPTrunk: config.SIPTrunkConfig{Enable: true}},
+			instanceID: "gw-stop-race",
+			ctx:        ctx,
+			cancel:     cancel,
+		}
+		tm.SetSingleInstance(true)
+		tm.replaceLoadedTrunks(map[int64]*Trunk{
+			5: {ID: 5, PublicID: "pub-5", Enabled: true},
+		}, nil)
+
+		var callersWG sync.WaitGroup
+		for g := 0; g < 4; g++ {
+			callersWG.Add(1)
+			go func(worker int) {
+				defer callersWG.Done()
+				for j := 0; j < 25; j++ {
+					u := fmt.Sprintf("u-%d-%d", worker, j)
+					_, _, _, _ = tm.ValidateAndClaimTrunkForOutboundCall(context.Background(), 5, "gw-stop-race", &u)
+				}
+			}(g)
+		}
+
+		tm.Stop()
+		callersWG.Wait()
+	}
+}
+
+func TestSingleInstance_StopSkipsUnregisterForNeverRegisteredTrunks(t *testing.T) {
+	t.Parallel()
+
+	regPort, received, stopReg := startTestUDPRegistrar(t)
+	defer stopReg()
+
+	ua, err := sipgo.NewUA()
+	if err != nil {
+		t.Fatalf("NewUA failed: %v", err)
+	}
+	defer ua.Close()
+
+	sipClient, err := sipgo.NewClient(ua)
+	if err != nil {
+		t.Fatalf("NewClient failed: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	tm := &TrunkManager{
+		cfg: &config.Config{
+			SIP:      config.SIPConfig{PublicIP: "127.0.0.1", LocalPort: 5060},
+			SIPTrunk: config.SIPTrunkConfig{Enable: true, LeaseTTLSeconds: 60},
+		},
+		userAgent:              ua,
+		sipClient:              sipClient,
+		instanceID:             "gw-single-stop",
+		publicIP:               "127.0.0.1",
+		localPort:              5060,
+		trunks:                 make(map[int64]*Trunk),
+		trunkByPublic:          make(map[string]int64),
+		trunksByUsername:       make(map[string][]int64),
+		trunksByIdentity:       make(map[trunkIdentityKey][]int64),
+		ownedLeases:            make(map[int64]bool),
+		refreshWorkers:         make(map[int64]chan struct{}),
+		leaseRetryRuns:         make(map[int64]int),
+		registrationAnnounced:  make(map[int64]bool),
+		needsReRegister:        make(map[int64]bool),
+		trunkConfigGen:         make(map[int64]uint64),
+		registeredPushContacts: make(map[int64]TrunkPushContact),
+		registrarIdentities:    make(map[int64]*registrarIdentity),
+		registrarGenerations:   make(map[int64]uint64),
+		resolver:               defaultRegistrarResolver{},
+		ctx:                    ctx,
+		cancel:                 cancel,
+	}
+	tm.SetSingleInstance(true)
+	tm.replaceLoadedTrunks(map[int64]*Trunk{
+		1: {ID: 1, Name: "t1", Domain: "127.0.0.1", Port: regPort, Username: "neverreg1", Password: "pw", Transport: "udp", Enabled: true, SipAutoRegister: false},
+		2: {ID: 2, Name: "t2", Domain: "127.0.0.1", Port: regPort, Username: "neverreg2", Password: "pw", Transport: "udp", Enabled: true, SipAutoRegister: true, LastRegisteredAt: nil},
+		3: {ID: 3, Name: "t3", Domain: "127.0.0.1", Port: regPort, Username: "activereg3", Password: "pw", Transport: "udp", Enabled: true, SipAutoRegister: true},
+	}, nil)
+
+	// Mark only trunk 3 as actively registered.
+	setRegistrarIdentity(tm, tm.trunks[3])
+
+	tm.Stop()
+
+	// Collect all SIP REGISTER packets sent during Stop().
+	var packets []string
+	for {
+		select {
+		case pkt := <-received:
+			packets = append(packets, pkt)
+		default:
+			goto doneCollect
+		}
+	}
+doneCollect:
+
+	if len(packets) != 1 {
+		t.Fatalf("expected exactly 1 unregister SIP packet (for active trunk 3 only), got %d: %v", len(packets), packets)
+	}
+	if !strings.Contains(packets[0], "activereg3@127.0.0.1") || !strings.Contains(packets[0], "Expires: 0") {
+		t.Fatalf("expected Expires: 0 unregister for activereg3, got %q", packets[0])
+	}
+	if strings.Contains(packets[0], "neverreg1") || strings.Contains(packets[0], "neverreg2") {
+		t.Fatalf("never-registered trunks must not receive Expires: 0 on Stop()")
+	}
+}
+
+func TestSingleInstance_ValidateAndClaimOutboundCall_RAMMissDBFallbackNoLeaseRequired(t *testing.T) {
+	t.Parallel()
+
+	foreignOwner := "old-pod-99"
+	expiredUntil := time.Now().Add(-10 * time.Minute)
+	var execSQL string
+	execDone := make(chan struct{}, 1)
+
+	db := &perfTestDB{
+		queryRowFn: func(_ context.Context, _ string, args ...any) pgx.Row {
+			id, _ := args[0].(int64)
+			switch id {
+			case 100:
+				return mobileTrunkTestRow{trunk: Trunk{
+					ID:         100,
+					PublicID:   "550e8400-e29b-41d4-a716-446655440100",
+					Name:       "db-only-foreign-lease",
+					Domain:     "sip.example.com",
+					Port:       5060,
+					Username:   "1100",
+					Enabled:    true,
+					LeaseOwner: &foreignOwner,
+					LeaseUntil: &expiredUntil,
+				}}
+			case 101:
+				return mobileTrunkTestRow{trunk: Trunk{
+					ID:      101,
+					Enabled: false,
+				}}
+			case 102:
+				return mobileTrunkTestRow{trunk: Trunk{
+					ID:         102,
+					PublicID:   "550e8400-e29b-41d4-a716-446655440102",
+					Name:       "db-only-null-lease",
+					Domain:     "sip.example.com",
+					Port:       5060,
+					Username:   "1102",
+					Enabled:    true,
+					LeaseOwner: nil,
+					LeaseUntil: nil,
+				}}
+			default:
+				return errRow{err: pgx.ErrNoRows}
+			}
+		},
+		execFn: func(_ context.Context, sql string, _ ...any) (pgconn.CommandTag, error) {
+			execSQL = sql
+			select {
+			case execDone <- struct{}{}:
+			default:
+			}
+			return pgconn.NewCommandTag("UPDATE 1"), nil
+		},
+	}
+
+	tm := &TrunkManager{
+		db:         db,
+		instanceID: "gw-single",
+	}
+	tm.SetSingleInstance(true)
+
+	// 1. RAM miss with foreign/expired lease in DB: must succeed, cache in RAM, mark locally owned, and persist in_use_by without lease predicate.
+	bob := "bob"
+	got, notFound, reason, err := tm.ValidateAndClaimTrunkForOutboundCall(context.Background(), 100, "gw-single", &bob)
+	if err != nil || notFound || reason != "" || got == nil || got.ID != 100 {
+		t.Fatalf("expected RAM-miss single-instance claim to succeed, got trunk=%+v notFound=%v reason=%q err=%v", got, notFound, reason, err)
+	}
+	if got.InUseBy == nil || *got.InUseBy != "bob" {
+		t.Fatalf("expected InUseBy=bob, got %#v", got.InUseBy)
+	}
+	if got.LeaseOwner == nil || *got.LeaseOwner != "gw-single" {
+		t.Fatalf("expected local LeaseOwner=gw-single, got %#v", got.LeaseOwner)
+	}
+	if !tm.IsTrunkOwned(100) {
+		t.Fatalf("expected trunk 100 marked locally owned after RAM-miss fallback")
+	}
+	if _, inRAM := tm.GetTrunkByID(100); !inRAM {
+		t.Fatalf("expected trunk 100 cached in RAM after RAM-miss fallback")
+	}
+	select {
+	case <-execDone:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for async in_use_by DB write on RAM-miss claim")
+	}
+	tm.wg.Wait()
+	if strings.Contains(execSQL, "lease_owner") || strings.Contains(execSQL, "lease_until") {
+		t.Fatalf("single-instance RAM-miss claim must not check DB lease columns, got SQL: %s", execSQL)
+	}
+
+	// 2. RAM miss with NULL lease and nil claimUsername: must succeed and cache in RAM.
+	got102, notFound, reason, err := tm.ValidateAndClaimTrunkForOutboundCall(context.Background(), 102, "gw-single", nil)
+	if err != nil || notFound || reason != "" || got102 == nil || got102.ID != 102 || !tm.IsTrunkOwned(102) {
+		t.Fatalf("expected RAM-miss NULL-lease lookup to succeed, got trunk=%+v notFound=%v reason=%q err=%v", got102, notFound, reason, err)
+	}
+
+	// 3. RAM miss for disabled trunk in DB: must return disabled reason and NOT cache or mark owned.
+	got101, notFound, reason, err := tm.ValidateAndClaimTrunkForOutboundCall(context.Background(), 101, "gw-single", &bob)
+	if err != nil || notFound || reason != "Trunk 101 is disabled" || got101 != nil {
+		t.Fatalf("expected disabled reason for trunk 101, got trunk=%+v notFound=%v reason=%q err=%v", got101, notFound, reason, err)
+	}
+	if tm.IsTrunkOwned(101) {
+		t.Fatalf("disabled trunk 101 must not be marked owned")
+	}
+}
+
+func TestSingleInstance_RegisterTrunk_BypassesForeignLeasePredicate(t *testing.T) {
+	t.Parallel()
+
+	regPort, _, stopReg := startTestUDPRegistrar(t)
+	defer stopReg()
+
+	ua, err := sipgo.NewUA()
+	if err != nil {
+		t.Fatalf("NewUA failed: %v", err)
+	}
+	defer ua.Close()
+	sipClient, err := sipgo.NewClient(ua)
+	if err != nil {
+		t.Fatalf("NewClient failed: %v", err)
+	}
+
+	var capturedSQL string
+	db := &perfTestDB{
+		queryRowFn: func(_ context.Context, sql string, _ ...any) pgx.Row {
+			capturedSQL = sql
+			// Simulate a row currently leased to another pod in DB:
+			// if SQL filters by foreign lease_owner, reject with ErrNoRows!
+			if strings.Contains(sql, "lease_until IS NULL OR lease_until < NOW() OR lease_owner = $1") {
+				return errRow{err: pgx.ErrNoRows}
+			}
+			lo := "gw-new-pod"
+			return mobileTrunkTestRow{trunk: Trunk{
+				ID:              55,
+				PublicID:        "550e8400-e29b-41d4-a716-446655440055",
+				Name:            "foreign-leased",
+				Domain:          "127.0.0.1",
+				Port:            regPort,
+				Username:        "u55",
+				Password:        "pw",
+				Transport:       "udp",
+				Enabled:         true,
+				SipAutoRegister: true,
+				LeaseOwner:      &lo,
+			}}
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	tm := &TrunkManager{
+		db: db,
+		cfg: &config.Config{
+			SIP:       config.SIPConfig{PublicIP: "127.0.0.1", LocalPort: 5060},
+			SIPTrunk:  config.SIPTrunkConfig{Enable: true, LeaseTTLSeconds: 60, RegisterTimeout: 2},
+			SIPPublic: config.SIPPublicConfig{RegisterExpiresSeconds: 300},
+		},
+		userAgent:              ua,
+		sipClient:              sipClient,
+		instanceID:             "gw-new-pod",
+		publicIP:               "127.0.0.1",
+		localPort:              5060,
+		trunks:                 make(map[int64]*Trunk),
+		trunkByPublic:          make(map[string]int64),
+		trunksByUsername:       make(map[string][]int64),
+		trunksByIdentity:       make(map[trunkIdentityKey][]int64),
+		ownedLeases:            make(map[int64]bool),
+		refreshWorkers:         make(map[int64]chan struct{}),
+		leaseRetryRuns:         make(map[int64]int),
+		registrationAnnounced:  make(map[int64]bool),
+		needsReRegister:        make(map[int64]bool),
+		trunkConfigGen:         make(map[int64]uint64),
+		registeredPushContacts: make(map[int64]TrunkPushContact),
+		registrarIdentities:    make(map[int64]*registrarIdentity),
+		registrarGenerations:   make(map[int64]uint64),
+		resolver:               defaultRegistrarResolver{},
+		ctx:                    ctx,
+		cancel:                 cancel,
+	}
+	tm.SetSingleInstance(true)
+	defer tm.Stop()
+
+	if err := tm.RegisterTrunk(55, false); err != nil {
+		t.Fatalf("RegisterTrunk(55, false) in single-instance mode must bypass foreign lease predicate, got: %v", err)
+	}
+	if strings.Contains(capturedSQL, "lease_until < NOW()") {
+		t.Fatalf("single-instance RegisterTrunk(force=false) must omit foreign lease predicate, got SQL: %s", capturedSQL)
+	}
+
+	// Verify multi-instance mode still enforces the foreign lease predicate when force=false.
+	tm.SetSingleInstance(false)
+	db.queryRowFn = func(_ context.Context, sql string, _ ...any) pgx.Row {
+		if strings.Contains(sql, "UPDATE sip_trunks") {
+			if !strings.Contains(sql, "lease_until IS NULL OR lease_until < NOW() OR lease_owner = $1") {
+				t.Errorf("multi-instance RegisterTrunk(force=false) must include foreign lease predicate")
+			}
+			return errRow{err: pgx.ErrNoRows}
+		}
+		return mobileTrunkTestRow{trunk: Trunk{ID: 55, Enabled: true}}
+	}
+	err = tm.RegisterTrunk(55, false)
+	if !errors.Is(err, ErrTrunkLeaseLost) {
+		t.Fatalf("expected ErrTrunkLeaseLost in multi-instance mode with foreign lease, got %v", err)
+	}
+}
+
+type createTrunkTestRow struct {
+	trunk Trunk
+}
+
+func (r createTrunkTestRow) Scan(dest ...any) error {
+	*(dest[0].(*int64)) = r.trunk.ID
+	*(dest[1].(*string)) = r.trunk.PublicID
+	*(dest[2].(*string)) = r.trunk.Name
+	*(dest[3].(*string)) = r.trunk.Domain
+	*(dest[4].(*int)) = r.trunk.Port
+	*(dest[5].(*string)) = r.trunk.Username
+	*(dest[6].(*string)) = r.trunk.Password
+	*(dest[7].(*string)) = r.trunk.Transport
+	*(dest[8].(*bool)) = r.trunk.Enabled
+	*(dest[9].(*bool)) = r.trunk.IsDefault
+	*(dest[10].(**string)) = r.trunk.LeaseOwner
+	*(dest[11].(**time.Time)) = r.trunk.LeaseUntil
+	*(dest[12].(**time.Time)) = r.trunk.LastRegisteredAt
+	*(dest[13].(**time.Time)) = r.trunk.LastUnregisteredAt
+	*(dest[14].(**string)) = r.trunk.LastError
+	*(dest[15].(*bool)) = r.trunk.SipAutoRegister
+	*(dest[16].(**string)) = r.trunk.InUseBy
+	*(dest[17].(*time.Time)) = r.trunk.CreatedAt
+	*(dest[18].(*time.Time)) = r.trunk.UpdatedAt
+	return nil
+}
+
+func TestSingleInstance_CreateUpdateUpsertMarkLocallyOwned(t *testing.T) {
+	t.Parallel()
+
+	createdTrunk := Trunk{
+		ID:        201,
+		PublicID:  "550e8400-e29b-41d4-a716-446655440201",
+		Name:      "created-trunk",
+		Domain:    "sip.example.com",
+		Port:      5060,
+		Username:  "201",
+		Password:  "pw",
+		Transport: "tcp",
+		Enabled:   true,
+	}
+
+	var updateEnabled bool
+	txMode := "create"
+	txStep := 0
+	tx := &perfTestTx{
+		queryRowFn: func(_ context.Context, _ string, _ ...any) pgx.Row {
+			txStep++
+			if txMode == "create" {
+				return createTrunkTestRow{trunk: createdTrunk}
+			}
+			if txStep == 1 {
+				cur := createdTrunk
+				cur.Enabled = !updateEnabled
+				return mobileTrunkTestRow{trunk: cur}
+			}
+			upd := createdTrunk
+			upd.Enabled = updateEnabled
+			return mobileTrunkTestRow{trunk: upd}
+		},
+	}
+
+	db := &perfTestDB{
+		beginTxFn: func(context.Context, pgx.TxOptions) (pgx.Tx, error) {
+			txStep = 0
+			return tx, nil
+		},
+		queryRowFn: func(_ context.Context, _ string, _ ...any) pgx.Row {
+			upd := createdTrunk
+			upd.Enabled = updateEnabled
+			return mobileTrunkTestRow{trunk: upd}
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	tm := &TrunkManager{
+		db:         db,
+		cfg:        &config.Config{SIPTrunk: config.SIPTrunkConfig{LeaseTTLSeconds: 60}},
+		instanceID: "gw-single-own",
+		ctx:        ctx,
+		cancel:     cancel,
+	}
+	tm.SetSingleInstance(true)
+
+	// 1. CreateTrunk (enabled=true) must mark trunk locally owned immediately.
+	if _, err := tm.CreateTrunk(context.Background(), CreateTrunkPayload{
+		Name:      createdTrunk.Name,
+		Domain:    createdTrunk.Domain,
+		Port:      createdTrunk.Port,
+		Username:  createdTrunk.Username,
+		Password:  createdTrunk.Password,
+		Transport: createdTrunk.Transport,
+		Enabled:   true,
+	}); err != nil {
+		t.Fatalf("CreateTrunk failed: %v", err)
+	}
+	if !tm.IsTrunkOwned(201) {
+		t.Fatalf("expected created trunk 201 marked locally owned in single-instance mode")
+	}
+	owned := tm.ListOwnedTrunks()
+	if len(owned) != 1 || owned[0].ID != 201 || owned[0].LeaseOwner == nil || *owned[0].LeaseOwner != "gw-single-own" {
+		t.Fatalf("expected trunk 201 in ListOwnedTrunks with local LeaseOwner, got %+v", owned)
+	}
+
+	// 2. cacheUpsertedTrunk (enabled=true) must also mark trunk locally owned immediately.
+	tm.cacheUpsertedTrunk(&Trunk{
+		ID:       202,
+		PublicID: "550e8400-e29b-41d4-a716-446655440202",
+		Name:     "upserted-trunk",
+		Domain:   "sip.example.com",
+		Port:     5060,
+		Username: "202",
+		Enabled:  true,
+	})
+	if !tm.IsTrunkOwned(202) {
+		t.Fatalf("expected upserted trunk 202 marked locally owned in single-instance mode")
+	}
+	if raw, ok := tm.GetTrunkByID(202); !ok || raw.(*Trunk).LeaseOwner == nil || *raw.(*Trunk).LeaseOwner != "gw-single-own" {
+		t.Fatalf("expected upserted trunk 202 to carry local LeaseOwner")
+	}
+
+	// 3. UpdateTrunk disabling trunk 201 removes it from ownedLeases / ListOwnedTrunks.
+	txMode = "update"
+	updateEnabled = false
+	disabled := false
+	if _, err := tm.UpdateTrunk(context.Background(), 201, TrunkUpdatePatch{Enabled: &disabled}); err != nil {
+		t.Fatalf("UpdateTrunk(disable) failed: %v", err)
+	}
+	if tm.IsTrunkOwned(201) {
+		t.Fatalf("expected disabled trunk 201 removed from ownedLeases")
+	}
+
+	// 4. UpdateTrunk re-enabling trunk 201 marks it locally owned again.
+	updateEnabled = true
+	enabled := true
+	if _, err := tm.UpdateTrunk(context.Background(), 201, TrunkUpdatePatch{Enabled: &enabled}); err != nil {
+		t.Fatalf("UpdateTrunk(enable) failed: %v", err)
+	}
+	if !tm.IsTrunkOwned(201) {
+		t.Fatalf("expected re-enabled trunk 201 marked locally owned in single-instance mode")
+	}
+	if raw, ok := tm.GetTrunkByID(201); !ok || raw.(*Trunk).LeaseOwner == nil || *raw.(*Trunk).LeaseOwner != "gw-single-own" {
+		t.Fatalf("expected re-enabled trunk 201 to carry local LeaseOwner")
 	}
 }
