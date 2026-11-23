@@ -122,14 +122,6 @@ func pickIdentityGroupCanonical(group []*Trunk) *Trunk {
 	return chosen
 }
 
-func cloneTrunk(trunk *Trunk) *Trunk {
-	if trunk == nil {
-		return nil
-	}
-	copied := *trunk
-	return &copied
-}
-
 func isLocalGatewayContact(publicIP string, localPort int, host string, port int) bool {
 	publicIP = normalizeSIPHost(publicIP)
 	if publicIP == "" || host == "" {
@@ -196,29 +188,129 @@ type inviteMatchState struct {
 	identities map[int64]*registrarIdentity
 }
 
-func (tm *TrunkManager) snapshotInviteMatchState() inviteMatchState {
+func mergeSortedUniqueInt64(a, b []int64) []int64 {
+	if len(a) == 0 {
+		return b
+	}
+	if len(b) == 0 {
+		return a
+	}
+	out := make([]int64, 0, len(a)+len(b))
+	i, j := 0, 0
+	for i < len(a) && j < len(b) {
+		if a[i] < b[j] {
+			out = append(out, a[i])
+			i++
+		} else if b[j] < a[i] {
+			out = append(out, b[j])
+			j++
+		} else {
+			out = append(out, a[i])
+			i++
+			j++
+		}
+	}
+	out = append(out, a[i:]...)
+	out = append(out, b[j:]...)
+	return out
+}
+
+func (tm *TrunkManager) snapshotInviteMatchState(ruriUser, toUser string) inviteMatchState {
+	ruriKey := makeTrunkUsernameKey(ruriUser)
+	toKey := makeTrunkUsernameKey(toUser)
+
 	tm.mu.RLock()
 	defer tm.mu.RUnlock()
 
 	state := inviteMatchState{
-		publicIP:   tm.publicIP,
-		localPort:  tm.localPort,
-		trunks:     make([]*Trunk, 0, len(tm.trunks)),
-		owned:      make(map[int64]bool, len(tm.ownedLeases)),
-		identities: make(map[int64]*registrarIdentity, len(tm.registrarIdentities)),
+		publicIP:  tm.publicIP,
+		localPort: tm.localPort,
 	}
-	for id, owned := range tm.ownedLeases {
-		if owned {
+
+	// Fast path: INVITE has a target username in Request-URI and/or To header.
+	// Only trunks matching those usernames can ever match, so look up candidates
+	// in O(1) via trunksByUsername instead of cloning and sorting all tm.trunks.
+	if ruriKey != "" || toKey != "" {
+		if tm.trunksByUsername != nil {
+			var candidateIDs []int64
+			switch {
+			case ruriKey != "" && toKey != "" && ruriKey != toKey:
+				candidateIDs = mergeSortedUniqueInt64(tm.trunksByUsername[ruriKey], tm.trunksByUsername[toKey])
+			case ruriKey != "":
+				candidateIDs = tm.trunksByUsername[ruriKey]
+			default:
+				candidateIDs = tm.trunksByUsername[toKey]
+			}
+			if len(candidateIDs) == 0 {
+				return state
+			}
+			state.trunks = make([]*Trunk, 0, len(candidateIDs))
+			state.owned = make(map[int64]bool, len(candidateIDs))
+			state.identities = make(map[int64]*registrarIdentity, len(candidateIDs))
+			for _, id := range candidateIDs {
+				trunk := tm.trunks[id]
+				if trunk == nil {
+					continue
+				}
+				state.trunks = append(state.trunks, trunk)
+				if tm.ownedLeases[id] {
+					state.owned[id] = true
+				}
+				if identity := tm.registrarIdentities[id]; identity != nil {
+					state.identities[id] = identity.clone()
+				}
+			}
+			return state
+		}
+
+		// Fallback when tm.trunks was populated directly in unit tests without index init:
+		// still only collect matching username candidates instead of cloning all trunks.
+		for id, trunk := range tm.trunks {
+			if trunk == nil {
+				continue
+			}
+			uk := makeTrunkUsernameKey(trunk.Username)
+			if uk == "" || (uk != ruriKey && uk != toKey) {
+				continue
+			}
+			state.trunks = append(state.trunks, trunk)
+			if tm.ownedLeases[id] {
+				if state.owned == nil {
+					state.owned = make(map[int64]bool)
+				}
+				state.owned[id] = true
+			}
+			if identity := tm.registrarIdentities[id]; identity != nil {
+				if state.identities == nil {
+					state.identities = make(map[int64]*registrarIdentity)
+				}
+				state.identities[id] = identity.clone()
+			}
+		}
+		if len(state.trunks) > 1 {
+			sort.Slice(state.trunks, func(i, j int) bool { return state.trunks[i].ID < state.trunks[j].ID })
+		}
+		return state
+	}
+
+	// Rare fallback for userless INVITEs (empty Request-URI user and empty To user):
+	// domain+port fallback may match any enabled owned trunk on that registrar.
+	state.trunks = make([]*Trunk, 0, len(tm.trunks))
+	state.owned = make(map[int64]bool, len(tm.ownedLeases))
+	state.identities = make(map[int64]*registrarIdentity, len(tm.registrarIdentities))
+	for id, trunk := range tm.trunks {
+		if trunk == nil {
+			continue
+		}
+		state.trunks = append(state.trunks, trunk)
+		if tm.ownedLeases[id] {
 			state.owned[id] = true
 		}
-	}
-	for _, trunk := range tm.trunks {
-		state.trunks = append(state.trunks, cloneTrunk(trunk))
+		if identity := tm.registrarIdentities[id]; identity != nil {
+			state.identities[id] = identity.clone()
+		}
 	}
 	sort.Slice(state.trunks, func(i, j int) bool { return state.trunks[i].ID < state.trunks[j].ID })
-	for id, identity := range tm.registrarIdentities {
-		state.identities[id] = identity.clone()
-	}
 	return state
 }
 
@@ -242,6 +334,7 @@ func finalizeSelected(result TrunkInviteMatchResult, state inviteMatchState, sip
 		if identity := state.identityFor(result.Trunk.ID); identity != nil {
 			result.RegistrarEvidence = identity.Hostname + ":" + strconv.Itoa(identity.Port)
 		}
+		result.Trunk = cloneTrunk(result.Trunk)
 	}
 	return result
 }
@@ -429,8 +522,6 @@ func selectByOrigin(candidates []*Trunk, state inviteMatchState, origins []invit
 
 // MatchTrunkFromInviteDetailed matches an incoming INVITE to a trunk with deterministic priority.
 func (tm *TrunkManager) MatchTrunkFromInviteDetailed(req *gosip.Request) TrunkInviteMatchResult {
-	state := tm.snapshotInviteMatchState()
-
 	ruriHost, ruriUser, ruriPort := normalizeInviteURI(req.Recipient)
 	toHost := ""
 	toUser := ""
@@ -438,6 +529,7 @@ func (tm *TrunkManager) MatchTrunkFromInviteDetailed(req *gosip.Request) TrunkIn
 	if to := req.To(); to != nil {
 		toHost, toUser, toPort = normalizeInviteURI(to.Address)
 	}
+	state := tm.snapshotInviteMatchState(ruriUser, toUser)
 	sipUser := strings.TrimSpace(ruriUser)
 	if sipUser == "" {
 		sipUser = strings.TrimSpace(toUser)
