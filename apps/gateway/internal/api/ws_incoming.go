@@ -180,21 +180,14 @@ type batchTrunkLoader interface {
 	GetTrunksByIDsFromDB(ctx context.Context, trunkIDs []int64) ([]*sip.Trunk, error)
 }
 
-func (s *Server) loadTrunksByIDsFromDB(ctx context.Context, targetIDs map[int64]struct{}, logContext, sessionID string) []*sip.Trunk {
-	if s.trunkManager == nil || len(targetIDs) == 0 {
-		return nil
-	}
-	ids := make([]int64, 0, len(targetIDs))
-	for id := range targetIDs {
-		if id > 0 {
-			ids = append(ids, id)
-		}
-	}
-	if len(ids) == 0 {
-		return nil
-	}
-	slices.Sort(ids)
+type ramBatchTrunkLoader interface {
+	GetTrunksByIDsFromRAM(trunkIDs []int64) ([]*sip.Trunk, []int64)
+}
 
+func (s *Server) loadTrunksByIDSliceFromDB(ctx context.Context, ids []int64, logContext, sessionID string) []*sip.Trunk {
+	if s.trunkManager == nil || len(ids) == 0 {
+		return nil
+	}
 	if batchLoader, ok := s.trunkManager.(batchTrunkLoader); ok {
 		trunks, err := batchLoader.GetTrunksByIDsFromDB(ctx, ids)
 		if err != nil {
@@ -222,6 +215,47 @@ func (s *Server) loadTrunksByIDsFromDB(ctx context.Context, targetIDs map[int64]
 	return trunks
 }
 
+func (s *Server) loadTrunksByIDsForPush(targetIDs map[int64]struct{}, logContext, sessionID string) []*sip.Trunk {
+	if s.trunkManager == nil || len(targetIDs) == 0 {
+		return nil
+	}
+	ids := make([]int64, 0, len(targetIDs))
+	for id := range targetIDs {
+		if id > 0 {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	slices.Sort(ids)
+
+	var found []*sip.Trunk
+	dbIDs := ids
+	if s.gatewayConfig.SingleInstance {
+		if ramLoader, ok := s.trunkManager.(ramBatchTrunkLoader); ok {
+			found, dbIDs = ramLoader.GetTrunksByIDsFromRAM(ids)
+			if len(dbIDs) == 0 {
+				return found
+			}
+		}
+	}
+
+	lookupCtx, cancel := context.WithTimeout(context.Background(), incomingPushTrunkLookupTimeout)
+	defer cancel()
+	fromDB := s.loadTrunksByIDSliceFromDB(lookupCtx, dbIDs, logContext, sessionID)
+	if len(found) == 0 {
+		return fromDB
+	}
+	if len(fromDB) == 0 {
+		return found
+	}
+	combined := make([]*sip.Trunk, 0, len(found)+len(fromDB))
+	combined = append(combined, found...)
+	combined = append(combined, fromDB...)
+	return combined
+}
+
 func (s *Server) trunkHasIncomingPushTargetRecord(trunk *sip.Trunk) bool {
 	if trunk == nil || s.pushService == nil {
 		return false
@@ -240,9 +274,7 @@ func (s *Server) findIncomingPushTargetTrunks(trunkID int64) ([]*sip.Trunk, bool
 	if s.pushService == nil || s.trunkManager == nil || trunkID <= 0 {
 		return nil, false
 	}
-	lookupCtx, cancel := context.WithTimeout(context.Background(), incomingPushTrunkLookupTimeout)
-	defer cancel()
-	trunks := s.loadTrunksByIDsFromDB(lookupCtx, s.incomingTargetTrunkIDs(trunkID), "", "")
+	trunks := s.loadTrunksByIDsForPush(s.incomingTargetTrunkIDs(trunkID), "", "")
 	for _, trunk := range trunks {
 		if s.trunkHasIncomingPushTargetRecord(trunk) {
 			return trunks, true
@@ -356,9 +388,7 @@ func (s *Server) dispatchCallEndedPush(sessionID, reason string, winner *WSClien
 				log.Printf("🔔 [Push] call_ended push panic recovered: sessionID=%s panic=%v", sessionID, r)
 			}
 		}()
-		lookupCtx, cancel := context.WithTimeout(context.Background(), incomingPushTrunkLookupTimeout)
-		defer cancel()
-		trunks := s.loadTrunksByIDsFromDB(lookupCtx, targetIDs, "call_ended push", sessionID)
+		trunks := s.loadTrunksByIDsForPush(targetIDs, "call_ended push", sessionID)
 		for _, trunk := range trunks {
 			if trunk == nil {
 				continue
@@ -397,9 +427,7 @@ func (s *Server) dispatchIncomingPush(sessionID, from, to string, trunkID int64,
 
 		trunks := trunksSnapshot
 		if len(trunks) == 0 {
-			lookupCtx, cancel := context.WithTimeout(context.Background(), incomingPushTrunkLookupTimeout)
-			defer cancel()
-			trunks = s.loadTrunksByIDsFromDB(lookupCtx, targetIDs, "incoming call push", sessionID)
+			trunks = s.loadTrunksByIDsForPush(targetIDs, "incoming call push", sessionID)
 		}
 
 		dispatched := false
@@ -667,7 +695,7 @@ func (s *Server) handleWSAccept(client *WSClient, msg WSMessage) {
 	if client.sessionID == msg.SessionID {
 		if sess, ok := s.sessionMgr.GetSession(client.sessionID); ok {
 			webrtcSessionFound = true
-			if sess.PeerConnection != nil {
+			if sess.HasPeerConnection() {
 				webrtcSess = sess
 				webrtcPeerConnectionReady = true
 				log.Printf("📞 Incoming session already owns client's WebRTC session: %s", webrtcSess.ID)
@@ -676,7 +704,7 @@ func (s *Server) handleWSAccept(client *WSClient, msg WSMessage) {
 	} else if client.sessionID != "" {
 		if sess, ok := s.sessionMgr.GetSession(client.sessionID); ok {
 			webrtcSessionFound = true
-			if sess.PeerConnection != nil {
+			if sess.HasPeerConnection() {
 				webrtcSess = sess
 				webrtcPeerConnectionReady = true
 				log.Printf("📞 Found client's WebRTC session: %s", webrtcSess.ID)

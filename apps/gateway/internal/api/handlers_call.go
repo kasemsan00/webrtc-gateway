@@ -40,6 +40,10 @@ func (s *Server) handleOffer(w http.ResponseWriter, r *http.Request) {
 			s.respondError(w, http.StatusNotFound, "Session not found")
 			return
 		}
+		if err := sess.EnsurePeerConnection(); err != nil {
+			s.respondError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to initialize peer connection: %v", err))
+			return
+		}
 	} else {
 		sess, err = s.sessionMgr.CreateSession(s.turnConfig)
 		if err != nil {

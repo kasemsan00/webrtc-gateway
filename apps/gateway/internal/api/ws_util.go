@@ -179,6 +179,9 @@ func (s *Server) storePayloadAndLogEvent(ctx context.Context, payload *logstore.
 }
 
 func (s *Server) upsertSessionDirectory(ctx context.Context, sessionID string) {
+	if s.gatewayConfig.SingleInstance {
+		return
+	}
 	if s.logStore == nil || sessionID == "" || s.gatewayConfig.InstanceID == "" || s.gatewayConfig.PublicWSURL == "" {
 		return
 	}

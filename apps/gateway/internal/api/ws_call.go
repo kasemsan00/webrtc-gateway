@@ -43,6 +43,10 @@ func (s *Server) handleWSoffer(client *WSClient, msg WSMessage) {
 			s.sendIncomingAnsweredElsewhere(client, sess.ID)
 			return
 		}
+		if err := sess.EnsurePeerConnection(); err != nil {
+			s.sendWSError(client, sess.ID, fmt.Sprintf("Failed to initialize peer connection: %v", err))
+			return
+		}
 	} else {
 		sess, err = s.sessionMgr.CreateSession(s.turnConfig)
 		if err != nil {
@@ -189,7 +193,7 @@ func (s *Server) handleWSIce(client *WSClient, msg WSMessage) {
 	if s.incomingClaimedByOther(sess, client) {
 		return
 	}
-	if sess.PeerConnection == nil {
+	if !sess.HasPeerConnection() {
 		s.sendWSError(client, sessionID, "PeerConnection not available")
 		return
 	}

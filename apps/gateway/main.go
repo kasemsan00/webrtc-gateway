@@ -123,6 +123,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to initialize log store: %v", err)
 	}
+	if cfg.Gateway.SingleInstance {
+		if configurable, ok := store.(logstore.SingleInstanceConfigurable); ok {
+			configurable.SetSingleInstance(true)
+		}
+	}
 	if err := store.Start(ctx); err != nil {
 		log.Fatalf("Failed to start log store: %v", err)
 	}
@@ -137,7 +142,9 @@ func runAPIMode(ctx context.Context, cfg *config.Config, unicastAddress string, 
 	fmt.Println("\n=== Running in API Mode (HTTP/WebSocket) ===")
 
 	// Register gateway instance for redirect lookup
-	if cfg.Gateway.InstanceID == "" || cfg.Gateway.PublicWSURL == "" {
+	if cfg.Gateway.SingleInstance {
+		log.Printf("⚡ Single-instance mode active (GATEWAY_SINGLE_INSTANCE=true): skipping gateway instance registry heartbeat & redirects")
+	} else if cfg.Gateway.InstanceID == "" || cfg.Gateway.PublicWSURL == "" {
 		log.Printf("⚠️ Warning: GATEWAY_INSTANCE_ID or GATEWAY_PUBLIC_WS_URL not set; trunk redirects disabled")
 	} else {
 		ttlSeconds := 120
@@ -201,6 +208,9 @@ func runAPIMode(ctx context.Context, cfg *config.Config, unicastAddress string, 
 		dbInterface := store.GetDB()
 		if dbInterface != nil {
 			trunkManager = sip.NewTrunkManager(dbInterface, cfg, sipServer.GetUserAgent(), cfg.Gateway.InstanceID)
+			if cfg.Gateway.SingleInstance {
+				trunkManager.SetSingleInstance(true)
+			}
 			if err := trunkManager.Start(); err != nil {
 				log.Printf("⚠️ Warning: TrunkManager failed to start: %v", err)
 			} else {

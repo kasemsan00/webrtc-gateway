@@ -51,8 +51,8 @@ func (s *Server) handleWSResume(client *WSClient, msg WSMessage) {
 	localLookupElapsed := time.Since(localLookupStartedAt).Round(10 * time.Millisecond)
 	log.Printf("📊 Resume local session lookup: session=%s found=%v elapsed=%s", msg.SessionID, ok, localLookupElapsed)
 
-	// Local-first: only hit directory when local session is missing.
-	if !ok && s.logStore != nil && s.gatewayConfig.InstanceID != "" {
+	// Local-first: only hit directory when local session is missing (skipped in single-instance mode).
+	if !ok && !s.gatewayConfig.SingleInstance && s.logStore != nil && s.gatewayConfig.InstanceID != "" {
 		dirLookupStartedAt := time.Now()
 		lookupCtx, cancelLookup := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancelLookup()

@@ -17,6 +17,10 @@ const (
 	trunkPNType = "apple"
 )
 
+type ramCredentialsTrunkResolver interface {
+	ResolveTrunkByCredentialsFromRAM(domain string, port int, username, password string) (*sip.Trunk, bool)
+}
+
 func normalizeTrunkPNAppID(appID string) string {
 	value := strings.TrimSpace(appID)
 	if value == "" {
@@ -140,6 +144,7 @@ func (s *Server) handleWSTrunkResolve(client *WSClient, msg WSMessage) {
 	var leaseOwner *string
 	var leaseUntil *time.Time
 	found := false
+	trunkEnabled := true
 
 	if msg.TrunkID > 0 || strings.TrimSpace(msg.TrunkPublicID) != "" {
 		if s.trunkManager == nil {
@@ -169,8 +174,22 @@ func (s *Server) handleWSTrunkResolve(client *WSClient, msg WSMessage) {
 			trunkID = resolvedID
 		}
 
-		trunk, err := s.trunkManager.GetTrunkByIDFromDB(ctx, trunkID)
-		if err != nil || trunk == nil {
+		var trunk *sip.Trunk
+		if s.gatewayConfig.SingleInstance {
+			if raw, ok := s.trunkManager.GetTrunkByID(trunkID); ok {
+				if ramTrunk, ok := raw.(*sip.Trunk); ok && ramTrunk != nil {
+					trunk = ramTrunk
+				}
+			}
+		}
+		if trunk == nil {
+			var err error
+			trunk, err = s.trunkManager.GetTrunkByIDFromDB(ctx, trunkID)
+			if err != nil {
+				trunk = nil
+			}
+		}
+		if trunk == nil {
 			reason := "No matching trunk ID/public ID"
 			s.sendWSMessage(client, WSMessage{Type: "trunk_not_found", Reason: reason})
 			s.sendWSError(client, msg.SessionID, fmt.Sprintf("Trunk not found: %s", reason))
@@ -178,6 +197,7 @@ func (s *Server) handleWSTrunkResolve(client *WSClient, msg WSMessage) {
 		}
 
 		found = true
+		trunkEnabled = trunk.Enabled
 		leaseOwner = trunk.LeaseOwner
 		leaseUntil = trunk.LeaseUntil
 		trunkPublicID = trunk.PublicID
@@ -191,45 +211,76 @@ func (s *Server) handleWSTrunkResolve(client *WSClient, msg WSMessage) {
 		// This allows DNS SRV resolution for hostnames without explicit port
 		port := msg.SIPPort
 
-		if s.logStore == nil {
-			s.sendWSError(client, msg.SessionID, "LogStore not available")
-			return
+		if s.gatewayConfig.SingleInstance && s.trunkManager != nil {
+			if ramResolver, ok := s.trunkManager.(ramCredentialsTrunkResolver); ok {
+				if ramTrunk, hit := ramResolver.ResolveTrunkByCredentialsFromRAM(msg.SIPDomain, port, msg.SIPUsername, msg.SIPPassword); hit && ramTrunk != nil {
+					found = true
+					trunkEnabled = ramTrunk.Enabled
+					trunkID = ramTrunk.ID
+					trunkPublicID = ramTrunk.PublicID
+					if strings.TrimSpace(ramTrunk.Username) != "" {
+						sipUsername = strings.TrimSpace(ramTrunk.Username)
+					}
+					leaseOwner = ramTrunk.LeaseOwner
+					leaseUntil = ramTrunk.LeaseUntil
+				}
+			}
 		}
 
-		var err error
-		if resolver, ok := s.logStore.(logstore.TrunkDetailsResolver); ok {
-			var resolvedUsername string
-			trunkID, trunkPublicID, resolvedUsername, leaseOwner, leaseUntil, found, err = resolver.ResolveTrunkDetailsByCredentials(ctx, msg.SIPDomain, port, msg.SIPUsername, msg.SIPPassword)
-			if err != nil {
-				s.sendWSError(client, msg.SessionID, fmt.Sprintf("Failed to resolve trunk: %v", err))
-				return
-			}
-			if !found {
-				reason := "No matching trunk credentials"
-				s.sendWSMessage(client, WSMessage{Type: "trunk_not_found", Reason: reason})
-				s.sendWSError(client, msg.SessionID, fmt.Sprintf("Trunk not found: %s", reason))
-				return
-			}
-			if strings.TrimSpace(resolvedUsername) != "" {
-				sipUsername = strings.TrimSpace(resolvedUsername)
-			}
-		} else {
-			trunkID, leaseOwner, leaseUntil, found, err = s.logStore.ResolveTrunkByCredentials(ctx, msg.SIPDomain, port, msg.SIPUsername, msg.SIPPassword)
-			if err != nil {
-				s.sendWSError(client, msg.SessionID, fmt.Sprintf("Failed to resolve trunk: %v", err))
-				return
-			}
-			if !found {
-				reason := "No matching trunk credentials"
-				s.sendWSMessage(client, WSMessage{Type: "trunk_not_found", Reason: reason})
-				s.sendWSError(client, msg.SessionID, fmt.Sprintf("Trunk not found: %s", reason))
+		if !found {
+			if s.logStore == nil {
+				s.sendWSError(client, msg.SessionID, "LogStore not available")
 				return
 			}
 
-			if s.trunkManager != nil {
-				if trunk, getErr := s.trunkManager.GetTrunkByIDFromDB(ctx, trunkID); getErr == nil && trunk != nil {
-					trunkPublicID = trunk.PublicID
-					sipUsername = strings.TrimSpace(trunk.Username)
+			var err error
+			if resolver, ok := s.logStore.(logstore.TrunkDetailsResolver); ok {
+				var resolvedUsername string
+				trunkID, trunkPublicID, resolvedUsername, leaseOwner, leaseUntil, found, err = resolver.ResolveTrunkDetailsByCredentials(ctx, msg.SIPDomain, port, msg.SIPUsername, msg.SIPPassword)
+				if err != nil {
+					s.sendWSError(client, msg.SessionID, fmt.Sprintf("Failed to resolve trunk: %v", err))
+					return
+				}
+				if !found {
+					reason := "No matching trunk credentials"
+					s.sendWSMessage(client, WSMessage{Type: "trunk_not_found", Reason: reason})
+					s.sendWSError(client, msg.SessionID, fmt.Sprintf("Trunk not found: %s", reason))
+					return
+				}
+				if strings.TrimSpace(resolvedUsername) != "" {
+					sipUsername = strings.TrimSpace(resolvedUsername)
+				}
+			} else {
+				trunkID, leaseOwner, leaseUntil, found, err = s.logStore.ResolveTrunkByCredentials(ctx, msg.SIPDomain, port, msg.SIPUsername, msg.SIPPassword)
+				if err != nil {
+					s.sendWSError(client, msg.SessionID, fmt.Sprintf("Failed to resolve trunk: %v", err))
+					return
+				}
+				if !found {
+					reason := "No matching trunk credentials"
+					s.sendWSMessage(client, WSMessage{Type: "trunk_not_found", Reason: reason})
+					s.sendWSError(client, msg.SessionID, fmt.Sprintf("Trunk not found: %s", reason))
+					return
+				}
+
+				if s.trunkManager != nil {
+					var trunk *sip.Trunk
+					if s.gatewayConfig.SingleInstance {
+						if raw, ok := s.trunkManager.GetTrunkByID(trunkID); ok {
+							if ramTrunk, ok := raw.(*sip.Trunk); ok {
+								trunk = ramTrunk
+							}
+						}
+					}
+					if trunk == nil {
+						if dbTrunk, getErr := s.trunkManager.GetTrunkByIDFromDB(ctx, trunkID); getErr == nil {
+							trunk = dbTrunk
+						}
+					}
+					if trunk != nil {
+						trunkPublicID = trunk.PublicID
+						sipUsername = strings.TrimSpace(trunk.Username)
+					}
 				}
 			}
 		}
@@ -242,12 +293,22 @@ func (s *Server) handleWSTrunkResolve(client *WSClient, msg WSMessage) {
 		return
 	}
 
-	if leaseOwner == nil || *leaseOwner == "" || leaseUntil == nil || leaseUntil.Before(time.Now()) {
-		s.sendWSMessage(client, WSMessage{Type: "trunk_not_ready", Reason: "Trunk lease not active"})
-		return
+	locallyOwned := false
+	if s.gatewayConfig.SingleInstance {
+		if !trunkEnabled {
+			s.sendWSMessage(client, WSMessage{Type: "trunk_not_ready", Reason: "Trunk is disabled"})
+			return
+		}
+		locallyOwned = true
+	} else {
+		if leaseOwner == nil || *leaseOwner == "" || leaseUntil == nil || leaseUntil.Before(time.Now()) {
+			s.sendWSMessage(client, WSMessage{Type: "trunk_not_ready", Reason: "Trunk lease not active"})
+			return
+		}
+		locallyOwned = *leaseOwner == s.gatewayConfig.InstanceID
 	}
 
-	if *leaseOwner == s.gatewayConfig.InstanceID {
+	if locallyOwned {
 		s.mu.Lock()
 		client.trunkResolved = true
 		client.resolvedTrunkID = trunkID

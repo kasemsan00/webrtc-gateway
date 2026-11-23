@@ -249,8 +249,9 @@ Enabling a local diagnostic does not authorize exporting its raw content.
 - `SIP_TRUNK_LEASE_TTL_SECONDS` (default `60`)
 - `SIP_TRUNK_LEASE_RENEW_INTERVAL_SECONDS` (default `20`)
 - `SIP_TRUNK_REGISTER_TIMEOUT_SECONDS` (default `10`)
+- `GATEWAY_SINGLE_INSTANCE` (default `true`; keeps enabled trunks locally owned in RAM and skips gateway instance heartbeats, `session_directory` DB writes/lookups, and `trunk_redirect`/`resume_redirect` — set to `false` for multi-instance deployments using distributed trunk leases and redirects)
 - `GATEWAY_INSTANCE_ID` (default hostname/random)
-- `GATEWAY_PUBLIC_WS_URL` (for redirects; single-domain example `wss://gateway.example.com/ws` — see [`deploy/README.md`](../../deploy/README.md))
+- `GATEWAY_PUBLIC_WS_URL` (for redirects when `GATEWAY_SINGLE_INSTANCE=false`; single-domain example `wss://gateway.example.com/ws` — see [`deploy/README.md`](../../deploy/README.md))
 - `SESSION_DIRECTORY_TTL_SECONDS` (default `7200`; **currently parsed and shown in `GET /api/config` only** — `ws_call.go` currently hardcodes a `7200`s TTL on `UpsertSessionDirectory`)
 - `SESSION_DIRECTORY_CLEANUP_INTERVAL_SECONDS` (default `300`; **currently parsed and shown in `GET /api/config` only** — `logstore.sessionDirectoryCleanupWorker` currently hardcodes a `5m` cleanup interval)
 
