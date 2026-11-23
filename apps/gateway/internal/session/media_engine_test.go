@@ -98,10 +98,7 @@ func newH264DualModeOfferer(t *testing.T) *webrtc.PeerConnection {
 		}
 	}
 
-	pc, err := webrtc.NewAPI(webrtc.WithMediaEngine(mediaEngine)).NewPeerConnection(webrtc.Configuration{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	pc := newLoopbackPeerConnectionWithMediaEngine(t, mediaEngine)
 	videoTrack, err := webrtc.NewTrackLocalStaticRTP(
 		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264, ClockRate: 90000},
 		"video",
@@ -124,10 +121,7 @@ func newGatewayH264Answerer(t *testing.T) *webrtc.PeerConnection {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pc, err := webrtc.NewAPI(webrtc.WithMediaEngine(mediaEngine)).NewPeerConnection(webrtc.Configuration{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	pc := newLoopbackPeerConnectionWithMediaEngine(t, mediaEngine)
 	videoTrack, err := webrtc.NewTrackLocalStaticRTP(
 		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264, ClockRate: 90000},
 		"video",
@@ -161,10 +155,7 @@ func TestCustomMediaEngineAnswersBrowserLikeOffer(t *testing.T) {
 }
 
 func testCustomMediaEngineAnswersBrowserLikeOffer(t *testing.T, addAudio, addVideo bool) {
-	offerer, err := webrtc.NewPeerConnection(webrtc.Configuration{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	offerer := newLoopbackPeerConnection(t)
 	defer offerer.Close()
 
 	audioTrack, err := webrtc.NewTrackLocalStaticRTP(
@@ -200,10 +191,7 @@ func testCustomMediaEngineAnswersBrowserLikeOffer(t *testing.T, addAudio, addVid
 	if err != nil {
 		t.Fatal(err)
 	}
-	answerer, err := webrtc.NewAPI(webrtc.WithMediaEngine(mediaEngine)).NewPeerConnection(webrtc.Configuration{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	answerer := newLoopbackPeerConnectionWithMediaEngine(t, mediaEngine)
 	defer answerer.Close()
 
 	if addAudio {
@@ -261,10 +249,7 @@ func TestPreferWebRTCH264PacketizationModeSkipsAudioOnlyOffer(t *testing.T) {
 }
 
 func TestPreferWebRTCH264PacketizationModeAnswersAudioOnlyBrowserOffer(t *testing.T) {
-	offerer, err := webrtc.NewPeerConnection(webrtc.Configuration{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	offerer := newLoopbackPeerConnection(t)
 	defer offerer.Close()
 
 	audioTrack, err := webrtc.NewTrackLocalStaticRTP(

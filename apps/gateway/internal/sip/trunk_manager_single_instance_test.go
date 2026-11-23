@@ -1183,7 +1183,7 @@ func TestSingleInstance_StopSkipsUnregisterForNeverRegisteredTrunks(t *testing.T
 	}
 	defer ua.Close()
 
-	sipClient, err := sipgo.NewClient(ua)
+	sipClient, err := sipgo.NewClient(ua, sipgo.WithClientConnectionAddr("127.0.0.1:0"))
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
@@ -1367,7 +1367,7 @@ func TestSingleInstance_RegisterTrunk_BypassesForeignLeasePredicate(t *testing.T
 		t.Fatalf("NewUA failed: %v", err)
 	}
 	defer ua.Close()
-	sipClient, err := sipgo.NewClient(ua)
+	sipClient, err := sipgo.NewClient(ua, sipgo.WithClientConnectionAddr("127.0.0.1:0"))
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}

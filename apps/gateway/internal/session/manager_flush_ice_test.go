@@ -54,10 +54,7 @@ func TestManagerCreateSessionConcurrent(t *testing.T) {
 }
 
 func TestSessionFlushPendingRemoteICE(t *testing.T) {
-	offerer, err := webrtc.NewPeerConnection(webrtc.Configuration{})
-	if err != nil {
-		t.Fatalf("new offerer pc: %v", err)
-	}
+	offerer := newLoopbackPeerConnection(t)
 	defer offerer.Close()
 	if _, err := offerer.CreateDataChannel("test", nil); err != nil {
 		t.Fatalf("create data channel: %v", err)
@@ -71,10 +68,7 @@ func TestSessionFlushPendingRemoteICE(t *testing.T) {
 	}
 	<-webrtc.GatheringCompletePromise(offerer)
 
-	answerer, err := webrtc.NewPeerConnection(webrtc.Configuration{})
-	if err != nil {
-		t.Fatalf("new answerer pc: %v", err)
-	}
+	answerer := newLoopbackPeerConnection(t)
 	defer answerer.Close()
 
 	sess := &Session{

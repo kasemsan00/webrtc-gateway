@@ -29,10 +29,7 @@ func TestPrepareSwitchPeerConnectionAnswersClientOffer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client, err := webrtc.NewAPI(webrtc.WithMediaEngine(clientMedia)).NewPeerConnection(webrtc.Configuration{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	client := newLoopbackPeerConnectionWithMediaEngine(t, clientMedia)
 	defer client.Close()
 	audioTrack, err := webrtc.NewTrackLocalStaticRTP(
 		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus},
@@ -205,10 +202,7 @@ func newSwitchClientOfferPC(t *testing.T) *webrtc.PeerConnection {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client, err := webrtc.NewAPI(webrtc.WithMediaEngine(clientMedia)).NewPeerConnection(webrtc.Configuration{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	client := newLoopbackPeerConnectionWithMediaEngine(t, clientMedia)
 	audioTrack, err := webrtc.NewTrackLocalStaticRTP(
 		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus},
 		"audio",

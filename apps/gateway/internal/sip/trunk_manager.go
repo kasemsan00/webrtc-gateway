@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"testing"
 	"time"
 
 	"webrtc-sip-gateway/internal/config"
@@ -1040,8 +1041,13 @@ func (tm *TrunkManager) Start() error {
 		return fmt.Errorf("database not available for trunk manager")
 	}
 
-	// Create SIP client
-	sipClient, err := sipgo.NewClient(tm.userAgent)
+	// Create SIP client (bind loopback under `go test` so UDP requests don't
+	// open wildcard listeners that trigger Windows Defender Firewall).
+	var clientOpts []sipgo.ClientOption
+	if testing.Testing() {
+		clientOpts = append(clientOpts, sipgo.WithClientConnectionAddr("127.0.0.1:0"))
+	}
+	sipClient, err := sipgo.NewClient(tm.userAgent, clientOpts...)
 	if err != nil {
 		return fmt.Errorf("failed to create SIP client: %w", err)
 	}

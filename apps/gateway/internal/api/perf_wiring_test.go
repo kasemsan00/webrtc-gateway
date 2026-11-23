@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	pionice "github.com/pion/ice/v4"
 	"github.com/pion/webrtc/v4"
 
 	"webrtc-sip-gateway/internal/auth"
@@ -755,12 +757,25 @@ func TestHandleWSCall_PublicRegisterFailureSendsWSError(t *testing.T) {
 	}
 }
 
-func createBrowserOfferSDP(t *testing.T) string {
+func newLoopbackBrowserPeerConnection(t *testing.T) *webrtc.PeerConnection {
 	t.Helper()
-	pc, err := webrtc.NewPeerConnection(webrtc.Configuration{})
+	var se webrtc.SettingEngine
+	se.SetIncludeLoopbackCandidate(true)
+	se.SetIPFilter(func(ip net.IP) bool {
+		return ip.IsLoopback()
+	})
+	se.SetICEMulticastDNSMode(pionice.MulticastDNSModeDisabled)
+	se.SetNetworkTypes([]webrtc.NetworkType{webrtc.NetworkTypeUDP4})
+	pc, err := webrtc.NewAPI(webrtc.WithSettingEngine(se)).NewPeerConnection(webrtc.Configuration{})
 	if err != nil {
 		t.Fatalf("NewPeerConnection: %v", err)
 	}
+	return pc
+}
+
+func createBrowserOfferSDP(t *testing.T) string {
+	t.Helper()
+	pc := newLoopbackBrowserPeerConnection(t)
 	defer pc.Close()
 	if _, err := pc.AddTransceiverFromKind(webrtc.RTPCodecTypeAudio, webrtc.RTPTransceiverInit{Direction: webrtc.RTPTransceiverDirectionSendrecv}); err != nil {
 		t.Fatalf("AddTransceiver audio: %v", err)

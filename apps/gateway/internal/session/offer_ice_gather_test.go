@@ -251,10 +251,7 @@ func TestWaitForOfferICEGatheringComplete_RealPeerConnectionPreservesOnICECandid
 		t.Fatal("expected false for nil PeerConnection")
 	}
 
-	offerer, err := webrtc.NewPeerConnection(webrtc.Configuration{})
-	if err != nil {
-		t.Fatalf("new offerer pc: %v", err)
-	}
+	offerer := newLoopbackPeerConnection(t)
 	defer offerer.Close()
 	if _, err := offerer.CreateDataChannel("test", nil); err != nil {
 		t.Fatalf("create data channel: %v", err)
@@ -264,10 +261,7 @@ func TestWaitForOfferICEGatheringComplete_RealPeerConnectionPreservesOnICECandid
 		t.Fatalf("create offer: %v", err)
 	}
 
-	answerer, err := webrtc.NewPeerConnection(webrtc.Configuration{})
-	if err != nil {
-		t.Fatalf("new answerer pc: %v", err)
-	}
+	answerer := newLoopbackPeerConnection(t)
 	defer answerer.Close()
 
 	var hookFired atomic.Bool

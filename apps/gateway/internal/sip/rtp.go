@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"sync/atomic"
+	"testing"
 	"time"
 
 	"github.com/pion/rtcp"
@@ -138,6 +139,20 @@ func rtpPortSlotCount(portMin, portMax int) int {
 	return ((portMax - (rtpPortSlotStep - 1) - portMin) / rtpPortSlotStep) + 1
 }
 
+func rtpBindIP() net.IP {
+	return rtpBindIPForMode(testing.Testing())
+}
+
+// rtpBindIPForMode returns 127.0.0.1 under `go test` so Windows Defender
+// Firewall never prompts on wildcard binds, while keeping 0.0.0.0 unchanged in
+// production.
+func rtpBindIPForMode(testMode bool) net.IP {
+	if testMode {
+		return net.IPv4(127, 0, 0, 1)
+	}
+	return net.ParseIP("0.0.0.0")
+}
+
 // bindRTPPortQuad allocates 4 consecutive UDP ports (audioRTP, audioRTCP,
 // videoRTP, videoRTCP) starting from an atomic round-robin cursor across
 // [PortMin, PortMax] and wrapping around cleanly.
@@ -147,6 +162,7 @@ func (s *Server) bindRTPPortQuad() (port int, audioConn, audioRTCPConn, videoCon
 		return 0, nil, nil, nil, nil, fmt.Errorf("failed to find available RTP port in range %d-%d", s.rtpConfig.PortMin, s.rtpConfig.PortMax)
 	}
 
+	bindIP := rtpBindIP()
 	seq := s.rtpPortCursor.Add(1) - 1
 	startSlot := int(seq % uint64(slotCount))
 
@@ -157,7 +173,7 @@ func (s *Server) bindRTPPortQuad() (port int, audioConn, audioRTCPConn, videoCon
 		// Create audio RTP listener (port)
 		aConn, err := net.ListenUDP("udp", &net.UDPAddr{
 			Port: candidatePort,
-			IP:   net.ParseIP("0.0.0.0"),
+			IP:   bindIP,
 		})
 		if err != nil {
 			continue
@@ -166,7 +182,7 @@ func (s *Server) bindRTPPortQuad() (port int, audioConn, audioRTCPConn, videoCon
 		// Create audio RTCP listener (port + 1)
 		aRTCPConn, err := net.ListenUDP("udp", &net.UDPAddr{
 			Port: candidatePort + 1,
-			IP:   net.ParseIP("0.0.0.0"),
+			IP:   bindIP,
 		})
 		if err != nil {
 			aConn.Close()
@@ -176,7 +192,7 @@ func (s *Server) bindRTPPortQuad() (port int, audioConn, audioRTCPConn, videoCon
 		// Create video RTP listener (port + 2)
 		vConn, err := net.ListenUDP("udp", &net.UDPAddr{
 			Port: candidatePort + 2,
-			IP:   net.ParseIP("0.0.0.0"),
+			IP:   bindIP,
 		})
 		if err != nil {
 			aConn.Close()
@@ -187,7 +203,7 @@ func (s *Server) bindRTPPortQuad() (port int, audioConn, audioRTCPConn, videoCon
 		// Create video RTCP listener (port + 3)
 		vRTCPConn, err := net.ListenUDP("udp", &net.UDPAddr{
 			Port: candidatePort + 3,
-			IP:   net.ParseIP("0.0.0.0"),
+			IP:   bindIP,
 		})
 		if err != nil {
 			aConn.Close()

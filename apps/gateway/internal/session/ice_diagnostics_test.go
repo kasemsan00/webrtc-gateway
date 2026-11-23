@@ -11,10 +11,7 @@ func TestIceCallbackIsForCurrentPeerConnection(t *testing.T) {
 		t.Fatal("nil current must ignore ICE callbacks")
 	}
 
-	pc, err := webrtc.NewPeerConnection(webrtc.Configuration{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	pc := newLoopbackPeerConnection(t)
 	defer pc.Close()
 	if iceCallbackIsForCurrentPeerConnection(nil, pc) {
 		t.Fatal("nil current must ignore ICE from any PC")
@@ -23,10 +20,7 @@ func TestIceCallbackIsForCurrentPeerConnection(t *testing.T) {
 		t.Fatal("current PC events must be applied")
 	}
 
-	other, err := webrtc.NewPeerConnection(webrtc.Configuration{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	other := newLoopbackPeerConnection(t)
 	defer other.Close()
 	if iceCallbackIsForCurrentPeerConnection(pc, other) {
 		t.Fatal("replaced PC events must be ignored")
@@ -34,10 +28,7 @@ func TestIceCallbackIsForCurrentPeerConnection(t *testing.T) {
 }
 
 func TestAddRemoteICECandidateQueuesUntilRemoteDescription(t *testing.T) {
-	pc, err := webrtc.NewPeerConnection(webrtc.Configuration{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	pc := newLoopbackPeerConnection(t)
 	defer pc.Close()
 	sess := &Session{ID: "ice-queue", PeerConnection: pc, State: StateActive}
 	mid := "0"

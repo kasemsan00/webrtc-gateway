@@ -6,47 +6,118 @@ import (
 	"net/netip"
 	"strings"
 	"sync"
+	"testing"
 
+	pionice "github.com/pion/ice/v4"
 	"github.com/pion/webrtc/v4"
 
 	"webrtc-sip-gateway/internal/config"
 )
 
+type resolvedGatewayICESettings struct {
+	interfaceFilter func(string) bool
+	ipFilter        func(net.IP) bool
+	rewriteRules    []webrtc.ICEAddressRewriteRule
+	networkTypes    []webrtc.NetworkType
+	includeLoopback bool
+	mdnsMode        pionice.MulticastDNSMode
+}
+
+func resolveGatewayICESettings(iceCfg config.WebRTCICEConfig, loopbackOnly bool) (resolvedGatewayICESettings, error) {
+	var out resolvedGatewayICESettings
+
+	if len(iceCfg.InterfaceExclude) > 0 {
+		out.interfaceFilter = interfaceExcludeFilter(iceCfg.InterfaceExclude)
+	}
+
+	if len(iceCfg.IPAllowlist) > 0 {
+		filter, err := ipAllowlistFilter(iceCfg.IPAllowlist)
+		if err != nil {
+			return out, err
+		}
+		out.ipFilter = filter
+	}
+
+	if len(iceCfg.NAT1To1IPs) > 0 {
+		out.rewriteRules = nat1To1HostRewriteRules(iceCfg.NAT1To1IPs)
+	}
+
+	if len(iceCfg.NetworkTypes) > 0 {
+		types := make([]webrtc.NetworkType, 0, len(iceCfg.NetworkTypes))
+		for _, raw := range iceCfg.NetworkTypes {
+			networkType, err := webrtc.NewNetworkType(raw)
+			if err != nil {
+				return out, err
+			}
+			types = append(types, networkType)
+		}
+		out.networkTypes = types
+	}
+
+	if loopbackOnly {
+		// Keep `go test` strictly on IPv4 loopback with mDNS disabled so
+		// Windows Defender Firewall never prompts on LAN or multicast sockets.
+		out.includeLoopback = true
+		out.mdnsMode = pionice.MulticastDNSModeDisabled
+		if out.ipFilter != nil {
+			allowlist := out.ipFilter
+			out.ipFilter = func(ip net.IP) bool {
+				return ip.IsLoopback() && allowlist(ip)
+			}
+		} else {
+			out.ipFilter = func(ip net.IP) bool {
+				return ip.IsLoopback()
+			}
+		}
+		if len(out.networkTypes) == 0 {
+			out.networkTypes = []webrtc.NetworkType{webrtc.NetworkTypeUDP4}
+		}
+	}
+
+	return out, nil
+}
+
 // gatewaySettingEngine applies the ICE gathering limits from config. Docker
 // and other virtual bridges otherwise add a dozen unreachable host candidates
 // that the browser checks before the real address, which delays ICE by
-// seconds.
-func gatewaySettingEngine(ice config.WebRTCICEConfig) (webrtc.SettingEngine, error) {
+// seconds. Under `go test`, ICE gathering is restricted to loopback with mDNS
+// disabled without altering production defaults.
+func gatewaySettingEngine(iceCfg config.WebRTCICEConfig) (webrtc.SettingEngine, error) {
+	return buildGatewaySettingEngine(iceCfg, testing.Testing())
+}
+
+func buildGatewaySettingEngine(iceCfg config.WebRTCICEConfig, loopbackOnly bool) (webrtc.SettingEngine, error) {
 	var se webrtc.SettingEngine
 
-	if len(ice.InterfaceExclude) > 0 {
-		se.SetInterfaceFilter(interfaceExcludeFilter(ice.InterfaceExclude))
+	resolved, err := resolveGatewayICESettings(iceCfg, loopbackOnly)
+	if err != nil {
+		return se, err
 	}
 
-	if len(ice.IPAllowlist) > 0 {
-		filter, err := ipAllowlistFilter(ice.IPAllowlist)
-		if err != nil {
-			return se, err
-		}
-		se.SetIPFilter(filter)
+	if resolved.interfaceFilter != nil {
+		se.SetInterfaceFilter(resolved.interfaceFilter)
 	}
 
-	if len(ice.NAT1To1IPs) > 0 {
-		if err := se.SetICEAddressRewriteRules(nat1To1HostRewriteRules(ice.NAT1To1IPs)...); err != nil {
+	if resolved.ipFilter != nil {
+		se.SetIPFilter(resolved.ipFilter)
+	}
+
+	if len(resolved.rewriteRules) > 0 {
+		if err := se.SetICEAddressRewriteRules(resolved.rewriteRules...); err != nil {
 			return se, fmt.Errorf("ICE NAT1To1 rules: %w", err)
 		}
 	}
 
-	if len(ice.NetworkTypes) > 0 {
-		types := make([]webrtc.NetworkType, 0, len(ice.NetworkTypes))
-		for _, raw := range ice.NetworkTypes {
-			networkType, err := webrtc.NewNetworkType(raw)
-			if err != nil {
-				return se, err
-			}
-			types = append(types, networkType)
-		}
-		se.SetNetworkTypes(types)
+	if len(resolved.networkTypes) > 0 {
+		se.SetNetworkTypes(resolved.networkTypes)
+	}
+
+	if resolved.includeLoopback {
+		se.SetIncludeLoopbackCandidate(true)
+	}
+
+	if resolved.mdnsMode != 0 {
+		se.SetICEMulticastDNSMode(resolved.mdnsMode)
 	}
 
 	return se, nil

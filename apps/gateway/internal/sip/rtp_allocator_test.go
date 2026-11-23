@@ -20,7 +20,7 @@ func findFreeContiguousUDPBlock(t *testing.T, slots int) (portMin, portMax int) 
 		conns := make([]*net.UDPConn, 0, portsNeeded)
 		ok := true
 		for p := base; p < base+portsNeeded; p++ {
-			c, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("0.0.0.0"), Port: p})
+			c, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: p})
 			if err != nil {
 				ok = false
 				break
@@ -166,6 +166,39 @@ func TestBindRTPPortQuad_ConcurrentDisjointPorts(t *testing.T) {
 	}
 	if len(seen) != slots {
 		t.Fatalf("allocated %d distinct slots, want %d", len(seen), slots)
+	}
+}
+
+func TestBindRTPPortQuad_BindsLoopbackInTestModeAndWildcardInProd(t *testing.T) {
+	if got := rtpBindIPForMode(false); !got.Equal(net.IPv4zero) {
+		t.Fatalf("rtpBindIPForMode(false) = %v, want 0.0.0.0", got)
+	}
+	if got := rtpBindIPForMode(true); !got.Equal(net.IPv4(127, 0, 0, 1)) {
+		t.Fatalf("rtpBindIPForMode(true) = %v, want 127.0.0.1", got)
+	}
+
+	portMin, portMax := findFreeContiguousUDPBlock(t, 1)
+	srv := &Server{
+		rtpConfig: config.RTPConfig{
+			PortMin: portMin,
+			PortMax: portMax,
+		},
+	}
+	_, a, ar, v, vr, err := srv.bindRTPPortQuad()
+	if err != nil {
+		t.Fatalf("bindRTPPortQuad failed: %v", err)
+	}
+	conns := []*net.UDPConn{a, ar, v, vr}
+	defer func() {
+		for _, c := range conns {
+			c.Close()
+		}
+	}()
+	for i, c := range conns {
+		addr, ok := c.LocalAddr().(*net.UDPAddr)
+		if !ok || !addr.IP.Equal(net.IPv4(127, 0, 0, 1)) {
+			t.Fatalf("quad socket %d local addr = %v, want 127.0.0.1", i, c.LocalAddr())
+		}
 	}
 }
 

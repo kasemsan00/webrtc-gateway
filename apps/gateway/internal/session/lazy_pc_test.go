@@ -168,10 +168,7 @@ func TestEnsurePeerConnectionConcurrentSingleInit(t *testing.T) {
 	}
 
 	// Verify the lazily created PeerConnection can negotiate a real WebRTC offer/answer.
-	offerer, err := webrtc.NewPeerConnection(webrtc.Configuration{})
-	if err != nil {
-		t.Fatalf("new offerer pc: %v", err)
-	}
+	offerer := newLoopbackPeerConnection(t)
 	defer offerer.Close()
 	if _, err := offerer.AddTransceiverFromKind(webrtc.RTPCodecTypeAudio); err != nil {
 		t.Fatalf("add audio transceiver: %v", err)
