@@ -14,9 +14,14 @@ import {
   RiUserVoiceFill,
   RiWifiOffLine,
 } from '@remixicon/react'
-import { AnimatePresence, motion } from 'motion/react'
+import {
+  AnimatePresence,
+  LayoutGroup,
+  MotionConfig,
+  motion,
+} from 'motion/react'
 import { useMemo, useState } from 'react'
-import type { ComponentType, ReactNode } from 'react'
+import type { ComponentType, ReactNode, Ref } from 'react'
 
 import type { ActiveSession } from '@/features/active-sessions/types'
 import type { Trunk } from '@/features/trunk/types'
@@ -526,6 +531,16 @@ function LinkCell({
   )
 }
 
+const LAYOUT_TRANSITION = {
+  duration: 0.24,
+  ease: [0.22, 1, 0.36, 1] as const,
+}
+
+const EXIT_TRANSITION = {
+  duration: 0.16,
+  ease: 'easeIn' as const,
+}
+
 /** operator · link · remote on desktop; operator ↔ remote, then link, on mobile. */
 const CALL_GRID =
   'grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-x-3 gap-y-2 md:grid-cols-[minmax(0,14rem)_minmax(9rem,1fr)_minmax(0,15rem)]'
@@ -534,10 +549,12 @@ function CallFlow({
   call,
   now,
   fetchedAt,
+  ref,
 }: {
   call: LiveCall
   now: number
   fetchedAt: number
+  ref?: Ref<HTMLDivElement>
 }) {
   const tone: Tone = call.phase
   const ringing = call.phase === 'dialing' || call.phase === 'incoming'
@@ -547,7 +564,16 @@ function CallFlow({
   const MobileGlyph = ringing ? Arrow : RiArrowLeftRightLine
 
   return (
-    <div className={CALL_GRID} aria-label={describeCall(call)}>
+    <motion.div
+      ref={ref}
+      layout="position"
+      initial={{ opacity: 0, y: 4 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: 4, transition: EXIT_TRANSITION }}
+      transition={LAYOUT_TRANSITION}
+      className={CALL_GRID}
+      aria-label={describeCall(call)}
+    >
       <OperatorNode operator={call.operator} />
       <LinkCell
         tone={tone}
@@ -570,17 +596,31 @@ function CallFlow({
           .join(' · ')}
         ringing={ringing}
       />
-    </div>
+    </motion.div>
   )
 }
 
-function FallbackCallFlow({ row }: { row: TrunkLiveRow }) {
+function FallbackCallFlow({
+  row,
+  ref,
+}: {
+  row: TrunkLiveRow
+  ref?: Ref<HTMLDivElement>
+}) {
   const inUseBy = (row.trunk.inUseBy ?? row.trunk.in_use_by ?? '').trim()
   const operator: CallOperator = inUseBy
     ? { kind: 'user', label: inUseBy }
     : { kind: 'line', label: row.trunk.username }
   return (
-    <div className={CALL_GRID}>
+    <motion.div
+      ref={ref}
+      layout="position"
+      initial={{ opacity: 0, y: 4 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: 4, transition: EXIT_TRANSITION }}
+      transition={LAYOUT_TRANSITION}
+      className={CALL_GRID}
+    >
       <OperatorNode operator={operator} />
       <LinkCell tone="talking" flowing="static">
         On call
@@ -597,7 +637,7 @@ function FallbackCallFlow({ row }: { row: TrunkLiveRow }) {
         }
         caption="On another gateway instance"
       />
-    </div>
+    </motion.div>
   )
 }
 
@@ -609,20 +649,23 @@ function ActiveLane({
   now,
   fetchedAt,
   actions,
+  ref,
 }: {
   row: TrunkLiveRow
   now: number
   fetchedAt: number
   actions?: ReactNode
+  ref?: Ref<HTMLLIElement>
 }) {
   const meta = STATUS_META[row.status]
   return (
     <motion.li
-      layout
+      ref={ref}
+      layout="position"
       initial={{ opacity: 0, y: 6 }}
       animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0 }}
-      transition={{ duration: 0.2 }}
+      exit={{ opacity: 0, y: 6, transition: EXIT_TRANSITION }}
+      transition={LAYOUT_TRANSITION}
       className={cn(LANE_GRID, TONE[meta.tone].accent)}
     >
       <div className="flex min-w-0 items-start justify-between gap-2 md:flex-col md:items-stretch">
@@ -648,19 +691,21 @@ function ActiveLane({
           {actions}
         </div>
       </div>
-      <div className="flex min-w-0 flex-col gap-3 md:border-l md:pl-5">
-        {row.calls.length > 0 ? (
-          row.calls.map((call) => (
-            <CallFlow
-              key={call.sessionId}
-              call={call}
-              now={now}
-              fetchedAt={fetchedAt}
-            />
-          ))
-        ) : (
-          <FallbackCallFlow row={row} />
-        )}
+      <div className="relative flex min-w-0 flex-col gap-3 md:border-l md:pl-5">
+        <AnimatePresence initial={false} mode="popLayout">
+          {row.calls.length > 0 ? (
+            row.calls.map((call) => (
+              <CallFlow
+                key={call.sessionId}
+                call={call}
+                now={now}
+                fetchedAt={fetchedAt}
+              />
+            ))
+          ) : (
+            <FallbackCallFlow key="fallback" row={row} />
+          )}
+        </AnimatePresence>
       </div>
     </motion.li>
   )
@@ -670,13 +715,23 @@ function DirectCallLane({
   call,
   now,
   fetchedAt,
+  ref,
 }: {
   call: LiveCall
   now: number
   fetchedAt: number
+  ref?: Ref<HTMLLIElement>
 }) {
   return (
-    <li className={cn(LANE_GRID, TONE[call.phase].accent)}>
+    <motion.li
+      ref={ref}
+      layout="position"
+      initial={{ opacity: 0, y: 6 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: 6, transition: EXIT_TRANSITION }}
+      transition={LAYOUT_TRANSITION}
+      className={cn(LANE_GRID, TONE[call.phase].accent)}
+    >
       <div className="flex min-w-0 items-center gap-2">
         <StatusDot tone={call.phase} live />
         <div className="min-w-0">
@@ -687,7 +742,7 @@ function DirectCallLane({
       <div className="min-w-0 md:border-l md:pl-5">
         <CallFlow call={call} now={now} fetchedAt={fetchedAt} />
       </div>
-    </li>
+    </motion.li>
   )
 }
 
@@ -717,20 +772,23 @@ function ErrorLine({ message }: { message: string }) {
 function CompactTrunkCard({
   row,
   actions,
+  ref,
 }: {
   row: TrunkLiveRow
   actions?: ReactNode
+  ref?: Ref<HTMLLIElement>
 }) {
   const { trunk, status } = row
   const meta = STATUS_META[status]
   const tone = TONE[meta.tone]
   return (
     <motion.li
-      layout
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      transition={{ duration: 0.2 }}
+      ref={ref}
+      layout="position"
+      initial={{ opacity: 0, y: -6, scale: 0.97 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={{ opacity: 0, y: -6, scale: 0.97, transition: EXIT_TRANSITION }}
+      transition={LAYOUT_TRANSITION}
       className={cn(
         'flex min-w-0 flex-col gap-1.5 rounded-xl border border-l-4 bg-card px-3 py-2.5',
         tone.accent,
@@ -843,93 +901,153 @@ export function TrunkLiveBoard({
   )
 
   return (
-    <div className="flex min-w-0 flex-col gap-4">
-      <SummaryTiles
-        summary={summary}
-        filter={filter}
-        onFilterChange={onFilterChange}
-      />
-      <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
-        <Legend />
-        {liveWarning ? (
-          <span className="flex items-center gap-1 text-xs text-amber-700 dark:text-amber-300">
-            <RiErrorWarningFill className="size-3.5" aria-hidden />
-            {liveWarning}
-          </span>
-        ) : null}
-      </div>
+    <MotionConfig reducedMotion="user">
+      <LayoutGroup>
+        <div className="flex min-w-0 flex-col gap-4">
+          <SummaryTiles
+            summary={summary}
+            filter={filter}
+            onFilterChange={onFilterChange}
+          />
+          <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+            <Legend />
+            {liveWarning ? (
+              <span className="flex items-center gap-1 text-xs text-amber-700 dark:text-amber-300">
+                <RiErrorWarningFill className="size-3.5" aria-hidden />
+                {liveWarning}
+              </span>
+            ) : null}
+          </div>
 
-      {showLiveSection ? (
-        <section className="flex flex-col gap-2" aria-label="Live calls">
-          <h2 className="text-sm font-semibold text-muted-foreground">
-            Live calls <span className="tabular-nums">({liveCount})</span>
-          </h2>
-          {liveCount === 0 ? (
-            <p className="rounded-xl border border-dashed px-4 py-4 text-sm text-muted-foreground">
-              No calls right now.
-            </p>
-          ) : (
-            <ul className="flex flex-col gap-2.5">
-              <AnimatePresence initial={false}>
-                {activeRows.map((row) => (
-                  <ActiveLane
-                    key={row.trunk.id}
-                    row={row}
-                    now={now}
-                    fetchedAt={sessionsFetchedAt}
-                    actions={renderActions?.(row)}
-                  />
-                ))}
-              </AnimatePresence>
-              {visibleOtherCalls.map((call) => (
-                <DirectCallLane
-                  key={call.sessionId}
-                  call={call}
-                  now={now}
-                  fetchedAt={sessionsFetchedAt}
-                />
-              ))}
-            </ul>
-          )}
-        </section>
-      ) : null}
+          <div className="relative flex min-w-0 flex-col gap-4">
+            <AnimatePresence initial={false} mode="popLayout">
+              {showLiveSection ? (
+                <motion.section
+                  key="live-section"
+                  layout="position"
+                  initial={{ opacity: 0, y: -6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -6, transition: EXIT_TRANSITION }}
+                  transition={LAYOUT_TRANSITION}
+                  className="flex flex-col gap-2"
+                  aria-label="Live calls"
+                >
+                  <h2 className="text-sm font-semibold text-muted-foreground">
+                    Live calls{' '}
+                    <span className="tabular-nums">({liveCount})</span>
+                  </h2>
+                  <div className="relative">
+                    <AnimatePresence initial={false} mode="popLayout">
+                      {liveCount === 0 ? (
+                        <motion.p
+                          key="live-empty"
+                          layout="position"
+                          initial={{ opacity: 0, y: -4 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{
+                            opacity: 0,
+                            y: -4,
+                            transition: EXIT_TRANSITION,
+                          }}
+                          transition={LAYOUT_TRANSITION}
+                          className="rounded-xl border border-dashed px-4 py-4 text-sm text-muted-foreground"
+                        >
+                          No calls right now.
+                        </motion.p>
+                      ) : (
+                        <motion.ul
+                          key="live-list"
+                          layout="position"
+                          initial={{ opacity: 0, y: 6 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{
+                            opacity: 0,
+                            y: 6,
+                            transition: EXIT_TRANSITION,
+                          }}
+                          transition={LAYOUT_TRANSITION}
+                          className="relative flex flex-col gap-2.5"
+                        >
+                          <AnimatePresence initial={false} mode="popLayout">
+                            {activeRows.map((row) => (
+                              <ActiveLane
+                                key={`trunk-${row.trunk.id}`}
+                                row={row}
+                                now={now}
+                                fetchedAt={sessionsFetchedAt}
+                                actions={renderActions?.(row)}
+                              />
+                            ))}
+                            {visibleOtherCalls.map((call) => (
+                              <DirectCallLane
+                                key={`direct-${call.sessionId}`}
+                                call={call}
+                                now={now}
+                                fetchedAt={sessionsFetchedAt}
+                              />
+                            ))}
+                          </AnimatePresence>
+                        </motion.ul>
+                      )}
+                    </AnimatePresence>
+                  </div>
+                </motion.section>
+              ) : null}
 
-      {idleRows.length > 0 ? (
-        <section
-          className="flex flex-col gap-2"
-          aria-label="Trunks not in a call"
-        >
-          <h2 className="text-sm font-semibold text-muted-foreground">
-            Not in a call{' '}
-            <span className="tabular-nums">({idleRows.length})</span>
-          </h2>
-          <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
-            <AnimatePresence initial={false}>
-              {idleRows.map((row) => (
-                <CompactTrunkCard
-                  key={row.trunk.id}
-                  row={row}
-                  actions={renderActions?.(row)}
-                />
-              ))}
+              {idleRows.length > 0 ? (
+                <motion.section
+                  key="idle-section"
+                  layout="position"
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: 6, transition: EXIT_TRANSITION }}
+                  transition={LAYOUT_TRANSITION}
+                  className="flex flex-col gap-2"
+                  aria-label="Trunks not in a call"
+                >
+                  <h2 className="text-sm font-semibold text-muted-foreground">
+                    Not in a call{' '}
+                    <span className="tabular-nums">({idleRows.length})</span>
+                  </h2>
+                  <ul className="relative grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+                    <AnimatePresence initial={false} mode="popLayout">
+                      {idleRows.map((row) => (
+                        <CompactTrunkCard
+                          key={row.trunk.id}
+                          row={row}
+                          actions={renderActions?.(row)}
+                        />
+                      ))}
+                    </AnimatePresence>
+                  </ul>
+                </motion.section>
+              ) : null}
+
+              {rows.length === 0 && !showLiveSection ? (
+                <motion.div
+                  key="filtered-empty"
+                  layout="position"
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: 6, transition: EXIT_TRANSITION }}
+                  transition={LAYOUT_TRANSITION}
+                  className="flex flex-col items-center gap-2 rounded-xl border border-dashed py-12 text-muted-foreground"
+                >
+                  <RiServerLine className="size-10 opacity-30" aria-hidden />
+                  <p className="text-sm">No trunks match this filter</p>
+                  <button
+                    type="button"
+                    className="text-sm font-medium text-primary underline-offset-4 hover:underline"
+                    onClick={() => onFilterChange('all')}
+                  >
+                    Show all trunks
+                  </button>
+                </motion.div>
+              ) : null}
             </AnimatePresence>
-          </ul>
-        </section>
-      ) : null}
-
-      {rows.length === 0 && !showLiveSection ? (
-        <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed py-12 text-muted-foreground">
-          <RiServerLine className="size-10 opacity-30" aria-hidden />
-          <p className="text-sm">No trunks match this filter</p>
-          <button
-            type="button"
-            className="text-sm font-medium text-primary underline-offset-4 hover:underline"
-            onClick={() => onFilterChange('all')}
-          >
-            Show all trunks
-          </button>
+          </div>
         </div>
-      ) : null}
-    </div>
+      </LayoutGroup>
+    </MotionConfig>
   )
 }
