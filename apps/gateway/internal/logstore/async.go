@@ -150,6 +150,9 @@ func (s *logStore) UpsertDialogAsync(dialog *DialogRecord) {
 // UpsertSessionDirectoryAsync enqueues a session directory upsert for
 // non-blocking background persistence.
 func (s *logStore) UpsertSessionDirectoryAsync(sessionID, ownerInstanceID, wsURL string, ttlSeconds int) {
+	if s.singleInstance.Load() {
+		return
+	}
 	if s.pool == nil && s.upsertSessionDirHook == nil {
 		return
 	}
@@ -311,6 +314,9 @@ func (s *logStore) miscAsyncWorker() {
 				return
 			}
 		case asyncWriteSessionDirectory:
+			if s.singleInstance.Load() {
+				return
+			}
 			err = s.execUpsertSessionDirectory(opCtx, job.sessionID, job.ownerInstanceID, job.wsURL, job.ttlSeconds)
 			if err != nil {
 				fmt.Printf("⚠️ Async session directory upsert failed (%s): %v\n", job.sessionID, err)
@@ -366,6 +372,9 @@ func (s *logStore) execUpsertDialog(ctx context.Context, dialog *DialogRecord) e
 }
 
 func (s *logStore) execUpsertSessionDirectory(ctx context.Context, sessionID, ownerInstanceID, wsURL string, ttlSeconds int) error {
+	if s.singleInstance.Load() {
+		return nil
+	}
 	if s.upsertSessionDirHook != nil {
 		return s.upsertSessionDirHook(ctx, sessionID, ownerInstanceID, wsURL, ttlSeconds)
 	}

@@ -39,6 +39,18 @@ var (
 	_ TrunkDetailsResolver = (*noopStore)(nil)
 )
 
+// SingleInstanceConfigurable is an optional interface implemented by LogStore
+// implementations that can skip multi-instance session_directory writes and
+// background cleanup workers in single-instance mode.
+type SingleInstanceConfigurable interface {
+	SetSingleInstance(enabled bool)
+}
+
+var (
+	_ SingleInstanceConfigurable = (*logStore)(nil)
+	_ SingleInstanceConfigurable = (*noopStore)(nil)
+)
+
 // withDefaultTimeout bounds deadline-less contexts (such as context.Background())
 // with timeout while preserving any existing caller deadline.
 func withDefaultTimeout(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
@@ -140,6 +152,7 @@ type logStore struct {
 	asyncAccepted    atomic.Uint64
 	asyncDropped     atomic.Uint64
 	lastSuccessNS    atomic.Int64
+	singleInstance   atomic.Bool
 	asyncWg          sync.WaitGroup
 	asyncStopCh      chan struct{}
 	wg               sync.WaitGroup
@@ -147,12 +160,16 @@ type logStore struct {
 	stopOnce         sync.Once
 
 	// Optional hooks for unit tests without a live PostgreSQL instance.
-	storePayloadHook     func(ctx context.Context, payload *PayloadRecord) (int64, error)
-	upsertSessionHook    func(ctx context.Context, sess *SessionRecord) error
-	upsertDialogHook     func(ctx context.Context, dialog *DialogRecord) error
-	upsertSessionDirHook func(ctx context.Context, sessionID, ownerInstanceID, wsURL string, ttlSeconds int) error
-	batchEventsHook      func(ctx context.Context, events []*Event) error
-	batchStatsHook       func(ctx context.Context, stats []*StatsRecord) error
+	storePayloadHook           func(ctx context.Context, payload *PayloadRecord) (int64, error)
+	upsertSessionHook          func(ctx context.Context, sess *SessionRecord) error
+	upsertDialogHook           func(ctx context.Context, dialog *DialogRecord) error
+	upsertSessionDirHook       func(ctx context.Context, sessionID, ownerInstanceID, wsURL string, ttlSeconds int) error
+	batchEventsHook            func(ctx context.Context, events []*Event) error
+	batchStatsHook             func(ctx context.Context, stats []*StatsRecord) error
+	copyFromHook               func(ctx context.Context, tableName pgx.Identifier, columnNames []string, rowSrc pgx.CopyFromSource) (int64, error)
+	sendBatchHook              func(ctx context.Context, b *pgx.Batch) pgx.BatchResults
+	sessionDirCleanupHook      func()
+	gatewayInstanceCleanupHook func()
 }
 
 // noopStore is a no-op implementation when DB is disabled
@@ -165,6 +182,7 @@ func Noop() LogStore {
 
 func (n *noopStore) Start(ctx context.Context) error                              { return nil }
 func (n *noopStore) Stop() error                                                  { return nil }
+func (n *noopStore) SetSingleInstance(enabled bool)                               {}
 func (n *noopStore) UpsertSession(ctx context.Context, sess *SessionRecord) error { return nil }
 func (n *noopStore) LogEvent(event *Event)                                        {}
 func (n *noopStore) StorePayload(ctx context.Context, payload *PayloadRecord) (int64, error) {
@@ -265,6 +283,12 @@ func New(cfg config.DBConfig) (LogStore, error) {
 	return s, nil
 }
 
+// SetSingleInstance configures whether multi-instance session_directory writes
+// and cleanup workers are skipped.
+func (s *logStore) SetSingleInstance(enabled bool) {
+	s.singleInstance.Store(enabled)
+}
+
 // Start initializes database connection and background workers
 func (s *logStore) Start(ctx context.Context) error {
 	s.ensureAsyncQueues()
@@ -302,19 +326,30 @@ func (s *logStore) Start(ctx context.Context) error {
 	fmt.Printf("   - Batch interval: %d ms\n", s.config.BatchIntervalMS)
 	fmt.Printf("   - Stats interval: %d ms\n", s.config.StatsIntervalMS)
 	fmt.Printf("   - Log full SIP: %v\n", s.config.LogFullSIP)
+	fmt.Printf("   - Single instance: %v\n", s.singleInstance.Load())
 
 	// Start async write workers (payloads, sessions, dialogs, session_directory)
 	s.startAsyncWorkers()
 
 	// Start background batch & maintenance workers
-	s.wg.Add(5)
+	s.startBackgroundWorkers()
+
+	return nil
+}
+
+func (s *logStore) startBackgroundWorkers() {
+	s.ensureAsyncQueues()
+
+	s.wg.Add(3)
 	go s.eventBatchWorker()
 	go s.statsBatchWorker()
 	go s.partitionMaintenanceWorker()
-	go s.sessionDirectoryCleanupWorker()
-	go s.gatewayInstanceCleanupWorker()
 
-	return nil
+	if !s.singleInstance.Load() {
+		s.wg.Add(2)
+		go s.sessionDirectoryCleanupWorker()
+		go s.gatewayInstanceCleanupWorker()
+	}
 }
 
 // Stop gracefully stops the log store
@@ -738,6 +773,9 @@ func (s *logStore) UpsertDialog(ctx context.Context, dialog *DialogRecord) error
 
 // UpsertSessionDirectory inserts or updates session directory entry
 func (s *logStore) UpsertSessionDirectory(ctx context.Context, sessionID, ownerInstanceID, wsURL string, ttlSeconds int) error {
+	if s.singleInstance.Load() {
+		return nil
+	}
 	if s.pool == nil {
 		return fmt.Errorf("database pool not initialized")
 	}
@@ -811,6 +849,13 @@ func (s *logStore) sessionDirectoryCleanupWorker() {
 	defer ticker.Stop()
 
 	cleanup := func() {
+		if s.sessionDirCleanupHook != nil {
+			s.sessionDirCleanupHook()
+			return
+		}
+		if s.pool == nil {
+			return
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
@@ -976,6 +1021,13 @@ func (s *logStore) gatewayInstanceCleanupWorker() {
 	defer ticker.Stop()
 
 	cleanup := func() {
+		if s.gatewayInstanceCleanupHook != nil {
+			s.gatewayInstanceCleanupHook()
+			return
+		}
+		if s.pool == nil {
+			return
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 

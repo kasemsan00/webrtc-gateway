@@ -262,8 +262,9 @@ type SIPTrunkConfig struct {
 
 // GatewayConfig holds gateway instance configuration
 type GatewayConfig struct {
-	InstanceID  string // Unique instance ID (default: hostname or random)
-	PublicWSURL string // Public WebSocket URL for this instance (e.g., wss://gw-1.../ws)
+	InstanceID     string // Unique instance ID (default: hostname or random)
+	PublicWSURL    string // Public WebSocket URL for this instance (e.g., wss://gw-1.../ws)
+	SingleInstance bool   // Single-instance deployment mode (default: true via Load(); false enables multi-instance redirects/leases)
 }
 
 // SessionDirectoryConfig holds session directory configuration
@@ -459,8 +460,9 @@ func Load() (*Config, error) {
 			RegisterTimeout:    getEnvAsInt("SIP_TRUNK_REGISTER_TIMEOUT_SECONDS", 10),
 		},
 		Gateway: GatewayConfig{
-			InstanceID:  getEnvWithDefault("GATEWAY_INSTANCE_ID", generateInstanceID()),
-			PublicWSURL: os.Getenv("GATEWAY_PUBLIC_WS_URL"),
+			InstanceID:     getEnvWithDefault("GATEWAY_INSTANCE_ID", generateInstanceID()),
+			PublicWSURL:    os.Getenv("GATEWAY_PUBLIC_WS_URL"),
+			SingleInstance: getEnvAsBool("GATEWAY_SINGLE_INSTANCE", true),
 		},
 		SessionDir: SessionDirectoryConfig{
 			TTLSeconds:         getEnvAsInt("SESSION_DIRECTORY_TTL_SECONDS", 7200),
@@ -698,6 +700,7 @@ func (c *Config) Display() {
 	// Display Gateway Configuration
 	fmt.Println("\nGateway Configuration:")
 	fmt.Printf("  Instance ID: %s\n", c.Gateway.InstanceID)
+	fmt.Printf("  Single Instance: %v\n", c.Gateway.SingleInstance)
 	if c.Gateway.PublicWSURL != "" {
 		fmt.Printf("  Public WS URL: %s\n", c.Gateway.PublicWSURL)
 	} else {

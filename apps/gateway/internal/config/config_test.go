@@ -628,3 +628,36 @@ func TestOfferICEGatherTimeoutMSConfig(t *testing.T) {
 		}
 	}
 }
+
+func TestGatewaySingleInstanceConfig(t *testing.T) {
+	if (GatewayConfig{}).SingleInstance {
+		t.Fatalf("expected zero-value GatewayConfig.SingleInstance to be false")
+	}
+
+	t.Setenv("GATEWAY_SINGLE_INSTANCE", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.Gateway.SingleInstance {
+		t.Fatalf("default Gateway.SingleInstance = false, want true")
+	}
+
+	t.Setenv("GATEWAY_SINGLE_INSTANCE", "false")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Gateway.SingleInstance {
+		t.Fatalf("GATEWAY_SINGLE_INSTANCE=false -> true, want false")
+	}
+
+	t.Setenv("GATEWAY_SINGLE_INSTANCE", "true")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.Gateway.SingleInstance {
+		t.Fatalf("GATEWAY_SINGLE_INSTANCE=true -> false, want true")
+	}
+}

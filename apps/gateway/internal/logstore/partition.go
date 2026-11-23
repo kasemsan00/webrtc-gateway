@@ -31,6 +31,9 @@ func (s *logStore) partitionMaintenanceWorker() {
 
 // maintainPartitions creates future partitions and drops old ones
 func (s *logStore) maintainPartitions() {
+	if s.pool == nil {
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
