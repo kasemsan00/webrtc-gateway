@@ -241,6 +241,9 @@ func PreferWebRTCH264PacketizationMode(pc *webrtc.PeerConnection, offerSDP strin
 	if !AnalyzeOfferVideo(offerSDP).HasVideoMLine {
 		return nil
 	}
+	if pc == nil {
+		return fmt.Errorf("peer connection not available")
+	}
 	codec, err := offeredH264CodecForPacketizationMode(offerSDP, mode)
 	if err != nil {
 		return err

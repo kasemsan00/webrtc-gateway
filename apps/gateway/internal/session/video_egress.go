@@ -50,6 +50,9 @@ func (s *Session) StopVideoEgress() {
 // DetachPeerConnection stops video egress and takes the PeerConnection so the
 // caller can close it without racing later cleanup.
 func (s *Session) DetachPeerConnection() *webrtc.PeerConnection {
+	if s == nil {
+		return nil
+	}
 	s.StopVideoEgress()
 	// No audio write may be in flight on these tracks when the caller
 	// closes the PeerConnection (same pion Write/Close overlap as video).
@@ -59,9 +62,11 @@ func (s *Session) DetachPeerConnection() *webrtc.PeerConnection {
 	legacy := s.legacyPeerConnection
 	s.PeerConnection = nil
 	s.AudioTrack = nil
+	s.VideoTrack = nil
 	s.legacyPeerConnection = nil
 	s.legacyAudioTrack = nil
 	s.legacyVideoTrack = nil
+	s.closed = true
 	s.mu.Unlock()
 	s.audioEgressMu.Unlock()
 	if legacy != nil && legacy != pc {

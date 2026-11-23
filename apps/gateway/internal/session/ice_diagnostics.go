@@ -20,6 +20,9 @@ func iceCallbackIsForCurrentPeerConnection(current, eventPC *webrtc.PeerConnecti
 // until SetRemoteDescription has run. Android recreates its PC and can trickle
 // ICE before renegotiate_answer arrives.
 func (s *Session) AddRemoteICECandidate(candidate webrtc.ICECandidateInit) (queued bool, err error) {
+	if s == nil {
+		return false, fmt.Errorf("session is nil")
+	}
 	s.mu.RLock()
 	pc := s.PeerConnection
 	s.mu.RUnlock()
@@ -146,6 +149,9 @@ func (s *Session) HasOutboundInviteStarted() bool {
 }
 
 func logICECandidatePairDiagnostics(sessionID string, pc *webrtc.PeerConnection, trigger string) {
+	if pc == nil {
+		return
+	}
 	stats := pc.GetStats()
 	var selectedPair *webrtc.ICECandidatePairStats
 	candidates := make(map[string]webrtc.ICECandidateStats)

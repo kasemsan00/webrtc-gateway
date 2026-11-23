@@ -42,6 +42,17 @@ func NewManager(cfg *config.Config) *Manager {
 // NewSession (Pion API + DTLS cert + tracks) runs outside m.mu.Lock so
 // concurrent call setups do not serialize on the manager mutex.
 func (m *Manager) CreateSession(turnConfig config.TURNConfig) (*Session, error) {
+	return m.createAndRegisterSession(turnConfig, false)
+}
+
+// CreateIncomingSession creates a lazy session for an incoming SIP call without
+// allocating a Pion PeerConnection, DTLS certificate, ICE agent, or media tracks.
+// Call sess.EnsurePeerConnection() when a WebSocket/REST offer actually arrives.
+func (m *Manager) CreateIncomingSession(turnConfig config.TURNConfig) (*Session, error) {
+	return m.createAndRegisterSession(turnConfig, true)
+}
+
+func (m *Manager) createAndRegisterSession(turnConfig config.TURNConfig, lazyPC bool) (*Session, error) {
 	m.mu.RLock()
 	cfg := m.config
 	info := m.sipKeyframeINFO
@@ -51,7 +62,15 @@ func (m *Manager) CreateSession(turnConfig config.TURNConfig) (*Session, error) 
 	// Generate session ID (12 characters, base62)
 	id := generateShortID()
 
-	session, err := NewSession(id, cfg, turnConfig)
+	var (
+		session *Session
+		err     error
+	)
+	if lazyPC {
+		session, err = NewIncomingSession(id, cfg, turnConfig)
+	} else {
+		session, err = NewSession(id, cfg, turnConfig)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -67,9 +86,7 @@ func (m *Manager) CreateSession(turnConfig config.TURNConfig) (*Session, error) 
 	m.mu.Lock()
 	if _, exists := m.sessions[id]; exists {
 		m.mu.Unlock()
-		session.SetState(StateEnded)
-		session.CloseMediaTransports()
-		ClosePeerConnectionAsync(session.DetachPeerConnection(), session.ID)
+		session.Close()
 		return nil, fmt.Errorf("session ID collision: %s", id)
 	}
 	if info == nil && m.sipKeyframeINFO != nil {
@@ -84,7 +101,11 @@ func (m *Manager) CreateSession(turnConfig config.TURNConfig) (*Session, error) 
 	m.sessions[id] = session
 	m.mu.Unlock()
 
-	fmt.Printf("[%s] Created new session\n", id)
+	if lazyPC {
+		fmt.Printf("[%s] Created new incoming session (lazy PeerConnection)\n", id)
+	} else {
+		fmt.Printf("[%s] Created new session\n", id)
+	}
 	return session, nil
 }
 
@@ -96,10 +117,11 @@ func (m *Manager) SetSIPKeyframeINFOSender(fn SIPKeyframeINFOSender) {
 	m.mu.Unlock()
 }
 
-// CreateSessionForIncoming creates a new session for incoming SIP calls
-// This is an alias for CreateSession used by the SIP server
+// CreateSessionForIncoming creates a new session for incoming SIP calls.
+// Delegates to CreateIncomingSession so incoming INVITEs defer PeerConnection
+// allocation until a client actually sends a WebRTC offer.
 func (m *Manager) CreateSessionForIncoming(turnConfig config.TURNConfig) (*Session, error) {
-	return m.CreateSession(turnConfig)
+	return m.CreateIncomingSession(turnConfig)
 }
 
 // GetSession retrieves a session by ID

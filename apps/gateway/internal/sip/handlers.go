@@ -9,6 +9,7 @@ import (
 
 	"github.com/emiago/sipgo/sip"
 
+	"webrtc-sip-gateway/internal/config"
 	"webrtc-sip-gateway/internal/logstore"
 	"webrtc-sip-gateway/internal/session"
 )
@@ -337,8 +338,19 @@ func (s *Server) handleINVITE(req *sip.Request, tx sip.ServerTransaction) {
 		tryingRes := sip.NewResponseFromRequest(req, 100, "Trying", nil)
 		tx.Respond(tryingRes)
 
-		// Create a new session for this incoming call
-		newSess, err := s.sessionCreator.CreateSessionForIncoming(s.turnConfig)
+		// Create a new lazy session for this incoming call (PeerConnection is
+		// allocated on demand when a client actually sends a WebRTC offer).
+		var (
+			newSess *session.Session
+			err     error
+		)
+		if lazyCreator, ok := s.sessionCreator.(interface {
+			CreateIncomingSession(turnConfig config.TURNConfig) (*session.Session, error)
+		}); ok {
+			newSess, err = lazyCreator.CreateIncomingSession(s.turnConfig)
+		} else {
+			newSess, err = s.sessionCreator.CreateSessionForIncoming(s.turnConfig)
+		}
 		if err != nil {
 			fmt.Printf("❌ Error creating session for incoming call: %v\n", err)
 			res := sip.NewResponseFromRequest(req, 500, "Internal Server Error", nil)

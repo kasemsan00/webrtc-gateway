@@ -462,6 +462,10 @@ type Session struct {
 	TranslationCaptionHandler TranslationCaptionHandler `json:"-"`
 	// ICE gathering limits, reused when a replacement PeerConnection is built
 	WebRTCICE config.WebRTCICEConfig `json:"-"`
+	// Deferred PeerConnection initialization parameters (used by lazy incoming sessions)
+	turnConfig config.TURNConfig `json:"-"`
+	debugTURN  bool              `json:"-"`
+	closed     bool              `json:"-"`
 	// Inbound audio gain (SIP → WebRTC)
 	InboundGainEnabled bool                        `json:"-"`
 	InboundGain        float32                     `json:"-"`
@@ -469,6 +473,7 @@ type Session struct {
 	ctx                context.Context             `json:"-"`
 	cancel             context.CancelFunc          `json:"-"`
 	videoRTPHistoryMu  sync.RWMutex
+	pcInitMu           sync.Mutex // lock order: pcInitMu before mu
 	mu                 sync.RWMutex
 }
 
@@ -599,61 +604,11 @@ func (s *Session) NoteInboundRTCP(media, report string) {
 	}
 }
 
-// NewSession creates a new session with a WebRTC peer connection
-func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*Session, error) {
-	// Build ICE servers configuration
-	iceServers := pkg_webrtc.BuildICEServers(turnConfig)
-
-	api, err := newGatewayWebRTCAPI(cfg.SIP.WebRTCTWCCEnabled, id, cfg.SIP.WebRTCICE)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create WebRTC API: %w", err)
-	}
-	fmt.Printf("[%s] webrtc_api twcc=%v %s\n", id, cfg.SIP.WebRTCTWCCEnabled, cfg.SIP.WebRTCICE.Summary())
-
-	// Create WebRTC peer connection using custom API
-	webrtcConfig := webrtc.Configuration{
-		ICEServers: iceServers,
-	}
-
-	peerConnection, err := api.NewPeerConnection(webrtcConfig)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create peer connection: %w", err)
-	}
-
-	// Create audio track (Opus for passthrough)
-	audioTrack, err := webrtc.NewTrackLocalStaticRTP(
-		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus},
-		"audio",
-		fmt.Sprintf("pion-audio-%s", id),
-	)
-	if err != nil {
-		peerConnection.Close()
-		return nil, fmt.Errorf("failed to create audio track: %w", err)
-	}
-
-	// Add audio track to peer connection
-	audioSender, err := peerConnection.AddTrack(audioTrack)
-	if err != nil {
-		peerConnection.Close()
-		return nil, fmt.Errorf("failed to add audio track: %w", err)
-	}
-
-	// Create video track (H.264 for SIP compatibility)
-	videoTrack, err := webrtc.NewTrackLocalStaticRTP(
-		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264, ClockRate: 90000},
-		"video",
-		fmt.Sprintf("pion-video-%s", id),
-	)
-	if err != nil {
-		peerConnection.Close()
-		return nil, fmt.Errorf("failed to create video track: %w", err)
-	}
-
-	// Add video track to peer connection
-	videoSender, err := peerConnection.AddTrack(videoTrack)
-	if err != nil {
-		peerConnection.Close()
-		return nil, fmt.Errorf("failed to add video track: %w", err)
+// newBaseSession initializes session metadata, buffers, and lifecycle context
+// without allocating a Pion PeerConnection or media tracks.
+func newBaseSession(id string, cfg *config.Config, turnConfig config.TURNConfig) *Session {
+	if cfg == nil {
+		cfg = &config.Config{}
 	}
 
 	// Initialize buffer size from config with minimum clamp (1500 bytes for MTU safety)
@@ -662,7 +617,6 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 		rtpBufferSize = 1500
 	}
 
-	// Create session with both audio and video tracks
 	burstWindow := time.Duration(cfg.SIP.VideoRecoveryBurstWindowMS) * time.Millisecond
 	if burstWindow <= 0 {
 		burstWindow = 8 * time.Second
@@ -680,20 +634,18 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 		burstFIRStale = 7000 * time.Millisecond
 	}
 
+	now := time.Now()
 	session := &Session{
 		ID:                                   id,
-		PeerConnection:                       peerConnection,
-		AudioTrack:                           audioTrack,
-		VideoTrack:                           videoTrack,
 		State:                                StateNew,
-		CreatedAt:                            time.Now(),
-		UpdatedAt:                            time.Now(),
+		CreatedAt:                            now,
+		UpdatedAt:                            now,
 		RTPBufferSize:                        rtpBufferSize,
 		SIPVideoPacketizationMode:            1,
 		SwitchSPSPPSInjectRemaining:          0, // 0 = disabled, will be set to 3 when @switch message is received
 		VideoRTCPSource:                      "unknown",
 		VideoFeedbackTransport:               cfg.SIP.VideoFeedbackTransport,
-		SymmetricRTPTrustUntil:               time.Now().Add(symmetricRTPTrustWindow),
+		SymmetricRTPTrustUntil:               now.Add(symmetricRTPTrustWindow),
 		VideoRecoveryBurstEnabled:            cfg.SIP.VideoRecoveryBurstEnabled,
 		VideoRecoveryBurstWindow:             burstWindow,
 		VideoRecoveryBurstInterval:           burstInterval,
@@ -735,25 +687,213 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 		WebRTCTWCCEnabled:                    cfg.SIP.WebRTCTWCCEnabled,
 		debugVideoPackets:                    cfg.SIP.DebugVideoPackets,
 		WebRTCICE:                            cfg.SIP.WebRTCICE,
+		turnConfig:                           turnConfig,
+		debugTURN:                            cfg.API.DebugTURN,
 		SwitchVideoGateFailOpen:              time.Duration(cfg.SIP.SwitchVideoGateFailOpenMS) * time.Millisecond,
 		SwitchVideoGateFailOpenCap:           time.Duration(cfg.SIP.SwitchVideoGateFailOpenCapMS) * time.Millisecond,
 		sipVideoIDRReplayNotify:              make(chan struct{}, 1),
 	}
 	session.initVideoRTPHistory()
 	session.ctx, session.cancel = context.WithCancel(context.Background())
+	return session
+}
+
+// NewIncomingSession creates a session for an incoming SIP call without
+// allocating a Pion PeerConnection, DTLS certificate, ICE agent, or media tracks.
+// Call EnsurePeerConnection when a WebSocket/REST offer actually arrives.
+func NewIncomingSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*Session, error) {
+	return newBaseSession(id, cfg, turnConfig), nil
+}
+
+// NewSession creates a new session with an initialized WebRTC peer connection.
+func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*Session, error) {
+	session := newBaseSession(id, cfg, turnConfig)
+	if err := session.EnsurePeerConnection(); err != nil {
+		session.Close()
+		return nil, err
+	}
+	return session, nil
+}
+
+// HasPeerConnection reports whether a WebRTC PeerConnection is currently attached.
+func (s *Session) HasPeerConnection() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.PeerConnection != nil
+}
+
+// IsClosed reports whether the session has ended or been detached/closed.
+func (s *Session) IsClosed() bool {
+	if s == nil {
+		return true
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.isClosedLocked()
+}
+
+func (s *Session) isClosedLocked() bool {
+	if s.State == StateEnded || s.closed {
+		return true
+	}
+	if s.ctx != nil && s.ctx.Err() != nil {
+		return true
+	}
+	return false
+}
+
+// Close ends the session, closes media transports, and detaches/closes any
+// attached PeerConnection. Safe to call multiple times or before EnsurePeerConnection.
+func (s *Session) Close() {
+	if s == nil {
+		return
+	}
+	s.SetState(StateEnded)
+	s.CloseMediaTransports()
+	ClosePeerConnectionAsync(s.DetachPeerConnection(), s.ID)
+}
+
+// EnsurePeerConnection lazily allocates and wires the session's Pion PeerConnection,
+// audio/video tracks, and WebRTC callbacks on first call. It is idempotent and safe
+// for concurrent callers, and refuses allocation if the session has already ended/closed.
+func (s *Session) EnsurePeerConnection() error {
+	if s == nil {
+		return fmt.Errorf("session is nil")
+	}
+
+	// Fast path: already initialized or already closed.
+	s.mu.RLock()
+	if s.PeerConnection != nil {
+		s.mu.RUnlock()
+		return nil
+	}
+	if s.isClosedLocked() {
+		id := s.ID
+		s.mu.RUnlock()
+		return fmt.Errorf("session %s is closed", id)
+	}
+	s.mu.RUnlock()
+
+	s.pcInitMu.Lock()
+	defer s.pcInitMu.Unlock()
+
+	return s.initPeerConnectionLocked()
+}
+
+// initPeerConnectionLocked constructs and installs the initial PeerConnection while
+// s.pcInitMu is held (s.mu is NOT held across Pion construction).
+func (s *Session) initPeerConnectionLocked() error {
+	s.mu.RLock()
+	if s.PeerConnection != nil {
+		s.mu.RUnlock()
+		return nil
+	}
+	if s.isClosedLocked() {
+		id := s.ID
+		s.mu.RUnlock()
+		return fmt.Errorf("session %s is closed", id)
+	}
+	id := s.ID
+	turnConfig := s.turnConfig
+	twccEnabled := s.WebRTCTWCCEnabled
+	iceCfg := s.WebRTCICE
+	debugTURN := s.debugTURN
+	s.mu.RUnlock()
+
+	// Build ICE servers configuration
+	iceServers := pkg_webrtc.BuildICEServers(turnConfig)
+
+	api, err := newGatewayWebRTCAPI(twccEnabled, id, iceCfg)
+	if err != nil {
+		return fmt.Errorf("failed to create WebRTC API: %w", err)
+	}
+	fmt.Printf("[%s] webrtc_api twcc=%v %s\n", id, twccEnabled, iceCfg.Summary())
+
+	// Create WebRTC peer connection using custom API
+	webrtcConfig := webrtc.Configuration{
+		ICEServers: iceServers,
+	}
+
+	peerConnection, err := api.NewPeerConnection(webrtcConfig)
+	if err != nil {
+		return fmt.Errorf("failed to create peer connection: %w", err)
+	}
+
+	// Create audio track (Opus for passthrough)
+	audioTrack, err := webrtc.NewTrackLocalStaticRTP(
+		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus},
+		"audio",
+		fmt.Sprintf("pion-audio-%s", id),
+	)
+	if err != nil {
+		_ = peerConnection.Close()
+		return fmt.Errorf("failed to create audio track: %w", err)
+	}
+
+	// Add audio track to peer connection
+	audioSender, err := peerConnection.AddTrack(audioTrack)
+	if err != nil {
+		_ = peerConnection.Close()
+		return fmt.Errorf("failed to add audio track: %w", err)
+	}
+
+	// Create video track (H.264 for SIP compatibility)
+	videoTrack, err := webrtc.NewTrackLocalStaticRTP(
+		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264, ClockRate: 90000},
+		"video",
+		fmt.Sprintf("pion-video-%s", id),
+	)
+	if err != nil {
+		_ = peerConnection.Close()
+		return fmt.Errorf("failed to create video track: %w", err)
+	}
+
+	// Add video track to peer connection
+	videoSender, err := peerConnection.AddTrack(videoTrack)
+	if err != nil {
+		_ = peerConnection.Close()
+		return fmt.Errorf("failed to add video track: %w", err)
+	}
+
+	// Register callbacks before publishing the PeerConnection on s so any caller
+	// that observes s.PeerConnection != nil immediately gets complete handlers.
+	s.attachInitialPeerConnectionCallbacks(peerConnection, id, debugTURN)
+
+	s.mu.Lock()
+	if s.isClosedLocked() {
+		s.mu.Unlock()
+		_ = peerConnection.Close()
+		return fmt.Errorf("session %s is closed", id)
+	}
+	if s.PeerConnection != nil {
+		s.mu.Unlock()
+		_ = peerConnection.Close()
+		return nil
+	}
+	s.PeerConnection = peerConnection
+	s.AudioTrack = audioTrack
+	s.VideoTrack = videoTrack
+	s.UpdatedAt = time.Now()
+	s.mu.Unlock()
 
 	// Read browser RTCP for our tracks (PLI/FIR/NACK on video). Shared with
 	// replacement PeerConnections (browser_rtcp.go).
-	go session.drainSenderRTCP(audioSender)
-	go session.readVideoSenderRTCP(videoSender)
+	go s.drainSenderRTCP(audioSender)
+	go s.readVideoSenderRTCP(videoSender)
 
+	return nil
+}
+
+func (s *Session) attachInitialPeerConnectionCallbacks(peerConnection *webrtc.PeerConnection, id string, debugTURN bool) {
 	// Set up TURN/ICE debug logging if enabled
-	if cfg.API.DebugTURN {
+	if debugTURN {
 		// Log ICE gathering state changes
 		peerConnection.OnICEGatheringStateChange(func(state webrtc.ICEGatheringState) {
 			fmt.Printf("[%s] 🧊 ICE Gathering State: %s\n", id, state.String())
 		})
-
 	}
 
 	// Always count candidates so terminal diagnostics remain useful even when
@@ -762,13 +902,13 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 	peerConnection.OnICECandidate(func(candidate *webrtc.ICECandidate) {
 		candidateLog.Observe(candidate)
 		if candidate == nil {
-			if cfg.API.DebugTURN {
+			if debugTURN {
 				fmt.Printf("[%s] 🧊 ICE Candidate gathering complete\n", id)
 			}
 			return
 		}
-		count, elapsed := session.RecordLocalICECandidate()
-		if cfg.API.DebugTURN {
+		count, elapsed := s.RecordLocalICECandidate()
+		if debugTURN {
 			fmt.Printf("[%s] 🧊 ICE Candidate: type=%s address=%s:%d protocol=%s count=%d elapsed=%s\n",
 				id, candidate.Typ.String(), candidate.Address, candidate.Port, candidate.Protocol.String(), count, elapsed)
 		}
@@ -781,22 +921,22 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 			logICECandidatePairDiagnostics(id, peerConnection, connectionState.String())
 		}
 
-		session.mu.Lock()
-		if !iceCallbackIsForCurrentPeerConnection(session.PeerConnection, peerConnection) {
-			session.mu.Unlock()
+		s.mu.Lock()
+		if !iceCallbackIsForCurrentPeerConnection(s.PeerConnection, peerConnection) {
+			s.mu.Unlock()
 			fmt.Printf("[%s] 🧊 ICE %s ignored on replaced PeerConnection\n", id, connectionState.String())
 			return
 		}
-		session.UpdatedAt = time.Now()
+		s.UpdatedAt = time.Now()
 		startRecoveryBurstReason := ""
 		replayIDRReason := ""
 		var afterICEEnded func()
-		isTerminalCleanup := isTerminalCleanupState(session.State, session.TerminalAction)
+		isTerminalCleanup := isTerminalCleanupState(s.State, s.TerminalAction)
 
 		switch connectionState {
 		case webrtc.ICEConnectionStateConnected:
 			// Log selected candidate pair if TURN debug is enabled
-			if cfg.API.DebugTURN {
+			if debugTURN {
 				// Use GetStats to find the selected candidate pair (nominated and succeeded)
 				stats := peerConnection.GetStats()
 				var selectedPair *webrtc.ICECandidatePairStats
@@ -846,68 +986,68 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 
 			// Call-progress state must follow SIP answer, not ICE readiness.
 			// Only restore active when recovering from a post-answer ICE reconnect.
-			nextState, recoveryReason, stateChanged := ApplyICEConnectedCallProgress(session.State)
+			nextState, recoveryReason, stateChanged := ApplyICEConnectedCallProgress(s.State)
 			if stateChanged {
-				session.State = nextState
+				s.State = nextState
 				fmt.Printf("[%s] ✅ ICE reconnected - resuming call\n", id)
 			} else if recoveryReason == "initial-call" {
-				fmt.Printf("[%s] ✅ ICE connected - starting initial call recovery burst (call state=%s)\n", id, session.State)
+				fmt.Printf("[%s] ✅ ICE connected - starting initial call recovery burst (call state=%s)\n", id, s.State)
 			}
 			if recoveryReason != "" {
 				startRecoveryBurstReason = recoveryReason
 			}
-			immediateICEConnectedFIR := session.RemoteVideoSSRC != 0 && session.LastKeyframe.IsZero()
+			immediateICEConnectedFIR := s.RemoteVideoSSRC != 0 && s.LastKeyframe.IsZero()
 			replayIDRReason = "ice-connected"
 			go func(sendImmediateFIR bool) {
 				fmt.Printf("[%s] 🚀 ICE Connected - Sending conservative FIR + PLI startup recovery (immediateFIR=%v)\n", id, sendImmediateFIR)
 				if !sendImmediateFIR {
 					time.Sleep(150 * time.Millisecond)
 				}
-				if session.GetState() == StateEnded {
+				if s.GetState() == StateEnded {
 					return
 				}
-				session.RequestSIPVideoIDRReplay("ice-connected")
-				session.SendFIRToAsterisk()
+				s.RequestSIPVideoIDRReplay("ice-connected")
+				s.SendFIRToAsterisk()
 				time.Sleep(250 * time.Millisecond)
-				if session.GetState() == StateEnded {
+				if s.GetState() == StateEnded {
 					return
 				}
-				session.SendPLIToAsteriskForced("ice-connected")
-				if skip, _ := session.SkipUplinkKeyframeRequest("startup", time.Now()); !skip {
-					session.SendPLItoWebRTC()
+				s.SendPLIToAsteriskForced("ice-connected")
+				if skip, _ := s.SkipUplinkKeyframeRequest("startup", time.Now()); !skip {
+					s.SendPLItoWebRTC()
 				}
 			}(immediateICEConnectedFIR)
 
 		case webrtc.ICEConnectionStateDisconnected, webrtc.ICEConnectionStateClosed:
 			if isTerminalCleanup {
-				fmt.Printf("[%s] 🧊 ICE %s ignored during terminal cleanup (state=%s action=%s)\n", id, connectionState.String(), session.State, session.TerminalAction)
+				fmt.Printf("[%s] 🧊 ICE %s ignored during terminal cleanup (state=%s action=%s)\n", id, connectionState.String(), s.State, s.TerminalAction)
 				break
 			}
 
 			// Keep session/media endpoints alive during transient ICE transitions.
 			// This allows WS resume + renegotiation to recover without losing SIP RTP sockets.
-			if session.enterICEReconnectGraceLocked(iceReconnectGracePeriod, connectionState.String()) {
+			if s.enterICEReconnectGraceLocked(iceReconnectGracePeriod, connectionState.String()) {
 				startRecoveryBurstReason = "ice-reconnecting"
 			}
 
 		case webrtc.ICEConnectionStateFailed:
 			if isTerminalCleanup {
-				fmt.Printf("[%s] 🧊 ICE failed ignored during terminal cleanup (state=%s action=%s)\n", id, session.State, session.TerminalAction)
+				fmt.Printf("[%s] 🧊 ICE failed ignored during terminal cleanup (state=%s action=%s)\n", id, s.State, s.TerminalAction)
 				break
 			}
 			// ICE failed is truly terminal - end immediately. Preserve the
 			// machine-readable cause so the API can distinguish pre-SIP failure
 			// from SIP cancellation after an INVITE has started.
-			session.TerminalReason = "ice_failed"
-			afterICEEnded = session.endForICELocked("ice_failed")
+			s.TerminalReason = "ice_failed"
+			afterICEEnded = s.endForICELocked("ice_failed")
 		}
-		session.mu.Unlock()
+		s.mu.Unlock()
 		runICEEndedHook(afterICEEnded)
 		if replayIDRReason != "" {
-			session.RequestSIPVideoIDRReplay(replayIDRReason)
+			s.RequestSIPVideoIDRReplay(replayIDRReason)
 		}
 		if startRecoveryBurstReason != "" {
-			session.StartVideoRecoveryBurst(startRecoveryBurstReason)
+			s.StartVideoRecoveryBurst(startRecoveryBurstReason)
 		}
 	})
 
@@ -934,18 +1074,18 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 						if len(sets) >= 1 {
 							sps, err := base64.StdEncoding.DecodeString(sets[0])
 							if err == nil {
-								session.mu.Lock()
-								session.CachedSPS = sps
-								session.mu.Unlock()
+								s.mu.Lock()
+								s.CachedSPS = sps
+								s.mu.Unlock()
 								fmt.Printf("[%s] 💾 Cached SPS from SDP (%d bytes)\n", id, len(sps))
 							}
 						}
 						if len(sets) >= 2 {
 							pps, err := base64.StdEncoding.DecodeString(sets[1])
 							if err == nil {
-								session.mu.Lock()
-								session.CachedPPS = pps
-								session.mu.Unlock()
+								s.mu.Lock()
+								s.CachedPPS = pps
+								s.mu.Unlock()
 								fmt.Printf("[%s] 💾 Cached PPS from SDP (%d bytes)\n", id, len(pps))
 							}
 						}
@@ -955,13 +1095,11 @@ func NewSession(id string, cfg *config.Config, turnConfig config.TURNConfig) (*S
 		}
 
 		// 1. Read receiver RTCP (sender reports and any routed feedback)
-		go session.readReceiverRTCP(receiver, kind)
+		go s.readReceiverRTCP(receiver, kind)
 
 		// 2. Start goroutine to forward RTP packets to Asterisk
-		go session.forwardRTPToAsterisk(track, kind)
+		go s.forwardRTPToAsterisk(track, kind)
 	})
-
-	return session, nil
 }
 
 // SetCallInfo sets call information for a session
