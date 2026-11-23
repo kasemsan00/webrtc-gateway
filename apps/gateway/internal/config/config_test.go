@@ -559,3 +559,72 @@ func TestDBMaxConnsConfig(t *testing.T) {
 		t.Fatalf("DB_MAX_CONNS=500 -> %d, want clamp %d", cfg.DB.MaxConns, MaxDBMaxConns)
 	}
 }
+
+func TestOfferVideoPrimeMSConfig(t *testing.T) {
+	t.Setenv("SIP_OFFER_VIDEO_PRIME_MS", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.SIP.OfferVideoPrimeMS != DefaultOfferVideoPrimeMS {
+		t.Fatalf("default SIP.OfferVideoPrimeMS = %d, want %d", cfg.SIP.OfferVideoPrimeMS, DefaultOfferVideoPrimeMS)
+	}
+
+	t.Setenv("SIP_OFFER_VIDEO_PRIME_MS", "0")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.SIP.OfferVideoPrimeMS != 0 {
+		t.Fatalf("SIP_OFFER_VIDEO_PRIME_MS=0 -> %d, want 0", cfg.SIP.OfferVideoPrimeMS)
+	}
+
+	t.Setenv("SIP_OFFER_VIDEO_PRIME_MS", "450")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.SIP.OfferVideoPrimeMS != 450 {
+		t.Fatalf("SIP_OFFER_VIDEO_PRIME_MS=450 -> %d, want 450", cfg.SIP.OfferVideoPrimeMS)
+	}
+
+	t.Setenv("SIP_OFFER_VIDEO_PRIME_MS", "-25")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.SIP.OfferVideoPrimeMS != 0 {
+		t.Fatalf("SIP_OFFER_VIDEO_PRIME_MS=-25 -> %d, want clamp 0", cfg.SIP.OfferVideoPrimeMS)
+	}
+}
+
+func TestOfferICEGatherTimeoutMSConfig(t *testing.T) {
+	t.Setenv("WEBRTC_OFFER_ICE_GATHER_TIMEOUT_MS", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.API.OfferICEGatherTimeoutMS != DefaultOfferICEGatherTimeoutMS {
+		t.Fatalf("default API.OfferICEGatherTimeoutMS = %d, want %d", cfg.API.OfferICEGatherTimeoutMS, DefaultOfferICEGatherTimeoutMS)
+	}
+
+	t.Setenv("WEBRTC_OFFER_ICE_GATHER_TIMEOUT_MS", "2200")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.API.OfferICEGatherTimeoutMS != 2200 {
+		t.Fatalf("WEBRTC_OFFER_ICE_GATHER_TIMEOUT_MS=2200 -> %d, want 2200", cfg.API.OfferICEGatherTimeoutMS)
+	}
+
+	for _, bad := range []string{"0", "-100"} {
+		t.Setenv("WEBRTC_OFFER_ICE_GATHER_TIMEOUT_MS", bad)
+		cfg, err = Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+		if cfg.API.OfferICEGatherTimeoutMS != DefaultOfferICEGatherTimeoutMS {
+			t.Fatalf("WEBRTC_OFFER_ICE_GATHER_TIMEOUT_MS=%q -> %d, want default %d", bad, cfg.API.OfferICEGatherTimeoutMS, DefaultOfferICEGatherTimeoutMS)
+		}
+	}
+}

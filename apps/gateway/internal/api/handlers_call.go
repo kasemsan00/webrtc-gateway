@@ -49,19 +49,17 @@ func (s *Server) handleOffer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	payloadID := s.storePayload(ctx, &logstore.PayloadRecord{
+	s.storePayloadAndLogEvent(ctx, &logstore.PayloadRecord{
 		SessionID:   sess.ID,
 		Timestamp:   time.Now(),
 		Kind:        "webrtc_sdp_offer",
 		ContentType: "application/sdp",
 		BodyText:    req.SDP,
-	})
-	s.logEvent(&logstore.Event{
+	}, &logstore.Event{
 		Timestamp: time.Now(),
 		SessionID: sess.ID,
 		Category:  "rest",
 		Name:      "rest_offer_received",
-		PayloadID: payloadID,
 	})
 
 	// Best-effort: cache H.264 SPS/PPS from Offer SDP (if present) so SIP SDP can include sprop-parameter-sets.
@@ -85,6 +83,9 @@ func (s *Server) handleOffer(w http.ResponseWriter, r *http.Request) {
 		})
 		s.respondError(w, http.StatusBadRequest, fmt.Sprintf("Failed to set offer: %v", err))
 		return
+	}
+	if flushed := sess.FlushPendingRemoteICE(); flushed > 0 {
+		log.Printf("[%s] 🧊 Flushed %d queued remote ICE candidates after REST offer SetRemoteDescription", sess.ID, flushed)
 	}
 
 	s.logEvent(&logstore.Event{
@@ -114,9 +115,11 @@ func (s *Server) handleOffer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Wait for ICE gathering to complete
-	gatherComplete := webrtc.GatheringCompletePromise(sess.PeerConnection)
-	<-gatherComplete
+	// Wait for ICE gathering with deployment-aware early return and bounded timeout.
+	gatherTimeout := s.effectiveOfferICEGatherTimeout()
+	if !session.WaitForOfferICEGatheringComplete(ctx, sess.PeerConnection, s.effectiveOfferICEHasNAT1To1(), s.effectiveOfferICEHasTURN(), gatherTimeout) {
+		log.Printf("[%s] ⏱️ [REST Offer] ICE gathering wait reached %s; sending answer with candidates gathered so far", sess.ID, gatherTimeout)
+	}
 
 	sess.UpdateState(session.StateConnecting)
 	s.logEvent(&logstore.Event{
@@ -133,19 +136,17 @@ func (s *Server) handleOffer(w http.ResponseWriter, r *http.Request) {
 		SDP:       sess.PeerConnection.LocalDescription().SDP,
 		SessionID: sess.ID,
 	}
-	answerPayloadID := s.storePayload(ctx, &logstore.PayloadRecord{
+	s.storePayloadAndLogEvent(ctx, &logstore.PayloadRecord{
 		SessionID:   sess.ID,
 		Timestamp:   time.Now(),
 		Kind:        "webrtc_sdp_answer",
 		ContentType: "application/sdp",
 		BodyText:    response.SDP,
-	})
-	s.logEvent(&logstore.Event{
+	}, &logstore.Event{
 		Timestamp: time.Now(),
 		SessionID: sess.ID,
 		Category:  "rest",
 		Name:      "rest_answer_sent",
-		PayloadID: answerPayloadID,
 	})
 	s.respondJSON(w, http.StatusOK, response)
 }
@@ -207,7 +208,14 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 			trunkID = resolved
 		}
 
-		validation := s.validateTrunkReadyForOutboundCall(ctx, trunkID)
+		claims, hasClaims := AuthClaimsFromContext(ctx)
+		var claimUsername *string
+		if hasClaims {
+			username := claims.PreferredUsername
+			claimUsername = &username
+		}
+
+		validation, claimed := s.validateAndClaimTrunkForOutboundCall(ctx, trunkID, claimUsername)
 		if validation.notFound {
 			s.respondError(w, http.StatusNotFound, validation.reason)
 			return
@@ -218,16 +226,14 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Require an authenticated user to use a trunk.
-		claims, hasClaims := AuthClaimsFromContext(ctx)
 		if s.tokenVerifier != nil && !hasClaims {
 			s.respondError(w, http.StatusUnauthorized, "Token authentication required to use trunk")
 			return
 		}
 
-		// Record who is using this trunk.
-		if hasClaims {
-			username := claims.PreferredUsername
-			if err := s.trunkManager.SetTrunkInUseBy(ctx, trunkID, &username); err != nil {
+		// Fallback when trunkManager does not support atomic validate+claim.
+		if hasClaims && !claimed {
+			if err := s.trunkManager.SetTrunkInUseBy(ctx, trunkID, claimUsername); err != nil {
 				log.Printf("⚠️ [REST Call] Failed to set in_use_by for trunk %d: %v", trunkID, err)
 			}
 		}
@@ -304,7 +310,6 @@ func (s *Server) handleHangup(w http.ResponseWriter, r *http.Request) {
 		Category:  "rest",
 		Name:      "rest_hangup_request",
 	})
-	s.logSessionSnapshot(ctx, sess, "rest_hangup")
 
 	// Delete session
 	s.sessionMgr.DeleteSession(sessionID)
@@ -342,9 +347,7 @@ func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 
 		var trunkName string
 		if authMode == "trunk" && trunkID > 0 && s.trunkManager != nil {
-			if trunk, err := s.trunkManager.GetTrunkByIDFromDB(r.Context(), trunkID); err == nil {
-				trunkName = trunk.Name
-			}
+			trunkName = s.resolveTrunkName(r.Context(), trunkID)
 		}
 
 		response[i] = SessionResponse{
@@ -396,9 +399,7 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 
 	var trunkName string
 	if authMode == "trunk" && trunkID > 0 && s.trunkManager != nil {
-		if trunk, err := s.trunkManager.GetTrunkByIDFromDB(r.Context(), trunkID); err == nil {
-			trunkName = trunk.Name
-		}
+		trunkName = s.resolveTrunkName(r.Context(), trunkID)
 	}
 
 	response := SessionResponse{

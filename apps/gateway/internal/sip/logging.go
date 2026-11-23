@@ -27,6 +27,37 @@ func (s *Server) storePayload(ctx context.Context, payload *logstore.PayloadReco
 	return &payloadID
 }
 
+func (s *Server) storePayloadAndLogEvent(ctx context.Context, payload *logstore.PayloadRecord, event *logstore.Event) {
+	if s.logStore == nil {
+		return
+	}
+	if asyncStore, ok := s.logStore.(logstore.AsyncLogStore); ok {
+		asyncStore.StorePayloadAndLogEventAsync(payload, event)
+		return
+	}
+	var payloadID *int64
+	if payload != nil {
+		payloadID = s.storePayload(ctx, payload)
+	}
+	if event != nil {
+		if payloadID != nil {
+			event.PayloadID = payloadID
+		}
+		s.logEvent(event)
+	}
+}
+
+func (s *Server) storePayloadAsync(ctx context.Context, payload *logstore.PayloadRecord) {
+	if s.logStore == nil || payload == nil {
+		return
+	}
+	if asyncStore, ok := s.logStore.(logstore.AsyncLogStore); ok {
+		asyncStore.StorePayloadAndLogEventAsync(payload, nil)
+		return
+	}
+	_ = s.storePayload(ctx, payload)
+}
+
 func (s *Server) logSessionSnapshot(ctx context.Context, sess *session.Session, endReason string) {
 	if s.logStore == nil || sess == nil {
 		return
@@ -58,7 +89,7 @@ func (s *Server) logSessionSnapshot(ctx context.Context, sess *session.Session, 
 		}
 	}
 
-	_ = s.logStore.UpsertSession(ctx, &logstore.SessionRecord{
+	record := &logstore.SessionRecord{
 		SessionID:     snap.ID,
 		CreatedAt:     snap.CreatedAt,
 		UpdatedAt:     time.Now(),
@@ -79,7 +110,12 @@ func (s *Server) logSessionSnapshot(ctx context.Context, sess *session.Session, 
 		TrunkName:     trunkName,
 		SIPUsername:   sipUsername,
 		Meta:          buildSessionMeta(sess, "sip"),
-	})
+	}
+	if asyncStore, ok := s.logStore.(logstore.AsyncLogStore); ok {
+		asyncStore.UpsertSessionAsync(record)
+		return
+	}
+	_ = s.logStore.UpsertSession(ctx, record)
 }
 
 func buildSessionMeta(sess *session.Session, source string) map[string]interface{} {
@@ -111,7 +147,7 @@ func (s *Server) logDialogSnapshot(ctx context.Context, sess *session.Session) {
 
 	_, _, _, callID := sess.GetCallInfo()
 
-	_ = s.logStore.UpsertDialog(ctx, &logstore.DialogRecord{
+	record := &logstore.DialogRecord{
 		SessionID:     sess.ID,
 		Timestamp:     time.Now(),
 		SIPCallID:     callID,
@@ -120,5 +156,10 @@ func (s *Server) logDialogSnapshot(ctx context.Context, sess *session.Session) {
 		RemoteContact: remoteContact,
 		CSeq:          cseq,
 		RouteSet:      routeSet,
-	})
+	}
+	if asyncStore, ok := s.logStore.(logstore.AsyncLogStore); ok {
+		asyncStore.UpsertDialogAsync(record)
+		return
+	}
+	_ = s.logStore.UpsertDialog(ctx, record)
 }

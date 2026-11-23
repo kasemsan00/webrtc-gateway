@@ -111,7 +111,7 @@ func (s *Server) handleINVITE(req *sip.Request, tx sip.ServerTransaction) {
 	})
 
 	if s.logFullSIP {
-		_ = s.storePayload(ctx, &logstore.PayloadRecord{
+		s.storePayloadAsync(ctx, &logstore.PayloadRecord{
 			SessionID:   "",
 			Timestamp:   time.Now(),
 			Kind:        "sip_message",
@@ -839,26 +839,26 @@ func (s *Server) handleBYE(req *sip.Request, tx sip.ServerTransaction) {
 		fmt.Printf("✅ State change notification sent to client\n")
 	}
 
-	var fullPayloadID *int64
-	if s.logFullSIP {
-		fullPayloadID = s.storePayload(ctx, &logstore.PayloadRecord{
-			SessionID:   byeSessionID,
-			Timestamp:   time.Now(),
-			Kind:        "sip_message",
-			ContentType: "application/sip",
-			BodyText:    req.String(),
-		})
-	}
-	s.logEvent(&logstore.Event{
+	byeEvent := &logstore.Event{
 		Timestamp:     time.Now(),
 		SessionID:     byeSessionID,
 		Category:      "sip",
 		Name:          "sip_bye_received",
 		SIPMethod:     string(req.Method),
 		SIPCallID:     callIDValue,
-		PayloadID:     fullPayloadID,
 		SIPStatusCode: 200,
-	})
+	}
+	if s.logFullSIP {
+		s.storePayloadAndLogEvent(ctx, &logstore.PayloadRecord{
+			SessionID:   byeSessionID,
+			Timestamp:   time.Now(),
+			Kind:        "sip_message",
+			ContentType: "application/sip",
+			BodyText:    req.String(),
+		}, byeEvent)
+	} else {
+		s.logEvent(byeEvent)
+	}
 
 	if sess != nil {
 		fmt.Printf("🔔 Cleaning up session %s after remote BYE\n", sess.ID)
@@ -1153,7 +1153,7 @@ func (s *Server) handleOPTIONS(req *sip.Request, tx sip.ServerTransaction) {
 	})
 
 	if s.logFullSIP {
-		_ = s.storePayload(ctx, &logstore.PayloadRecord{
+		s.storePayloadAsync(ctx, &logstore.PayloadRecord{
 			SessionID:   "",
 			Timestamp:   time.Now(),
 			Kind:        "sip_message",
@@ -1194,26 +1194,24 @@ func (s *Server) handleMESSAGE(req *sip.Request, tx sip.ServerTransaction) {
 		callIDValue = callID.Value()
 	}
 
-	payloadID := s.storePayload(ctx, &logstore.PayloadRecord{
+	s.storePayloadAndLogEvent(ctx, &logstore.PayloadRecord{
 		SessionID:   "",
 		Timestamp:   time.Now(),
 		Kind:        "sip_message",
 		ContentType: contentType,
 		BodyText:    body,
-	})
-	s.logEvent(&logstore.Event{
+	}, &logstore.Event{
 		Timestamp: time.Now(),
 		SessionID: "",
 		Category:  "sip",
 		Name:      "sip_message_received",
 		SIPMethod: string(req.Method),
 		SIPCallID: callIDValue,
-		PayloadID: payloadID,
 		Data:      map[string]interface{}{"from": fromURI, "to": toURI},
 	})
 
 	if s.logFullSIP {
-		_ = s.storePayload(ctx, &logstore.PayloadRecord{
+		s.storePayloadAsync(ctx, &logstore.PayloadRecord{
 			SessionID:   "",
 			Timestamp:   time.Now(),
 			Kind:        "sip_message_full",

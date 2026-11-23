@@ -177,6 +177,7 @@ func runAPIMode(ctx context.Context, cfg *config.Config, unicastAddress string, 
 	}
 	sipServer.SetLogStore(store)
 	sipServer.SetLogFullSIP(cfg.DB.LogFullSIP)
+	sipServer.SetOfferVideoPrimeTimeout(time.Duration(cfg.SIP.OfferVideoPrimeMS) * time.Millisecond)
 
 	// Create SIP client if configured
 	if err := sipServer.CreateClient(); err != nil {
@@ -228,6 +229,8 @@ func runAPIMode(ctx context.Context, cfg *config.Config, unicastAddress string, 
 		apiServer.AttachTrunkListChangeCallback(trunkManager)
 	}
 	apiServer.SetRuntimeConfig(cfg)
+	apiServer.SetOfferICEGatherTimeout(time.Duration(cfg.API.OfferICEGatherTimeoutMS) * time.Millisecond)
+	apiServer.SetOfferICEHasNAT1To1(len(cfg.SIP.WebRTCICE.NAT1To1IPs) > 0)
 	if cfg.Auth.FrontendPassword != "" {
 		apiServer.SetAdminPassword(cfg.Auth.FrontendPassword)
 		log.Printf("Admin REST password auth enabled")

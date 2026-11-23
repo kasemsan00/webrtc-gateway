@@ -181,20 +181,18 @@ func (s *Server) makeCall(destination, from string, sess *session.Session) error
 	// If SPS/PPS are available, they will be included in sprop-parameter-sets
 	sdpOffer := s.createSDPOffer(rtpPort, sess)
 
-	payloadID := s.storePayload(ctx, &logstore.PayloadRecord{
+	s.storePayloadAndLogEvent(ctx, &logstore.PayloadRecord{
 		SessionID:    sess.ID,
 		Timestamp:    time.Now(),
 		Kind:         "sip_sdp_offer",
 		ContentType:  "application/sdp",
 		BodyBytesB64: "",
 		BodyText:     string(sdpOffer),
-	})
-	s.logEvent(&logstore.Event{
+	}, &logstore.Event{
 		Timestamp: time.Now(),
 		SessionID: sess.ID,
 		Category:  "sip",
 		Name:      "sip_sdp_offer_created",
-		PayloadID: payloadID,
 	})
 
 	// Create INVITE request
@@ -834,19 +832,17 @@ func (s *Server) acceptCall(sess *session.Session) error {
 	if len(inviteBody) > 0 {
 		fmt.Printf("[%s] 📡 Parsing INVITE SDP to get Asterisk endpoints + Opus PT...\n", sess.ID)
 
-		invitePayloadID := s.storePayload(ctx, &logstore.PayloadRecord{
+		s.storePayloadAndLogEvent(ctx, &logstore.PayloadRecord{
 			SessionID:   sess.ID,
 			Timestamp:   time.Now(),
 			Kind:        "sip_sdp_offer",
 			ContentType: "application/sdp",
 			BodyText:    string(inviteBody),
-		})
-		s.logEvent(&logstore.Event{
+		}, &logstore.Event{
 			Timestamp: time.Now(),
 			SessionID: sess.ID,
 			Category:  "sip",
 			Name:      "sip_inbound_invite_sdp_received",
-			PayloadID: invitePayloadID,
 			SIPCallID: req.CallID().Value(),
 		})
 
@@ -904,19 +900,17 @@ func (s *Server) acceptCall(sess *session.Session) error {
 		}
 	}
 
-	answerPayloadID := s.storePayload(ctx, &logstore.PayloadRecord{
+	s.storePayloadAndLogEvent(ctx, &logstore.PayloadRecord{
 		SessionID:   sess.ID,
 		Timestamp:   time.Now(),
 		Kind:        "sip_sdp_answer",
 		ContentType: "application/sdp",
 		BodyText:    string(sdpOffer),
-	})
-	s.logEvent(&logstore.Event{
+	}, &logstore.Event{
 		Timestamp: time.Now(),
 		SessionID: sess.ID,
 		Category:  "sip",
 		Name:      "sip_200_ok_sent",
-		PayloadID: answerPayloadID,
 		SIPCallID: req.CallID().Value(),
 	})
 
@@ -1729,19 +1723,17 @@ func (s *Server) completeOutboundInvite200(
 		})
 	}
 	if len(res.Body()) > 0 {
-		answerPayloadID := s.storePayload(ctx, &logstore.PayloadRecord{
+		s.storePayloadAndLogEvent(ctx, &logstore.PayloadRecord{
 			SessionID:   sess.ID,
 			Timestamp:   time.Now(),
 			Kind:        "sip_sdp_answer",
 			ContentType: "application/sdp",
 			BodyText:    string(res.Body()),
-		})
-		s.logEvent(&logstore.Event{
+		}, &logstore.Event{
 			Timestamp:     time.Now(),
 			SessionID:     sess.ID,
 			Category:      "sip",
 			Name:          "sip_sdp_answer_received",
-			PayloadID:     answerPayloadID,
 			SIPStatusCode: res.StatusCode,
 			SIPCallID:     callIDValue,
 		})

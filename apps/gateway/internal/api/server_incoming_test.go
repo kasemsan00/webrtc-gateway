@@ -1041,9 +1041,12 @@ func TestNotifyIncomingCall_IdleClientAlsoDispatchesPushWhenTargetExists(t *test
 	if len(msgs) != 1 || msgs[0].Type != "incoming" || msgs[0].SessionID != "incoming-ws-push" {
 		t.Fatalf("expected one WS incoming message, got %+v", msgs)
 	}
-	waitForDBLookups(t, trunkMgr, 2)
-	if trunkMgr.getTrunkByDBCalls != 2 {
-		t.Fatalf("expected push target check and dispatch DB lookups, got %d", trunkMgr.getTrunkByDBCalls)
+	waitForDBLookups(t, trunkMgr, 1)
+	if trunkMgr.getTrunkByDBCalls != 1 {
+		t.Fatalf("expected single reused DB lookup for push target check and dispatch, got %d", trunkMgr.getTrunkByDBCalls)
+	}
+	if _, ok := srv.incomingPushes.Load("incoming-ws-push"); !ok {
+		t.Fatalf("expected incoming push dispatch to be recorded for incoming-ws-push")
 	}
 }
 
@@ -1828,7 +1831,7 @@ func TestNotifyIncomingCall_AgentDeviceOfflineUsesStoredFCMNotTTRS(t *testing.T)
 
 	logs := captureStandardLogs(t, func() {
 		srv.NotifyIncomingCall(incomingSess.ID, "sip:2002@example.com", "sip:1001@example.com", 11)
-		waitForDBLookups(t, trunkMgr, 2)
+		waitForDBLookups(t, trunkMgr, 1)
 		time.Sleep(100 * time.Millisecond)
 	})
 	if !strings.Contains(logs, "Dispatch incoming call stored FCM") && !strings.Contains(logs, "Stored FCM skipped") {
@@ -1887,7 +1890,7 @@ func TestNotifyIncomingCall_AgentDeviceOnlineStillSendsStoredFCM(t *testing.T) {
 
 	logs := captureStandardLogs(t, func() {
 		srv.NotifyIncomingCall(incomingSess.ID, "sip:2002@example.com", "sip:1001@example.com", 11)
-		waitForDBLookups(t, trunkMgr, 2)
+		waitForDBLookups(t, trunkMgr, 1)
 		time.Sleep(100 * time.Millisecond)
 	})
 	msgs := readWSMessages(t, device.send)

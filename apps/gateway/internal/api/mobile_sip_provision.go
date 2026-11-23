@@ -31,6 +31,10 @@ type mobileSIPTrunkManager interface {
 	RegisterTrunk(trunkID int64, force bool) error
 }
 
+type mobileSIPTrunkEnsureRegistrar interface {
+	EnsureTrunkRegistered(trunkID int64, forceLeaseSteal bool) error
+}
+
 type mobileSIPProvisioner struct {
 	authClient   mobileSIPAuthClient
 	trunkManager mobileSIPTrunkManager
@@ -76,7 +80,11 @@ func (p *mobileSIPProvisioner) ProvisionMobileSIPTrunk(ctx context.Context, rawT
 	if err := p.trunkManager.SetTrunkNotifyUserIDAndPlatform(ctx, trunk.ID, &subject, &devicePlatform); err != nil {
 		return nil, fmt.Errorf("bind mobile sip trunk notification target: %w", err)
 	}
-	if err := p.trunkManager.RegisterTrunk(trunk.ID, true); err != nil {
+	if ensurer, ok := p.trunkManager.(mobileSIPTrunkEnsureRegistrar); ok {
+		if err := ensurer.EnsureTrunkRegistered(trunk.ID, true); err != nil {
+			return nil, fmt.Errorf("register mobile sip trunk: %w", err)
+		}
+	} else if err := p.trunkManager.RegisterTrunk(trunk.ID, true); err != nil {
 		return nil, fmt.Errorf("register mobile sip trunk: %w", err)
 	}
 

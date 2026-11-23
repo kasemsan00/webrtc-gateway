@@ -8,6 +8,7 @@ import (
 
 	"webrtc-sip-gateway/internal/logstore"
 	"webrtc-sip-gateway/internal/session"
+	"webrtc-sip-gateway/internal/sip"
 	"webrtc-sip-gateway/internal/telemetry"
 )
 
@@ -108,12 +109,10 @@ func (s *Server) logSessionSnapshot(ctx context.Context, sess *session.Session, 
 	}
 	var trunkName string
 	if authMode == "trunk" && trunkID > 0 && s.trunkManager != nil {
-		if trunk, err := s.trunkManager.GetTrunkByIDFromDB(ctx, trunkID); err == nil {
-			trunkName = trunk.Name
-		}
+		trunkName = s.resolveTrunkName(ctx, trunkID)
 	}
 
-	if err := s.logStore.UpsertSession(ctx, &logstore.SessionRecord{
+	record := &logstore.SessionRecord{
 		SessionID:     snap.ID,
 		CreatedAt:     snap.CreatedAt,
 		UpdatedAt:     time.Now(),
@@ -134,8 +133,65 @@ func (s *Server) logSessionSnapshot(ctx context.Context, sess *session.Session, 
 		TrunkName:     trunkName,
 		SIPUsername:   sipUsername,
 		Meta:          s.buildSessionMeta(sess, "api"),
-	}); err != nil {
+	}
+	if asyncStore, ok := s.logStore.(logstore.AsyncLogStore); ok {
+		asyncStore.UpsertSessionAsync(record)
+		return
+	}
+	if err := s.logStore.UpsertSession(ctx, record); err != nil {
 		log.Printf("⚠️ Failed to upsert session snapshot for %s: %v", snap.ID, err)
+	}
+}
+
+func (s *Server) resolveTrunkName(ctx context.Context, trunkID int64) string {
+	if s.trunkManager == nil || trunkID <= 0 {
+		return ""
+	}
+	if raw, found := s.trunkManager.GetTrunkByID(trunkID); found {
+		if trunk, ok := raw.(*sip.Trunk); ok && trunk != nil {
+			return trunk.Name
+		}
+	}
+	if trunk, err := s.trunkManager.GetTrunkByIDFromDB(ctx, trunkID); err == nil && trunk != nil {
+		return trunk.Name
+	}
+	return ""
+}
+
+func (s *Server) storePayloadAndLogEvent(ctx context.Context, payload *logstore.PayloadRecord, event *logstore.Event) {
+	if s.logStore == nil {
+		return
+	}
+	if asyncStore, ok := s.logStore.(logstore.AsyncLogStore); ok {
+		asyncStore.StorePayloadAndLogEventAsync(payload, event)
+		return
+	}
+	var payloadID *int64
+	if payload != nil {
+		payloadID = s.storePayload(ctx, payload)
+	}
+	if event != nil {
+		if payloadID != nil {
+			event.PayloadID = payloadID
+		}
+		s.logEvent(event)
+	}
+}
+
+func (s *Server) upsertSessionDirectory(ctx context.Context, sessionID string) {
+	if s.logStore == nil || sessionID == "" || s.gatewayConfig.InstanceID == "" || s.gatewayConfig.PublicWSURL == "" {
+		return
+	}
+	ttl := 7200 // 2 hours default
+	if s.runtimeConfig != nil && s.runtimeConfig.SessionDir.TTLSeconds > 0 {
+		ttl = s.runtimeConfig.SessionDir.TTLSeconds
+	}
+	if asyncStore, ok := s.logStore.(logstore.AsyncLogStore); ok {
+		asyncStore.UpsertSessionDirectoryAsync(sessionID, s.gatewayConfig.InstanceID, s.gatewayConfig.PublicWSURL, ttl)
+		return
+	}
+	if err := s.logStore.UpsertSessionDirectory(ctx, sessionID, s.gatewayConfig.InstanceID, s.gatewayConfig.PublicWSURL, ttl); err != nil {
+		log.Printf("⚠️ Failed to upsert session directory for %s: %v", sessionID, err)
 	}
 }
 

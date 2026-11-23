@@ -60,7 +60,16 @@ func (s *Server) handleWSUnregister(client *WSClient, msg WSMessage) {
 	defer unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	trunk, err := s.trunkManager.GetTrunkByIDFromDB(ctx, trunkID)
+	var trunk *sip.Trunk
+	var err error
+	if raw, found := s.trunkManager.GetTrunkByID(trunkID); found {
+		if t, ok := raw.(*sip.Trunk); ok && t != nil {
+			trunk = t
+		}
+	}
+	if trunk == nil {
+		trunk, err = s.trunkManager.GetTrunkByIDFromDB(ctx, trunkID)
+	}
 	expectedName, nameErr := sip.BuildMobileTrunkName(client.authClaims.Subject)
 	if err != nil || nameErr != nil || trunk == nil || trunk.Name != expectedName {
 		s.unregisterError(client, msg, fmt.Errorf("mobile trunk ownership could not be verified"))

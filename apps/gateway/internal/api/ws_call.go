@@ -21,6 +21,10 @@ type trunkOutboundValidation struct {
 	reason   string
 }
 
+type outboundTrunkValidatorClaimer interface {
+	ValidateAndClaimTrunkForOutboundCall(ctx context.Context, trunkID int64, instanceID string, claimUsername *string) (trunk *sip.Trunk, notFound bool, notReadyReason string, err error)
+}
+
 // handleWSoffer handles WebSocket offer messages
 func (s *Server) handleWSoffer(client *WSClient, msg WSMessage) {
 	// Create or get session
@@ -48,19 +52,17 @@ func (s *Server) handleWSoffer(client *WSClient, msg WSMessage) {
 	}
 
 	ctx := context.Background()
-	payloadID := s.storePayload(ctx, &logstore.PayloadRecord{
+	s.storePayloadAndLogEvent(ctx, &logstore.PayloadRecord{
 		SessionID:   sess.ID,
 		Timestamp:   time.Now(),
 		Kind:        "webrtc_sdp_offer",
 		ContentType: "application/sdp",
 		BodyText:    msg.SDP,
-	})
-	s.logEvent(&logstore.Event{
+	}, &logstore.Event{
 		Timestamp: time.Now(),
 		SessionID: sess.ID,
 		Category:  "ws",
 		Name:      "ws_offer_received",
-		PayloadID: payloadID,
 	})
 
 	// Associate client with session
@@ -88,6 +90,9 @@ func (s *Server) handleWSoffer(client *WSClient, msg WSMessage) {
 		})
 		s.sendWSError(client, sess.ID, fmt.Sprintf("Failed to set offer: %v", err))
 		return
+	}
+	if flushed := sess.FlushPendingRemoteICE(); flushed > 0 {
+		log.Printf("[%s] 🧊 Flushed %d queued remote ICE candidates after offer SetRemoteDescription", sess.ID, flushed)
 	}
 
 	s.logEvent(&logstore.Event{
@@ -117,9 +122,11 @@ func (s *Server) handleWSoffer(client *WSClient, msg WSMessage) {
 		return
 	}
 
-	// Wait for ICE gathering to complete
-	gatherComplete := webrtc.GatheringCompletePromise(sess.PeerConnection)
-	<-gatherComplete
+	// Wait for ICE gathering with deployment-aware early return and bounded timeout.
+	gatherTimeout := s.effectiveOfferICEGatherTimeout()
+	if !session.WaitForOfferICEGatheringComplete(ctx, sess.PeerConnection, s.effectiveOfferICEHasNAT1To1(), s.effectiveOfferICEHasTURN(), gatherTimeout) {
+		log.Printf("[%s] ⏱️ [WS Offer] ICE gathering wait reached %s; sending answer with candidates gathered so far", sess.ID, gatherTimeout)
+	}
 
 	// Send answer with video configuration
 	response := WSMessage{
@@ -129,19 +136,17 @@ func (s *Server) handleWSoffer(client *WSClient, msg WSMessage) {
 	}
 	s.sendWSMessage(client, response)
 
-	answerPayloadID := s.storePayload(ctx, &logstore.PayloadRecord{
+	s.storePayloadAndLogEvent(ctx, &logstore.PayloadRecord{
 		SessionID:   sess.ID,
 		Timestamp:   time.Now(),
 		Kind:        "webrtc_sdp_answer",
 		ContentType: "application/sdp",
 		BodyText:    response.SDP,
-	})
-	s.logEvent(&logstore.Event{
+	}, &logstore.Event{
 		Timestamp: time.Now(),
 		SessionID: sess.ID,
 		Category:  "ws",
 		Name:      "ws_answer_sent",
-		PayloadID: answerPayloadID,
 	})
 
 	// An incoming session may be negotiated in place by a multi-call client. Keep
@@ -229,6 +234,37 @@ func (s *Server) handleWSIce(client *WSClient, msg WSMessage) {
 			"queued":         queued,
 		},
 	})
+}
+
+func (s *Server) validateAndClaimTrunkForOutboundCall(ctx context.Context, trunkID int64, claimUsername *string) (trunkOutboundValidation, bool) {
+	if s.trunkManager == nil {
+		return trunkOutboundValidation{reason: "Trunk manager not available"}, false
+	}
+	if vc, ok := s.trunkManager.(outboundTrunkValidatorClaimer); ok {
+		trunk, notFound, notReadyReason, err := vc.ValidateAndClaimTrunkForOutboundCall(ctx, trunkID, s.gatewayConfig.InstanceID, claimUsername)
+		if err != nil {
+			if notFound {
+				reason := notReadyReason
+				if reason == "" {
+					reason = fmt.Sprintf("Trunk %d not found", trunkID)
+				}
+				return trunkOutboundValidation{notFound: true, reason: reason}, false
+			}
+			return trunkOutboundValidation{reason: err.Error()}, false
+		}
+		if notFound {
+			reason := notReadyReason
+			if reason == "" {
+				reason = fmt.Sprintf("Trunk %d not found", trunkID)
+			}
+			return trunkOutboundValidation{notFound: true, reason: reason}, false
+		}
+		if notReadyReason != "" {
+			return trunkOutboundValidation{reason: notReadyReason}, false
+		}
+		return trunkOutboundValidation{trunk: trunk}, claimUsername != nil
+	}
+	return s.validateTrunkReadyForOutboundCall(ctx, trunkID), false
 }
 
 func (s *Server) validateTrunkReadyForOutboundCall(ctx context.Context, trunkID int64) trunkOutboundValidation {
@@ -336,7 +372,13 @@ func (s *Server) handleWSCall(client *WSClient, msg WSMessage) {
 			return
 		}
 
-		validation := s.validateTrunkReadyForOutboundCall(ctx, trunkID)
+		var claimUsername *string
+		if client.authClaims != nil {
+			username := client.authClaims.PreferredUsername
+			claimUsername = &username
+		}
+
+		validation, claimed := s.validateAndClaimTrunkForOutboundCall(ctx, trunkID, claimUsername)
 		if validation.notFound {
 			s.sendWSError(client, msg.SessionID, validation.reason)
 			return
@@ -369,10 +411,9 @@ func (s *Server) handleWSCall(client *WSClient, msg WSMessage) {
 			return
 		}
 
-		// Record who is using this trunk.
-		if client.authClaims != nil && s.trunkManager != nil {
-			username := client.authClaims.PreferredUsername
-			if err := s.trunkManager.SetTrunkInUseBy(ctx, trunkID, &username); err != nil {
+		// Fallback when trunkManager does not support atomic validate+claim.
+		if claimUsername != nil && !claimed && s.trunkManager != nil {
+			if err := s.trunkManager.SetTrunkInUseBy(ctx, trunkID, claimUsername); err != nil {
 				log.Printf("⚠️ [WS Call] Failed to set in_use_by for trunk %d: %v", trunkID, err)
 			}
 		}
@@ -383,7 +424,8 @@ func (s *Server) handleWSCall(client *WSClient, msg WSMessage) {
 		)
 
 	} else if msg.SIPDomain != "" && msg.SIPUsername != "" && msg.SIPPassword != "" {
-		// Public mode: register and bind credentials to session
+		// Public mode: bind credentials synchronously and perform blocking SIP
+		// REGISTER/DNS SRV asynchronously in runWSCall so the WS read pump stays responsive.
 		authMode = "public"
 
 		// Use port as-is from client (0 means "not specified" for hostname domains)
@@ -413,23 +455,10 @@ func (s *Server) handleWSCall(client *WSClient, msg WSMessage) {
 			}
 		}
 
-		// Acquire and register account
-		if s.publicRegistry != nil {
-			var err error
-			accountKey, err = s.publicRegistry.AcquireAndRegister(ctx, msg.SIPDomain, msg.SIPUsername, msg.SIPPassword, port)
-			if err != nil {
-				s.sendWSError(client, msg.SessionID, fmt.Sprintf("Failed to register SIP account: %v", err))
-				return
-			}
+		// Set public auth context in session immediately (accountKey populated in runWSCall once registered)
+		sess.SetSIPAuthContext("public", "", 0, msg.SIPDomain, msg.SIPUsername, msg.SIPPassword, port)
 
-			// Increment ref count for active call
-			s.publicRegistry.IncrementRefCount(accountKey)
-		}
-
-		// Set public auth context in session
-		sess.SetSIPAuthContext("public", accountKey, 0, msg.SIPDomain, msg.SIPUsername, msg.SIPPassword, port)
-
-		log.Printf("📞 [WS Call] Session %s using public mode (account=%s, port=%d)", sess.ID, accountKey, port)
+		log.Printf("📞 [WS Call] Session %s using public mode (domain=%s, user=%s, port=%d)", sess.ID, msg.SIPDomain, msg.SIPUsername, port)
 
 	} else {
 		// Legacy mode: use global/dynamic SIP credentials (backward compatibility)
@@ -456,13 +485,8 @@ func (s *Server) handleWSCall(client *WSClient, msg WSMessage) {
 	})
 	s.logSessionSnapshot(ctx, sess, "")
 
-	// Upsert session directory entry
-	if s.logStore != nil && s.gatewayConfig.InstanceID != "" && s.gatewayConfig.PublicWSURL != "" {
-		ttl := 7200 // 2 hours default
-		if err := s.logStore.UpsertSessionDirectory(ctx, sess.ID, s.gatewayConfig.InstanceID, s.gatewayConfig.PublicWSURL, ttl); err != nil {
-			log.Printf("⚠️ Failed to upsert session directory for %s: %v", sess.ID, err)
-		}
-	}
+	// Upsert session directory entry (non-blocking when AsyncLogStore is available)
+	s.upsertSessionDirectory(ctx, sess.ID)
 
 	// Bind and acknowledge before starting the asynchronous SIP path. A cold
 	// ICE failure can cancel MakeCall immediately; starting it first could drop
@@ -480,14 +504,70 @@ func (s *Server) handleWSCall(client *WSClient, msg WSMessage) {
 		s.NotifySessionStateWithReason(sess.ID, ackState, "ws-call-ack")
 	}
 
-	// Make SIP call asynchronously so the read loop can process hangup while
-	// the outbound INVITE is still pending and translate it to SIP CANCEL.
-	if s.sipMaker != nil {
+	// Make SIP call asynchronously so the read loop can process hangup/ice while
+	// public SIP REGISTER or the outbound INVITE is still pending.
+	if s.sipMaker != nil || (authMode == "public" && s.publicRegistry != nil) {
 		go s.runWSCall(client, msg, sess, authMode, accountKey)
 	}
 }
 
 func (s *Server) runWSCall(client *WSClient, msg WSMessage, sess *session.Session, authMode, accountKey string) {
+	if authMode == "public" && s.publicRegistry != nil && accountKey == "" {
+		if sess.IsPendingCancelRequested() {
+			log.Printf("[%s] Skipping public SIP REGISTER after local CANCEL", sess.ID)
+			return
+		}
+		if s.sessionMgr != nil {
+			if _, ok := s.sessionMgr.GetSession(sess.ID); !ok {
+				log.Printf("[%s] Skipping public SIP REGISTER after session cleanup", sess.ID)
+				return
+			}
+		}
+
+		registeredKey, err := s.publicRegistry.AcquireAndRegister(context.Background(), msg.SIPDomain, msg.SIPUsername, msg.SIPPassword, msg.SIPPort)
+		if err != nil {
+			if sess.IsPendingCancelRequested() {
+				log.Printf("[%s] Suppressing public SIP REGISTER error after local CANCEL: %v", sess.ID, err)
+				return
+			}
+			if s.sessionMgr != nil {
+				if _, ok := s.sessionMgr.GetSession(sess.ID); !ok {
+					log.Printf("[%s] Suppressing public SIP REGISTER error after session cleanup: %v", sess.ID, err)
+					return
+				}
+			}
+			s.logEvent(&logstore.Event{
+				Timestamp: time.Now(),
+				SessionID: sess.ID,
+				Category:  "ws",
+				Name:      "ws_public_register_failed",
+				Data:      map[string]interface{}{"error": err.Error()},
+			})
+			s.sendWSError(client, msg.SessionID, fmt.Sprintf("Failed to register SIP account: %v", err))
+			return
+		}
+
+		if sess.IsPendingCancelRequested() {
+			log.Printf("[%s] Skipping MakeCall after public SIP REGISTER due to local CANCEL", sess.ID)
+			return
+		}
+		if s.sessionMgr != nil {
+			if _, ok := s.sessionMgr.GetSession(sess.ID); !ok {
+				log.Printf("[%s] Skipping MakeCall after public SIP REGISTER due to session cleanup", sess.ID)
+				return
+			}
+		}
+
+		accountKey = registeredKey
+		s.publicRegistry.IncrementRefCount(accountKey)
+		sess.SetSIPAuthContext("public", accountKey, 0, msg.SIPDomain, msg.SIPUsername, msg.SIPPassword, msg.SIPPort)
+		log.Printf("📞 [WS Call] Session %s registered public account=%s port=%d", sess.ID, accountKey, msg.SIPPort)
+	}
+
+	if s.sipMaker == nil {
+		return
+	}
+
 	if err := s.sipMaker.MakeCall(msg.Destination, msg.From, sess); err != nil {
 		if sess.IsPendingCancelRequested() {
 			log.Printf("[%s] Suppressing MakeCall error after local CANCEL: %v", sess.ID, err)
@@ -552,14 +632,12 @@ func (s *Server) handleWSHangup(client *WSClient, msg WSMessage) {
 		return
 	}
 
-	ctx := context.Background()
 	s.logEvent(&logstore.Event{
 		Timestamp: time.Now(),
 		SessionID: sess.ID,
 		Category:  "ws",
 		Name:      "ws_hangup_request",
 	})
-	s.logSessionSnapshot(ctx, sess, "ws_hangup")
 
 	// Send state=ended to browser IMMEDIATELY so the frontend knows the
 	// call is ending. This must happen BEFORE Hangup() because Hangup()

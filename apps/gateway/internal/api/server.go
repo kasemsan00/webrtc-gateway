@@ -38,10 +38,13 @@ type Server struct {
 	config             config.APIConfig
 	turnConfig         config.TURNConfig
 	gatewayConfig      config.GatewayConfig
-	translatorCfg      config.TranslatorConfig
-	translatorClient   *translator.Client
-	runtimeConfig      *config.Config
-	upgrader           websocket.Upgrader
+	translatorCfg         config.TranslatorConfig
+	translatorClient      *translator.Client
+	runtimeConfig         *config.Config
+	offerICEGatherTimeout time.Duration
+	offerICEHasNAT1To1    bool
+	offerICENAT1To1Set    bool
+	upgrader              websocket.Upgrader
 	wsClients          map[string]*WSClient
 	wsConnections      map[*WSClient]struct{}
 	agentTrunkBindings map[int64]map[*WSClient]struct{} // agent WS refcount per trunk
@@ -302,6 +305,60 @@ func (s *Server) SetMobileSIPProvisioner(provisioner MobileSIPProvisioner) {
 // SetRuntimeConfig exposes the loaded gateway configuration for read-only inspection.
 func (s *Server) SetRuntimeConfig(cfg *config.Config) {
 	s.runtimeConfig = cfg
+}
+
+// SetOfferICEGatherTimeout sets the maximum wait budget for initial offer->answer
+// ICE candidate gathering. Passing <= 0 falls back to APIConfig or DefaultOfferICEGatherTimeout.
+func (s *Server) SetOfferICEGatherTimeout(d time.Duration) {
+	if s == nil {
+		return
+	}
+	if d <= 0 {
+		s.offerICEGatherTimeout = 0
+		return
+	}
+	s.offerICEGatherTimeout = d
+}
+
+// SetOfferICEHasNAT1To1 records whether WEBRTC_ICE_NAT1TO1_IPS is configured so
+// initial offer ICE gathering can return as soon as a public/1:1 host candidate
+// is ready (with short TURN relay grace when TURN is also enabled).
+func (s *Server) SetOfferICEHasNAT1To1(enabled bool) {
+	if s == nil {
+		return
+	}
+	s.offerICEHasNAT1To1 = enabled
+	s.offerICENAT1To1Set = true
+}
+
+func (s *Server) effectiveOfferICEGatherTimeout() time.Duration {
+	if s == nil {
+		return session.DefaultOfferICEGatherTimeout
+	}
+	if s.offerICEGatherTimeout > 0 {
+		return s.offerICEGatherTimeout
+	}
+	if s.config.OfferICEGatherTimeoutMS > 0 {
+		return time.Duration(s.config.OfferICEGatherTimeoutMS) * time.Millisecond
+	}
+	return session.DefaultOfferICEGatherTimeout
+}
+
+func (s *Server) effectiveOfferICEHasNAT1To1() bool {
+	if s == nil {
+		return false
+	}
+	if s.offerICENAT1To1Set {
+		return s.offerICEHasNAT1To1
+	}
+	return s.runtimeConfig != nil && len(s.runtimeConfig.SIP.WebRTCICE.NAT1To1IPs) > 0
+}
+
+func (s *Server) effectiveOfferICEHasTURN() bool {
+	if s == nil {
+		return false
+	}
+	return strings.TrimSpace(s.turnConfig.Server) != ""
 }
 
 // Start starts the HTTP server with graceful shutdown support

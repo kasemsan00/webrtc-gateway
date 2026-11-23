@@ -80,9 +80,14 @@ type APIConfig struct {
 	TrunkPNAppID               string // SIP Contact push app-id accepted for trunk PushKit tokens
 	MobileSIPAuthRegisterURL   string // External auth endpoint for mobile SIP credential provisioning
 	MobileSIPAuthTimeoutMS     int    // Timeout for mobile SIP auth register requests
+	OfferICEGatherTimeoutMS    int    // Max wait in ms for initial offer->answer ICE gathering (default: 1500)
 }
 
-const DefaultTrunkPNAppID = "th.or.ttrs.video.prod"
+const (
+	DefaultTrunkPNAppID            = "th.or.ttrs.video.prod"
+	DefaultOfferVideoPrimeMS       = 300
+	DefaultOfferICEGatherTimeoutMS = 1500
+)
 
 // AuthConfig holds JWT/JWKS authentication settings.
 type AuthConfig struct {
@@ -195,6 +200,8 @@ type SIPConfig struct {
 	AudioInboundGainMax    float32 // Maximum allowed gain (default: 3.0)
 	// ICE candidate gathering limits for every gateway PeerConnection (WEBRTC_ICE_*)
 	WebRTCICE WebRTCICEConfig
+	// Max wait in ms for WebRTC H.264 SPS/PPS before sending outbound SIP INVITE (default: 300; 0 disables blocking wait)
+	OfferVideoPrimeMS int
 }
 
 const (
@@ -385,6 +392,7 @@ func Load() (*Config, error) {
 			AudioInboundGainEnable:               getEnvAsBool("SIP_AUDIO_INBOUND_GAIN_ENABLE", false),
 			AudioInboundGain:                     clampInboundGain(getEnvAsFloat32("SIP_AUDIO_INBOUND_GAIN", 1.0), getEnvAsFloat32("SIP_AUDIO_INBOUND_GAIN_MAX", 3.0)),
 			AudioInboundGainMax:                  getEnvAsFloat32("SIP_AUDIO_INBOUND_GAIN_MAX", 3.0),
+			OfferVideoPrimeMS:                    offerVideoPrimeMSFromEnv(),
 		},
 		API: APIConfig{
 			Port:                       apiPort,
@@ -401,6 +409,7 @@ func Load() (*Config, error) {
 			TrunkPNAppID:               trunkPNAppID,
 			MobileSIPAuthRegisterURL:   os.Getenv("SIPCLIENT_AUTH_REGISTER_URL"),
 			MobileSIPAuthTimeoutMS:     getEnvAsInt("SIPCLIENT_AUTH_TIMEOUT_MS", 5000),
+			OfferICEGatherTimeoutMS:    offerICEGatherTimeoutMSFromEnv(),
 		},
 		Auth: AuthConfig{
 			Enable:           getEnvAsBool("AUTH_ENABLE", false),
@@ -611,6 +620,7 @@ func (c *Config) Display() {
 	fmt.Printf("  SIP Video Forward Early Media: %v\n", !c.SIP.VideoSuppressEarlyMedia)
 	fmt.Printf("  WebRTC TWCC: %v\n", c.SIP.WebRTCTWCCEnabled)
 	fmt.Printf("  WebRTC ICE: %s\n", c.SIP.WebRTCICE.Summary())
+	fmt.Printf("  SIP Offer Video Prime Timeout: %dms\n", c.SIP.OfferVideoPrimeMS)
 	fmt.Printf("  @switch Gate Fail-Open: sameStream=%dms cap=%dms infoFIR=%v\n",
 		c.SIP.SwitchVideoGateFailOpenMS, c.SIP.SwitchVideoGateFailOpenCapMS, c.SIP.SwitchVideoInfoFIREnable)
 
@@ -622,6 +632,7 @@ func (c *Config) Display() {
 	fmt.Printf("  CORS Origins: %s\n", c.API.CORSOrigins)
 	fmt.Printf("  Debug WebSocket: %v\n", c.API.DebugWebSocket)
 	fmt.Printf("  Debug TURN/ICE: %v\n", c.API.DebugTURN)
+	fmt.Printf("  Offer ICE Gather Timeout: %dms\n", c.API.OfferICEGatherTimeoutMS)
 	if c.API.MobileSIPAuthRegisterURL != "" {
 		fmt.Printf("  Mobile SIP Auth Register URL: %s\n", c.API.MobileSIPAuthRegisterURL)
 		fmt.Printf("  Mobile SIP Auth Timeout: %d ms\n", c.API.MobileSIPAuthTimeoutMS)
@@ -906,6 +917,24 @@ func sipRTCPFBGuardMSFromEnv() int {
 		return 0
 	}
 	return clampInt(v, 0, 5000)
+}
+
+func offerVideoPrimeMSFromEnv() int {
+	v := getEnvAsInt("SIP_OFFER_VIDEO_PRIME_MS", DefaultOfferVideoPrimeMS)
+	if v < 0 {
+		fmt.Printf("Warning: SIP_OFFER_VIDEO_PRIME_MS=%d must be >= 0, clamping to 0\n", v)
+		return 0
+	}
+	return v
+}
+
+func offerICEGatherTimeoutMSFromEnv() int {
+	v := getEnvAsInt("WEBRTC_OFFER_ICE_GATHER_TIMEOUT_MS", DefaultOfferICEGatherTimeoutMS)
+	if v <= 0 {
+		fmt.Printf("Warning: WEBRTC_OFFER_ICE_GATHER_TIMEOUT_MS=%d must be > 0, using default: %d\n", v, DefaultOfferICEGatherTimeoutMS)
+		return DefaultOfferICEGatherTimeoutMS
+	}
+	return v
 }
 
 func clampInt(value, min, max int) int {

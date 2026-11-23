@@ -9,6 +9,7 @@ import (
 
 	"webrtc-sip-gateway/internal/auth"
 	"webrtc-sip-gateway/internal/config"
+	"webrtc-sip-gateway/internal/logstore"
 	"webrtc-sip-gateway/internal/sip"
 )
 
@@ -196,22 +197,40 @@ func (s *Server) handleWSTrunkResolve(client *WSClient, msg WSMessage) {
 		}
 
 		var err error
-		trunkID, leaseOwner, leaseUntil, found, err = s.logStore.ResolveTrunkByCredentials(ctx, msg.SIPDomain, port, msg.SIPUsername, msg.SIPPassword)
-		if err != nil {
-			s.sendWSError(client, msg.SessionID, fmt.Sprintf("Failed to resolve trunk: %v", err))
-			return
-		}
-		if !found {
-			reason := "No matching trunk credentials"
-			s.sendWSMessage(client, WSMessage{Type: "trunk_not_found", Reason: reason})
-			s.sendWSError(client, msg.SessionID, fmt.Sprintf("Trunk not found: %s", reason))
-			return
-		}
+		if resolver, ok := s.logStore.(logstore.TrunkDetailsResolver); ok {
+			var resolvedUsername string
+			trunkID, trunkPublicID, resolvedUsername, leaseOwner, leaseUntil, found, err = resolver.ResolveTrunkDetailsByCredentials(ctx, msg.SIPDomain, port, msg.SIPUsername, msg.SIPPassword)
+			if err != nil {
+				s.sendWSError(client, msg.SessionID, fmt.Sprintf("Failed to resolve trunk: %v", err))
+				return
+			}
+			if !found {
+				reason := "No matching trunk credentials"
+				s.sendWSMessage(client, WSMessage{Type: "trunk_not_found", Reason: reason})
+				s.sendWSError(client, msg.SessionID, fmt.Sprintf("Trunk not found: %s", reason))
+				return
+			}
+			if strings.TrimSpace(resolvedUsername) != "" {
+				sipUsername = strings.TrimSpace(resolvedUsername)
+			}
+		} else {
+			trunkID, leaseOwner, leaseUntil, found, err = s.logStore.ResolveTrunkByCredentials(ctx, msg.SIPDomain, port, msg.SIPUsername, msg.SIPPassword)
+			if err != nil {
+				s.sendWSError(client, msg.SessionID, fmt.Sprintf("Failed to resolve trunk: %v", err))
+				return
+			}
+			if !found {
+				reason := "No matching trunk credentials"
+				s.sendWSMessage(client, WSMessage{Type: "trunk_not_found", Reason: reason})
+				s.sendWSError(client, msg.SessionID, fmt.Sprintf("Trunk not found: %s", reason))
+				return
+			}
 
-		if s.trunkManager != nil {
-			if trunk, getErr := s.trunkManager.GetTrunkByIDFromDB(ctx, trunkID); getErr == nil && trunk != nil {
-				trunkPublicID = trunk.PublicID
-				sipUsername = strings.TrimSpace(trunk.Username)
+			if s.trunkManager != nil {
+				if trunk, getErr := s.trunkManager.GetTrunkByIDFromDB(ctx, trunkID); getErr == nil && trunk != nil {
+					trunkPublicID = trunk.PublicID
+					sipUsername = strings.TrimSpace(trunk.Username)
+				}
 			}
 		}
 	}

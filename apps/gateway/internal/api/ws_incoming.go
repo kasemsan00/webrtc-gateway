@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -175,26 +176,54 @@ func trunkStoredFcmToken(trunk *sip.Trunk) string {
 	return strings.TrimSpace(*trunk.FcmToken)
 }
 
-func (s *Server) hasIncomingPushTarget(trunkID int64) bool {
-	if s.config.IncomingOfflinePolicy != "" && s.config.IncomingOfflinePolicy != incomingOfflinePolicyPush480 {
-		return false
-	}
-	if s.pushService == nil || s.trunkManager == nil || trunkID <= 0 {
-		return false
-	}
-	for id := range s.incomingTargetTrunkIDs(trunkID) {
-		if s.trunkHasIncomingPushTarget(id) {
-			return true
-		}
-	}
-	return false
+type batchTrunkLoader interface {
+	GetTrunksByIDsFromDB(ctx context.Context, trunkIDs []int64) ([]*sip.Trunk, error)
 }
 
-func (s *Server) trunkHasIncomingPushTarget(trunkID int64) bool {
-	lookupCtx, cancel := context.WithTimeout(context.Background(), incomingPushTrunkLookupTimeout)
-	defer cancel()
-	trunk, err := s.trunkManager.GetTrunkByIDFromDB(lookupCtx, trunkID)
-	if err != nil || trunk == nil {
+func (s *Server) loadTrunksByIDsFromDB(ctx context.Context, targetIDs map[int64]struct{}, logContext, sessionID string) []*sip.Trunk {
+	if s.trunkManager == nil || len(targetIDs) == 0 {
+		return nil
+	}
+	ids := make([]int64, 0, len(targetIDs))
+	for id := range targetIDs {
+		if id > 0 {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	slices.Sort(ids)
+
+	if batchLoader, ok := s.trunkManager.(batchTrunkLoader); ok {
+		trunks, err := batchLoader.GetTrunksByIDsFromDB(ctx, ids)
+		if err != nil {
+			if logContext != "" {
+				log.Printf("🔔 [Push] Skip %s: failed to batch-load trunks from DB (sessionID=%s trunkIDs=%v err=%v)", logContext, sessionID, ids, err)
+			}
+			return nil
+		}
+		return trunks
+	}
+
+	trunks := make([]*sip.Trunk, 0, len(ids))
+	for _, id := range ids {
+		trunk, err := s.trunkManager.GetTrunkByIDFromDB(ctx, id)
+		if err != nil {
+			if logContext != "" {
+				log.Printf("🔔 [Push] Skip %s: failed to load trunk from DB (sessionID=%s trunkID=%d err=%v)", logContext, sessionID, id, err)
+			}
+			continue
+		}
+		if trunk != nil {
+			trunks = append(trunks, trunk)
+		}
+	}
+	return trunks
+}
+
+func (s *Server) trunkHasIncomingPushTargetRecord(trunk *sip.Trunk) bool {
+	if trunk == nil || s.pushService == nil {
 		return false
 	}
 	if trunkStoredFcmToken(trunk) != "" {
@@ -202,6 +231,29 @@ func (s *Server) trunkHasIncomingPushTarget(trunkID int64) bool {
 	}
 	route := selectIncomingPushRoute(trunk, s.pushService.CanSendAPNS(), s.config.TrunkPNAppID)
 	return route.SendFCM || route.SendAPNS
+}
+
+func (s *Server) findIncomingPushTargetTrunks(trunkID int64) ([]*sip.Trunk, bool) {
+	if s.config.IncomingOfflinePolicy != "" && s.config.IncomingOfflinePolicy != incomingOfflinePolicyPush480 {
+		return nil, false
+	}
+	if s.pushService == nil || s.trunkManager == nil || trunkID <= 0 {
+		return nil, false
+	}
+	lookupCtx, cancel := context.WithTimeout(context.Background(), incomingPushTrunkLookupTimeout)
+	defer cancel()
+	trunks := s.loadTrunksByIDsFromDB(lookupCtx, s.incomingTargetTrunkIDs(trunkID), "", "")
+	for _, trunk := range trunks {
+		if s.trunkHasIncomingPushTargetRecord(trunk) {
+			return trunks, true
+		}
+	}
+	return nil, false
+}
+
+func (s *Server) hasIncomingPushTarget(trunkID int64) bool {
+	_, ok := s.findIncomingPushTargetTrunks(trunkID)
+	return ok
 }
 
 func trunkHasFCMPushTarget(trunk *sip.Trunk) bool {
@@ -306,12 +358,12 @@ func (s *Server) dispatchCallEndedPush(sessionID, reason string, winner *WSClien
 		}()
 		lookupCtx, cancel := context.WithTimeout(context.Background(), incomingPushTrunkLookupTimeout)
 		defer cancel()
-		for id := range targetIDs {
-			trunk, err := s.trunkManager.GetTrunkByIDFromDB(lookupCtx, id)
-			if err != nil {
-				log.Printf("🔔 [Push] Skip call_ended push: failed to load trunk from DB (sessionID=%s trunkID=%d err=%v)", sessionID, id, err)
+		trunks := s.loadTrunksByIDsFromDB(lookupCtx, targetIDs, "call_ended push", sessionID)
+		for _, trunk := range trunks {
+			if trunk == nil {
 				continue
 			}
+			id := trunk.ID
 			if token := trunkStoredFcmToken(trunk); token != "" {
 				// A stored token is one device, and that device answered.
 				if id != winnerTrunkID {
@@ -326,28 +378,36 @@ func (s *Server) dispatchCallEndedPush(sessionID, reason string, winner *WSClien
 	}()
 }
 
-func (s *Server) dispatchIncomingPush(sessionID, from, to string, trunkID int64, hasVideo bool) {
+func (s *Server) dispatchIncomingPush(sessionID, from, to string, trunkID int64, hasVideo bool, preloadedTrunks ...*sip.Trunk) {
 	if s.pushService == nil || s.trunkManager == nil {
 		return
 	}
 	s.incomingPushes.Store(sessionID, incomingPushRecord{from: from, to: to, trunkID: trunkID, startedAt: time.Now()})
-	targetIDs := s.incomingTargetTrunkIDs(trunkID)
+	var targetIDs map[int64]struct{}
+	if len(preloadedTrunks) == 0 {
+		targetIDs = s.incomingTargetTrunkIDs(trunkID)
+	}
+	trunksSnapshot := preloadedTrunks
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
 				log.Printf("🔔 [Push] Incoming call push panic recovered: sessionID=%s trunkID=%d panic=%v", sessionID, trunkID, r)
 			}
 		}()
-		lookupCtx, cancel := context.WithTimeout(context.Background(), incomingPushTrunkLookupTimeout)
-		defer cancel()
+
+		trunks := trunksSnapshot
+		if len(trunks) == 0 {
+			lookupCtx, cancel := context.WithTimeout(context.Background(), incomingPushTrunkLookupTimeout)
+			defer cancel()
+			trunks = s.loadTrunksByIDsFromDB(lookupCtx, targetIDs, "incoming call push", sessionID)
+		}
 
 		dispatched := false
-		for id := range targetIDs {
-			trunk, err := s.trunkManager.GetTrunkByIDFromDB(lookupCtx, id)
-			if err != nil {
-				log.Printf("🔔 [Push] Skip incoming call push: failed to load trunk from DB (sessionID=%s trunkID=%d err=%v)", sessionID, id, err)
+		for _, trunk := range trunks {
+			if trunk == nil {
 				continue
 			}
+			id := trunk.ID
 			if token := trunkStoredFcmToken(trunk); token != "" {
 				log.Printf("🔔 [Push] Dispatch incoming call stored FCM: sessionID=%s trunkID=%d", sessionID, id)
 				s.pushService.NotifyIncomingCallFCMToken(token, sessionID, from, to, hasVideo)
@@ -465,8 +525,10 @@ func (s *Server) NotifyIncomingCall(sessionID, from, to string, trunkID int64) {
 		}
 		// A connected phone still needs FCM to bring the app forward and answer.
 		// Desktop /ws-agent stays websocket-only while that client is live.
-		if (s.isAgentDeviceTrunk(trunkID) || !s.isAgentPresenceTrunk(trunkID)) && s.hasIncomingPushTarget(trunkID) {
-			s.dispatchIncomingPush(sessionID, from, to, trunkID, hasVideo)
+		if s.isAgentDeviceTrunk(trunkID) || !s.isAgentPresenceTrunk(trunkID) {
+			if pushTrunks, ok := s.findIncomingPushTargetTrunks(trunkID); ok {
+				s.dispatchIncomingPush(sessionID, from, to, trunkID, hasVideo, pushTrunks...)
+			}
 		}
 		s.startIncomingRingTimeout(sessionID, trunkID)
 		log.Printf("📲 Incoming fanout summary: sessionID=%s trunkID=%d recipients=%d recipientSessionIDs=%v filtered=%d total=%d", sessionID, trunkID, len(idleClients), recipientSessionIDs, totalConnections-len(idleClients), totalConnections)
@@ -487,8 +549,8 @@ func (s *Server) NotifyIncomingCall(sessionID, from, to string, trunkID int64) {
 		log.Printf("⚠️ No WebSocket clients connected for incoming call notification")
 	}
 
-	if s.hasIncomingPushTarget(trunkID) {
-		s.dispatchIncomingPush(sessionID, from, to, trunkID, hasVideo)
+	if pushTrunks, ok := s.findIncomingPushTargetTrunks(trunkID); ok {
+		s.dispatchIncomingPush(sessionID, from, to, trunkID, hasVideo, pushTrunks...)
 		s.startIncomingRingTimeout(sessionID, trunkID)
 		return
 	}
@@ -723,7 +785,8 @@ func (s *Server) handleWSAccept(client *WSClient, msg WSMessage) {
 		}
 	}
 
-	s.logSessionSnapshot(ctx, callSession, "")
+	// Record session directory for cross-instance resume (async when supported).
+	s.upsertSessionDirectory(ctx, callSession.ID)
 
 	// Delete the old incoming session (even if AcceptCall reported error, call may work)
 	// webrtcSess is non-nil here (early return above if missing).
@@ -826,7 +889,6 @@ func (s *Server) handleWSReject(client *WSClient, msg WSMessage) {
 		return
 	}
 
-	ctx := context.Background()
 	s.logEvent(&logstore.Event{
 		Timestamp: time.Now(),
 		SessionID: sess.ID,
@@ -925,7 +987,6 @@ func (s *Server) handleWSReject(client *WSClient, msg WSMessage) {
 	// Delete session
 	s.clearPendingIncoming(msg.SessionID)
 	s.sessionMgr.DeleteSession(msg.SessionID)
-	s.logSessionSnapshot(ctx, sess, "ws_reject")
 
 	// Send state update
 	response := WSMessage{
