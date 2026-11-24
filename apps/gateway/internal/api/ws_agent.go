@@ -37,6 +37,7 @@ func (s *Server) handleWSAgentRegister(client *WSClient, msg WSMessage) {
 	// original one-call admission behavior.
 	s.mu.Lock()
 	client.multiCall = msg.MultiCall
+	client.multiVideo = msg.MultiVideo
 	s.mu.Unlock()
 
 	ctx := context.Background()

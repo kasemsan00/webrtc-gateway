@@ -75,6 +75,8 @@ func (s *Server) handleWSMessage(client *WSClient, message []byte) {
 		s.handleWSRenegotiateAnswer(client, msg)
 	case "hold", "unhold":
 		s.handleWSHold(client, msg)
+	case "stream_update":
+		s.handleWSStreamUpdate(client, msg)
 	case "transfer":
 		s.handleWSTransfer(client, msg)
 	case "trunk_resolve":
@@ -115,7 +117,7 @@ func (s *Server) allowAgentDeviceWSMessage(client *WSClient, msg WSMessage) (boo
 			return true, ""
 		}
 		return s.agentClientCanAccessSession(client, msg)
-	case "call", "ice", "hangup", "accept", "reject", "dtmf", "send_message", "request_keyframe", "request-keyframe", "renegotiate_answer", "hold", "unhold", "transfer":
+	case "call", "ice", "hangup", "accept", "reject", "dtmf", "send_message", "request_keyframe", "request-keyframe", "renegotiate_answer", "hold", "unhold", "transfer", "stream_update":
 		return s.agentClientCanAccessSession(client, msg)
 	case "resume":
 		return s.agentDeviceCanResume(client, msg)
@@ -135,7 +137,7 @@ func (s *Server) allowAgentWSMessage(client *WSClient, msg WSMessage) (bool, str
 			return true, ""
 		}
 		return s.agentClientCanAccessSession(client, msg)
-	case "call", "ice", "hangup", "accept", "reject", "dtmf", "send_message", "request_keyframe", "request-keyframe", "renegotiate_answer", "hold", "unhold", "transfer":
+	case "call", "ice", "hangup", "accept", "reject", "dtmf", "send_message", "request_keyframe", "request-keyframe", "renegotiate_answer", "hold", "unhold", "transfer", "stream_update":
 		return s.agentClientCanAccessSession(client, msg)
 	case "trunk_push_token", "trunk_resolve", "resume":
 		return false, fmt.Sprintf("Message type %q is not allowed on agent WebSocket", msg.Type)

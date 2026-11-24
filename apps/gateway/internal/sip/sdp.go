@@ -35,19 +35,50 @@ func stripSDPRTCPFeedbackLines(sdp string) string {
 	return strings.Join(out, "\n")
 }
 
+// primarySDPSectionTracker classifies SDP lines by section while walking a
+// body top to bottom. Only the first m=audio and the first m=video are the
+// call's primary streams; any later m-line (a second video, an unknown media
+// type) is reported as "other" so it cannot overwrite what was read from the
+// primary ones.
+type primarySDPSectionTracker struct {
+	audioSeen bool
+	videoSeen bool
+	section   string
+}
+
+// observe returns the section the line belongs to: "" for session level,
+// "audio" or "video" for the primary sections, "other" for everything else.
+// isMLine reports whether the line itself opens a section.
+func (t *primarySDPSectionTracker) observe(line string) (section string, isMLine bool) {
+	if !strings.HasPrefix(line, "m=") {
+		return t.section, false
+	}
+	kind := ""
+	if fields := strings.Fields(line); len(fields) > 0 {
+		kind = strings.TrimPrefix(strings.ToLower(fields[0]), "m=")
+	}
+	switch {
+	case kind == "audio" && !t.audioSeen:
+		t.audioSeen = true
+		t.section = "audio"
+	case kind == "video" && !t.videoSeen:
+		t.videoSeen = true
+		t.section = "video"
+	default:
+		t.section = "other"
+	}
+	return t.section, true
+}
+
 func sdpVideoHasRTCPFeedback(sdp string) bool {
-	currentMedia := ""
+	var tracker primarySDPSectionTracker
 	for _, raw := range strings.Split(sdp, "\n") {
 		line := strings.TrimSpace(raw)
-		if strings.HasPrefix(line, "m=") {
-			fields := strings.Fields(line)
-			currentMedia = ""
-			if len(fields) > 0 {
-				currentMedia = strings.TrimPrefix(strings.ToLower(fields[0]), "m=")
-			}
+		section, isMLine := tracker.observe(line)
+		if isMLine {
 			continue
 		}
-		if currentMedia == "video" && isSDPRTCPFeedbackLine(line) {
+		if section == "video" && isSDPRTCPFeedbackLine(line) {
 			return true
 		}
 	}
@@ -117,8 +148,8 @@ func insertAfterMLine(lines []string, attr string) []string {
 // Plain RTP version (no SRTP/crypto) since Asterisk doesn't use encryption
 // WebRTC side will still use SRTP (handled by pion/webrtc automatically)
 func (s *Server) createSDPOffer(rtpPort int, sess *session.Session) []byte {
-	sessionID := time.Now().UnixNano() / 1000000 // Use milliseconds like Linphone
-	videoPort := rtpPort + 2                     // Video on next even port
+	sdpSessionID, sdpSessionVersion := sess.NextSDPOriginVersion(time.Now().UnixMilli())
+	videoPort := rtpPort + 2 // Video on next even port
 
 	// Determine Opus payload type to use
 	// For incoming calls: use the PT negotiated from INVITE SDP (e.g., 107)
@@ -221,7 +252,7 @@ a=fmtp:101 0-16
 a=ptime:20
 a=rtcp-mux
 a=sendrecv
-`, sdpUsername, sessionID, sessionID, s.publicAddress,
+`, sdpUsername, sdpSessionID, sdpSessionVersion, s.publicAddress,
 		s.publicAddress,
 		rtpPort, audioProfile,
 		opusPT, opusPT, opusPT)
@@ -273,7 +304,9 @@ func (s *Server) createSDPAnswerForInvite(rtpPort int, sess *session.Session, in
 	}
 
 	if len(inviteSDP) > 0 {
-		currentMedia := ""
+		// Profile and rtcp-mux come from the primary audio and video m-lines
+		// only. A second m=video is a separate stream with its own settings.
+		var tracker primarySDPSectionTracker
 		lines := strings.Split(string(inviteSDP), "\n")
 		for _, line := range lines {
 			line = strings.TrimSpace(line)
@@ -281,20 +314,16 @@ func (s *Server) createSDPAnswerForInvite(rtpPort int, sess *session.Session, in
 				continue
 			}
 
-			if strings.HasPrefix(line, "m=audio ") {
-				currentMedia = "audio"
+			currentMedia, isMLine := tracker.observe(line)
+			if isMLine {
 				parts := strings.Fields(line)
 				if len(parts) >= 3 {
-					audioProfile = parts[2]
-				}
-				continue
-			}
-
-			if strings.HasPrefix(line, "m=video ") {
-				currentMedia = "video"
-				parts := strings.Fields(line)
-				if len(parts) >= 3 {
-					videoProfile = parts[2]
+					switch currentMedia {
+					case "audio":
+						audioProfile = parts[2]
+					case "video":
+						videoProfile = parts[2]
+					}
 				}
 				continue
 			}
@@ -312,36 +341,26 @@ func (s *Server) createSDPAnswerForInvite(rtpPort int, sess *session.Session, in
 		}
 	}
 
-	base := s.createSDPOffer(rtpPort, sess)
-	sdp := string(base)
-
-	sdp = replaceSDPMediaProfile(sdp, "audio", rtpPort, audioProfile)
-	videoPort := rtpPort + 2
-	sdp = replaceSDPMediaProfile(sdp, "video", videoPort, videoProfile)
-
-	if !audioRtcpMux {
-		sdp = rewriteSDPMediaSection(sdp, "audio", stripRTCPMuxLines)
-	}
-	if !videoRtcpMux {
-		rtcpPort := videoPort + 1
-		sdp = rewriteSDPMediaSection(sdp, "video", func(lines []string) []string {
-			return insertAfterMLine(stripRTCPMuxLines(lines), fmt.Sprintf("a=rtcp:%d", rtcpPort))
-		})
-	}
-
 	// RFC 6184 defaults an omitted packetization-mode to 0. An answer must not
 	// introduce mode 1 when the offer did not advertise it. The WebRTC→SIP
 	// forwarding path converts FU-A to Single NAL Unit packets for mode-0 peers.
 	answerPacketizationMode := uint8(1)
 	if !videoPacketizationMode {
 		answerPacketizationMode = 0
-		sdp = strings.ReplaceAll(sdp, ";packetization-mode=1", ";packetization-mode=0")
 	}
 	sess.SetSIPVideoPacketizationMode(answerPacketizationMode)
 
-	if videoProfile != "RTP/AVPF" {
-		sdp = stripSDPRTCPFeedbackLines(sdp)
+	negotiated := session.SIPNegotiatedMedia{
+		AudioProfile:           audioProfile,
+		VideoProfile:           videoProfile,
+		AudioRTCPMux:           audioRtcpMux,
+		VideoRTCPMux:           videoRtcpMux,
+		VideoPacketizationMode: answerPacketizationMode,
 	}
+	sess.SetSIPNegotiatedMedia(negotiated)
+
+	base := s.createSDPOffer(rtpPort, sess)
+	sdp := constrainSDPToNegotiatedDialog(string(base), rtpPort, negotiated)
 
 	fmt.Printf("[%s] 📋 Inbound SDP answer constrained to offer (audio=%s video=%s audio_mux=%v video_mux=%v offer_pmode1=%v answer_pmode1=%v)\n",
 		sess.ID,
@@ -356,23 +375,158 @@ func (s *Server) createSDPAnswerForInvite(rtpPort int, sess *session.Session, in
 	return []byte(sdp)
 }
 
+func constrainSDPToNegotiatedDialog(sdp string, rtpPort int, m session.SIPNegotiatedMedia) string {
+	if m.AudioProfile != "" {
+		sdp = replaceSDPMediaProfile(sdp, "audio", rtpPort, m.AudioProfile)
+	}
+	videoPort := rtpPort + 2
+	if m.VideoProfile != "" {
+		sdp = replaceSDPMediaProfile(sdp, "video", videoPort, m.VideoProfile)
+	}
+	if !m.AudioRTCPMux {
+		sdp = rewriteSDPMediaSection(sdp, "audio", stripRTCPMuxLines)
+	}
+	if !m.VideoRTCPMux {
+		rtcpPort := videoPort + 1
+		sdp = rewriteSDPMediaSection(sdp, "video", func(lines []string) []string {
+			return insertAfterMLine(stripRTCPMuxLines(lines), fmt.Sprintf("a=rtcp:%d", rtcpPort))
+		})
+	}
+	if m.VideoPacketizationMode == 0 {
+		sdp = strings.ReplaceAll(sdp, ";packetization-mode=1", ";packetization-mode=0")
+	}
+	if m.VideoProfile == "RTP/AVPF" {
+		if !sdpVideoHasRTCPFeedback(sdp) {
+			sdp = rewriteSDPMediaSection(sdp, "video", appendVideoRTCPFeedbackLines)
+		}
+	} else if m.VideoProfile != "" {
+		sdp = stripSDPRTCPFeedbackLines(sdp)
+	}
+	return sdp
+}
+
+func appendVideoRTCPFeedbackLines(lines []string) []string {
+	fbLines := strings.Split(strings.TrimSuffix(sipVideoRTCPFeedbackSDP, "\n"), "\n")
+	out := make([]string, 0, len(lines)+len(fbLines))
+	inserted := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if !inserted && (trimmed == "a=sendrecv" || trimmed == "a=sendonly" || trimmed == "a=recvonly" || trimmed == "a=inactive") {
+			out = append(out, fbLines...)
+			inserted = true
+		}
+		out = append(out, line)
+	}
+	if !inserted {
+		out = append(out, fbLines...)
+	}
+	return out
+}
+
+func parseSDPOrigin(sdp []byte) (sessID, ver int64, ok bool) {
+	for _, raw := range strings.Split(string(sdp), "\n") {
+		line := strings.TrimSpace(strings.TrimSuffix(raw, "\r"))
+		if !strings.HasPrefix(line, "o=") {
+			continue
+		}
+		fields := strings.Fields(line[2:])
+		if len(fields) < 6 {
+			return 0, 0, false
+		}
+		id, err1 := strconv.ParseInt(fields[1], 10, 64)
+		v, err2 := strconv.ParseInt(fields[2], 10, 64)
+		if err1 != nil || err2 != nil {
+			return 0, 0, false
+		}
+		return id, v, true
+	}
+	return 0, 0, false
+}
+
+func rewriteSDPOrigin(sdp []byte, sessID, ver int64) []byte {
+	lines := strings.Split(string(sdp), "\n")
+	for i, raw := range lines {
+		trimmed := strings.TrimSpace(strings.TrimSuffix(raw, "\r"))
+		if !strings.HasPrefix(trimmed, "o=") {
+			continue
+		}
+		fields := strings.Fields(trimmed[2:])
+		if len(fields) < 6 {
+			break
+		}
+		fields[1] = strconv.FormatInt(sessID, 10)
+		fields[2] = strconv.FormatInt(ver, 10)
+		updated := "o=" + strings.Join(fields, " ")
+		if strings.HasSuffix(raw, "\r") {
+			updated += "\r"
+		}
+		lines[i] = updated
+		return []byte(strings.Join(lines, "\n"))
+	}
+	return sdp
+}
+
+func stripSDPOriginNumbers(sdp []byte) string {
+	return string(rewriteSDPOrigin(sdp, 1, 1))
+}
+
+func finalizeInboundAnswerSDP(sess *session.Session, candidate []byte) (wire []byte, changed bool) {
+	if sess == nil {
+		return candidate, false
+	}
+	prev := sess.LastWireSIPAnswer()
+	if len(prev) == 0 {
+		sess.RememberLastWireSIPAnswer(candidate)
+		return candidate, false
+	}
+	if stripSDPOriginNumbers(prev) == stripSDPOriginNumbers(candidate) {
+		return prev, false
+	}
+	prevID, prevVer, okPrev := parseSDPOrigin(prev)
+	_, candVer, okCand := parseSDPOrigin(candidate)
+	if !okPrev || !okCand || candVer <= prevVer {
+		id, ver := sess.NextSDPOriginVersion(time.Now().UnixMilli())
+		if okPrev && id != prevID {
+			id = prevID
+		}
+		candidate = rewriteSDPOrigin(candidate, id, ver)
+	}
+	sess.RememberLastWireSIPAnswer(candidate)
+	return candidate, true
+}
+
 func sipVideoPacketizationMode(sdp []byte) uint8 {
-	currentMedia := ""
+	h264PT, hasH264PT := parseH264PayloadType(sdp)
+	var tracker primarySDPSectionTracker
 	for _, rawLine := range strings.Split(string(sdp), "\n") {
 		line := strings.TrimSpace(rawLine)
-		if strings.HasPrefix(line, "m=video ") {
-			currentMedia = "video"
+		currentMedia, isMLine := tracker.observe(line)
+		if isMLine {
 			continue
 		}
-		if strings.HasPrefix(line, "m=") {
-			currentMedia = "other"
+		if currentMedia != "video" || !sdpFmtpHasParameter(line, "packetization-mode", "1") {
 			continue
 		}
-		if currentMedia == "video" && sdpFmtpHasParameter(line, "packetization-mode", "1") {
-			return 1
+		if hasH264PT {
+			if pt, ok := parseFmtpPayloadType(line); !ok || pt != h264PT {
+				continue
+			}
 		}
+		return 1
 	}
 	return 0
+}
+
+func parseFmtpPayloadType(line string) (uint8, bool) {
+	fields := strings.Fields(strings.TrimSpace(line))
+	if len(fields) < 2 || !strings.HasPrefix(strings.ToLower(fields[0]), "a=fmtp:") {
+		return 0, false
+	}
+	pt, err := strconv.ParseUint(fields[0][len("a=fmtp:"):], 10, 8)
+	if err != nil {
+		return 0, false
+	}
+	return uint8(pt), true
 }
 
 func sdpFmtpHasParameter(line, key, value string) bool {
@@ -391,28 +545,40 @@ func sdpFmtpHasParameter(line, key, value string) bool {
 
 // parseAsteriskSDPAndSetEndpoints parses Asterisk's SDP answer to extract RTP ports
 // and configures the session for forwarding WebRTC → Asterisk
-// parseSDPMediaEndpoints returns the IPv4 c= address (the last one seen,
-// session or media level), the audio and video ports, and the video profile.
+// parseSDPMediaEndpoints returns the IPv4 c= address, the audio and video
+// ports, and the video profile of the call's primary streams: the first
+// m=audio and the first m=video. The address is the last c= seen at session
+// level or inside those two sections. Later m-lines (a second video stream,
+// other media types) and their c= lines are ignored, so they cannot move the
+// primary RTP destinations.
 func parseSDPMediaEndpoints(lines []string) (ip string, audioPort, videoPort int, videoProfile string) {
+	var tracker primarySDPSectionTracker
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 
+		section, isMLine := tracker.observe(line)
+		if section == "other" {
+			continue
+		}
+		if isMLine {
+			parts := strings.Fields(line)
+			switch section {
+			case "audio":
+				if len(parts) >= 2 {
+					fmt.Sscanf(parts[1], "%d", &audioPort)
+				}
+			case "video":
+				if len(parts) >= 2 {
+					fmt.Sscanf(parts[1], "%d", &videoPort)
+				}
+				if len(parts) >= 3 {
+					videoProfile = parts[2]
+				}
+			}
+			continue
+		}
 		if strings.HasPrefix(line, "c=IN IP4 ") {
 			ip = strings.TrimPrefix(line, "c=IN IP4 ")
-		}
-		if strings.HasPrefix(line, "m=audio ") {
-			if parts := strings.Fields(line); len(parts) >= 2 {
-				fmt.Sscanf(parts[1], "%d", &audioPort)
-			}
-		}
-		if strings.HasPrefix(line, "m=video ") {
-			parts := strings.Fields(line)
-			if len(parts) >= 2 {
-				fmt.Sscanf(parts[1], "%d", &videoPort)
-			}
-			if len(parts) >= 3 {
-				videoProfile = parts[2]
-			}
 		}
 	}
 	return ip, audioPort, videoPort, videoProfile
@@ -549,15 +715,11 @@ func parseOpusPayloadType(sdpBody []byte) uint8 {
 // video media section. SIP answers must preserve this mapping for strict
 // chan_sip peers, and WebRTC->SIP RTP must use the same negotiated value.
 func parseH264PayloadType(sdpBody []byte) (uint8, bool) {
-	currentMedia := ""
+	var tracker primarySDPSectionTracker
 	for _, rawLine := range strings.Split(string(sdpBody), "\n") {
 		line := strings.TrimSpace(rawLine)
-		if strings.HasPrefix(line, "m=") {
-			fields := strings.Fields(line)
-			currentMedia = ""
-			if len(fields) > 0 {
-				currentMedia = strings.TrimPrefix(strings.ToLower(fields[0]), "m=")
-			}
+		currentMedia, isMLine := tracker.observe(line)
+		if isMLine {
 			continue
 		}
 		if currentMedia != "video" || !strings.HasPrefix(strings.ToLower(line), "a=rtpmap:") {

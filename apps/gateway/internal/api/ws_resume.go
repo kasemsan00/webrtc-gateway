@@ -211,6 +211,9 @@ func (s *Server) handleWSResume(client *WSClient, msg WSMessage) {
 		}
 
 		log.Printf("✅ Session %s PeerConnection renegotiated successfully", msg.SessionID)
+		// A shared screen survives the resume only when the client's offer
+		// kept its video section.
+		s.handleAuxAfterResume(sess)
 	}
 
 	finalState := sess.GetState()

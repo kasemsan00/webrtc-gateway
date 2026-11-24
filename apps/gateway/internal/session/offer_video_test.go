@@ -104,3 +104,21 @@ func TestSIPOfferIncludeVideoDefaultsTrue(t *testing.T) {
 		t.Fatalf("explicit true must include video")
 	}
 }
+
+func TestAnalyzeOfferVideoUsesFirstVideoMLine(t *testing.T) {
+	sdp := "v=0\r\nm=audio 4000 RTP/AVP 111\r\nm=video 4002 RTP/AVP 96\r\na=sendrecv\r\nm=video 0 RTP/AVP 96\r\na=inactive\r\n"
+
+	got := AnalyzeOfferVideo(sdp)
+
+	if !got.HasVideoMLine || got.VideoPort != 4002 || got.VideoDirection != "sendrecv" || !got.ExpectVideoUplink {
+		t.Fatalf("diagnostics must describe the first m=video, got %+v", got)
+	}
+}
+
+func TestIsRemoteHoldOfferUsesFirstAudioMLine(t *testing.T) {
+	sdp := "v=0\r\nc=IN IP4 10.0.0.5\r\nm=audio 4000 RTP/AVP 111\r\na=sendrecv\r\nm=audio 0 RTP/AVP 0\r\na=inactive\r\n"
+
+	if IsRemoteHoldOffer(sdp) {
+		t.Fatal("a declined second m=audio must not be read as a hold")
+	}
+}

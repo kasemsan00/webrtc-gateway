@@ -493,11 +493,15 @@ func (s *Server) respondExistingDialogReINVITE(req *sip.Request, tx sip.ServerTr
 	fmt.Printf("[%s] sip_reinvite rejected state=%s\n", sess.ID, state)
 }
 
+func (s *Server) allowInboundMidCallOffer(sess *session.Session) bool {
+	return s.config.MidCallRenegotiationEnable || s.canReceiveAuxVideo(sess) || (sess != nil && sess.AuxVideo() != nil)
+}
+
 func (s *Server) handleActiveReINVITE(req *sip.Request, tx sip.ServerTransaction, sess *session.Session, callIDValue string) {
 	tryingRes := sip.NewResponseFromRequest(req, 100, "Trying", nil)
 	_ = tx.Respond(tryingRes)
 
-	if !s.config.MidCallRenegotiationEnable {
+	if !s.allowInboundMidCallOffer(sess) {
 		res := sip.NewResponseFromRequest(req, 501, "Not Implemented", nil)
 		_ = tx.Respond(res)
 		return
@@ -550,8 +554,8 @@ func (s *Server) handleActiveReINVITE(req *sip.Request, tx sip.ServerTransaction
 	}
 
 	previousMediaState := sess.GetMidCallMediaState()
-	requiresClientRenegotiation := validation.RequiresClientRenegotiation ||
-		(!previousMediaState.HasActiveVideo && validation.HasActiveVideo)
+	requiresClientRenegotiation := s.config.MidCallRenegotiationEnable &&
+		(validation.RequiresClientRenegotiation || (!previousMediaState.HasActiveVideo && validation.HasActiveVideo))
 
 	sess.ApplyMidCallSDPValidation(validation)
 	s.updateAsteriskEndpointsFromMidCallOffer(req.Body(), sess)
@@ -574,7 +578,17 @@ func (s *Server) handleActiveReINVITE(req *sip.Request, tx sip.ServerTransaction
 		answerSDP = s.createSDPAnswerForInvite(rtpPort, sess, req.Body())
 		sess.RememberSIPAnswer(answerSDP)
 	}
-	fmt.Printf("[%s] sip_reinvite answered sdp=unchanged bytes=%d\n", sess.ID, len(answerSDP))
+	// Mirror the re-INVITE's m-lines: same count and order, port 0 for the
+	// ones the gateway does not use (a second m=video, unknown media).
+	// A second m=video from the far end (its shared screen) is accepted only
+	// when this offer needs no other client renegotiation.
+	answerSDP, auxOpened := s.answerSDPForInboundOffer(sess, answerSDP, req.Body(), !requiresClientRenegotiation)
+	answerSDP, sdpChanged := finalizeInboundAnswerSDP(sess, answerSDP)
+	sdpStatus := "unchanged"
+	if sdpChanged {
+		sdpStatus = "updated"
+	}
+	fmt.Printf("[%s] sip_reinvite answered sdp=%s bytes=%d mlines=%d\n", sess.ID, sdpStatus, len(answerSDP), len(sess.SIPMediaLayout()))
 	res := sip.NewResponseFromRequest(req, 200, "OK", answerSDP)
 	res.AppendHeader(&sip.ContactHeader{
 		Address: sip.Uri{Host: s.publicAddress, Port: s.sipPort},
@@ -587,6 +601,9 @@ func (s *Server) handleActiveReINVITE(req *sip.Request, tx sip.ServerTransaction
 	sess.HandleSIPReinviteKeyframe(time.Now())
 	if !requiresClientRenegotiation {
 		_ = sess.CompleteMidCallRenegotiation(started.ID, string(answerSDP))
+	}
+	if auxOpened {
+		s.startAuxVideoClientRenegotiation(sess)
 	}
 	s.logEvent(&logstore.Event{
 		Timestamp:     time.Now(),
@@ -634,7 +651,7 @@ func (s *Server) handleUPDATE(req *sip.Request, tx sip.ServerTransaction) {
 		_ = tx.Respond(res)
 		return
 	}
-	if !s.config.MidCallRenegotiationEnable {
+	if !s.allowInboundMidCallOffer(sess) {
 		res := sip.NewResponseFromRequest(req, 501, "Not Implemented", nil)
 		_ = tx.Respond(res)
 		return
@@ -692,8 +709,8 @@ func (s *Server) handleUPDATE(req *sip.Request, tx sip.ServerTransaction) {
 	}
 
 	previousMediaState := sess.GetMidCallMediaState()
-	requiresClientRenegotiation := validation.RequiresClientRenegotiation ||
-		(!previousMediaState.HasActiveVideo && validation.HasActiveVideo)
+	requiresClientRenegotiation := s.config.MidCallRenegotiationEnable &&
+		(validation.RequiresClientRenegotiation || (!previousMediaState.HasActiveVideo && validation.HasActiveVideo))
 	sess.ApplyMidCallSDPValidation(validation)
 	s.updateAsteriskEndpointsFromMidCallOffer(req.Body(), sess)
 	s.notifyRemoteHoldChange(sess, req.Body())
@@ -712,6 +729,8 @@ func (s *Server) handleUPDATE(req *sip.Request, tx sip.ServerTransaction) {
 		rtpPort = 4000
 	}
 	answerSDP := s.createSDPAnswerForInvite(rtpPort, sess, req.Body())
+	answerSDP, auxOpened := s.answerSDPForInboundOffer(sess, answerSDP, req.Body(), !requiresClientRenegotiation)
+	answerSDP, _ = finalizeInboundAnswerSDP(sess, answerSDP)
 	res := sip.NewResponseFromRequest(req, 200, "OK", answerSDP)
 	res.AppendHeader(&contentTypeHeaderSDPCall)
 	if err := tx.Respond(res); err != nil {
@@ -720,6 +739,9 @@ func (s *Server) handleUPDATE(req *sip.Request, tx sip.ServerTransaction) {
 	}
 	if !requiresClientRenegotiation {
 		_ = sess.CompleteMidCallRenegotiation(started.ID, string(answerSDP))
+	}
+	if auxOpened {
+		s.startAuxVideoClientRenegotiation(sess)
 	}
 	s.logEvent(&logstore.Event{
 		Timestamp:     time.Now(),
@@ -1250,6 +1272,15 @@ func (s *Server) handleMESSAGE(req *sip.Request, tx sip.ServerTransaction) {
 		go s.handleKeyframeMessage(body, toURI)
 	}
 
+	// A far-end report about a shared screen is gateway control, not chat.
+	if strings.HasPrefix(body, screenStreamMessagePrefix) {
+		if err := tx.Respond(sip.NewResponseFromRequest(req, 200, "OK", nil)); err != nil {
+			fmt.Printf("ERROR responding to MESSAGE: %v\n", err)
+		}
+		go s.handleScreenStreamMessage(body, callIDValue, toURI)
+		return
+	}
+
 	// Determine caller display name
 	caller := fromDisplayName
 	if caller == "" {
@@ -1447,6 +1478,9 @@ func (s *Server) handleSwitchMessage(body string, callerURI string) {
 		if !sess.ArmSwitchSPSPPSInjectIfAuthoritative(switchDecision.Generation, switchDecision.MediaEpoch, 3) {
 			return
 		}
+		// The far end changes to another agent, who has not agreed to receive
+		// a shared screen. Its re-INVITE must not delay the switch recovery.
+		go s.closeAuxVideoForSwitch(sess)
 	}
 
 	recoveryWindow := time.Duration(s.config.SwitchVideoRecoveryWindowMS) * time.Millisecond

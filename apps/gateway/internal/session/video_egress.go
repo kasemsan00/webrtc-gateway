@@ -54,6 +54,8 @@ func (s *Session) DetachPeerConnection() *webrtc.PeerConnection {
 		return nil
 	}
 	s.StopVideoEgress()
+	// The auxiliary track belongs to the same PeerConnection.
+	s.detachAuxVideoTrack()
 	// No audio write may be in flight on these tracks when the caller
 	// closes the PeerConnection (same pion Write/Close overlap as video).
 	s.audioEgressMu.Lock()

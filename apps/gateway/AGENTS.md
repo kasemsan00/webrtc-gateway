@@ -101,6 +101,8 @@ apps/gateway/
 | `ws_dispatch.go` | `handleWSMessage` router and per-endpoint allowlists (`/ws-public`, `/ws-agent`, `/ws-agent-device`) |
 | `ws_multicall.go` | agent multi-call session ownership (`agentClientCanAccessSession`) |
 | `ws_hold.go` | `hold`, `unhold` |
+| `ws_stream.go` | `stream_update` (share/stop a screen as a second video stream), `stream_state` notify |
+| `ws_stream_receive.go` | receiving a shared screen: `renegotiate` `stream_added`, its `renegotiate_answer`, resume handling |
 | `ws_unregister.go` | explicit logout `unregister` |
 | `ws_call.go` | `offer`, `ice`, `call`, `hangup`, `dtmf` |
 | `ws_incoming.go` | `accept`, `reject`, push dispatch, ring timeout |
@@ -140,6 +142,7 @@ apps/gateway/
 | Session resume | `ws_resume.go` |
 | Trunk resolve / push token | `ws_trunk.go` |
 | Mid-call renegotiation | `ws_midcall.go`, `internal/session/renegotiate.go` |
+| Screen share (second video stream) | `ws_stream.go`, `ws_stream_receive.go`, `internal/sip/aux_stream.go` (re-INVITE, refusal cache), `internal/sip/aux_stream_sdp.go` (its m-section), `internal/sip/aux_stream_peer.go` (receiving leg, far-end confirmation), `internal/sip/rtp_aux_video.go` (ports, sockets), `internal/sip/sdp_layout.go` (m-line order), `internal/session/aux_video*.go` (pipeline, tracks) |
 | Live translation | `ws_translate.go`, `internal/translator/` |
 | SIP MESSAGE / DTMF notify | `ws_notify.go` |
 | REST call control | `handlers_call.go` |
@@ -161,6 +164,7 @@ Full WS message types: [`docs/gateway/ws-contract.md`](../../docs/gateway/ws-con
 - **Audio:** Opus passthrough default; optional SIP→WebRTC gain in `internal/audio/` (`SIP_AUDIO_INBOUND_GAIN_ENABLE`). Outbound passthrough. DTMF via RFC2833.
 - **Video:** H.264 only. Preserve SPS/PPS cache/reinject (`h264_paramsets.go`, `keyframe.go`, `sip/sdp.go`).
 - **Uplink (WebRTC→SIP) video:** written directly, no pacer or IDR pacing. Held until the first IDR; mid-call picture-size changes are accepted by default and held until the new IDR (`uplink_picture_size.go`, `SIP_UPLINK_PICTURE_SIZE_CHANGE`). Browser IDR requests are gated in `uplink_keyframe_gate.go`; IDRs forwarded before the SIP far end was seen do not suppress the `remote-ssrc-learn`/`sip-rtcp-first` kicks.
+- **Second video stream (screen share):** an optional auxiliary stream per session, the second `m=video` of the SIP dialog, with its own sockets, SSRC and parameter sets (`internal/session/aux_video*.go`). It never shares state or locks with the camera pipeline. The first `m=video` is always the camera; SDP is read and written by m-line position (`sip/sdp_layout.go`). Support is decided per call from the SIP answer, with no configuration flag.
 - **Recovery:** Session resume is first-class; session directory enables cross-instance redirect; incoming uses first-accept-wins.
 
 ---

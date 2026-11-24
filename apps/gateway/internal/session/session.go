@@ -323,6 +323,24 @@ type Session struct {
 	proactiveBrowserPLISafety  time.Duration     `json:"-"`
 	sipInfoFIRAt               time.Time         `json:"-"`
 	sipAnswerSDP               []byte            `json:"-"`
+	// sipMediaLayout is the m-line order of the peer's latest SIP offer
+	// (sip_media_layout.go). Under s.mu.
+	sipMediaLayout             []SIPMediaSlot    `json:"-"`
+	sdpSessionID               int64             `json:"-"`
+	sdpSessionVersion          int64             `json:"-"`
+	lastWireSIPAnswer          []byte            `json:"-"`
+	sipMediaNegotiated         bool              `json:"-"`
+	sipNegotiatedMedia         SIPNegotiatedMedia `json:"-"`
+	// auxVideo is the open auxiliary (screen) video stream, or nil
+	// (aux_video.go). auxUplinkMid is the WebRTC mid whose incoming track
+	// belongs to it. Both under s.mu.
+	auxVideo                   *AuxVideo         `json:"-"`
+	auxUplinkMid               string            `json:"-"`
+	// auxDownlink is the send-only transceiver that carries a received
+	// auxiliary stream to the client; auxResume is what the last resume did
+	// with the stream (aux_video_downlink_track.go). Both under s.mu.
+	auxDownlink                *auxDownlinkTrack `json:"-"`
+	auxResume                  AuxResumeOutcome  `json:"-"`
 	lastBrowserPLIReason       string            `json:"-"`
 	mode0NeedsIDR              bool              `json:"-"`
 	mode0PLIAt                 time.Time         `json:"-"`
@@ -417,6 +435,7 @@ type Session struct {
 	RemoteAudioDirection        string                     `json:"-"`
 	RemoteVideoDirection        string                     `json:"-"`
 	MidCallHasActiveVideo       bool                       `json:"-"`
+	midCallMediaSeeded          bool                       `json:"-"`
 	// sipOfferIncludeVideo is nil until explicitly set. Nil defaults to true so
 	// existing callers that build SIP SDP without analyzing the WebRTC offer
 	// keep advertising video.
@@ -1058,6 +1077,11 @@ func (s *Session) attachInitialPeerConnectionCallbacks(peerConnection *webrtc.Pe
 
 	// Set OnTrack handler to forward WebRTC RTP → Asterisk
 	peerConnection.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
+		// A track on the auxiliary media section is a separate stream with
+		// its own SIP port and SSRC. It must not enter the camera's path.
+		if s.routeAuxUplinkTrack(peerConnection, track, receiver) {
+			return
+		}
 		kind := track.Kind().String()
 		codec := track.Codec()
 		fmt.Printf("[%s] 🎬 OnTrack: kind=%s mime=%s pt=%d ssrc=%d clockRate=%d fmtp=%q\n",

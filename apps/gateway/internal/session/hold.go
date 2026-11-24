@@ -51,11 +51,14 @@ func IsRemoteHoldOffer(sdp string) bool {
 	var sessionDirection, audioDirection string
 	var sessionZero, audioZero, audioHasConnection bool
 	section := "session"
+	audioSeen := false
 	for _, raw := range strings.Split(sdp, "\n") {
 		line := strings.TrimSpace(raw)
 		if strings.HasPrefix(line, "m=") {
 			section = "other"
-			if strings.HasPrefix(line, "m=audio") {
+			// Only the first m=audio is the call's audio.
+			if strings.HasPrefix(line, "m=audio") && !audioSeen {
+				audioSeen = true
 				section = "audio"
 			}
 			continue

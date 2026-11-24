@@ -450,6 +450,7 @@ func (s *Server) applyEarlyMediaSDP(sdpBody []byte, sess *session.Session) {
 		return
 	}
 	s.parseAsteriskSDPAndSetEndpoints(sdpBody, sess)
+	sess.SeedInitialSIPMediaState(string(sdpBody))
 }
 
 // handleInviteAuth re-sends the INVITE with digest credentials and waits for
@@ -883,7 +884,17 @@ func (s *Server) acceptCall(sess *session.Session) error {
 
 	// Create SDP answer using negotiated Opus PT and constraints from INVITE offer.
 	sdpOffer := s.createSDPAnswerForInvite(rtpPort, sess, inviteBody)
+	if len(inviteBody) > 0 {
+		sess.SeedInitialSIPMediaState(string(inviteBody))
+	}
 	sess.RememberSIPAnswer(sdpOffer)
+	// The remembered answer stays in the gateway's own audio[+video] form.
+	// What goes on the wire mirrors the INVITE's m-lines, so an m-line the
+	// gateway does not use is refused in place instead of being left out.
+	// A second m=video on the initial INVITE is refused: a screen share
+	// starts after the call is answered.
+	sdpOffer, _ = s.answerSDPForInboundOffer(sess, sdpOffer, inviteBody, false)
+	sess.RememberLastWireSIPAnswer(sdpOffer)
 
 	// Create 200 OK response using original request
 	okRes := sip.NewResponseFromRequest(req, 200, "OK", sdpOffer)
@@ -1704,6 +1715,7 @@ func (s *Server) completeOutboundInvite200(
 			}
 		}
 		s.parseAsteriskSDPAndSetEndpoints(res.Body(), sess)
+		sess.SeedInitialSIPMediaState(string(res.Body()))
 	}
 
 	sess.UpdateState(session.StateActive)

@@ -108,6 +108,12 @@ func (s *Session) RenegotiatePeerConnection(newOfferSDP string, turnConfig confi
 		return err
 	}
 
+	// An open auxiliary (screen) stream moves to the new PeerConnection when
+	// the offer still has its section. This must be decided before the offer
+	// is applied: the screen track is routed by mid, and a received stream
+	// needs its send-only transceiver in place.
+	s.prepareAuxForReplacement(newPC, newOfferSDP)
+
 	// 9. Set remote description (the new offer from client)
 	offer := webrtc.SessionDescription{
 		Type: webrtc.SDPTypeOffer,
@@ -152,6 +158,7 @@ func (s *Session) RenegotiatePeerConnection(newOfferSDP string, turnConfig confi
 	s.PeerConnection = newPC
 	s.UpdatedAt = time.Now()
 	s.mu.Unlock()
+	s.finishAuxAfterReplacement()
 
 	fmt.Printf("[%s] ✅ PeerConnection renegotiated successfully\n", s.ID)
 	return nil

@@ -16,6 +16,25 @@ Checkpoints:
 - confirm peer config has `allow=opus` and `allow=h264`
 - confirm `videosupport=yes`/equivalent endpoint settings
 
+## Screen share is refused or stops after a few seconds
+
+The client's `stream_update_result` / `stream_state` reason says which side refused. Grep the session's log for `aux_stream`.
+
+- `stream_update_result` `rejected` / `not_supported`, log `aux_stream_add rejected`: the SIP peer of **this** leg refused the second `m=video` (answered port 0, or refused the re-INVITE).
+  - `chan_sip` peers carry one video stream. This is the expected result there.
+  - `chan_pjsip`: set `max_video_streams = 2` and `direct_media = no` on the endpoint, then reload. The gateway remembers a refusal per SIP account for 10 minutes (`aux_stream_add skipped reason=cached_rejection`); wait it out or restart the gateway after fixing the endpoint.
+- `stream_update_result` `ok`, then `stream_state` `active:false` / `peer_not_supported` about 3 seconds later, log `aux_stream not confirmed by far end`: this leg accepted but the far end never confirmed.
+  - the other leg's endpoint is `chan_sip` or still has `max_video_streams = 1` (Asterisk accepts on one leg and cannot offer the stream to the other)
+  - the far-end client did not send `multiVideo: true`, or did not answer `renegotiate` `stream_added` (log `aux_stream receive refused` or a `renegotiate_result` timeout on the other session)
+  - the far end is not a gateway client; only a gateway session can confirm
+  - the two legs are on different gateway instances and the PBX does not route SIP MESSAGE between the two users (log `aux_stream report ... via MESSAGE failed`)
+  - the caller is still waiting in a queue: share after the agent has answered
+- `failed` / `no_rtp_ports`: widen `RTP_PORT_MIN`/`RTP_PORT_MAX` (a shared screen takes one more port slot per session).
+- `failed` / `video_call_required`: the call has no camera video m-line; screen share is added next to a video call.
+- `failed` / `busy`: another mid-call negotiation (hold, a re-INVITE from the peer) was in progress, or the peer answered 491 twice. Retry.
+- `failed` / `sip_error`: SIP transport/timeout error or rejected Digest authentication (`401`/`407`) on the in-dialog `re-INVITE`. Verify trunk/account credentials and SIP reachability; unlike codec/port refusals, this is not cached in `auxRejects`.
+- Screen arrives but stays black until the next keyframe: check `aux_video browser PLI sent` on the sharing session. Keyframe requests are limited to one per second per direction.
+
 ## Video rejected (`m=video ... 0`)
 
 - inspect full SDP answer logs through `https://gateway.example.com/api/logs/current?tail=500`

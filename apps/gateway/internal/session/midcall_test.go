@@ -229,3 +229,45 @@ func TestValidateMidCallSDP_RejectsUnsupportedOrMalformedSDP(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateMidCallSDP_SecondVideoDoesNotChangePrimaryVideo(t *testing.T) {
+	primary := "v=0\r\nm=audio 4000 RTP/AVP 111\r\na=rtpmap:111 opus/48000/2\r\na=sendrecv\r\nm=video 4002 RTP/AVP 96\r\na=rtpmap:96 H264/90000\r\na=sendrecv\r\n"
+	tests := []struct {
+		name          string
+		second        string
+		wantExtraPort int
+		wantExtraDir  string
+	}{
+		{name: "closed second video", second: "m=video 0 RTP/AVP 96\r\n", wantExtraPort: 0, wantExtraDir: "sendrecv"},
+		{name: "inactive second video", second: "m=video 4006 RTP/AVP 96\r\na=rtpmap:96 H264/90000\r\na=inactive\r\n", wantExtraPort: 4006, wantExtraDir: "inactive"},
+		{name: "sendonly second video without H264", second: "m=video 4006 RTP/AVP 100\r\na=rtpmap:100 VP8/90000\r\na=sendonly\r\n", wantExtraPort: 4006, wantExtraDir: "sendonly"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ValidateMidCallSDP(primary + tt.second)
+
+			if !got.Accept {
+				t.Fatalf("expected accept, got %d %s", got.StatusCode, got.Reason)
+			}
+			if got.Video.Port != 4002 || got.Video.Direction != "sendrecv" || !got.HasActiveVideo || !got.HasH264 {
+				t.Fatalf("primary video changed: %+v active=%v h264=%v", got.Video, got.HasActiveVideo, got.HasH264)
+			}
+			if got.RequiresClientRenegotiation {
+				t.Fatal("a second video m-line must not be classified as video removed")
+			}
+			if len(got.ExtraVideo) != 1 || got.ExtraVideo[0].Port != tt.wantExtraPort || got.ExtraVideo[0].Direction != tt.wantExtraDir {
+				t.Fatalf("extra video = %+v, want port %d direction %s", got.ExtraVideo, tt.wantExtraPort, tt.wantExtraDir)
+			}
+		})
+	}
+}
+
+func TestValidateMidCallSDP_SecondAudioDoesNotChangePrimaryAudio(t *testing.T) {
+	sdp := "v=0\r\nm=audio 4000 RTP/AVP 111\r\na=rtpmap:111 opus/48000/2\r\na=sendrecv\r\nm=audio 0 RTP/AVP 0\r\na=inactive\r\n"
+
+	got := ValidateMidCallSDP(sdp)
+
+	if !got.Accept || got.Audio.Port != 4000 || got.Audio.Direction != "sendrecv" || !got.HasOpus {
+		t.Fatalf("primary audio changed: accept=%v %+v opus=%v reason=%s", got.Accept, got.Audio, got.HasOpus, got.Reason)
+	}
+}

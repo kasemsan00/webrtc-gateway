@@ -51,6 +51,11 @@ func (s *Server) handleWSRenegotiateAnswer(client *WSClient, msg WSMessage) {
 		return
 	}
 
+	if pending.Source == session.MidCallRenegotiationSourceStreamAdded {
+		s.handleStreamAddedAnswer(client, sess, pending, msg, status)
+		return
+	}
+
 	resultSDP := ""
 	var completed bool
 	switch status {
@@ -133,8 +138,13 @@ func (s *Server) scheduleMidCallRenegotiationTimeout(sessionID, renegotiationID 
 		if !ok || sess == nil {
 			return
 		}
+		pending, _ := sess.GetPendingMidCallRenegotiation()
 		if !sess.FailMidCallRenegotiation(renegotiationID, 408, "client_timeout") {
 			return
+		}
+		if pending.ID == renegotiationID && pending.Source == session.MidCallRenegotiationSourceStreamAdded {
+			// The client never added the screen. Close the SIP stream and let the sharing leg know.
+			s.abortReceivedAuxStream(sess, "client-timeout")
 		}
 
 		s.mu.RLock()
@@ -179,6 +189,10 @@ func (s *Server) handleWSClientState(client *WSClient, msg WSMessage) {
 	}
 	if client.multiCall {
 		client.activeCalls = max(msg.ActiveCalls, 0)
+	}
+	// Same opt-in rule for a second (screen) video stream.
+	if !client.publicOnly && msg.MultiVideo {
+		client.multiVideo = true
 	}
 	s.mu.Unlock()
 	s.notifyWSClientChanged("updated", client)

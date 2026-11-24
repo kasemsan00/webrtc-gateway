@@ -53,6 +53,10 @@ type MidCallSDPValidation struct {
 	Reason                      string
 	Audio                       MidCallMedia
 	Video                       MidCallMedia
+	// ExtraVideo lists every m=video after the first, in offer order. Audio,
+	// Video and the fields derived from them describe the first m=audio and
+	// the first m=video only.
+	ExtraVideo                  []MidCallMedia
 	HasOpus                     bool
 	HasH264                     bool
 	HasActiveVideo              bool
@@ -153,17 +157,100 @@ func (s *Session) ApplyMidCallSDPValidation(validation MidCallSDPValidation) {
 	s.RemoteAudioDirection = validation.Audio.Direction
 	s.RemoteVideoDirection = validation.Video.Direction
 	s.MidCallHasActiveVideo = validation.HasActiveVideo
+	s.midCallMediaSeeded = true
 	s.UpdatedAt = time.Now()
+}
+
+// SeedInitialSIPMediaState initializes mid-call media baseline from the
+// remote peer's initial SDP offer or answer (INVITE, 183, or 200 OK) so the
+// first mid-call re-INVITE does not misclassify an already-active camera
+// video stream as newly added.
+func (s *Session) SeedInitialSIPMediaState(remoteSDP string) {
+	if s == nil || strings.TrimSpace(remoteSDP) == "" {
+		return
+	}
+	audioDir := parsePrimaryAudioDirection(remoteSDP)
+	videoDiag := AnalyzeOfferVideo(remoteSDP)
+	videoDir := videoDiag.VideoDirection
+	if !videoDiag.HasVideoMLine {
+		videoDir = ""
+	} else if videoDir == "" || videoDir == "unspecified" {
+		videoDir = "sendrecv"
+	}
+	hasActiveVideo := videoDiag.HasActiveVideo() && s.SIPOfferIncludeVideo()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.RemoteAudioDirection = audioDir
+	s.RemoteVideoDirection = videoDir
+	s.MidCallHasActiveVideo = hasActiveVideo
+	s.midCallMediaSeeded = true
+	s.UpdatedAt = time.Now()
+}
+
+func parsePrimaryAudioDirection(sdp string) string {
+	var sessionDir, audioDir string
+	audioPort := -1
+	section := "session"
+	audioSeen := false
+	for _, raw := range strings.Split(sdp, "\n") {
+		line := strings.TrimSpace(strings.TrimSuffix(raw, "\r"))
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "m=") {
+			if strings.HasPrefix(line, "m=audio ") && !audioSeen {
+				audioSeen = true
+				section = "audio"
+				if m, ok := parseMidCallMediaLine(line); ok {
+					audioPort = m.port
+				}
+			} else {
+				section = "other"
+			}
+			continue
+		}
+		if section == "other" {
+			continue
+		}
+		switch line {
+		case "a=sendrecv", "a=sendonly", "a=recvonly", "a=inactive":
+			dir := strings.TrimPrefix(line, "a=")
+			if section == "audio" {
+				audioDir = dir
+			} else {
+				sessionDir = dir
+			}
+		}
+	}
+	if !audioSeen {
+		return ""
+	}
+	if audioDir != "" {
+		return audioDir
+	}
+	if sessionDir != "" {
+		return sessionDir
+	}
+	if audioPort > 0 {
+		return "sendrecv"
+	}
+	return "inactive"
 }
 
 // GetMidCallMediaState returns the last accepted mid-call media state.
 func (s *Session) GetMidCallMediaState() MidCallMediaState {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	hasActiveVideo := s.MidCallHasActiveVideo
+	if !s.midCallMediaSeeded && s.AsteriskVideoAddr != nil && s.AsteriskVideoAddr.Port > 0 &&
+		(s.sipOfferIncludeVideo == nil || *s.sipOfferIncludeVideo) {
+		hasActiveVideo = true
+	}
 	return MidCallMediaState{
 		AudioDirection: s.RemoteAudioDirection,
 		VideoDirection: s.RemoteVideoDirection,
-		HasActiveVideo: s.MidCallHasActiveVideo,
+		HasActiveVideo: hasActiveVideo,
 	}
 }
 
@@ -181,6 +268,7 @@ func ValidateMidCallSDP(sdp string) MidCallSDPValidation {
 	}
 
 	var current *MidCallMedia
+	var extraVideo []*MidCallMedia
 	for _, raw := range strings.Split(sdp, "\n") {
 		line := strings.TrimSpace(strings.TrimSuffix(raw, "\r"))
 		if line == "" {
@@ -192,17 +280,23 @@ func ValidateMidCallSDP(sdp string) MidCallSDPValidation {
 			if !ok {
 				return rejectMidCallSDP(488, "malformed_sdp")
 			}
-			switch media.kind {
-			case "audio":
+			switch {
+			case media.kind == "audio" && !result.Audio.Present:
 				result.Audio.Present = true
 				result.Audio.Port = media.port
 				result.Audio.Codecs = media.payloads
 				current = &result.Audio
-			case "video":
+			case media.kind == "video" && !result.Video.Present:
 				result.Video.Present = true
 				result.Video.Port = media.port
 				result.Video.Codecs = media.payloads
 				current = &result.Video
+			case media.kind == "video":
+				// A later m=video is a separate stream. It gets its own
+				// record so it cannot change the primary video's state.
+				extra := &MidCallMedia{Present: true, Port: media.port, Direction: "sendrecv", Codecs: media.payloads}
+				extraVideo = append(extraVideo, extra)
+				current = extra
 			default:
 				current = nil
 			}
@@ -223,6 +317,10 @@ func ValidateMidCallSDP(sdp string) MidCallSDPValidation {
 				current.Codecs[pt] = codec
 			}
 		}
+	}
+
+	for _, extra := range extraVideo {
+		result.ExtraVideo = append(result.ExtraVideo, *extra)
 	}
 
 	result.HasOpus = mediaHasCodec(result.Audio, "opus")

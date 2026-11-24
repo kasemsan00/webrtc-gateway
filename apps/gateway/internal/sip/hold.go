@@ -1,10 +1,8 @@
 package sip
 
 import (
-	"context"
+	"errors"
 	"fmt"
-	"strings"
-	"time"
 
 	"github.com/emiago/sipgo/sip"
 
@@ -21,74 +19,36 @@ func (s *Server) SetHold(sess *session.Session, held bool) error {
 	if sess.IsHeld() == held {
 		return nil
 	}
-	req, err := s.createHoldRequest(sess, held)
+	offer, err := s.buildMidCallOffer(sess, held)
 	if err != nil {
 		return fmt.Errorf("build in-dialog INVITE: %w", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	tx, err := s.sipClient.TransactionRequest(ctx, req)
+	res, err := s.sendMidCallOffer(sess, offer.body)
 	if err != nil {
-		return fmt.Errorf("send in-dialog INVITE: %w", err)
-	}
-	defer tx.Terminate()
-
-	for {
-		select {
-		case res := <-tx.Responses():
-			if res == nil || res.StatusCode < 200 {
-				continue
-			}
-			if res.StatusCode == 491 {
+		var statusErr *sipStatusError
+		if errors.As(err, &statusErr) {
+			if statusErr.Code == 491 {
 				return fmt.Errorf("SIP renegotiation glare (491)")
 			}
-			if res.StatusCode < 200 || res.StatusCode >= 300 {
-				return fmt.Errorf("SIP hold re-INVITE rejected: %d %s", res.StatusCode, res.Reason)
-			}
-			s.sendAckForInvite(req, res)
-			if len(res.Body()) > 0 {
-				s.parseAsteriskSDPAndSetEndpoints(res.Body(), sess)
-			}
-			sess.SetHeld(held)
-			return nil
-		case <-tx.Done():
-			return fmt.Errorf("SIP hold re-INVITE transaction ended without final response")
-		case <-ctx.Done():
-			return fmt.Errorf("SIP hold re-INVITE timed out: %w", ctx.Err())
+			return fmt.Errorf("SIP hold re-INVITE rejected: %d %s", statusErr.Code, statusErr.Reason)
 		}
+		return err
 	}
+	if len(res.Body()) > 0 {
+		s.parseAsteriskSDPAndSetEndpoints(res.Body(), sess)
+	}
+	sess.SetHeld(held)
+	return nil
 }
 
 func (s *Server) createHoldRequest(sess *session.Session, held bool) (*sip.Request, error) {
-	status := sess.GetMediaEndpointStatus()
-	if status.AudioRTPPort <= 0 {
-		return nil, fmt.Errorf("audio RTP endpoint is not ready")
-	}
-
-	body := s.createSDPOffer(status.AudioRTPPort, sess)
-	direction := "sendrecv"
-	if held {
-		direction = "inactive"
-	}
-	body = []byte(strings.ReplaceAll(string(body), "a=sendrecv", "a="+direction))
-
-	req, err := s.createBYERequest(sess)
+	// The offer carries the hold direction on audio and primary video, the
+	// auxiliary video section when that stream is open, and port 0 at the
+	// positions the gateway refused earlier (aux_stream.go).
+	offer, err := s.buildMidCallOffer(sess, held)
 	if err != nil {
 		return nil, err
 	}
-	req.Method = sip.INVITE
-	// createBYERequest currently adds CSeq as a generic header. req.CSeq()
-	// lazily parses that value into a detached typed header, so mutating the
-	// returned pointer changes the transaction key but not the serialized wire
-	// header. Replace the stored header to keep sipgo transaction matching and
-	// the actual SIP request on the same INVITE method/CSeq.
-	req.ReplaceHeader(&sip.CSeqHeader{
-		SeqNo:      uint32(sess.NextSIPCSeq()),
-		MethodName: sip.INVITE,
-	})
-	req.AppendHeader(sip.NewHeader("Content-Type", "application/sdp"))
-	req.AppendHeader(sip.NewHeader("Allow", sipAllowHeaderValue()))
-	req.SetBody(body)
-	return req, nil
+	return s.createInDialogInvite(sess, offer.body)
 }

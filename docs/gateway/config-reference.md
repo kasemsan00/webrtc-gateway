@@ -42,6 +42,8 @@ Setting them has no effect.
 - `SIPCLIENT_AUTH_TIMEOUT_MS` (default `5000`)
 - `RTP_PORT_MIN` (default `10500`)
 - `RTP_PORT_MAX` (default `10600`)
+  - Each call takes one slot of four consecutive ports (audio RTP/RTCP, video RTP/RTCP). A call with a shared screen takes a second slot for the screen stream on each gateway session that carries it. The default range holds 25 slots; widen it where screen share is used, and open the same range on the firewall. When no slot is free a share is refused with `no_rtp_ports` and the call is unaffected.
+- Screen share (second video stream) has no gateway setting. It works per call when the SIP peer accepts a second `m=video`: Asterisk `chan_pjsip` endpoints on **both** call legs need `max_video_streams = 2` and `direct_media = no`. `chan_sip` carries one video stream only, so a share on such a call is refused (`not_supported`). Clients opt in with `multiVideo` (see [`ws-contract.md`](ws-contract.md)).
 - `RTP_BUFFER_SIZE` (default `16384`)
 
 ## JWT auth (Keycloak/JWKS)
@@ -129,9 +131,10 @@ When `FRONTEND_PASSWORD` is set and `AUTH_ENABLE=false`, protected `/api/*` rout
 - `SIP_SWITCH_VIDEO_RTP_MAX_REORDER_TIMEOUT_DELTA` (default `5`)
 - `SIP_SWITCH_DUPLICATE_DEBOUNCE_ENABLED` (default `true`)
 - `SIP_SWITCH_DUPLICATE_DEBOUNCE_MS` (default `60000`)
-- `SIP_MIDCALL_RENEGOTIATION_ENABLE` (default `true`; enables SIP mid-call
+- `SIP_MIDCALL_RENEGOTIATION_ENABLE` (default `true`; enables primary SIP mid-call
   re-INVITE/UPDATE handling and is also required by switch-triggered WebRTC
-  renegotiation)
+  renegotiation; auxiliary screen-share offers on `multiVideo` sessions remain
+  allowed per call even when this flag is `false`)
 - `SIP_SWITCH_VIDEO_RENEGOTIATE_ENABLE` (default `false`; opt in to
   client-assisted WebRTC renegotiation when an authoritative `@switch`
   MESSAGE is accepted. When enabled along with `SIP_MIDCALL_RENEGOTIATION_ENABLE=true`,

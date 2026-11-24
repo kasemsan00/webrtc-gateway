@@ -1,4 +1,4 @@
-$branch = $env:BRANCH ?? "1.4.1"
+$branch = $env:BRANCH ?? "multi-stream"
 $registry = $env:REGISTRY ?? "registry.kasemsan.com"
 # $platforms = $env:PLATFORMS ?? "linux/amd64,linux/arm64"
 $platforms = $env:PLATFORMS ?? "linux/amd64"

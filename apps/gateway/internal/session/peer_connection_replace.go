@@ -23,6 +23,10 @@ func (s *Session) createReplacementPeerConnection(
 ) (*webrtc.PeerConnection, error) {
 	var videoOnTrackObserved atomic.Bool
 
+	// The auxiliary video track lives on the PeerConnection being replaced.
+	// Stop writing to it before that PeerConnection can close.
+	s.detachAuxVideoTrack()
+
 	// Resume tears the live PeerConnection down. Detach its tracks while
 	// holding videoEgressMu so no RTP write is in flight on them when it
 	// closes: writing a TrackLocalStaticRTP concurrently with Close can
@@ -247,6 +251,9 @@ func (s *Session) createReplacementPeerConnection(
 	})
 
 	newPC.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
+		if s.routeAuxUplinkTrack(newPC, track, receiver) {
+			return
+		}
 		kind := track.Kind().String()
 		if kind == "video" {
 			videoOnTrackObserved.Store(true)

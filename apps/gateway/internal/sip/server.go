@@ -95,6 +95,15 @@ type Server struct {
 	sessionCreator             SessionCreator // For creating sessions for incoming calls
 	stateNotifier              StateNotifier  // For notifying WebSocket clients
 	midCallNotifier            MidCallRenegotiationNotifier
+	// Auxiliary (screen) video negotiation (aux_stream.go). inDialogInvite
+	// and glareBackoff are nil in production; tests set them to stand in for
+	// the SIP peer and to skip the RFC 3261 glare wait.
+	auxRejects     auxRejectCache
+	inDialogInvite inDialogInviteFunc
+	glareBackoff   func(sess *session.Session) time.Duration
+	// screenConfirmTimeout overrides how long a sharing leg waits for the
+	// far end to confirm; zero means the default.
+	screenConfirmTimeout time.Duration
 	remoteMediaNotifier        RemoteMediaNotifier
 	switchRenegotiationStarter SwitchVideoRenegotiationStarter
 	incomingNotifier           IncomingCallNotifier // For notifying incoming calls

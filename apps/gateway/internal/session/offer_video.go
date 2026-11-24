@@ -33,6 +33,8 @@ func AnalyzeOfferVideo(sdp string) OfferVideoDiagnostics {
 		return diag
 	}
 
+	// Only the first m=video describes the call's primary video. A second
+	// m=video is a separate stream and must not overwrite its port/direction.
 	inVideoSection := false
 	lines := strings.Split(sdp, "\n")
 	for _, raw := range lines {
@@ -42,7 +44,7 @@ func AnalyzeOfferVideo(sdp string) OfferVideoDiagnostics {
 		}
 
 		if strings.HasPrefix(line, "m=") {
-			inVideoSection = strings.HasPrefix(line, "m=video ")
+			inVideoSection = strings.HasPrefix(line, "m=video ") && !diag.HasVideoMLine
 			if inVideoSection {
 				diag.HasVideoMLine = true
 				fields := strings.Fields(line)

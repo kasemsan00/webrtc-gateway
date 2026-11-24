@@ -11,6 +11,7 @@ import (
 // Socket closes are performed outside the session lock to keep lock hold time short.
 func (s *Session) CloseMediaTransports() {
 	s.DisableInboundGain()
+	s.CloseAuxVideo("media-transports-closed")
 
 	s.mu.Lock()
 	audioRTP := s.RTPConn
@@ -570,6 +571,16 @@ func (s *Session) ResetMediaState() {
 	s.switchEpochAt = time.Time{}
 	s.sipInfoFIRAt = time.Time{}
 	s.sipAnswerSDP = nil
+	s.RemoteAudioDirection = ""
+	s.RemoteVideoDirection = ""
+	s.MidCallHasActiveVideo = false
+	s.midCallMediaSeeded = false
+	s.sipMediaLayout = nil
+	s.sdpSessionID = 0
+	s.sdpSessionVersion = 0
+	s.lastWireSIPAnswer = nil
+	s.sipMediaNegotiated = false
+	s.sipNegotiatedMedia = SIPNegotiatedMedia{}
 	s.lastBrowserPLIReason = ""
 	s.mode0NeedsIDR = false
 	s.mode0PLIAt = time.Time{}

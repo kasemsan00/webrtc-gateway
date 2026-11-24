@@ -133,6 +133,7 @@ type WSClient struct {
 	availability    string
 	callState       string
 	multiCall       bool
+	multiVideo      bool // opted in to a second (screen) video stream; never set on /ws-public
 	activeCalls     int
 	send            chan []byte
 	ConnectedAt     time.Time
@@ -162,6 +163,14 @@ type WSMessage struct {
 	Availability string          `json:"availability,omitempty"`
 	CallState    string          `json:"callState,omitempty"`
 	MultiCall    bool            `json:"multiCall,omitempty"`
+	// MultiVideo opts the connection in to a second (screen) video stream.
+	MultiVideo bool `json:"multiVideo,omitempty"`
+	// Stream messages (stream_update, stream_update_result, stream_state).
+	// Role is "screen"; Action is "add" or "remove"; Active is the stream's
+	// state in stream_state.
+	Role   string `json:"role,omitempty"`
+	Action string `json:"action,omitempty"`
+	Active *bool  `json:"active,omitempty"`
 	ActiveCalls  int             `json:"activeCalls,omitempty"`
 	Held         *bool           `json:"held,omitempty"`
 	EndReason    string          `json:"endReason,omitempty"`

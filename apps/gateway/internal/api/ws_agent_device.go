@@ -34,6 +34,7 @@ func (s *Server) handleWSDeviceRegister(client *WSClient, msg WSMessage) {
 
 	s.mu.Lock()
 	client.multiCall = msg.MultiCall
+	client.multiVideo = msg.MultiVideo
 	s.mu.Unlock()
 
 	ctx := context.Background()

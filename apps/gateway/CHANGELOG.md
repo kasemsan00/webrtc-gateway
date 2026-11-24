@@ -1,3 +1,17 @@
+## 2026-11-24
+
+- **แชร์หน้าจอเป็นวิดีโอ stream ที่สอง (กล้อง + จอพร้อมกัน)**: สายหนึ่งมี stream จอเพิ่มได้ 1 ตัวเป็น `m=video` ตัวที่สองใน SIP dialog เดิม เปิด/ปิดกลางสายด้วย re-INVITE และ renegotiate บน PeerConnection เดิม (ไม่สร้าง PeerConnection ใหม่) รายละเอียด message อยู่ใน `docs/gateway/ws-contract.md`
+  - client ต้อง opt-in ด้วย `multiVideo: true` (`agent_register`, `device_register`, `client_state`) client และ SDK เดิมไม่เห็นความเปลี่ยนแปลง และ SDP ของ INVITE แรกเหมือนเดิมทุก byte
+  - ฝั่งแชร์ส่ง `stream_update` (`add`/`remove`) ได้ผลเป็น `stream_update_result` เสมอ ไม่ใช้ `type: error`
+  - ฝั่งรับได้ `renegotiate` แบบ `reason: stream_added` แล้วตอบด้วย offer ที่เพิ่ม video แบบ recvonly
+  - **ไม่มี environment variable ใหม่** gateway ตัดสินต่อสายจากคำตอบ SIP: `chan_pjsip` ที่ตั้ง `max_video_streams = 2` ทั้งสองขาใช้ได้ ส่วน `chan_sip` ถูกปฏิเสธด้วย `not_supported` โดยสายเดิมไม่กระทบ และจำการปฏิเสธต่อ SIP account ไว้ 10 นาที
+  - ขารับยืนยันกลับไปขาส่งภายใน 3 วินาที (ตรงระหว่าง session เมื่อสองขาอยู่ gateway เดียวกัน, ผ่าน SIP MESSAGE ที่ PBX route เมื่อคนละ instance) ถ้าไม่ยืนยัน ฝั่งแชร์ได้ `stream_state` เหตุผล `peer_not_supported`
+  - stream จอมี socket RTP/RTCP, SSRC และ cache SPS/PPS ของตัวเอง ใช้ port เพิ่ม 1 slot ต่อ session ที่มี stream (ควรขยาย `RTP_PORT_MIN`/`RTP_PORT_MAX`)
+  - hold คง m-line ของจอไว้เป็น `inactive`, resume คง stream ไว้ถ้า offer ยังมี video ตัวที่สอง, `@switch` ปิด stream แล้วให้แชร์ใหม่
+- **SIP SDP อ่านและตอบตามตำแหน่ง m-line**: กล้องคือ `m=video` ตัวแรก เสียงคือ `m=audio` ตัวแรก m-line ที่ตามมาไม่ทับปลายทาง RTP, payload type, packetization mode หรือสถานะ hold ของ stream หลักอีก (เดิม `m=video` ตัวสุดท้ายชนะ)
+  - คำตอบ INVITE, re-INVITE และ UPDATE มี m-line ครบตามจำนวนและลำดับของ offer โดย m-line ที่ไม่ใช้ตอบด้วย port 0 (เดิมตอบ SDP เดิมที่มี 2 m-line เสมอ)
+  - re-INVITE แบบ audio-only เข้ามาในสายวิดีโอ ได้คำตอบ 1 m-line ตาม offer (เดิมตอบ 2)
+
 ## 2026-11-17
 
 - **สายออกที่ Asterisk ขอ auth (401/407) ส่ง `ringing` ให้ client แล้ว**: เปลี่ยน INVITE ที่แนบ credentials จาก `DoDigestAuth` (ซึ่งทิ้ง 1xx ทั้งหมด) เป็น `TransactionDigestAuth` และใช้ลูปรับ response เดียวกับ INVITE แรก
