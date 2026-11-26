@@ -119,7 +119,7 @@ func TestHandleINVITE_ActiveReinvitePendingResponds491(t *testing.T) {
 }
 
 func TestHandleINVITE_InDialogUnknownCallResponds481(t *testing.T) {
-	cfg := &config.Config{SIP: config.SIPConfig{MidCallRenegotiationEnable: true}, RTP: config.RTPConfig{BufferSize: 1500}}
+	cfg := &config.Config{RTP: config.RTPConfig{BufferSize: 1500}}
 	mgr := session.NewManager(cfg)
 	srv := &Server{
 		config:        cfg.SIP,
@@ -260,7 +260,6 @@ func TestHandleUPDATE_WithoutSDPRespondsOK(t *testing.T) {
 func newMidCallTestServer(t *testing.T, callID string) (*Server, *session.Session) {
 	t.Helper()
 	cfg := &config.Config{
-		SIP: config.SIPConfig{MidCallRenegotiationEnable: true},
 		RTP: config.RTPConfig{BufferSize: 1500},
 	}
 	mgr := session.NewManager(cfg)

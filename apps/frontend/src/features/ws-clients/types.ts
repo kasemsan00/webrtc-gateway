@@ -15,6 +15,7 @@ export interface WSClient {
   publicOnly?: boolean
   agentOnly?: boolean
   multiCall?: boolean
+  multiVideo?: boolean
   activeCalls?: number
   presenceMode?: 'ephemeral' | 'sticky' | 'public' | string
   agentTrunkRefCount?: number
@@ -35,4 +36,13 @@ export function resolveWSClientPresenceLabel(
   if (client.agentOnly || client.presenceMode === 'ephemeral') return 'agent'
   if (client.publicOnly || client.presenceMode === 'public') return 'public'
   return 'mobile'
+}
+
+export function resolveWSClientCapabilities(
+  client: Pick<WSClient, 'multiCall' | 'multiVideo'>,
+): Array<'multi-call' | 'multi-video'> {
+  const caps: Array<'multi-call' | 'multi-video'> = []
+  if (client.multiCall) caps.push('multi-call')
+  if (client.multiVideo) caps.push('multi-video')
+  return caps
 }

@@ -20,7 +20,6 @@ func TestStartSwitchVideoRenegotiationDisabledByConfig(t *testing.T) {
 		runtimeConfig: &config.Config{
 			SIP: config.SIPConfig{
 				SwitchVideoRenegotiateEnable: false,
-				MidCallRenegotiationEnable:   true,
 			},
 		},
 	}
@@ -41,7 +40,6 @@ func TestStartSwitchVideoRenegotiationNotifiesClient(t *testing.T) {
 		runtimeConfig: &config.Config{
 			SIP: config.SIPConfig{
 				SwitchVideoRenegotiateEnable: true,
-				MidCallRenegotiationEnable:   true,
 			},
 		},
 	}

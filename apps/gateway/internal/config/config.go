@@ -192,7 +192,6 @@ type SIPConfig struct {
 	VideoRecoveryBurstIntervalMS int  // Burst watchdog interval in ms (default: 1000)
 	VideoRecoveryBurstStaleMS    int  // Burst stale threshold for PLI in ms (default: 4000)
 	VideoRecoveryBurstFIRStaleMS int  // Burst stale threshold for FIR in ms (default: 7000)
-	MidCallRenegotiationEnable   bool // Enable SIP mid-call re-INVITE/UPDATE negotiation (default: true)
 	SwitchVideoRenegotiateEnable bool // Send WebRTC renegotiate on accepted @switch MESSAGE immediately; skip blackout (default: false; opt in)
 	// Inbound audio gain (SIP → WebRTC): decode Opus, apply PCM gain, re-encode Opus
 	AudioInboundGainEnable bool    // Enable inbound gain processing (default: false)
@@ -388,7 +387,6 @@ func Load() (*Config, error) {
 			VideoRecoveryBurstIntervalMS:         getEnvAsInt("SIP_VIDEO_RECOVERY_BURST_INTERVAL_MS", 1000),
 			VideoRecoveryBurstStaleMS:            getEnvAsInt("SIP_VIDEO_RECOVERY_BURST_STALE_MS", 4000),
 			VideoRecoveryBurstFIRStaleMS:         getEnvAsInt("SIP_VIDEO_RECOVERY_BURST_FIR_STALE_MS", 7000),
-			MidCallRenegotiationEnable:           getEnvAsBool("SIP_MIDCALL_RENEGOTIATION_ENABLE", true),
 			SwitchVideoRenegotiateEnable:         getEnvAsBool("SIP_SWITCH_VIDEO_RENEGOTIATE_ENABLE", false),
 			AudioInboundGainEnable:               getEnvAsBool("SIP_AUDIO_INBOUND_GAIN_ENABLE", false),
 			AudioInboundGain:                     clampInboundGain(getEnvAsFloat32("SIP_AUDIO_INBOUND_GAIN", 1.0), getEnvAsFloat32("SIP_AUDIO_INBOUND_GAIN_MAX", 3.0)),
@@ -589,7 +587,6 @@ func (c *Config) Display() {
 		c.SIP.SwitchDuplicateDebounceEnabled,
 		c.SIP.SwitchDuplicateDebounceMS,
 	)
-	fmt.Printf("  SIP Mid-Call Renegotiation: %v\n", c.SIP.MidCallRenegotiationEnable)
 	fmt.Printf("  @switch WebRTC Renegotiate: %v (on @switch message)\n", c.SIP.SwitchVideoRenegotiateEnable)
 	fmt.Printf("  SIP Video RTP Disorder Monitor: %v (minPackets=%d, maxGap=%d, maxMissing=%d, maxOOO=%d, maxTimeout=%d, consecutive=%d, logInterval=%dms, containment=%v/%dms)\n",
 		c.SIP.VideoRTPDisorderMonitorEnabled,

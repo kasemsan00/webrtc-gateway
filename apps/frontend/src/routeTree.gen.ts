@@ -15,6 +15,7 @@ import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as SessionsRouteImport } from './routes/sessions'
 import { Route as SessionDirectoryRouteImport } from './routes/session-directory'
 import { Route as PublicAccountsRouteImport } from './routes/public-accounts'
+import { Route as MultiStreamTestRouteImport } from './routes/multi-stream-test'
 import { Route as LogsRouteImport } from './routes/logs'
 import { Route as InstancesRouteImport } from './routes/instances'
 import { Route as DashboardRouteImport } from './routes/dashboard'
@@ -52,6 +53,11 @@ const SessionDirectoryRoute = SessionDirectoryRouteImport.update({
 const PublicAccountsRoute = PublicAccountsRouteImport.update({
   id: '/public-accounts',
   path: '/public-accounts',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const MultiStreamTestRoute = MultiStreamTestRouteImport.update({
+  id: '/multi-stream-test',
+  path: '/multi-stream-test',
   getParentRoute: () => rootRouteImport,
 } as any)
 const LogsRoute = LogsRouteImport.update({
@@ -102,6 +108,7 @@ export interface FileRoutesByFullPath {
   '/dashboard': typeof DashboardRoute
   '/instances': typeof InstancesRoute
   '/logs': typeof LogsRoute
+  '/multi-stream-test': typeof MultiStreamTestRoute
   '/public-accounts': typeof PublicAccountsRoute
   '/session-directory': typeof SessionDirectoryRoute
   '/sessions': typeof SessionsRouteWithChildren
@@ -118,6 +125,7 @@ export interface FileRoutesByTo {
   '/dashboard': typeof DashboardRoute
   '/instances': typeof InstancesRoute
   '/logs': typeof LogsRoute
+  '/multi-stream-test': typeof MultiStreamTestRoute
   '/public-accounts': typeof PublicAccountsRoute
   '/session-directory': typeof SessionDirectoryRoute
   '/settings': typeof SettingsRoute
@@ -134,6 +142,7 @@ export interface FileRoutesById {
   '/dashboard': typeof DashboardRoute
   '/instances': typeof InstancesRoute
   '/logs': typeof LogsRoute
+  '/multi-stream-test': typeof MultiStreamTestRoute
   '/public-accounts': typeof PublicAccountsRoute
   '/session-directory': typeof SessionDirectoryRoute
   '/sessions': typeof SessionsRouteWithChildren
@@ -152,6 +161,7 @@ export interface FileRouteTypes {
     | '/dashboard'
     | '/instances'
     | '/logs'
+    | '/multi-stream-test'
     | '/public-accounts'
     | '/session-directory'
     | '/sessions'
@@ -168,6 +178,7 @@ export interface FileRouteTypes {
     | '/dashboard'
     | '/instances'
     | '/logs'
+    | '/multi-stream-test'
     | '/public-accounts'
     | '/session-directory'
     | '/settings'
@@ -183,6 +194,7 @@ export interface FileRouteTypes {
     | '/dashboard'
     | '/instances'
     | '/logs'
+    | '/multi-stream-test'
     | '/public-accounts'
     | '/session-directory'
     | '/sessions'
@@ -200,6 +212,7 @@ export interface RootRouteChildren {
   DashboardRoute: typeof DashboardRoute
   InstancesRoute: typeof InstancesRoute
   LogsRoute: typeof LogsRoute
+  MultiStreamTestRoute: typeof MultiStreamTestRoute
   PublicAccountsRoute: typeof PublicAccountsRoute
   SessionDirectoryRoute: typeof SessionDirectoryRoute
   SessionsRoute: typeof SessionsRouteWithChildren
@@ -250,6 +263,13 @@ declare module '@tanstack/react-router' {
       path: '/public-accounts'
       fullPath: '/public-accounts'
       preLoaderRoute: typeof PublicAccountsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/multi-stream-test': {
+      id: '/multi-stream-test'
+      path: '/multi-stream-test'
+      fullPath: '/multi-stream-test'
+      preLoaderRoute: typeof MultiStreamTestRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/logs': {
@@ -332,6 +352,7 @@ const rootRouteChildren: RootRouteChildren = {
   DashboardRoute: DashboardRoute,
   InstancesRoute: InstancesRoute,
   LogsRoute: LogsRoute,
+  MultiStreamTestRoute: MultiStreamTestRoute,
   PublicAccountsRoute: PublicAccountsRoute,
   SessionDirectoryRoute: SessionDirectoryRoute,
   SessionsRoute: SessionsRouteWithChildren,

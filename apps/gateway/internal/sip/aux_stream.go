@@ -31,9 +31,10 @@ type ScreenStreamOutcome struct {
 }
 
 // AuxVideoStateNotifier is told when the auxiliary video stream of a session
-// stops for a reason other than the client's own request.
+// starts or stops for a reason other than the client's own request.
+// direction is "local" (this client's shared screen) or "remote" (peer's screen).
 type AuxVideoStateNotifier interface {
-	NotifyAuxVideoState(sessionID string, active bool, reason string)
+	NotifyAuxVideoState(sessionID string, active bool, reason string, direction string)
 }
 
 const (
@@ -293,10 +294,12 @@ func (s *Server) sendMidCallOffer(sess *session.Session, body []byte) (*sip.Resp
 }
 
 // OpenScreenStream asks the SIP peer to open the session's auxiliary video
-// stream as a send-only second m=video. On "ok" the stream is open and
-// forwards the client's auxiliary track once it is attached. On any other
-// status the stream is closed again and the call's audio and primary video
-// are as they were.
+// stream as a send-only second m=video, or upgrades an existing recvonly
+// stream to sendrecv when the far end is already sharing so both parties can
+// share simultaneously. On "ok" the stream forwards the client's auxiliary
+// track once attached. On any other status any newly opened stream is closed
+// (or an existing receiving stream is restored to recvonly) and the call's
+// audio, primary video, and any peer screen share remain untouched.
 func (s *Server) OpenScreenStream(sess *session.Session) ScreenStreamOutcome {
 	if sess == nil || sess.GetState() != session.StateActive || !sess.HasDialogState() {
 		return ScreenStreamOutcome{Status: screenStreamFailed, Reason: "not_active"}
@@ -304,14 +307,8 @@ func (s *Server) OpenScreenStream(sess *session.Session) ScreenStreamOutcome {
 	if sess.IsHeld() {
 		return ScreenStreamOutcome{Status: screenStreamFailed, Reason: "held"}
 	}
-	if aux := sess.AuxVideo(); aux != nil {
-		if aux.SIPDirection() != "sendonly" {
-			// The dialog has one auxiliary m-line and the far end is using it.
-			return ScreenStreamOutcome{Status: screenStreamFailed, Reason: "peer_sharing"}
-		}
-		if aux.RemoteRTPAddr() != nil {
-			return ScreenStreamOutcome{Status: screenStreamOK}
-		}
+	if aux := sess.AuxVideo(); aux != nil && aux.HasUplink() && aux.RemoteRTPAddr() != nil {
+		return ScreenStreamOutcome{Status: screenStreamOK}
 	}
 	accountKey := auxRejectKey(sess)
 	if s.auxRejects.rejected(accountKey, time.Now()) {
@@ -321,6 +318,7 @@ func (s *Server) OpenScreenStream(sess *session.Session) ScreenStreamOutcome {
 
 	previousLayout := sess.SIPMediaLayout()
 	aux := sess.AuxVideo()
+	upgradedFromDownlink := false
 	if aux == nil {
 		opened, err := s.openAuxVideoForSession(sess)
 		if err != nil {
@@ -328,16 +326,26 @@ func (s *Server) OpenScreenStream(sess *session.Session) ScreenStreamOutcome {
 			return ScreenStreamOutcome{Status: screenStreamFailed, Reason: "no_rtp_ports"}
 		}
 		aux = opened
+		aux.SetSIPDirection("sendonly")
+	} else if aux.HasDownlink() {
+		upgradedFromDownlink = true
+		aux.PrepareUplinkStart()
+		aux.SetSIPDirection("sendrecv")
+	} else {
+		aux.SetSIPDirection("sendonly")
 	}
-	aux.SetSIPDirection("sendonly")
 
 	abort := func(outcome ScreenStreamOutcome, layout []session.SIPMediaSlot, cache bool) ScreenStreamOutcome {
-		sess.CloseAuxVideo("add-" + outcome.Reason)
-		sess.SetSIPMediaLayout(layout)
+		if upgradedFromDownlink {
+			aux.StopUplink()
+		} else {
+			sess.CloseAuxVideo("add-" + outcome.Reason)
+			sess.SetSIPMediaLayout(layout)
+		}
 		if cache {
 			s.auxRejects.remember(accountKey, time.Now())
 		}
-		fmt.Printf("[%s] aux_stream_add %s reason=%s cached=%v\n", sess.ID, outcome.Status, outcome.Reason, cache)
+		fmt.Printf("[%s] aux_stream_add %s reason=%s cached=%v dual=%v\n", sess.ID, outcome.Status, outcome.Reason, cache, upgradedFromDownlink)
 		s.logAuxStreamEvent(sess, "sip_aux_stream_add_"+outcome.Status, map[string]interface{}{"reason": outcome.Reason, "cached": cache})
 		return outcome
 	}
@@ -379,27 +387,43 @@ func (s *Server) OpenScreenStream(sess *session.Session) ScreenStreamOutcome {
 	if answer.kind != "video" || answer.port <= 0 {
 		// Refused in place. The m-line is now part of the dialog and stays
 		// in later SDP with port 0.
-		return abort(ScreenStreamOutcome{Status: screenStreamRejected, Reason: "not_supported"}, offer.layout, true)
+		return abort(ScreenStreamOutcome{Status: screenStreamRejected, Reason: "not_supported"}, offer.layout, !upgradedFromDownlink)
+	}
+	if upgradedFromDownlink && (answer.direction == "sendonly" || answer.direction == "inactive") {
+		// The peer kept its own screen flowing toward us (sendonly) but refused
+		// to receive our simultaneous screen stream.
+		return abort(ScreenStreamOutcome{Status: screenStreamRejected, Reason: "not_supported"}, previousLayout, false)
 	}
 
 	s.applyAuxRemoteDescription(sess, aux, answer)
 	sess.SetSIPMediaLayout(offer.layout)
 	s.updateAsteriskEndpointsFromMidCallOffer(res.Body(), sess)
-	fmt.Printf("[%s] aux_stream_add ok remote=%s pt=%d pmode=%d rtcp_mux=%v\n",
-		sess.ID, aux.RemoteRTPAddr(), answer.h264PT, answer.packetizationMode, answer.rtcpMux)
-	s.logAuxStreamEvent(sess, "sip_aux_stream_add_ok", map[string]interface{}{"remote": aux.RemoteRTPAddr().String()})
+	fmt.Printf("[%s] aux_stream_add ok direction=%s remote=%s pt=%d pmode=%d rtcp_mux=%v\n",
+		sess.ID, aux.SIPDirection(), aux.RemoteRTPAddr(), answer.h264PT, answer.packetizationMode, answer.rtcpMux)
+	s.logAuxStreamEvent(sess, "sip_aux_stream_add_ok", map[string]interface{}{"remote": aux.RemoteRTPAddr().String(), "direction": aux.SIPDirection()})
 	// The SIP peer accepted on this leg only. The far end still has to
 	// confirm that it shows the stream (aux_stream_peer.go).
 	s.armScreenStreamConfirmation(sess, aux)
 	return ScreenStreamOutcome{Status: screenStreamOK}
 }
 
-// CloseScreenStream closes the session's auxiliary video stream and tells
-// the SIP peer with a re-INVITE that sets its m-line to port 0. Media stops
-// first, so the stream is closed for the client whatever the peer answers.
-// It reports whether a stream was open.
+// CloseScreenStream closes the session's local auxiliary uplink and tells the
+// SIP peer with a re-INVITE: if the far end is still sharing toward us
+// ("sendrecv"), the m-line is downgraded to "recvonly" so the peer's screen
+// keeps flowing; otherwise the stream is closed and its m-line is set to
+// port 0. It reports whether a local uplink was open.
 func (s *Server) CloseScreenStream(sess *session.Session, reason string) bool {
-	if sess == nil || !sess.CloseAuxVideo(reason) {
+	if sess == nil {
+		return false
+	}
+	aux := sess.AuxVideo()
+	if aux == nil || !aux.HasUplink() {
+		return false
+	}
+	if aux.HasDownlink() {
+		aux.StopUplink()
+		fmt.Printf("[%s] aux_video_uplink_stopped reason=%s remaining=recvonly\n", sess.ID, reason)
+	} else if !sess.CloseAuxVideo(reason) {
 		return false
 	}
 	if sess.GetState() != session.StateActive || !sess.HasDialogState() {
@@ -412,7 +436,7 @@ func (s *Server) CloseScreenStream(sess *session.Session, reason string) bool {
 	}
 	if _, err := s.sendMidCallOffer(sess, offer.body); err != nil {
 		// The peer still lists the m-line as open but receives nothing on
-		// it. The next mid-call offer from either side closes it.
+		// it. The next mid-call offer from either side updates it.
 		fmt.Printf("[%s] aux_stream_remove re-INVITE error: %v\n", sess.ID, err)
 	}
 	return true
@@ -470,21 +494,86 @@ func (s *Server) answerSDPForInboundOffer(sess *session.Session, base, offer []b
 	aux := sess.AuxVideo()
 	switch {
 	case aux != nil && offered:
-		direction := aux.SIPDirection()
-		if desc.direction == "inactive" {
-			direction = "inactive"
+		currentDir := aux.SIPDirection()
+		answerDir := currentDir
+		closeAll := false
+
+		switch desc.direction {
+		case "inactive":
+			answerDir = "inactive"
+		case "recvonly":
+			switch currentDir {
+			case "sendrecv":
+				// Peer stopped sending its screen while continuing to receive ours.
+				aux.StopDownlink()
+				answerDir = "sendonly"
+				fmt.Printf("[%s] aux_stream remote downlink closed by peer offer (keeping local uplink)\n", sess.ID)
+				s.logAuxStreamEvent(sess, "sip_aux_stream_closed", map[string]interface{}{"reason": "peer_closed", "direction": "remote"})
+				s.notifyAuxVideoState(sess.ID, false, "peer_closed", "remote")
+			case "recvonly":
+				// Peer stopped sending and we are not sending either.
+				closeAll = true
+			}
+		case "sendonly":
+			if currentDir == "sendrecv" {
+				// Peer stopped receiving our screen while still sending its own.
+				aux.StopUplink()
+				answerDir = "recvonly"
+				fmt.Printf("[%s] aux_stream local uplink closed by peer offer (keeping remote downlink)\n", sess.ID)
+				s.logAuxStreamEvent(sess, "sip_aux_stream_closed", map[string]interface{}{"reason": "peer_closed", "direction": "local"})
+				s.notifyAuxVideoState(sess.ID, false, "peer_closed", "local")
+			}
+		case "sendrecv", "":
+			if currentDir == "sendonly" {
+				// Peer started sharing its own screen while we are already sharing ours.
+				wanted := allowOpen && desc.h264PT != 0 && s.canReceiveAuxVideo(sess)
+				if wanted {
+					aux.SetSIPDirection("sendrecv")
+					aux.SetKeyframeRelay(func() { s.relayAuxKeyframeToBridgedPeer(sess) })
+					answerDir = "sendrecv"
+					opened = true
+					fmt.Printf("[%s] aux_stream upgraded to sendrecv (simultaneous peer screen share)\n", sess.ID)
+					s.logAuxStreamEvent(sess, "sip_aux_stream_receive_opened", map[string]interface{}{"dual": true})
+				} else if allowOpen {
+					s.logAuxStreamEvent(sess, "sip_aux_stream_receive_refused", map[string]interface{}{"dual": true})
+					go s.ReportScreenStreamToPeer(sess, false)
+				}
+			}
 		}
-		rtpPort, rtcpPort := aux.Ports()
-		if auxSection = buildAuxSDPAnswerSection(desc, rtpPort, rtcpPort, direction); auxSection != nil {
-			s.applyAuxRemoteDescription(sess, aux, desc)
+
+		if !closeAll {
+			rtpPort, rtcpPort := aux.Ports()
+			if auxSection = buildAuxSDPAnswerSection(desc, rtpPort, rtcpPort, answerDir); auxSection != nil {
+				s.applyAuxRemoteDescription(sess, aux, desc)
+			} else if opened {
+				aux.StopDownlink()
+				opened = false
+			}
 		}
-		fallthrough
-	case aux != nil:
 		if auxSection == nil {
+			hadUplink := aux.HasUplink()
+			hadDownlink := aux.HasDownlink()
 			sess.CloseAuxVideo("peer-closed")
 			fmt.Printf("[%s] aux_stream closed by peer offer\n", sess.ID)
 			s.logAuxStreamEvent(sess, "sip_aux_stream_closed", map[string]interface{}{"reason": "peer_closed"})
-			s.notifyAuxVideoState(sess.ID, false, "peer_closed")
+			if hadUplink {
+				s.notifyAuxVideoState(sess.ID, false, "peer_closed", "local")
+			}
+			if hadDownlink {
+				s.notifyAuxVideoState(sess.ID, false, "peer_closed", "remote")
+			}
+		}
+	case aux != nil:
+		hadUplink := aux.HasUplink()
+		hadDownlink := aux.HasDownlink()
+		sess.CloseAuxVideo("peer-closed")
+		fmt.Printf("[%s] aux_stream closed by peer offer\n", sess.ID)
+		s.logAuxStreamEvent(sess, "sip_aux_stream_closed", map[string]interface{}{"reason": "peer_closed"})
+		if hadUplink {
+			s.notifyAuxVideoState(sess.ID, false, "peer_closed", "local")
+		}
+		if hadDownlink {
+			s.notifyAuxVideoState(sess.ID, false, "peer_closed", "remote")
 		}
 	case offered:
 		// The far end offers its screen. A stream it marks recvonly or
@@ -516,8 +605,8 @@ func (s *Server) answerSDPForInboundOffer(sess *session.Session, base, offer []b
 	return renderSDPAnswerForLayout(base, layout, auxSection), opened
 }
 
-func (s *Server) notifyAuxVideoState(sessionID string, active bool, reason string) {
+func (s *Server) notifyAuxVideoState(sessionID string, active bool, reason, direction string) {
 	if notifier, ok := s.midCallNotifier.(AuxVideoStateNotifier); ok {
-		notifier.NotifyAuxVideoState(sessionID, active, reason)
+		notifier.NotifyAuxVideoState(sessionID, active, reason, direction)
 	}
 }

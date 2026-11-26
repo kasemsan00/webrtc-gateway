@@ -101,6 +101,14 @@ func isH264KeyframeStart(payload []byte) bool {
 	return false
 }
 
+type auxRTPWriter interface {
+	Write([]byte) (int, error)
+}
+
+type auxDownlinkNormalizer interface {
+	NormalizeDownlink(data []byte) (out []byte, outSeq uint16, seqOffset uint16)
+}
+
 // writeDownlink is the reorder buffer's sink: one in-order RTP packet for the
 // browser.
 func (a *AuxVideo) writeDownlink(data []byte, _ bool) {
@@ -117,14 +125,30 @@ func (a *AuxVideo) writeDownlink(data []byte, _ bool) {
 		a.mu.Unlock()
 		return
 	}
-	a.history.store(binary.BigEndian.Uint16(data[2:4]), data)
 	a.mu.Unlock()
 
-	a.writeTrack(track, data)
+	out := data
+	outSeq := binary.BigEndian.Uint16(data[2:4])
+	var seqOffset uint16
+	if normalizer, ok := track.(auxDownlinkNormalizer); ok {
+		out, outSeq, seqOffset = normalizer.NormalizeDownlink(data)
+	}
+
+	a.mu.Lock()
+	if a.closed || a.track != track {
+		a.stats.DownlinkDropped++
+		a.mu.Unlock()
+		return
+	}
+	a.egressSeqOffset = seqOffset
+	a.history.store(outSeq, out)
+	a.mu.Unlock()
+
+	a.writeTrack(track, out)
 }
 
 // writeTrack writes to the WebRTC track. The caller holds egressMu.
-func (a *AuxVideo) writeTrack(track *webrtc.TrackLocalStaticRTP, data []byte) bool {
+func (a *AuxVideo) writeTrack(track auxRTPWriter, data []byte) bool {
 	_, err := track.Write(data)
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -190,13 +214,18 @@ func (a *AuxVideo) handleBrowserNACK(nacks []rtcp.NackPair) {
 
 	a.mu.Lock()
 	a.stats.NACKMisses += len(missing)
+	seqOffset := a.egressSeqOffset
 	a.mu.Unlock()
 	if len(missing) > 0 {
+		sipMissing := make([]uint16, len(missing))
+		for i, seq := range missing {
+			sipMissing[i] = seq - seqOffset
+		}
 		a.sendSIPRTCP(func(senderSSRC, mediaSSRC uint32) rtcp.Packet {
 			return &rtcp.TransportLayerNack{
 				SenderSSRC: senderSSRC,
 				MediaSSRC:  mediaSSRC,
-				Nacks:      rtcp.NackPairsFromSequenceNumbers(missing),
+				Nacks:      rtcp.NackPairsFromSequenceNumbers(sipMissing),
 			}
 		})
 	}
@@ -234,7 +263,11 @@ func (a *AuxVideo) RequestKeyframeFromSIP(reason string) bool {
 	}
 	if a.remoteSSRC == 0 {
 		a.pendingSIPPLI = true
+		relay := a.keyframeRelay
 		a.mu.Unlock()
+		if relay != nil {
+			relay()
+		}
 		return false
 	}
 	if !a.lastSIPPLI.IsZero() && now.Sub(a.lastSIPPLI) < auxKeyframeRequestMinInterval {

@@ -39,8 +39,8 @@ RUN BUILDINFO=webrtc-sip-gateway/internal/buildinfo && \
 # Stage 2: Runtime
 FROM alpine:latest
 
-# Install ca-certificates for HTTPS/TLS, libopus runtime, and su-exec for privilege drop
-RUN apk --no-cache add ca-certificates opus su-exec
+# Install ca-certificates for HTTPS/TLS, tzdata for timezone support, libopus runtime, and su-exec for privilege drop
+RUN apk --no-cache add ca-certificates tzdata opus su-exec
 
 WORKDIR /app
 
@@ -60,6 +60,7 @@ ARG RTP_PORT_MIN=10500
 ARG RTP_PORT_MAX=10600
 
 # Environment variables (can be overridden at runtime)
+ENV TZ=Asia/Bangkok
 ENV RTP_PORT_MIN=${RTP_PORT_MIN}
 ENV RTP_PORT_MAX=${RTP_PORT_MAX}
 ENV CHAT_IMAGE_MAX_BYTES=10485760

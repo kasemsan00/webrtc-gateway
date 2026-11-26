@@ -47,7 +47,8 @@ type AuxVideo struct {
 	// the sending side that does not depend on the SIP peer forwarding RTCP.
 	keyframeRelay func()
 
-	uplink auxUplinkState
+	uplink         auxUplinkState
+	uplinkIDRCache *auxUplinkIDRCache
 
 	// Browser feedback target for the uplink track.
 	uplinkTrackSSRC uint32
@@ -55,12 +56,13 @@ type AuxVideo struct {
 	lastBrowserPLI  time.Time
 
 	// Downlink (SIP to WebRTC).
-	track         *webrtc.TrackLocalStaticRTP
-	remoteSSRC    uint32
-	lastSIPPLI    time.Time
-	pendingSIPPLI bool
-	reorder       *VideoReorderBuffer
-	history       auxRTPHistory
+	track           auxRTPWriter
+	remoteSSRC      uint32
+	egressSeqOffset uint16
+	lastSIPPLI      time.Time
+	pendingSIPPLI   bool
+	reorder         *VideoReorderBuffer
+	history         auxRTPHistory
 
 	// egressMu fences WebRTC track writes against detaching the track before
 	// its PeerConnection closes. Writing a TrackLocalStaticRTP concurrently
@@ -130,6 +132,15 @@ func (s *Session) OpenAuxVideo(rtpConn, rtcpConn *net.UDPConn, rtpPort, rtcpPort
 	if s.auxVideo != nil {
 		return nil, errAuxVideoOpen
 	}
+	if s.auxUplinkIDRCache == nil {
+		s.auxUplinkIDRCache = &auxUplinkIDRCache{}
+	}
+	aux.uplinkIDRCache = s.auxUplinkIDRCache
+	if s.auxUplinkSSRC != 0 && s.auxUplinkWriteRTCP != nil && s.auxUplinkPC != nil && s.auxUplinkPC == s.PeerConnection {
+		aux.uplinkTrackSSRC = s.auxUplinkSSRC
+		aux.writeRTCP = s.auxUplinkWriteRTCP
+		fmt.Printf("[%s] aux_video_uplink_rebound ssrc=%d\n", s.ID, s.auxUplinkSSRC)
+	}
 	s.auxVideo = aux
 	s.UpdatedAt = time.Now()
 	fmt.Printf("[%s] aux_video_opened rtp_port=%d rtcp_port=%d\n", s.ID, rtpPort, rtcpPort)
@@ -156,12 +167,16 @@ func (s *Session) CloseAuxVideo(reason string) bool {
 	s.mu.Lock()
 	aux := s.auxVideo
 	s.auxVideo = nil
+	cache := s.auxUplinkIDRCache
 	if aux != nil {
 		s.UpdatedAt = time.Now()
 	}
 	s.mu.Unlock()
 	if aux == nil {
 		return false
+	}
+	if cache != nil {
+		cache.reset()
 	}
 	aux.close()
 	fmt.Printf("[%s] aux_video_closed reason=%s stats=%+v\n", s.ID, reason, aux.Stats())
@@ -176,7 +191,29 @@ func (s *Session) detachAuxVideoTrack() {
 		aux.SetLocalTrack(nil)
 		aux.BindUplinkTrack(0, nil)
 	}
+	s.mu.Lock()
+	s.auxUplinkPC = nil
+	s.auxUplinkSSRC = 0
+	s.auxUplinkWriteRTCP = nil
+	cache := s.auxUplinkIDRCache
+	s.mu.Unlock()
+	if cache != nil {
+		cache.reset()
+	}
 	s.dropAuxDownlinkTrack()
+}
+
+func (s *Session) clearAuxUplinkBinding(pc *webrtc.PeerConnection, ssrc uint32) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	if s.auxUplinkPC == pc && s.auxUplinkSSRC == ssrc {
+		s.auxUplinkPC = nil
+		s.auxUplinkSSRC = 0
+		s.auxUplinkWriteRTCP = nil
+	}
+	s.mu.Unlock()
 }
 
 // SetAuxUplinkMid names the WebRTC media section (a=mid) whose incoming track
@@ -226,9 +263,22 @@ func (s *Session) routeAuxUplinkTrack(pc *webrtc.PeerConnection, track *webrtc.T
 	if !s.isAuxUplinkMid(mid) {
 		return false
 	}
+	ssrc := uint32(track.SSRC())
+	s.mu.Lock()
+	s.auxUplinkPC = pc
+	s.auxUplinkSSRC = ssrc
+	s.auxUplinkWriteRTCP = pc.WriteRTCP
+	aux := s.auxVideo
+	s.mu.Unlock()
 	fmt.Printf("[%s] aux_video_uplink_track mid=%s ssrc=%d pt=%d\n", s.ID, mid, track.SSRC(), track.PayloadType())
+	if aux != nil {
+		aux.BindUplinkTrack(ssrc, pc.WriteRTCP)
+		if aux.RemoteRTPAddr() != nil {
+			aux.RequestKeyframeFromBrowser("uplink-track-routed")
+		}
+	}
 	go s.drainReceiverRTCP(receiver)
-	go s.forwardAuxUplink(trackRTPReader{track: track}, uint32(track.SSRC()), pc.WriteRTCP)
+	go s.forwardAuxUplinkOnPC(pc, trackRTPReader{track: track}, ssrc, pc.WriteRTCP)
 	return true
 }
 
@@ -364,12 +414,105 @@ func (a *AuxVideo) LearnSymmetricRTCP(remoteAddr *net.UDPAddr) {
 }
 
 // SetSIPDirection records the gateway's SDP direction for the auxiliary
-// m-line: "sendonly" on the sharing leg (the default), "recvonly" on the
-// receiving leg.
+// m-line: "sendonly" on a sharing-only leg (the default), "recvonly" on a
+// receiving-only leg, or "sendrecv" when both legs share simultaneously.
 func (a *AuxVideo) SetSIPDirection(direction string) {
 	a.mu.Lock()
 	a.sipDirection = direction
 	a.mu.Unlock()
+}
+
+// HasUplink reports whether this auxiliary stream currently sends local
+// screen media toward the SIP peer ("sendonly" or "sendrecv").
+func (a *AuxVideo) HasUplink() bool {
+	if a == nil {
+		return false
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.hasUplinkLocked()
+}
+
+func (a *AuxVideo) hasUplinkLocked() bool {
+	if a.closed {
+		return false
+	}
+	return a.sipDirection == "" || a.sipDirection == "sendonly" || a.sipDirection == "sendrecv"
+}
+
+// HasDownlink reports whether this auxiliary stream currently receives remote
+// screen media from the SIP peer ("recvonly" or "sendrecv").
+func (a *AuxVideo) HasDownlink() bool {
+	if a == nil {
+		return false
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.hasDownlinkLocked()
+}
+
+func (a *AuxVideo) hasDownlinkLocked() bool {
+	if a.closed {
+		return false
+	}
+	return a.sipDirection == "recvonly" || a.sipDirection == "sendrecv"
+}
+
+// PrepareUplinkStart resets uplink framing and peer confirmation before
+// activating the local screen direction on an existing receiving stream.
+func (a *AuxVideo) PrepareUplinkStart() {
+	if a == nil {
+		return
+	}
+	a.mu.Lock()
+	a.peerConfirmed = false
+	a.uplink.waitIDR = true
+	a.uplink.paramTSSet = false
+	a.uplink.inBandTSSet = false
+	a.mu.Unlock()
+}
+
+// StopUplink disables the local screen uplink while keeping an active
+// downlink open on the same SIP m-line ("sendrecv" -> "recvonly").
+func (a *AuxVideo) StopUplink() {
+	if a == nil {
+		return
+	}
+	a.mu.Lock()
+	if !a.closed && a.sipDirection == "sendrecv" {
+		a.sipDirection = "recvonly"
+	}
+	a.peerConfirmed = false
+	a.uplink.waitIDR = true
+	a.uplink.paramTSSet = false
+	a.uplink.inBandTSSet = false
+	cache := a.uplinkIDRCache
+	a.mu.Unlock()
+	if cache != nil {
+		cache.reset()
+	}
+}
+
+// StopDownlink disables the remote screen downlink while keeping an active
+// local uplink open on the same SIP m-line ("sendrecv" -> "sendonly").
+func (a *AuxVideo) StopDownlink() {
+	if a == nil {
+		return
+	}
+	a.egressMu.Lock()
+	a.mu.Lock()
+	if !a.closed && a.sipDirection == "sendrecv" {
+		a.sipDirection = "sendonly"
+	}
+	a.track = nil
+	a.remoteSSRC = 0
+	a.pendingSIPPLI = false
+	reorder := a.reorder
+	a.mu.Unlock()
+	a.egressMu.Unlock()
+	if reorder != nil {
+		reorder.Reset()
+	}
 }
 
 // MarkPeerConfirmed records that the far end shows the stream. It reports
@@ -382,6 +525,17 @@ func (a *AuxVideo) MarkPeerConfirmed() bool {
 	}
 	a.peerConfirmed = true
 	return true
+}
+
+// ResetPeerConfirmed clears peer confirmation so a new local share on a
+// reused stream must be confirmed again.
+func (a *AuxVideo) ResetPeerConfirmed() {
+	if a == nil {
+		return
+	}
+	a.mu.Lock()
+	a.peerConfirmed = false
+	a.mu.Unlock()
 }
 
 // PeerConfirmed reports whether MarkPeerConfirmed was called.
@@ -429,9 +583,12 @@ func (a *AuxVideo) SetSIPFormat(payloadType, packetizationMode uint8) {
 // to send it RTCP, so keyframes can be requested. A nil writer unbinds.
 func (a *AuxVideo) BindUplinkTrack(ssrc uint32, writeRTCP func([]rtcp.Packet) error) {
 	a.mu.Lock()
+	sameBinding := ssrc != 0 && writeRTCP != nil && a.uplinkTrackSSRC == ssrc && a.writeRTCP != nil
 	a.uplinkTrackSSRC = ssrc
 	a.writeRTCP = writeRTCP
-	a.uplink.waitIDR = true
+	if !sameBinding {
+		a.uplink.waitIDR = true
+	}
 	a.mu.Unlock()
 }
 
@@ -439,12 +596,20 @@ func (a *AuxVideo) BindUplinkTrack(ssrc uint32, writeRTCP func([]rtcp.Packet) er
 // to the client, or detaches it with nil. It waits for an in-flight write.
 // Attaching asks the SIP side for a keyframe so the new track starts clean.
 func (a *AuxVideo) SetLocalTrack(track *webrtc.TrackLocalStaticRTP) {
+	var writer auxRTPWriter
+	if track != nil {
+		writer = track
+	}
+	a.setLocalWriter(writer)
+}
+
+func (a *AuxVideo) setLocalWriter(writer auxRTPWriter) {
 	a.egressMu.Lock()
 	a.mu.Lock()
-	a.track = track
+	a.track = writer
 	a.mu.Unlock()
 	a.egressMu.Unlock()
-	if track != nil {
+	if writer != nil {
 		a.RequestKeyframeFromSIP("track-attached")
 	}
 }

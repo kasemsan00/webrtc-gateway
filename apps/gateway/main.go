@@ -15,6 +15,7 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+	_ "time/tzdata"
 
 	"webrtc-sip-gateway/internal/api"
 	"webrtc-sip-gateway/internal/auth"

@@ -2,6 +2,7 @@ import {
   RiAccountCircleLine,
   RiBarChartGroupedLine,
   RiBugLine,
+  RiCastLine,
   RiComputerLine,
   RiFileTextLine,
   RiHistoryLine,
@@ -26,6 +27,7 @@ export type NavPath =
   | '/sessions'
   | '/logs'
   | '/client-diagnostics'
+  | '/multi-stream-test'
   | '/instances'
   | '/session-directory'
   | '/public-accounts'
@@ -105,6 +107,13 @@ export const NAV_GROUPS: Array<NavGroup> = [
         icon: RiBugLine,
         description:
           'Diagnostic events uploaded by mobile and desktop clients.',
+      },
+      {
+        to: '/multi-stream-test',
+        label: 'Multi-Stream Test',
+        icon: RiCastLine,
+        description:
+          'Test camera + screen share (multiVideo) end-to-end over /ws-agent or /ws.',
       },
     ],
   },

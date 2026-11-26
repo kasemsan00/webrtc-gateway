@@ -18,7 +18,7 @@ func (s *Server) StartSwitchVideoRenegotiation(sessionID string, generation int)
 	if s.sessionMgr == nil || s.runtimeConfig == nil {
 		return
 	}
-	if !s.runtimeConfig.SIP.SwitchVideoRenegotiateEnable || !s.runtimeConfig.SIP.MidCallRenegotiationEnable {
+	if !s.runtimeConfig.SIP.SwitchVideoRenegotiateEnable {
 		return
 	}
 

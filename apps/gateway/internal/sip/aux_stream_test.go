@@ -388,7 +388,7 @@ type auxStateNotifierStub struct {
 	states []string
 }
 
-func (n *auxStateNotifierStub) NotifyAuxVideoState(sessionID string, active bool, reason string) {
+func (n *auxStateNotifierStub) NotifyAuxVideoState(sessionID string, active bool, reason, direction string) {
 	n.states = append(n.states, fmt.Sprintf("%s:%v:%s", sessionID, active, reason))
 }
 

@@ -54,6 +54,7 @@ FROM alpine:latest AS runtime
 
 RUN apk add --no-cache \
     ca-certificates \
+    tzdata \
     opus \
     nginx \
     nodejs \
@@ -88,6 +89,7 @@ COPY deploy/stack-entrypoint.sh /app/stack-entrypoint.sh
 RUN sed -i 's/\r$//' /etc/nginx/nginx.conf.template /app/stack-entrypoint.sh && \
     chmod +x /app/stack-entrypoint.sh
 
+ENV TZ=Asia/Bangkok
 ENV NODE_ENV=production
 ENV VITE_BASE_PATH=/admin/
 ENV STACK_PROXY_PORT=8088

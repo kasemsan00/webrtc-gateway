@@ -20,6 +20,7 @@ describe('gateway smoke route and action contracts', () => {
     expect(routeTreeContent.includes("'/sessions/$sessionId'")).toBe(true)
     expect(routeTreeContent.includes("'/logs'")).toBe(true)
     expect(routeTreeContent.includes("'/client-diagnostics'")).toBe(true)
+    expect(routeTreeContent.includes("'/multi-stream-test'")).toBe(true)
     expect(routeTreeContent.includes("'/settings'")).toBe(true)
   })
 

@@ -166,7 +166,6 @@ func TestHandleSwitchMessage_SkipsBlackoutWhenSwitchRenegotiateEnabled(t *testin
 			VideoRecoveryBurstIntervalMS:   800,
 			VideoRecoveryBurstStaleMS:      1200,
 			VideoRecoveryBurstFIRStaleMS:   2500,
-			MidCallRenegotiationEnable:     true,
 			SwitchVideoRenegotiateEnable:   true,
 		},
 		RTP: config.RTPConfig{BufferSize: 1500},

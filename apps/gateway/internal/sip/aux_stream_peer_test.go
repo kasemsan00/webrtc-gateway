@@ -24,6 +24,7 @@ type auxPeerNotifier struct {
 	canReceive map[string]bool
 	offered    []string
 	states     []string
+	dirStates  []string
 	onOffered  func(sessionID string)
 }
 
@@ -43,10 +44,25 @@ func (n *auxPeerNotifier) NotifyAuxVideoOffered(sessionID string) {
 	}
 }
 
-func (n *auxPeerNotifier) NotifyAuxVideoState(sessionID string, active bool, reason string) {
+func (n *auxPeerNotifier) NotifyAuxVideoState(sessionID string, active bool, reason, direction string) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.states = append(n.states, fmt.Sprintf("%s:%v:%s", sessionID, active, reason))
+	n.dirStates = append(n.dirStates, fmt.Sprintf("%s:%s:%v:%s", sessionID, direction, active, reason))
+}
+
+func (n *auxPeerNotifier) waitForDirState(t *testing.T, want string) {
+	t.Helper()
+	waitFor(t, "stream dir state "+want, func() bool {
+		n.mu.Lock()
+		defer n.mu.Unlock()
+		for _, state := range n.dirStates {
+			if state == want {
+				return true
+			}
+		}
+		return false
+	})
 }
 
 func (n *auxPeerNotifier) snapshot() (offered, states []string) {
@@ -89,7 +105,7 @@ const (
 func newTwoLegRig(t *testing.T) *twoLegRig {
 	t.Helper()
 	cfg := &config.Config{
-		SIP: config.SIPConfig{MidCallRenegotiationEnable: true, Domain: "203.0.113.20", Port: 5060},
+		SIP: config.SIPConfig{Domain: "203.0.113.20", Port: 5060},
 		RTP: config.RTPConfig{BufferSize: 2048},
 	}
 	cfg.RTP.PortMin, cfg.RTP.PortMax = findFreeContiguousUDPBlock(t, 3)
@@ -326,7 +342,98 @@ func TestConfirmedScreenShareSurvivesTheTimeout(t *testing.T) {
 	}
 }
 
-func TestOpenScreenStreamWhileReceivingIsRefused(t *testing.T) {
+func TestSimultaneousDualScreenShareAcrossBothLegs(t *testing.T) {
+	rig := newTwoLegRig(t)
+	rig.notifier.canReceive[rig.sharer.ID] = true
+	rig.notifier.canReceive[rig.receiver.ID] = true
+	rig.notifier.onOffered = func(sessionID string) {
+		if sessionID == rig.receiver.ID {
+			rig.srv.ReportScreenStreamToPeer(rig.receiver, true)
+		} else if sessionID == rig.sharer.ID {
+			rig.srv.ReportScreenStreamToPeer(rig.sharer, true)
+		}
+	}
+
+	// Bidirectional Asterisk bridge stub: mirrors re-INVITE from either leg
+	// to the other leg (inverting sendonly <-> recvonly when bridging).
+	rig.respond = func(req *sip.Request) (*sip.Response, error) {
+		fromCallID := ""
+		if h := req.CallID(); h != nil {
+			fromCallID = h.Value()
+		}
+		targetCallID := receiverCallID
+		if fromCallID == receiverCallID {
+			targetCallID = sharerCallID
+		}
+		ports := []int{20000, 20002, 20006}
+		if lines := sdpMediaLines(req.Body()); len(lines) == 3 && strings.HasPrefix(lines[2], "m=video 0 ") {
+			ports[2] = 0
+		}
+		res, err := answerMirroring(req, ports...)
+		if err != nil {
+			return nil, err
+		}
+
+		// Forward offer to the opposite leg with Asterisk's media IP.
+		// On a 2-party bridge, an offerer's recvonly means the opposite leg
+		// receives recvonly (peer stopped sending, still receiving);
+		// sendonly stays sendonly (peer sends to target); sendrecv stays sendrecv.
+		forwarded := strings.ReplaceAll(string(req.Body()), "c=IN IP4 203.0.113.10", "c=IN IP4 10.0.0.9")
+		tx := &midCallServerTxStub{}
+		rig.srv.handleINVITE(newMidCallInviteRequest(targetCallID, forwarded), tx)
+		if len(tx.responses) != 2 || tx.responses[1].StatusCode != 200 {
+			t.Errorf("peer leg %s did not answer forwarded re-INVITE with 200: %d responses", targetCallID, len(tx.responses))
+		}
+		return res, nil
+	}
+
+	// 1. Leg A (sharer) starts sharing -> Leg B receives.
+	assertOutcome(t, rig.srv.OpenScreenStream(rig.sharer), "ok", "")
+	if aux := rig.sharer.AuxVideo(); aux == nil || aux.SIPDirection() != "sendonly" || !aux.PeerConfirmed() {
+		t.Fatalf("leg A must have confirmed sendonly stream, got %v", aux)
+	}
+	if aux := rig.receiver.AuxVideo(); aux == nil || aux.SIPDirection() != "recvonly" {
+		t.Fatalf("leg B must have recvonly stream, got %v", aux)
+	}
+	rig.notifier.waitForDirState(t, rig.sharer.ID+":local:true:")
+
+	// 2. Leg B ALSO starts sharing while viewing Leg A's screen -> both upgrade to sendrecv.
+	assertOutcome(t, rig.srv.OpenScreenStream(rig.receiver), "ok", "")
+	if aux := rig.receiver.AuxVideo(); aux == nil || aux.SIPDirection() != "sendrecv" || !aux.PeerConfirmed() {
+		t.Fatalf("leg B must upgrade to confirmed sendrecv, got %v", aux)
+	}
+	if aux := rig.sharer.AuxVideo(); aux == nil || aux.SIPDirection() != "sendrecv" {
+		t.Fatalf("leg A must upgrade to sendrecv when leg B shares, got %v", aux)
+	}
+	rig.notifier.waitForDirState(t, rig.receiver.ID+":local:true:")
+
+	// 3. Leg A stops sharing while Leg B is still sharing:
+	// Leg A downgrades to recvonly (keeping B's screen); Leg B downgrades to sendonly and sees remote peer_closed.
+	if !rig.srv.CloseScreenStream(rig.sharer, "client-remove") {
+		t.Fatal("expected leg A local share to stop")
+	}
+	if aux := rig.sharer.AuxVideo(); aux == nil || aux.SIPDirection() != "recvonly" {
+		t.Fatalf("leg A must stay open as recvonly while leg B shares, got %v", aux)
+	}
+	if aux := rig.receiver.AuxVideo(); aux == nil || aux.SIPDirection() != "sendonly" {
+		t.Fatalf("leg B must downgrade to sendonly when leg A stops, got %v", aux)
+	}
+	rig.notifier.waitForDirState(t, rig.receiver.ID+":remote:false:peer_closed")
+
+	// 4. Leg B finally stops sharing -> both legs close AuxVideo cleanly.
+	if !rig.srv.CloseScreenStream(rig.receiver, "client-remove") {
+		t.Fatal("expected leg B local share to stop")
+	}
+	if rig.receiver.AuxVideo() != nil {
+		t.Fatal("leg B AuxVideo must close when no direction remains")
+	}
+	if rig.sharer.AuxVideo() != nil {
+		t.Fatal("leg A AuxVideo must close when leg B stops")
+	}
+	rig.notifier.waitForDirState(t, rig.sharer.ID+":remote:false:peer_closed")
+}
+
+func TestOpenScreenStreamWhileReceivingRefusedKeepsDownlinkIntact(t *testing.T) {
 	rig := newTwoLegRig(t)
 	rig.notifier.canReceive[rig.receiver.ID] = true
 	tx := &midCallServerTxStub{}
@@ -335,17 +442,25 @@ func TestOpenScreenStreamWhileReceivingIsRefused(t *testing.T) {
 	if aux := rig.receiver.AuxVideo(); aux == nil || aux.SIPDirection() != "recvonly" {
 		t.Fatal("expected the receiving stream to be open")
 	}
-	// The offer's screen m-line uses AVPF and payload type 100.
-	auxPort, _ := rig.receiver.AuxVideo().Ports()
-	assertMediaLines(t, tx.responses[1].Body(),
-		"m=audio 12000 RTP/AVP 111 101", "m=video 12002 RTP/AVP 96", fmt.Sprintf("m=video %d RTP/AVPF 100", auxPort))
-	if got := rig.receiver.AuxVideo().RemoteRTPAddr(); got == nil || got.String() != "10.0.0.77:20006" {
-		t.Fatalf("auxiliary RTP source = %v, want 10.0.0.77:20006", got)
+	origAux := rig.receiver.AuxVideo()
+
+	// Peer answers sendonly (keeps sending its screen, refuses our reverse screen).
+	rig.respond = func(req *sip.Request) (*sip.Response, error) {
+		res, err := answerMirroring(req, 20000, 20002, 20006)
+		if err != nil {
+			return nil, err
+		}
+		body := string(res.Body())
+		idx := strings.LastIndex(body, "a=sendrecv")
+		if idx >= 0 {
+			body = body[:idx] + "a=sendonly" + body[idx+len("a=sendrecv"):]
+		}
+		return sip.NewResponseFromRequest(req, 200, "OK", []byte(body)), nil
 	}
 
-	assertOutcome(t, rig.srv.OpenScreenStream(rig.receiver), "failed", "peer_sharing")
-	if got := rig.requestCount(); got != 0 {
-		t.Fatalf("no re-INVITE may be sent, got %d", got)
+	assertOutcome(t, rig.srv.OpenScreenStream(rig.receiver), "rejected", "not_supported")
+	if rig.receiver.AuxVideo() != origAux || origAux.SIPDirection() != "recvonly" {
+		t.Fatalf("failed dual upgrade must preserve existing recvonly stream, got %v dir=%q", rig.receiver.AuxVideo(), origAux.SIPDirection())
 	}
 }
 
@@ -534,5 +649,57 @@ func TestEndingTheSessionReleasesAuxiliaryPorts(t *testing.T) {
 		}
 		conn.Close()
 		return true
+	})
+}
+
+func TestScreenShareReShareTriggersBrowserPLIAndFollowup(t *testing.T) {
+	rig := newTwoLegRig(t)
+	rig.srv.screenKeyframeFollowupDelay = 1050 * time.Millisecond
+	rig.notifier.canReceive[rig.receiver.ID] = true
+
+	var mu sync.Mutex
+	var plis []rtcp.Packet
+	bindWriter := func(aux *session.AuxVideo) {
+		if aux == nil {
+			return
+		}
+		aux.BindUplinkTrack(0xCAFE, func(packets []rtcp.Packet) error {
+			mu.Lock()
+			plis = append(plis, packets...)
+			mu.Unlock()
+			return nil
+		})
+	}
+
+	rig.notifier.onOffered = func(string) {
+		bindWriter(rig.sharer.AuxVideo())
+		rig.srv.ReportScreenStreamToPeer(rig.receiver, true)
+	}
+	_ = rig.asteriskForwards(t)
+
+	// Share #1
+	assertOutcome(t, rig.srv.OpenScreenStream(rig.sharer), "ok", "")
+	waitFor(t, "Share #1 confirm + follow-up browser PLIs", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(plis) >= 2
+	})
+	if !rig.srv.CloseScreenStream(rig.sharer, "client-remove") {
+		t.Fatal("expected Share #1 to close")
+	}
+
+	// Share #2 (no new WebRTC offer): simulate re-bound uplink writer on the newly opened stream
+	mu.Lock()
+	plis = nil
+	mu.Unlock()
+	rig.notifier.onOffered = nil
+	assertOutcome(t, rig.srv.OpenScreenStream(rig.sharer), "ok", "")
+	bindWriter(rig.sharer.AuxVideo())
+	rig.srv.ReportScreenStreamToPeer(rig.receiver, true)
+
+	waitFor(t, "Share #2 peer-ready + follow-up browser PLIs", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(plis) >= 2
 	})
 }

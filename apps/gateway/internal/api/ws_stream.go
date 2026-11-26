@@ -114,14 +114,15 @@ func (s *Server) handleWSStreamUpdate(client *WSClient, msg WSMessage) {
 		return
 	}
 
-	// The WebRTC side changes only on the first share of a call, when the
-	// client's offer adds the second video section. Later shares reuse that
-	// section and carry no SDP.
+	// The WebRTC side changes only on the first local share of a call, when
+	// the client's offer adds its sendonly screen section (2nd video m-line,
+	// or 3rd when a receive-only peer screen section is already negotiated).
+	// Later local shares reuse that section and carry no SDP.
 	offerSDP := strings.TrimSpace(msg.SDP)
 	auxMid := ""
 	if action == streamActionAdd {
 		if offerSDP != "" {
-			mid, ok := session.AuxVideoMidFromOffer(msg.SDP)
+			mid, ok := session.AuxUplinkMidFromOffer(msg.SDP, sess.AuxDownlinkMid())
 			if !ok {
 				reply(streamStatusFailed, "invalid_offer", "")
 				return
@@ -186,8 +187,9 @@ func (s *Server) handleWSStreamUpdate(client *WSClient, msg WSMessage) {
 
 // NotifyAuxVideoState tells the session's client that its auxiliary video
 // stream started or stopped for a reason other than its own request. Only
-// clients that opted in with multiVideo are told.
-func (s *Server) NotifyAuxVideoState(sessionID string, active bool, reason string) {
+// clients that opted in with multiVideo are told. direction is "local" or
+// "remote" (empty omitted for legacy callers).
+func (s *Server) NotifyAuxVideoState(sessionID string, active bool, reason, direction string) {
 	s.mu.RLock()
 	client := s.wsClients[sessionID]
 	optedIn := client != nil && client.multiVideo
@@ -200,6 +202,7 @@ func (s *Server) NotifyAuxVideoState(sessionID string, active bool, reason strin
 		Type:      "stream_state",
 		SessionID: sessionID,
 		Role:      streamRoleScreen,
+		Direction: direction,
 		Active:    &value,
 		Reason:    reason,
 	})
@@ -209,9 +212,10 @@ func (s *Server) NotifyAuxVideoState(sessionID string, active bool, reason strin
 		Category:  "ws",
 		Name:      "ws_stream_state",
 		Data: map[string]interface{}{
-			"role":   streamRoleScreen,
-			"active": active,
-			"reason": reason,
+			"role":      streamRoleScreen,
+			"direction": direction,
+			"active":    active,
+			"reason":    reason,
 		},
 	})
 }

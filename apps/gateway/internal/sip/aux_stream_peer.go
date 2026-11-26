@@ -33,7 +33,8 @@ const (
 	screenStreamMessagePrefix   = "@screen:"
 
 	// How long the sharing leg waits for the far end to confirm.
-	defaultScreenConfirmTimeout = 3 * time.Second
+	defaultScreenConfirmTimeout        = 3 * time.Second
+	defaultScreenKeyframeFollowupDelay = 1100 * time.Millisecond
 )
 
 func (s *Server) canReceiveAuxVideo(sess *session.Session) bool {
@@ -113,13 +114,13 @@ func (s *Server) sendScreenControlMessage(sess *session.Session, body string) er
 
 // ConfirmScreenStream applies the far end's report to a sharing session. A
 // ready report keeps the stream and tells the client; anything else closes
-// it. Reports for a session that is not sharing are ignored.
+// the local uplink. Reports for a session that is not sharing are ignored.
 func (s *Server) ConfirmScreenStream(sess *session.Session, ready bool) {
 	if sess == nil {
 		return
 	}
 	aux := sess.AuxVideo()
-	if aux == nil || aux.SIPDirection() != "sendonly" {
+	if aux == nil || !aux.HasUplink() {
 		return
 	}
 	if !ready {
@@ -132,8 +133,33 @@ func (s *Server) ConfirmScreenStream(sess *session.Session, ready bool) {
 	fmt.Printf("[%s] aux_stream confirmed by far end\n", sess.ID)
 	s.logAuxStreamEvent(sess, "sip_aux_stream_confirmed", nil)
 	// The far end has just attached its track and needs a whole picture.
+	// Replay any recently cached uplink IDR immediately so a static screen
+	// that already emitted its first frame before confirmation still renders
+	// even if the browser ignores PLI until pixels change.
+	aux.ReplayCachedIDR("peer-ready")
 	aux.RequestKeyframeFromBrowserForced("peer-ready")
-	s.notifyAuxVideoState(sess.ID, true, "")
+	s.scheduleAuxKeyframeFollowup(sess, aux)
+	s.notifyAuxVideoState(sess.ID, true, "", "local")
+}
+
+func (s *Server) scheduleAuxKeyframeFollowup(sess *session.Session, aux *session.AuxVideo) {
+	if s == nil || sess == nil || aux == nil {
+		return
+	}
+	delay := s.screenKeyframeFollowupDelay
+	if delay <= 0 {
+		delay = defaultScreenKeyframeFollowupDelay
+	}
+	time.AfterFunc(delay, func() {
+		if sess.AuxVideo() == aux {
+			aux.RequestKeyframeFromBrowser("peer-ready-followup")
+		}
+	})
+	time.AfterFunc(delay*2, func() {
+		if sess.AuxVideo() == aux && aux.Stats().UplinkForwarded == 0 {
+			aux.RequestKeyframeFromBrowser("peer-ready-stalled")
+		}
+	})
 }
 
 // armScreenStreamConfirmation closes a shared stream that the far end has not
@@ -146,7 +172,7 @@ func (s *Server) armScreenStreamConfirmation(sess *session.Session, aux *session
 		timeout = defaultScreenConfirmTimeout
 	}
 	time.AfterFunc(timeout, func() {
-		if aux.PeerConfirmed() || sess.AuxVideo() != aux {
+		if aux.PeerConfirmed() || sess.AuxVideo() != aux || !aux.HasUplink() {
 			return
 		}
 		fmt.Printf("[%s] aux_stream not confirmed by far end within %s\n", sess.ID, timeout)
@@ -154,10 +180,11 @@ func (s *Server) armScreenStreamConfirmation(sess *session.Session, aux *session
 	})
 }
 
-// closeScreenStreamForPeer ends a shared stream for a reason the client did
-// not ask for, closes its m-line toward the SIP peer and tells the client.
+// closeScreenStreamForPeer ends a shared stream's local uplink for a reason
+// the client did not ask for, updates or closes its m-line toward the SIP
+// peer and tells the client.
 func (s *Server) closeScreenStreamForPeer(sess *session.Session, aux *session.AuxVideo, reason string) {
-	if sess.AuxVideo() != aux {
+	if sess.AuxVideo() != aux || !aux.HasUplink() {
 		return
 	}
 	// The closing re-INVITE must not overlap another mid-call negotiation on
@@ -178,8 +205,8 @@ func (s *Server) closeScreenStreamForPeer(sess *session.Session, aux *session.Au
 	if !closed {
 		return
 	}
-	s.logAuxStreamEvent(sess, "sip_aux_stream_closed", map[string]interface{}{"reason": reason})
-	s.notifyAuxVideoState(sess.ID, false, reason)
+	s.logAuxStreamEvent(sess, "sip_aux_stream_closed", map[string]interface{}{"reason": reason, "direction": "local"})
+	s.notifyAuxVideoState(sess.ID, false, reason, "local")
 }
 
 // handleScreenStreamMessage applies a far-end report that arrived as a SIP
@@ -211,7 +238,7 @@ func (s *Server) handleScreenStreamMessage(body, callID, toURI string) {
 			continue
 		}
 		aux := sess.AuxVideo()
-		if aux == nil || aux.SIPDirection() != "sendonly" || aux.PeerConfirmed() {
+		if aux == nil || !aux.HasUplink() || aux.PeerConfirmed() {
 			continue
 		}
 		if sessionLocalSIPUser(sess) == user {
@@ -245,7 +272,7 @@ func (s *Server) relayAuxKeyframeToBridgedPeer(sess *session.Session) {
 	if peer == nil {
 		return
 	}
-	if aux := peer.AuxVideo(); aux != nil && aux.SIPDirection() == "sendonly" {
+	if aux := peer.AuxVideo(); aux != nil && aux.HasUplink() {
 		aux.RequestKeyframeFromBrowser("bridged-peer-request")
 	}
 }
@@ -258,12 +285,20 @@ func (s *Server) closeAuxVideoForSwitch(sess *session.Session) {
 	if aux == nil {
 		return
 	}
-	if aux.SIPDirection() == "sendonly" {
+	hadUplink := aux.HasUplink()
+	hadDownlink := aux.HasDownlink()
+	if hadUplink {
+		if hadDownlink {
+			aux.StopDownlink()
+		}
 		s.closeScreenStreamForPeer(sess, aux, "agent_switch")
+		if hadDownlink {
+			s.notifyAuxVideoState(sess.ID, false, "agent_switch", "remote")
+		}
 		return
 	}
 	if sess.CloseAuxVideo("agent-switch") {
-		s.notifyAuxVideoState(sess.ID, false, "agent_switch")
+		s.notifyAuxVideoState(sess.ID, false, "agent_switch", "remote")
 	}
 }
 

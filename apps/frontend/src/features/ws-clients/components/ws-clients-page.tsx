@@ -11,7 +11,10 @@ import {
   fetchWSClients,
   subscribeWSClientEvents,
 } from '../services/ws-clients-api'
-import { resolveWSClientPresenceLabel } from '../types'
+import {
+  resolveWSClientCapabilities,
+  resolveWSClientPresenceLabel,
+} from '../types'
 import type {
   WSClient,
   WSClientPresenceLabel,
@@ -84,6 +87,7 @@ function matchesSearch(client: WSClient, query: string) {
     client.authSubject,
     client.resolvedTrunkPublicId,
     client.callState,
+    ...resolveWSClientCapabilities(client),
   ].some((value) => value && value.toLowerCase().includes(q))
 }
 
@@ -293,11 +297,15 @@ export function WSClientsPage() {
                     · {c.activeCalls} call{c.activeCalls === 1 ? '' : 's'}
                   </span>
                 ) : null}
-                {c.multiCall ? (
-                  <Badge variant="outline" className="ml-1 text-[9px]">
-                    multi-call
+                {resolveWSClientCapabilities(c).map((capability) => (
+                  <Badge
+                    key={capability}
+                    variant="outline"
+                    className="ml-1 text-[9px]"
+                  >
+                    {capability}
                   </Badge>
-                ) : null}
+                ))}
               </p>
               {c.sessionId ? (
                 <SessionIdLink

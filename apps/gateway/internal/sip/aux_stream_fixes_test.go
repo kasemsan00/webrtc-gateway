@@ -14,9 +14,9 @@ import (
 	"webrtc-sip-gateway/internal/session"
 )
 
-func TestInboundScreenShareSucceedsWithoutManualMidCallSeedAndWithMidCallDisabled(t *testing.T) {
+func TestInboundScreenShareSucceedsWithoutManualMidCallSeed(t *testing.T) {
 	cfg := &config.Config{
-		SIP: config.SIPConfig{MidCallRenegotiationEnable: false, Domain: "203.0.113.20", Port: 5060},
+		SIP: config.SIPConfig{Domain: "203.0.113.20", Port: 5060},
 		RTP: config.RTPConfig{BufferSize: 2048},
 	}
 	cfg.RTP.PortMin, cfg.RTP.PortMax = findFreeContiguousUDPBlock(t, 3)
@@ -50,12 +50,18 @@ func TestInboundScreenShareSucceedsWithoutManualMidCallSeedAndWithMidCallDisable
 	ans, _ = srv.answerSDPForInboundOffer(sess, ans, initialOffer, false)
 	sess.RememberLastWireSIPAnswer(ans)
 
-	// Non-multiVideo client stays rejected with 501 when MidCallRenegotiationEnable=false.
-	tx501 := &midCallServerTxStub{}
-	srv.handleINVITE(newMidCallInviteRequest("call-real-seed", offerWithSecondVideo), tx501)
-	assertResponseCodes(t, tx501, []int{100, 501})
+	// Non-multiVideo client answers 200 OK with the 2nd m=video declined (port 0) and no auxiliary stream opened.
+	txNoAux := &midCallServerTxStub{}
+	srv.handleINVITE(newMidCallInviteRequest("call-real-seed", offerWithSecondVideo), txNoAux)
+	assertResponseCodes(t, txNoAux, []int{100, 200})
+	if lines := sdpMediaLines(txNoAux.responses[1].Body()); len(lines) != 3 || !strings.HasPrefix(lines[2], "m=video 0 ") {
+		t.Fatalf("expected declined 2nd m=video for non-multiVideo client, got %q", lines)
+	}
+	if sess.AuxVideo() != nil {
+		t.Fatalf("expected no auxiliary stream for non-multiVideo client, got %v", sess.AuxVideo())
+	}
 
-	// MultiVideo client receives auxiliary stream cleanly with MidCallRenegotiationEnable=false.
+	// MultiVideo client receives auxiliary stream cleanly.
 	notifier.canReceive[sess.ID] = true
 	tx200 := &midCallServerTxStub{}
 	srv.handleINVITE(newMidCallInviteRequest("call-real-seed", offerWithSecondVideo), tx200)
@@ -164,7 +170,7 @@ func TestOpenAndCloseScreenStreamAuthenticate401And407(t *testing.T) {
 
 func TestMidCallSDPOriginVersionAndNegotiatedAVPF(t *testing.T) {
 	cfg := &config.Config{
-		SIP: config.SIPConfig{MidCallRenegotiationEnable: true, Domain: "203.0.113.20", Port: 5060},
+		SIP: config.SIPConfig{Domain: "203.0.113.20", Port: 5060},
 		RTP: config.RTPConfig{BufferSize: 2048},
 	}
 	cfg.RTP.PortMin, cfg.RTP.PortMax = findFreeContiguousUDPBlock(t, 2)

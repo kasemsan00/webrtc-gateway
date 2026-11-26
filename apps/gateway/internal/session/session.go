@@ -334,8 +334,12 @@ type Session struct {
 	// auxVideo is the open auxiliary (screen) video stream, or nil
 	// (aux_video.go). auxUplinkMid is the WebRTC mid whose incoming track
 	// belongs to it. Both under s.mu.
-	auxVideo                   *AuxVideo         `json:"-"`
-	auxUplinkMid               string            `json:"-"`
+	auxVideo                   *AuxVideo                 `json:"-"`
+	auxUplinkMid               string                    `json:"-"`
+	auxUplinkPC                *webrtc.PeerConnection    `json:"-"`
+	auxUplinkSSRC              uint32                    `json:"-"`
+	auxUplinkWriteRTCP         func([]rtcp.Packet) error `json:"-"`
+	auxUplinkIDRCache          *auxUplinkIDRCache        `json:"-"`
 	// auxDownlink is the send-only transceiver that carries a received
 	// auxiliary stream to the client; auxResume is what the last resume did
 	// with the stream (aux_video_downlink_track.go). Both under s.mu.

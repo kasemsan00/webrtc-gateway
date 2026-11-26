@@ -493,19 +493,9 @@ func (s *Server) respondExistingDialogReINVITE(req *sip.Request, tx sip.ServerTr
 	fmt.Printf("[%s] sip_reinvite rejected state=%s\n", sess.ID, state)
 }
 
-func (s *Server) allowInboundMidCallOffer(sess *session.Session) bool {
-	return s.config.MidCallRenegotiationEnable || s.canReceiveAuxVideo(sess) || (sess != nil && sess.AuxVideo() != nil)
-}
-
 func (s *Server) handleActiveReINVITE(req *sip.Request, tx sip.ServerTransaction, sess *session.Session, callIDValue string) {
 	tryingRes := sip.NewResponseFromRequest(req, 100, "Trying", nil)
 	_ = tx.Respond(tryingRes)
-
-	if !s.allowInboundMidCallOffer(sess) {
-		res := sip.NewResponseFromRequest(req, 501, "Not Implemented", nil)
-		_ = tx.Respond(res)
-		return
-	}
 
 	started, ok := sess.TryBeginMidCallRenegotiation(session.MidCallRenegotiationRequest{
 		Source:    "sip_reinvite",
@@ -554,8 +544,7 @@ func (s *Server) handleActiveReINVITE(req *sip.Request, tx sip.ServerTransaction
 	}
 
 	previousMediaState := sess.GetMidCallMediaState()
-	requiresClientRenegotiation := s.config.MidCallRenegotiationEnable &&
-		(validation.RequiresClientRenegotiation || (!previousMediaState.HasActiveVideo && validation.HasActiveVideo))
+	requiresClientRenegotiation := validation.RequiresClientRenegotiation || (!previousMediaState.HasActiveVideo && validation.HasActiveVideo)
 
 	sess.ApplyMidCallSDPValidation(validation)
 	s.updateAsteriskEndpointsFromMidCallOffer(req.Body(), sess)
@@ -651,11 +640,6 @@ func (s *Server) handleUPDATE(req *sip.Request, tx sip.ServerTransaction) {
 		_ = tx.Respond(res)
 		return
 	}
-	if !s.allowInboundMidCallOffer(sess) {
-		res := sip.NewResponseFromRequest(req, 501, "Not Implemented", nil)
-		_ = tx.Respond(res)
-		return
-	}
 	if len(req.Body()) == 0 {
 		res := sip.NewResponseFromRequest(req, 200, "OK", nil)
 		_ = tx.Respond(res)
@@ -709,8 +693,7 @@ func (s *Server) handleUPDATE(req *sip.Request, tx sip.ServerTransaction) {
 	}
 
 	previousMediaState := sess.GetMidCallMediaState()
-	requiresClientRenegotiation := s.config.MidCallRenegotiationEnable &&
-		(validation.RequiresClientRenegotiation || (!previousMediaState.HasActiveVideo && validation.HasActiveVideo))
+	requiresClientRenegotiation := validation.RequiresClientRenegotiation || (!previousMediaState.HasActiveVideo && validation.HasActiveVideo)
 	sess.ApplyMidCallSDPValidation(validation)
 	s.updateAsteriskEndpointsFromMidCallOffer(req.Body(), sess)
 	s.notifyRemoteHoldChange(sess, req.Body())
@@ -1528,7 +1511,7 @@ func (s *Server) handleSwitchMessage(body string, callerURI string) {
 	// until the target keyframe arrives; blackout mode keeps legacy rollback behavior.
 	// Skip the 300ms blackout when switch renegotiation is active: the replacement
 	// decoder is the visual fix, and holding the old path only adds switch latency.
-	skipBlackoutForRenegotiate := genuineSwitch && s.config.SwitchVideoRenegotiateEnable && s.config.MidCallRenegotiationEnable
+	skipBlackoutForRenegotiate := genuineSwitch && s.config.SwitchVideoRenegotiateEnable
 	if skipBlackoutForRenegotiate {
 		fmt.Printf("[%s] switch_transition_hold_skipped reason=renegotiate\n", sess.ID)
 	}

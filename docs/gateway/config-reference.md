@@ -116,7 +116,7 @@ When `FRONTEND_PASSWORD` is set and `AUTH_ENABLE=false`, protected `/api/*` rout
 - `WEBRTC_ICE_NAT1TO1_IPS` (default unset; `none|off|false|0` also disables; comma list of `public` or `public/local`). Host candidates advertise the public IP instead of the local one (Pion address rewrite, host/replace mode, same as the legacy `SetNAT1To1IPs(ips, host)`). Use it when the gateway sits behind a 1:1 NAT; not needed when the public IP is on an interface.
 - `WEBRTC_ICE_NETWORK_TYPES` (default `udp4`; comma list of `udp4|udp6|tcp4|tcp6`, or `all` for Pion's default of all four). Network types for host and srflx gathering. TURN relay endpoints are UDP, and the client-to-TURN transport (`turn:?transport=tcp`, `turns:`) is not limited by this list, so TURN keeps working with `udp4`. A list without `udp4`/`udp6` gathers no relay candidates (logged as a warning). The gateway has no ICE-TCP listener, so `tcp4`/`tcp6` add no host candidates today.
 - Each PeerConnection logs its gathered candidates once, when gathering first completes: `[<session>] ice_local_candidates pc=initial|replacement count=N candidates=host/udp/203.150.245.39:50123,srflx/udp/...,relay/udp/203.150.245.38:...`. The `webrtc_api` line shows the effective settings (`iface_exclude= ip_allow= nat1to1= networks=`), and so does the startup config dump (`WebRTC ICE:`).
-- `SIP_SWITCH_VIDEO_TRANSITION_MODE` (default `blackout`; `blackout|preserve`). In `blackout` mode, **all** SIP→WebRTC video packets (including early keyframes) are dropped during the minimum `SIP_SWITCH_VIDEO_BLACKOUT_MS` window (holding the AU normalizer complete-IDR gate as well), and then held until a decoder-safe IDR/keyframe or `SIP_SWITCH_VIDEO_BLACKOUT_MAX_WAIT_MS`. In `preserve` mode, there is no minimum blackout window: only non-keyframe packets are held while the previous rendered frame remains visible, and the first keyframe/safe IDR releases immediately. On a genuine `@switch`, this transition hold is skipped (`switch_transition_hold_skipped reason=renegotiate`) when both `SIP_SWITCH_VIDEO_RENEGOTIATE_ENABLE=true` and `SIP_MIDCALL_RENEGOTIATION_ENABLE=true`.
+- `SIP_SWITCH_VIDEO_TRANSITION_MODE` (default `blackout`; `blackout|preserve`). In `blackout` mode, **all** SIP→WebRTC video packets (including early keyframes) are dropped during the minimum `SIP_SWITCH_VIDEO_BLACKOUT_MS` window (holding the AU normalizer complete-IDR gate as well), and then held until a decoder-safe IDR/keyframe or `SIP_SWITCH_VIDEO_BLACKOUT_MAX_WAIT_MS`. In `preserve` mode, there is no minimum blackout window: only non-keyframe packets are held while the previous rendered frame remains visible, and the first keyframe/safe IDR releases immediately. On a genuine `@switch`, this transition hold is skipped (`switch_transition_hold_skipped reason=renegotiate`) when `SIP_SWITCH_VIDEO_RENEGOTIATE_ENABLE=true`.
 - `SIP_SWITCH_VIDEO_BLACKOUT_ENABLED` (default `true`)
 - `SIP_SWITCH_VIDEO_BLACKOUT_MS` (default `300`; minimum all-packet hold window before the gate or keyframe may release in `blackout` mode)
 - `SIP_SWITCH_VIDEO_BLACKOUT_MAX_WAIT_MS` (default `1200`)
@@ -131,13 +131,9 @@ When `FRONTEND_PASSWORD` is set and `AUTH_ENABLE=false`, protected `/api/*` rout
 - `SIP_SWITCH_VIDEO_RTP_MAX_REORDER_TIMEOUT_DELTA` (default `5`)
 - `SIP_SWITCH_DUPLICATE_DEBOUNCE_ENABLED` (default `true`)
 - `SIP_SWITCH_DUPLICATE_DEBOUNCE_MS` (default `60000`)
-- `SIP_MIDCALL_RENEGOTIATION_ENABLE` (default `true`; enables primary SIP mid-call
-  re-INVITE/UPDATE handling and is also required by switch-triggered WebRTC
-  renegotiation; auxiliary screen-share offers on `multiVideo` sessions remain
-  allowed per call even when this flag is `false`)
 - `SIP_SWITCH_VIDEO_RENEGOTIATE_ENABLE` (default `false`; opt in to
   client-assisted WebRTC renegotiation when an authoritative `@switch`
-  MESSAGE is accepted. When enabled along with `SIP_MIDCALL_RENEGOTIATION_ENABLE=true`,
+  MESSAGE is accepted. When enabled,
   the gateway parks the live PeerConnection (make-before-break), emits WebSocket
   `renegotiate` with `reason=agent_switch` immediately (the client may createOffer
   while the gateway still prepares the replacement PeerConnection), empty SDP, and
@@ -149,7 +145,7 @@ When `FRONTEND_PASSWORD` is set and `AUTH_ENABLE=false`, protected `/api/*` rout
   `renegotiate-pending` until the client offer is applied (or the attempt
   fails/times out). On a genuine `@switch`, the `SIP_SWITCH_VIDEO_BLACKOUT_MS`
   transition hold is skipped (`switch_transition_hold_skipped reason=renegotiate`)
-  while both flags are `true`. The parked PC is closed after ICE connected. No
+  while this flag is `true`. The parked PC is closed after ICE connected. No
   switch renegotiation is attempted, and no `switch_renegotiate_*` log is emitted,
   while this flag is `false`. Configuration changes require a gateway process restart.)
 - `SIP_PROACTIVE_BROWSER_PLI_INITIAL_MS` (default `2000`; clamped `500..10000`; browser PLI interval until the first WebRTC→SIP IDR is forwarded)

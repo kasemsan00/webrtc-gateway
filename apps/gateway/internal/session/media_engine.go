@@ -144,54 +144,79 @@ func registerTransportCC(mediaEngine *webrtc.MediaEngine) error {
 	)
 }
 
-func offeredH264CodecForPacketizationMode(offerSDP string, mode uint8) (webrtc.RTPCodecParameters, error) {
-	if mode != 0 {
-		mode = 1
-	}
+type offeredVideoSection struct {
+	mid       string
+	rejected  bool
+	payloads  []webrtc.PayloadType
+	rtpMaps   map[webrtc.PayloadType]string
+	fmtpLines map[webrtc.PayloadType]string
+}
 
-	var videoPayloads []webrtc.PayloadType
-	rtpMaps := make(map[webrtc.PayloadType]string)
-	fmtpLines := make(map[webrtc.PayloadType]string)
-	currentMedia := ""
-	for _, rawLine := range strings.Split(offerSDP, "\n") {
+type preferredCodecTrack interface {
+	SetPreferredCodec(webrtc.RTPCodecParameters)
+}
+
+func parseOfferedVideoSections(sdpText string) []offeredVideoSection {
+	var sections []offeredVideoSection
+	var current *offeredVideoSection
+	for _, rawLine := range strings.Split(sdpText, "\n") {
 		line := strings.TrimSpace(strings.TrimSuffix(rawLine, "\r"))
 		if strings.HasPrefix(line, "m=") {
 			fields := strings.Fields(line)
-			currentMedia = "other"
 			if len(fields) >= 4 && fields[0] == "m=video" {
-				currentMedia = "video"
+				sec := offeredVideoSection{
+					rejected:  fields[1] == "0",
+					rtpMaps:   make(map[webrtc.PayloadType]string),
+					fmtpLines: make(map[webrtc.PayloadType]string),
+				}
 				for _, field := range fields[3:] {
 					value, err := strconv.Atoi(field)
 					if err == nil && value >= 0 && value <= 127 {
-						videoPayloads = append(videoPayloads, webrtc.PayloadType(value))
+						sec.payloads = append(sec.payloads, webrtc.PayloadType(value))
 					}
 				}
+				sections = append(sections, sec)
+				current = &sections[len(sections)-1]
+			} else {
+				current = nil
 			}
 			continue
 		}
-		if currentMedia != "video" {
+		if current == nil {
+			continue
+		}
+		if current.mid == "" && strings.HasPrefix(line, "a=mid:") {
+			current.mid = strings.TrimSpace(strings.TrimPrefix(line, "a=mid:"))
 			continue
 		}
 		if payloadType, value, ok := parseSDPPayloadAttribute(line, "a=rtpmap:"); ok {
-			rtpMaps[payloadType] = value
+			current.rtpMaps[payloadType] = value
 			continue
 		}
 		if payloadType, value, ok := parseSDPPayloadAttribute(line, "a=fmtp:"); ok {
-			fmtpLines[payloadType] = value
+			current.fmtpLines[payloadType] = value
 		}
 	}
+	return sections
+}
 
+func (s offeredVideoSection) h264CodecForMode(mode uint8, preferredPT webrtc.PayloadType) (webrtc.RTPCodecParameters, bool) {
+	if mode != 0 {
+		mode = 1
+	}
 	feedback := videoRTCPFeedback(true)
-	for _, payloadType := range videoPayloads {
-		rtpMap := strings.Fields(rtpMaps[payloadType])
+	var first webrtc.RTPCodecParameters
+	foundFirst := false
+	for _, payloadType := range s.payloads {
+		rtpMap := strings.Fields(s.rtpMaps[payloadType])
 		if len(rtpMap) == 0 || !strings.EqualFold(rtpMap[0], "H264/90000") {
 			continue
 		}
-		fmtpLine := fmtpLines[payloadType]
+		fmtpLine := s.fmtpLines[payloadType]
 		if h264PacketizationModeFromFMTP(fmtpLine) != mode {
 			continue
 		}
-		return webrtc.RTPCodecParameters{
+		codec := webrtc.RTPCodecParameters{
 			RTPCodecCapability: webrtc.RTPCodecCapability{
 				MimeType:     webrtc.MimeTypeH264,
 				ClockRate:    90000,
@@ -199,9 +224,66 @@ func offeredH264CodecForPacketizationMode(offerSDP string, mode uint8) (webrtc.R
 				RTCPFeedback: feedback,
 			},
 			PayloadType: payloadType,
-		}, nil
+		}
+		if preferredPT != 0 && payloadType == preferredPT {
+			return codec, true
+		}
+		if !foundFirst {
+			first = codec
+			foundFirst = true
+		}
 	}
-	return webrtc.RTPCodecParameters{}, fmt.Errorf("WebRTC offer has no H264 packetization-mode=%d codec", mode)
+	return first, foundFirst
+}
+
+func offeredH264CodecForPacketizationMode(offerSDP string, mode uint8) (webrtc.RTPCodecParameters, error) {
+	if mode != 0 {
+		mode = 1
+	}
+	sections := parseOfferedVideoSections(offerSDP)
+	var first webrtc.RTPCodecParameters
+	foundAny := false
+	for _, sec := range sections {
+		if sec.rejected {
+			continue
+		}
+		codec, ok := sec.h264CodecForMode(mode, 0)
+		if !ok {
+			return webrtc.RTPCodecParameters{}, fmt.Errorf("WebRTC offer has no H264 packetization-mode=%d codec", mode)
+		}
+		if !foundAny {
+			first = codec
+			foundAny = true
+		}
+	}
+	if !foundAny {
+		return webrtc.RTPCodecParameters{}, fmt.Errorf("WebRTC offer has no H264 packetization-mode=%d codec", mode)
+	}
+	return first, nil
+}
+
+func localVideoPayloadByMid(pc *webrtc.PeerConnection) map[string]webrtc.PayloadType {
+	if pc == nil {
+		return nil
+	}
+	local := pc.LocalDescription()
+	if local == nil || local.SDP == "" {
+		return nil
+	}
+	byMid := make(map[string]webrtc.PayloadType)
+	for _, sec := range parseOfferedVideoSections(local.SDP) {
+		if sec.rejected || sec.mid == "" || len(sec.payloads) == 0 {
+			continue
+		}
+		for _, pt := range sec.payloads {
+			rtpMap := strings.Fields(sec.rtpMaps[pt])
+			if len(rtpMap) > 0 && strings.EqualFold(rtpMap[0], "H264/90000") {
+				byMid[sec.mid] = pt
+				break
+			}
+		}
+	}
+	return byMid
 }
 
 func parseSDPPayloadAttribute(line, prefix string) (webrtc.PayloadType, string, bool) {
@@ -232,10 +314,12 @@ func h264PacketizationModeFromFMTP(fmtpLine string) uint8 {
 	return 0
 }
 
-// PreferWebRTCH264PacketizationMode restricts every video transceiver to the
-// first compatible codec/PT from the WebRTC offer for the RFC 6184 mode
-// negotiated on the SIP leg. This must run after SetRemoteDescription and
-// before CreateAnswer so the answer preserves the offerer's payload mapping.
+// PreferWebRTCH264PacketizationMode restricts every active video transceiver to
+// a compatible codec/PT from its own m=video section in the WebRTC offer for
+// the RFC 6184 mode negotiated on the SIP leg, preserving any previously
+// answered payload type on that mid when still offered. This must run after
+// SetRemoteDescription and before CreateAnswer so both the answer SDP and
+// bound local tracks use the offerer's exact per-section payload mapping.
 // Audio-only offers have no video m-line and must not fail H264 selection.
 func PreferWebRTCH264PacketizationMode(pc *webrtc.PeerConnection, offerSDP string, mode uint8) error {
 	if !AnalyzeOfferVideo(offerSDP).HasVideoMLine {
@@ -244,16 +328,58 @@ func PreferWebRTCH264PacketizationMode(pc *webrtc.PeerConnection, offerSDP strin
 	if pc == nil {
 		return fmt.Errorf("peer connection not available")
 	}
-	codec, err := offeredH264CodecForPacketizationMode(offerSDP, mode)
+	fallbackCodec, err := offeredH264CodecForPacketizationMode(offerSDP, mode)
 	if err != nil {
 		return err
 	}
+	sections := parseOfferedVideoSections(offerSDP)
+	sectionByMid := make(map[string]offeredVideoSection, len(sections))
+	var activeSections []offeredVideoSection
+	for _, sec := range sections {
+		if sec.mid != "" {
+			sectionByMid[sec.mid] = sec
+		}
+		if !sec.rejected {
+			activeSections = append(activeSections, sec)
+		}
+	}
+	existingPTByMid := localVideoPayloadByMid(pc)
+
+	videoIndex := 0
 	for _, transceiver := range pc.GetTransceivers() {
 		if transceiver.Kind() != webrtc.RTPCodecTypeVideo {
 			continue
 		}
+		mid := transceiver.Mid()
+		codec := fallbackCodec
+		matchedSection := false
+		if mid != "" {
+			if sec, ok := sectionByMid[mid]; ok {
+				if sec.rejected {
+					videoIndex++
+					continue
+				}
+				if c, ok := sec.h264CodecForMode(mode, existingPTByMid[mid]); ok {
+					codec = c
+					matchedSection = true
+				}
+			}
+		}
+		if !matchedSection && videoIndex < len(activeSections) {
+			sec := activeSections[videoIndex]
+			if c, ok := sec.h264CodecForMode(mode, existingPTByMid[sec.mid]); ok {
+				codec = c
+			}
+		}
+		videoIndex++
+
 		if err := transceiver.SetCodecPreferences([]webrtc.RTPCodecParameters{codec}); err != nil {
 			return fmt.Errorf("set H264 packetization-mode=%d preference: %w", mode, err)
+		}
+		if sender := transceiver.Sender(); sender != nil {
+			if pinned, ok := sender.Track().(preferredCodecTrack); ok {
+				pinned.SetPreferredCodec(codec)
+			}
 		}
 	}
 	return nil

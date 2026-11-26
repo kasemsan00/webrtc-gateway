@@ -67,7 +67,7 @@ Correlate browser inbound RTP diagnostics with Gateway logs by `sessionId`:
 - A `h264_au_normalized status=complete-idr` line now means the marker and all FU-A fragments were complete; a bare IDR/FU-A start no longer counts as successful keyframe delivery.
 - Accepted `@switch` transitions use **blackout-until-safe-IDR** by default
   (`SIP_SWITCH_VIDEO_TRANSITION_MODE=blackout`): unless skipped by opt-in
-  `SIP_SWITCH_VIDEO_RENEGOTIATE_ENABLE=true` (with `SIP_MIDCALL_RENEGOTIATION_ENABLE=true`),
+  `SIP_SWITCH_VIDEO_RENEGOTIATE_ENABLE=true`,
   the transition hold drops **all** SIP→WebRTC video packets (including early
   keyframes) during the minimum `SIP_SWITCH_VIDEO_BLACKOUT_MS` (300ms) window
   and holds the complete-IDR gate until both that window has elapsed and a
@@ -106,8 +106,7 @@ blackout window and holds only unsafe non-keyframe packets so the last rendered
 frame stays visible until the first keyframe/safe IDR releases immediately.
 Audio continues independently.
 
-When opt-in `SIP_SWITCH_VIDEO_RENEGOTIATE_ENABLE=true` (default `false`, requires
-`SIP_MIDCALL_RENEGOTIATION_ENABLE=true`), a genuine `@switch` skips the
+When opt-in `SIP_SWITCH_VIDEO_RENEGOTIATE_ENABLE=true` (default `false`), a genuine `@switch` skips the
 `SIP_SWITCH_VIDEO_BLACKOUT_MS` transition hold (`switch_transition_hold_skipped reason=renegotiate`)
 and starts a make-before-break WebRTC handoff: the live PeerConnection stays
 parked until the replacement ICE-connects. The gateway emits

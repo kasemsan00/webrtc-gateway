@@ -49,7 +49,7 @@ func (s *Server) NotifyAuxVideoOffered(sessionID string) {
 			s.abortReceivedAuxStream(sess, "reattach-failed")
 			return
 		}
-		s.NotifyAuxVideoState(sessionID, true, "")
+		s.NotifyAuxVideoState(sessionID, true, "", "remote")
 		s.reportScreenStream(sess, true)
 		return
 	}
@@ -161,7 +161,12 @@ func (s *Server) handleStreamAddedAnswer(client *WSClient, sess *session.Session
 
 func (s *Server) abortReceivedAuxStream(sess *session.Session, reason string) {
 	if sess != nil {
-		sess.CloseAuxVideo(reason)
+		if aux := sess.AuxVideo(); aux != nil && aux.HasUplink() && aux.HasDownlink() {
+			// Keep an active local share alive; only drop the failed remote downlink.
+			aux.StopDownlink()
+		} else {
+			sess.CloseAuxVideo(reason)
+		}
 	}
 	s.reportScreenStream(sess, false)
 }
@@ -177,25 +182,32 @@ func (s *Server) reportScreenStream(sess *session.Session, ready bool) {
 }
 
 // handleAuxAfterResume acts on an auxiliary stream that could not move to the
-// PeerConnection built for a resume, because the client's offer had no second
-// video section. A sharing session closes its SIP m-line; a receiving session
-// tells the sharing leg, which then closes it.
+// PeerConnection built for a resume, because the client's offer omitted the
+// corresponding screen section. A lost local share closes its SIP uplink; a
+// lost remote share tells the sharing leg so it can close its uplink.
 func (s *Server) handleAuxAfterResume(sess *session.Session) {
 	outcome := sess.TakeAuxResumeOutcome()
-	if !outcome.Lost {
+	lostUplink := outcome.LostUplink || (outcome.Lost && outcome.Sending)
+	lostDownlink := outcome.LostDownlink || (outcome.Lost && !outcome.Sending)
+	if !lostUplink && !lostDownlink {
 		return
 	}
 	controller, ok := s.sipMaker.(sipScreenStreamController)
 	if !ok || controller == nil {
 		return
 	}
-	fmt.Printf("[%s] aux_stream lost on resume sending=%v\n", sess.ID, outcome.Sending)
+	fmt.Printf("[%s] aux_stream lost on resume lostUplink=%v lostDownlink=%v\n", sess.ID, lostUplink, lostDownlink)
 	go func() {
-		if outcome.Sending {
+		if lostUplink {
 			controller.CloseScreenStream(sess, "resume")
-		} else {
-			controller.ReportScreenStreamToPeer(sess, false)
+			s.NotifyAuxVideoState(sess.ID, false, "resume", "local")
 		}
-		s.NotifyAuxVideoState(sess.ID, false, "resume")
+		if lostDownlink {
+			if aux := sess.AuxVideo(); aux != nil && aux.HasUplink() {
+				aux.StopDownlink()
+			}
+			controller.ReportScreenStreamToPeer(sess, false)
+			s.NotifyAuxVideoState(sess.ID, false, "resume", "remote")
+		}
 	}()
 }

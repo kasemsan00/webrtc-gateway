@@ -104,6 +104,8 @@ type Server struct {
 	// screenConfirmTimeout overrides how long a sharing leg waits for the
 	// far end to confirm; zero means the default.
 	screenConfirmTimeout time.Duration
+	// screenKeyframeFollowupDelay overrides the post-confirm PLI follow-up delay; zero means 500ms.
+	screenKeyframeFollowupDelay time.Duration
 	remoteMediaNotifier        RemoteMediaNotifier
 	switchRenegotiationStarter SwitchVideoRenegotiationStarter
 	incomingNotifier           IncomingCallNotifier // For notifying incoming calls

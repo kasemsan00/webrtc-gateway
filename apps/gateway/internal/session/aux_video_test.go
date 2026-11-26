@@ -551,3 +551,162 @@ func TestForwardAuxUplinkDiscardsWhileNoStreamIsOpen(t *testing.T) {
 		t.Fatal("forwarder must drain and return when the track closes")
 	}
 }
+
+func TestAuxUplinkPaddingProbeRequestsBrowserKeyframeWhileWaiting(t *testing.T) {
+	rig := newAuxTestRig(t)
+	var mu sync.Mutex
+	var sent []rtcp.Packet
+	rig.aux.BindUplinkTrack(0xCAFE, func(packets []rtcp.Packet) error {
+		mu.Lock()
+		sent = append(sent, packets...)
+		mu.Unlock()
+		return nil
+	})
+
+	// Padding-only BWE probe carries an empty RTP payload.
+	rig.aux.HandleUplinkRTP(&rtp.Packet{
+		Header: rtp.Header{Version: 2, PayloadType: 102, SequenceNumber: 1, Timestamp: 1000, SSRC: 0xB0B0B0B0},
+	})
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(sent) != 1 {
+		t.Fatalf("browser keyframe requests on padding probe = %d, want 1", len(sent))
+	}
+	if pli, ok := sent[0].(*rtcp.PictureLossIndication); !ok || pli.MediaSSRC != 0xCAFE {
+		t.Fatalf("request = %#v, want PLI for aux uplink SSRC", sent[0])
+	}
+}
+
+func TestAuxDownlinkRelayFiresBeforeRemoteSSRCIsLearned(t *testing.T) {
+	rig := newAuxTestRig(t)
+	rig.aux.SetSIPDirection("recvonly")
+	relays := 0
+	rig.aux.SetKeyframeRelay(func() { relays++ })
+
+	// Attach track before any SIP RTP arrived (remoteSSRC == 0): relay must still fire,
+	// and pendingSIPPLI must remain armed so the first SIP RTP packet still sends SIP RTCP PLI.
+	rig.aux.SetLocalTrack(newAuxLocalTrack(t))
+	if relays != 1 {
+		t.Fatalf("relay calls = %d, want 1", relays)
+	}
+	if stats := rig.aux.Stats(); stats.SIPPLISent != 0 {
+		t.Fatalf("SIPPLISent before remoteSSRC learned = %d, want 0", stats.SIPPLISent)
+	}
+
+	rig.aux.HandleSIPRTP(auxDownlinkPacket(1, auxTestP))
+	packets := readRTCP(t, rig.peerRTCP)
+	if len(packets) != 2 {
+		t.Fatalf("SIP RTCP packets after first RTP = %d, want RR + PLI", len(packets))
+	}
+	if relays != 2 {
+		t.Fatalf("relay calls after first RTP = %d, want 2", relays)
+	}
+}
+
+func TestAuxUplinkReplaysCachedIDRAfterEarlyStaticFrame(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	sess := &Session{ID: "aux-cached-idr", RTPBufferSize: 2048, State: StateActive, ctx: ctx, cancel: cancel}
+
+	peerRTP := listenLoopbackUDP(t)
+	rtpConn := listenLoopbackUDP(t)
+	rtcpConn := listenLoopbackUDP(t)
+
+	// Open AuxVideo WITHOUT remoteRTP yet (simulates the SIP re-INVITE window on Share #2).
+	aux, err := sess.OpenAuxVideo(rtpConn, rtcpConn, udpAddrOf(rtpConn).Port, udpAddrOf(rtcpConn).Port)
+	if err != nil {
+		t.Fatalf("OpenAuxVideo: %v", err)
+	}
+	t.Cleanup(func() { sess.CloseAuxVideo("test-cleanup") })
+	aux.SetSIPFormat(96, 1)
+
+	// Browser sends the sole IDR of a static screen before SIP 200 OK sets remoteRTP.
+	fuaStart := []byte{0x7c, 0x85, 0x11, 0x22} // FU-A start of NAL type 5 (IDR)
+	fuaEnd := []byte{0x7c, 0x45, 0x33, 0x44}   // FU-A end of NAL type 5 (IDR)
+	aux.HandleUplinkRTP(browserPacket(1, 90000, false, auxTestSPS))
+	aux.HandleUplinkRTP(browserPacket(2, 90000, false, auxTestPPS))
+	aux.HandleUplinkRTP(browserPacket(3, 90000, false, fuaStart))
+	aux.HandleUplinkRTP(browserPacket(4, 90000, true, fuaEnd))
+
+	if stats := aux.Stats(); stats.UplinkForwarded != 0 || stats.UplinkHeld != 4 {
+		t.Fatalf("before remoteRTP: forwarded=%d held=%d, want 0 and 4", stats.UplinkForwarded, stats.UplinkHeld)
+	}
+
+	// SIP 200 OK arrives -> SetRemoteEndpoints keeps the live IDR gate closed until peer-ready or a fresh IDR.
+	aux.SetRemoteEndpoints(udpAddrOf(peerRTP), nil, true)
+	if !aux.ReplayCachedIDR("peer-ready") {
+		t.Fatalf("ReplayCachedIDR(peer-ready) = false, want true")
+	}
+	got := readRTP(t, peerRTP)
+	if len(got) != 4 {
+		t.Fatalf("replayed packets on peer-ready = %d, want 4", len(got))
+	}
+	if got[0].Payload[0]&0x1F != 7 || got[1].Payload[0]&0x1F != 8 || got[2].Payload[0]&0x1F != 28 || got[3].Payload[0]&0x1F != 28 {
+		t.Fatalf("unexpected replayed NAL types: %x %x %x %x", got[0].Payload[0], got[1].Payload[0], got[2].Payload[0], got[3].Payload[0])
+	}
+	if !got[3].Marker {
+		t.Fatalf("last replayed IDR packet must preserve Marker=true")
+	}
+	firstTS := got[0].Timestamp
+
+	// Replaying again advances the RTP timestamp monotonically.
+	if !aux.ReplayCachedIDR("peer-ready-followup") {
+		t.Fatalf("ReplayCachedIDR(peer-ready-followup) = false, want true")
+	}
+	got2 := readRTP(t, peerRTP)
+	if len(got2) != 4 {
+		t.Fatalf("replayed packets on second replay = %d, want 4", len(got2))
+	}
+	if int32(got2[0].Timestamp-firstTS) <= 0 {
+		t.Fatalf("second replay timestamp=%d must advance past %d", got2[0].Timestamp, firstTS)
+	}
+
+	// Mode-0 SIP leg must not replay FU-A cached packets.
+	aux.SetSIPFormat(96, 0)
+	if aux.ReplayCachedIDR("mode0-skip") {
+		t.Fatalf("ReplayCachedIDR must skip FU-A payloads on packetization-mode=0")
+	}
+
+	// Closing Share #1 clears the cache so Share #1's frame never leaks into Share #2.
+	sess.CloseAuxVideo("client-remove")
+	if snap := sess.ensureAuxUplinkIDRCache().snapshot(auxCachedIDRMaxAge); snap != nil {
+		t.Fatalf("CloseAuxVideo did not clear uplink IDR cache: %+v", snap)
+	}
+}
+
+func TestAuxUplinkCachesIDRBeforeOpenAuxVideo(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	sess := &Session{ID: "aux-pre-open-idr", RTPBufferSize: 2048, State: StateActive, ctx: ctx, cancel: cancel}
+
+	// Share #2 IDR arrives over SRTP BEFORE stream_update opens AuxVideo (aux == nil).
+	packets := marshalBrowserPackets(t,
+		browserPacket(10, 180000, false, auxTestSPS),
+		browserPacket(11, 180000, false, auxTestPPS),
+		browserPacket(12, 180000, true, auxTestIDR),
+	)
+	sess.forwardAuxUplink(&queuedRTPReader{packets: packets}, 0xABCD, nil)
+
+	peerRTP := listenLoopbackUDP(t)
+	rtpConn := listenLoopbackUDP(t)
+	rtcpConn := listenLoopbackUDP(t)
+	aux, err := sess.OpenAuxVideo(rtpConn, rtcpConn, udpAddrOf(rtpConn).Port, udpAddrOf(rtcpConn).Port)
+	if err != nil {
+		t.Fatalf("OpenAuxVideo: %v", err)
+	}
+	t.Cleanup(func() { sess.CloseAuxVideo("test-cleanup") })
+	aux.SetSIPFormat(96, 1)
+	aux.SetRemoteEndpoints(udpAddrOf(peerRTP), nil, true)
+	if !aux.ReplayCachedIDR("peer-ready") {
+		t.Fatalf("ReplayCachedIDR(peer-ready) = false, want true")
+	}
+
+	got := readRTP(t, peerRTP)
+	if len(got) != 3 {
+		t.Fatalf("replayed pre-open packets = %d, want 3 (SPS, PPS, IDR)", len(got))
+	}
+	if got[0].Payload[0]&0x1F != 7 || got[1].Payload[0]&0x1F != 8 || got[2].Payload[0]&0x1F != 5 {
+		t.Fatalf("unexpected pre-open NAL types: %x %x %x", got[0].Payload[0], got[1].Payload[0], got[2].Payload[0])
+	}
+}

@@ -320,15 +320,32 @@ func TestClientStateOptsInToMultiVideoExceptOnPublicSocket(t *testing.T) {
 func TestNotifyAuxVideoStateOnlyReachesOptedInClient(t *testing.T) {
 	rig := newStreamTestRig(t)
 
-	rig.srv.NotifyAuxVideoState(rig.sess.ID, false, "peer_closed")
+	rig.srv.NotifyAuxVideoState(rig.sess.ID, false, "peer_closed", "remote")
 
 	msg := readWSTestMessage(t, rig.client)
 	if msg.Type != "stream_state" || msg.SessionID != rig.sess.ID || msg.Role != "screen" ||
-		msg.Active == nil || *msg.Active || msg.Reason != "peer_closed" {
+		msg.Direction != "remote" || msg.Active == nil || *msg.Active || msg.Reason != "peer_closed" {
 		t.Fatalf("unexpected stream_state: %+v", msg)
 	}
 
 	rig.client.multiVideo = false
-	rig.srv.NotifyAuxVideoState(rig.sess.ID, false, "peer_closed")
+	rig.srv.NotifyAuxVideoState(rig.sess.ID, false, "peer_closed", "remote")
 	assertNoWSTestMessage(t, rig.client)
+}
+
+func TestStreamUpdateAcceptsThreeVideoOfferForDualScreenShare(t *testing.T) {
+	rig := newStreamTestRig(t)
+	rig.maker.outcome = sip.ScreenStreamOutcome{Status: "rejected", Reason: "not_supported"}
+
+	offerDual := "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=mid:0\r\n" +
+		"m=video 9 UDP/TLS/RTP/SAVPF 96\r\na=mid:1\r\na=sendrecv\r\n" +
+		"m=video 9 UDP/TLS/RTP/SAVPF 96\r\na=mid:2\r\na=recvonly\r\n" +
+		"m=video 9 UDP/TLS/RTP/SAVPF 96\r\na=mid:3\r\na=sendonly\r\n"
+
+	// Validation must accept the 3-video dual-screen offer and reach SIP.
+	result := rig.update(t, WSMessage{Action: "add", SDP: offerDual})
+	assertStreamResult(t, result, "rejected", "not_supported")
+	if open, _, _ := rig.maker.counts(); open != 1 {
+		t.Fatalf("OpenScreenStream calls = %d, want 1", open)
+	}
 }
