@@ -110,7 +110,7 @@ func TestEnsurePeerConnectionConcurrentSingleInit(t *testing.T) {
 	errs := make([]error, workers)
 	pcs := make([]*webrtc.PeerConnection, workers)
 	audios := make([]*webrtc.TrackLocalStaticRTP, workers)
-	videos := make([]*webrtc.TrackLocalStaticRTP, workers)
+	videos := make([]VideoEgressTrack, workers)
 
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
@@ -134,7 +134,7 @@ func TestEnsurePeerConnectionConcurrentSingleInit(t *testing.T) {
 
 	var firstPC *webrtc.PeerConnection
 	var firstAudio *webrtc.TrackLocalStaticRTP
-	var firstVideo *webrtc.TrackLocalStaticRTP
+	var firstVideo VideoEgressTrack
 	for i := 0; i < workers; i++ {
 		if errs[i] != nil {
 			t.Fatalf("worker %d EnsurePeerConnection error: %v", i, errs[i])

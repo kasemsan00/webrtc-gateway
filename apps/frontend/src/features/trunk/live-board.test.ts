@@ -229,6 +229,7 @@ describe('buildTrunkLiveRows', () => {
       incoming: 0,
       talking: 1,
       reconnecting: 0,
+      screenSharing: 0,
       offline: 1,
       appsConnected: 1,
     })

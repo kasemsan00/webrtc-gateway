@@ -37,6 +37,8 @@ export interface SipParty {
   detail?: string
 }
 
+export type ScreenShareMode = 'sending' | 'receiving' | 'both'
+
 export interface LiveCall {
   sessionId: string
   phase: CallPhase
@@ -53,6 +55,12 @@ export interface LiveCall {
   sipUsername: string
   /** Who on our side is on this call (agent / app / user), when known. */
   operator: CallOperator | null
+  /** Active auxiliary screen-share direction on this session, or null when idle. */
+  screenShare: ScreenShareMode | null
+  /** True once the far end confirmed displaying an outbound screen share. */
+  screenShareConfirmed: boolean
+  /** True when the WS client handling this call opted into multiVideo. */
+  multiVideo: boolean
 }
 
 export type OperatorKind = 'agent' | 'app' | 'user' | 'line'
@@ -70,6 +78,8 @@ export interface TrunkLiveRow {
   clients: Array<WSClient>
   /** Destinations from /api/trunks when sessions are not visible here. */
   fallbackDestinations: Array<string>
+  /** True when at least one connected WS client on this trunk enabled multiVideo. */
+  multiVideoReady: boolean
 }
 
 export interface LiveSummary {
@@ -84,6 +94,8 @@ export interface LiveSummary {
   talking: number
   /** Connected calls currently reconnecting (subset of `talking`). */
   reconnecting: number
+  /** Active calls currently sharing or viewing a screen (subset of `talking`). */
+  screenSharing: number
   offline: number
   appsConnected: number
 }
@@ -156,6 +168,23 @@ function normalizeDirection(direction: string): LiveCall['direction'] {
   return 'unknown'
 }
 
+function normalizeScreenShareMode(
+  active?: boolean,
+  direction?: string,
+): ScreenShareMode | null {
+  if (!active) return null
+  switch (direction?.trim().toLowerCase()) {
+    case 'sending':
+      return 'sending'
+    case 'receiving':
+      return 'receiving'
+    case 'both':
+      return 'both'
+    default:
+      return 'sending'
+  }
+}
+
 export function toLiveCall(session: ActiveSession): LiveCall | null {
   const phase = sessionCallPhase(session)
   if (!phase) return null
@@ -176,6 +205,12 @@ export function toLiveCall(session: ActiveSession): LiveCall | null {
     trunkName: session.trunkName || '',
     sipUsername: session.sipUsername || '',
     operator: null,
+    screenShare: normalizeScreenShareMode(
+      session.screenShareActive,
+      session.screenShareDirection,
+    ),
+    screenShareConfirmed: Boolean(session.screenShareConfirmed),
+    multiVideo: false,
   }
 }
 
@@ -337,11 +372,20 @@ export function buildTrunkLiveRows(
 
   const rows = trunks.map((trunk, index) => {
     const trunkClients = clientsByTrunk.get(trunk.id) ?? []
+    const multiVideoReady = trunkClients.some((client) =>
+      Boolean(client.multiVideo),
+    )
     const calls = sortCalls(
-      (callsByTrunk.get(trunk.id) ?? []).map((call) => ({
-        ...call,
-        operator: resolveCallOperator(call, trunk, clients),
-      })),
+      (callsByTrunk.get(trunk.id) ?? []).map((call) => {
+        const boundClient = call.sessionId
+          ? clients.find((client) => client.sessionId === call.sessionId)
+          : undefined
+        return {
+          ...call,
+          operator: resolveCallOperator(call, trunk, clients),
+          multiVideo: Boolean(boundClient?.multiVideo || multiVideoReady),
+        }
+      }),
     )
     // Normalised destinations are already trimmed and non-empty.
     const fallbackDestinations =
@@ -354,6 +398,7 @@ export function buildTrunkLiveRows(
         calls,
         clients: trunkClients,
         fallbackDestinations,
+        multiVideoReady,
       } satisfies TrunkLiveRow,
     }
   })
@@ -377,13 +422,19 @@ export function collectNonTrunkCalls(
     normalizeSessions(rawSessions)
       .map(toLiveCall)
       .filter((call): call is LiveCall => call !== null && call.trunkId <= 0)
-      .map((call) => ({
-        ...call,
-        operator: resolveCallOperator(call, null, clients) ?? {
-          kind: 'user',
-          label: call.sipUsername || call.local.label,
-        },
-      })),
+      .map((call) => {
+        const boundClient = call.sessionId
+          ? clients.find((client) => client.sessionId === call.sessionId)
+          : undefined
+        return {
+          ...call,
+          operator: resolveCallOperator(call, null, clients) ?? {
+            kind: 'user',
+            label: call.sipUsername || call.local.label,
+          },
+          multiVideo: Boolean(boundClient?.multiVideo),
+        }
+      }),
   )
 }
 
@@ -417,7 +468,7 @@ export function rowCallCount(
  */
 export function summarizeLiveRows(
   rows: Array<TrunkLiveRow>,
-  otherCalls: Array<Pick<LiveCall, 'phase'>> = [],
+  otherCalls: Array<Pick<LiveCall, 'phase' | 'screenShare'>> = [],
 ): LiveSummary {
   const summary: LiveSummary = {
     trunks: rows.length,
@@ -427,10 +478,12 @@ export function summarizeLiveRows(
     incoming: 0,
     talking: 0,
     reconnecting: 0,
+    screenSharing: 0,
     offline: 0,
     appsConnected: 0,
   }
-  const countCall = (call: Pick<LiveCall, 'phase'>) => {
+  const countCall = (call: Pick<LiveCall, 'phase' | 'screenShare'>) => {
+    if (call.screenShare) summary.screenSharing += 1
     switch (call.phase) {
       case 'dialing':
         summary.calling += 1

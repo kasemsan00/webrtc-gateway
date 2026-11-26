@@ -238,4 +238,61 @@ describe('TrunkLiveBoard transitions', () => {
       { timeout: 1500 },
     )
   })
+
+  it('displays Multi-stream capability and live screen share badges on trunks and calls', () => {
+    const trunks = [
+      makeTrunk({ id: 1, name: 'Agent 00025', username: '00025' }),
+      makeTrunk({ id: 2, name: 'Agent 9001', username: 'lab9001' }),
+    ]
+    const sessions = [
+      makeSession({
+        id: 's-share',
+        trunkId: 1,
+        screenShareActive: true,
+        screenShareDirection: 'both',
+        screenShareConfirmed: true,
+      }),
+    ]
+    const clients = [
+      {
+        clientId: 'c-1',
+        sessionId: 's-share',
+        connectedAt: '2026-10-27T06:00:00Z',
+        trunkResolved: true,
+        resolvedTrunkId: 1,
+        sipUsername: '00025',
+        agentOnly: true,
+        multiVideo: true,
+      },
+      {
+        clientId: 'c-2',
+        connectedAt: '2026-10-27T06:00:00Z',
+        trunkResolved: true,
+        resolvedTrunkId: 2,
+        sipUsername: 'lab9001',
+        agentOnly: true,
+        multiVideo: true,
+      },
+    ]
+
+    render(
+      <TrunkLiveBoard
+        trunks={trunks}
+        sessions={sessions}
+        clients={clients}
+        filter="all"
+        onFilterChange={() => {}}
+        sessionsFetchedAt={Date.now()}
+      />,
+    )
+
+    const liveSection = screen.getByRole('region', { name: 'Live calls' })
+    const idleSection = screen.getByRole('region', {
+      name: 'Trunks not in a call',
+    })
+    expect(within(liveSection).getByText('Dual screen')).toBeTruthy()
+    expect(within(liveSection).getByText('Multi-stream')).toBeTruthy()
+    expect(within(idleSection).getByText('Multi-stream')).toBeTruthy()
+    expect(screen.getByText('1 screen share')).toBeTruthy()
+  })
 })

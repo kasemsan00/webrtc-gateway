@@ -96,6 +96,7 @@ func (s *Server) buildWSClientResponse(client *WSClient) WSClientResponse {
 		AgentOnly:       client.agentOnly,
 		AgentDeviceOnly: client.agentDeviceOnly,
 		MultiCall:       client.multiCall,
+		MultiVideo:      client.multiVideo,
 		ActiveCalls:     client.activeCalls,
 	}
 	if client.agentOnly {

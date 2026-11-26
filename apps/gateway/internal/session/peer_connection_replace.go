@@ -94,15 +94,11 @@ func (s *Session) createReplacementPeerConnection(
 		return nil, fmt.Errorf("failed to add audio track: %w", err)
 	}
 
-	videoTrack, err := webrtc.NewTrackLocalStaticRTP(
+	videoTrack := newPinnedVideoTrack(
 		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264, ClockRate: 90000},
 		"video",
 		fmt.Sprintf("pion-video-%s-renegotiate", s.ID),
 	)
-	if err != nil {
-		newPC.Close()
-		return nil, fmt.Errorf("failed to create video track: %w", err)
-	}
 	videoSender, err := newPC.AddTrack(videoTrack)
 	if err != nil {
 		newPC.Close()

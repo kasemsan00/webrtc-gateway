@@ -52,6 +52,10 @@ type SessionResponse struct {
 	TranslatorSrcLang  string `json:"translatorSrcLang,omitempty"`
 	TranslatorTgtLang  string `json:"translatorTgtLang,omitempty"`
 	TranslatorTTSVoice string `json:"translatorTtsVoice,omitempty"`
+	// Screen share (auxiliary video) live status for admin monitoring.
+	ScreenShareActive    bool   `json:"screenShareActive,omitempty"`
+	ScreenShareDirection string `json:"screenShareDirection,omitempty"` // "sending" | "receiving" | "both"
+	ScreenShareConfirmed bool   `json:"screenShareConfirmed,omitempty"`
 	// AnsweredAt is RFC3339 and null until the call first becomes active.
 	AnsweredAt *string `json:"answeredAt"`
 }

@@ -58,12 +58,12 @@ type Session struct {
 	ID             string                      `json:"id"`
 	PeerConnection *webrtc.PeerConnection      `json:"-"`
 	AudioTrack     *webrtc.TrackLocalStaticRTP `json:"-"`
-	VideoTrack     *webrtc.TrackLocalStaticRTP `json:"-"`
+	VideoTrack     VideoEgressTrack            `json:"-"`
 	// Make-before-break @switch: the previous WebRTC PC stays up until the
 	// replacement ICE-connects so the client keeps last-frame video and audio.
 	legacyPeerConnection *webrtc.PeerConnection      `json:"-"`
 	legacyAudioTrack     *webrtc.TrackLocalStaticRTP `json:"-"`
-	legacyVideoTrack     *webrtc.TrackLocalStaticRTP `json:"-"`
+	legacyVideoTrack     VideoEgressTrack            `json:"-"`
 	RTPConn              *net.UDPConn                `json:"-"`
 	VideoRTPConn         *net.UDPConn                `json:"-"`
 	AudioRTCPConn        *net.UDPConn                `json:"-"` // Dedicated RTCP port for audio (RTP+1)
@@ -863,16 +863,14 @@ func (s *Session) initPeerConnectionLocked() error {
 		return fmt.Errorf("failed to add audio track: %w", err)
 	}
 
-	// Create video track (H.264 for SIP compatibility)
-	videoTrack, err := webrtc.NewTrackLocalStaticRTP(
+	// Create video track (H.264 for SIP compatibility) with dynamic PayloadType
+	// pinning so mid-call in-place renegotiations never leave camera RTP stamped
+	// with a retired payload type.
+	videoTrack := newPinnedVideoTrack(
 		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264, ClockRate: 90000},
 		"video",
 		fmt.Sprintf("pion-video-%s", id),
 	)
-	if err != nil {
-		_ = peerConnection.Close()
-		return fmt.Errorf("failed to create video track: %w", err)
-	}
 
 	// Add video track to peer connection
 	videoSender, err := peerConnection.AddTrack(videoTrack)

@@ -9,7 +9,7 @@ import (
 
 // armMakeBeforeBreakLocked parks the live PeerConnection so SIP audio can keep
 // flowing on it while signaling and new video go to the replacement PC.
-func (s *Session) armMakeBeforeBreakLocked(oldPC *webrtc.PeerConnection, oldAudio, oldVideo *webrtc.TrackLocalStaticRTP) {
+func (s *Session) armMakeBeforeBreakLocked(oldPC *webrtc.PeerConnection, oldAudio *webrtc.TrackLocalStaticRTP, oldVideo VideoEgressTrack) {
 	if oldPC == nil {
 		return
 	}

@@ -156,6 +156,8 @@ func (s *Server) handleStreamAddedAnswer(client *WSClient, sess *session.Session
 		return
 	}
 	result("ok", "", answerSDP)
+	sid := sess.ID
+	s.notifySessionListChanged("updated", &sid)
 	s.reportScreenStream(sess, true)
 }
 
@@ -167,6 +169,8 @@ func (s *Server) abortReceivedAuxStream(sess *session.Session, reason string) {
 		} else {
 			sess.CloseAuxVideo(reason)
 		}
+		sid := sess.ID
+		s.notifySessionListChanged("updated", &sid)
 	}
 	s.reportScreenStream(sess, false)
 }

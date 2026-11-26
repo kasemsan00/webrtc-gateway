@@ -1,6 +1,9 @@
 package api
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
@@ -347,5 +350,56 @@ func TestStreamUpdateAcceptsThreeVideoOfferForDualScreenShare(t *testing.T) {
 	assertStreamResult(t, result, "rejected", "not_supported")
 	if open, _, _ := rig.maker.counts(); open != 1 {
 		t.Fatalf("OpenScreenStream calls = %d, want 1", open)
+	}
+}
+
+func TestAdminAPIExposesMultiVideoAndScreenShareState(t *testing.T) {
+	rig := newStreamTestRig(t)
+	rig.client.clientID = "client-mv"
+	rig.srv.wsConnections = map[*WSClient]struct{}{rig.client: {}}
+
+	// 1. /api/ws-clients exposes multiVideo=true.
+	rrClients := httptest.NewRecorder()
+	rig.srv.handleListWSClients(rrClients, httptest.NewRequest(http.MethodGet, "/api/ws-clients", nil))
+	var clients []WSClientResponse
+	if err := json.Unmarshal(rrClients.Body.Bytes(), &clients); err != nil {
+		t.Fatalf("unmarshal ws-clients: %v", err)
+	}
+	if len(clients) != 1 || !clients[0].MultiVideo {
+		t.Fatalf("expected multiVideo=true on ws-client response, got %+v", clients)
+	}
+
+	// 2. /api/sessions exposes screenShareActive, screenShareDirection, and screenShareConfirmed.
+	aux, err := rig.sess.OpenAuxVideo(nil, nil, 12010, 12011)
+	if err != nil {
+		t.Fatalf("OpenAuxVideo: %v", err)
+	}
+	for _, tc := range []struct {
+		sipDir      string
+		confirm     bool
+		wantDir     string
+		wantConfirm bool
+	}{
+		{sipDir: "sendonly", confirm: true, wantDir: "sending", wantConfirm: true},
+		{sipDir: "recvonly", confirm: false, wantDir: "receiving", wantConfirm: false},
+		{sipDir: "sendrecv", confirm: true, wantDir: "both", wantConfirm: true},
+	} {
+		aux.SetSIPDirection(tc.sipDir)
+		aux.ResetPeerConfirmed()
+		if tc.confirm {
+			aux.MarkPeerConfirmed()
+		}
+		rrSessions := httptest.NewRecorder()
+		rig.srv.handleListSessions(rrSessions, httptest.NewRequest(http.MethodGet, "/api/sessions", nil))
+		var sessions []SessionResponse
+		if err := json.Unmarshal(rrSessions.Body.Bytes(), &sessions); err != nil {
+			t.Fatalf("unmarshal sessions: %v", err)
+		}
+		if len(sessions) != 1 || !sessions[0].ScreenShareActive ||
+			sessions[0].ScreenShareDirection != tc.wantDir ||
+			sessions[0].ScreenShareConfirmed != tc.wantConfirm {
+			t.Fatalf("sipDir=%s: got %+v, want active=true dir=%s confirmed=%v",
+				tc.sipDir, sessions, tc.wantDir, tc.wantConfirm)
+		}
 	}
 }

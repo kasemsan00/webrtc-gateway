@@ -344,6 +344,28 @@ func sessionAnsweredAt(sess *session.Session) *string {
 	return &formatted
 }
 
+func sessionScreenShareSummary(sess *session.Session) (active bool, direction string, confirmed bool) {
+	if sess == nil {
+		return false, "", false
+	}
+	aux := sess.AuxVideo()
+	if aux == nil {
+		return false, "", false
+	}
+	hasUp := aux.HasUplink()
+	hasDown := aux.HasDownlink()
+	switch {
+	case hasUp && hasDown:
+		return true, "both", aux.PeerConfirmed()
+	case hasUp:
+		return true, "sending", aux.PeerConfirmed()
+	case hasDown:
+		return true, "receiving", false
+	default:
+		return false, "", false
+	}
+}
+
 // handleListSessions returns all active sessions
 func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	sessions := s.sessionMgr.ListSessions()
@@ -353,6 +375,7 @@ func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 		direction, from, to, sipCallID := sess.GetCallInfo()
 		authMode, _, trunkID, _, sipUsername, _, _ := sess.GetSIPAuthContext()
 		snap := sess.Snapshot()
+		screenActive, screenDir, screenConfirmed := sessionScreenShareSummary(sess)
 
 		durationSec := int64(time.Since(sess.CreatedAt).Seconds())
 
@@ -362,24 +385,27 @@ func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 		}
 
 		response[i] = SessionResponse{
-			ID:                 sess.ID,
-			State:              string(sess.GetState()),
-			Direction:          direction,
-			From:               from,
-			To:                 to,
-			SIPCallID:          sipCallID,
-			AuthMode:           authMode,
-			TrunkID:            trunkID,
-			TrunkName:          trunkName,
-			SIPUsername:        sipUsername,
-			DurationSec:        durationSec,
-			CreatedAt:          sess.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
-			UpdatedAt:          sess.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
-			TranslatorEnabled:  snap.TranslatorEnabled,
-			TranslatorSrcLang:  snap.TranslatorSrcLang,
-			TranslatorTgtLang:  snap.TranslatorTgtLang,
-			TranslatorTTSVoice: snap.TranslatorTTSVoice,
-			AnsweredAt:         sessionAnsweredAt(sess),
+			ID:                   sess.ID,
+			State:                string(sess.GetState()),
+			Direction:            direction,
+			From:                 from,
+			To:                   to,
+			SIPCallID:            sipCallID,
+			AuthMode:             authMode,
+			TrunkID:              trunkID,
+			TrunkName:            trunkName,
+			SIPUsername:          sipUsername,
+			DurationSec:          durationSec,
+			CreatedAt:            sess.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+			UpdatedAt:            sess.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+			TranslatorEnabled:    snap.TranslatorEnabled,
+			TranslatorSrcLang:    snap.TranslatorSrcLang,
+			TranslatorTgtLang:    snap.TranslatorTgtLang,
+			TranslatorTTSVoice:   snap.TranslatorTTSVoice,
+			ScreenShareActive:    screenActive,
+			ScreenShareDirection: screenDir,
+			ScreenShareConfirmed: screenConfirmed,
+			AnsweredAt:           sessionAnsweredAt(sess),
 		}
 	}
 
@@ -405,6 +431,7 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 	direction, from, to, sipCallID := sess.GetCallInfo()
 	authMode, _, trunkID, _, sipUsername, _, _ := sess.GetSIPAuthContext()
 	snap := sess.Snapshot()
+	screenActive, screenDir, screenConfirmed := sessionScreenShareSummary(sess)
 
 	durationSec := int64(time.Since(sess.CreatedAt).Seconds())
 
@@ -414,24 +441,27 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response := SessionResponse{
-		ID:                 sess.ID,
-		State:              string(sess.GetState()),
-		Direction:          direction,
-		From:               from,
-		To:                 to,
-		SIPCallID:          sipCallID,
-		AuthMode:           authMode,
-		TrunkID:            trunkID,
-		TrunkName:          trunkName,
-		SIPUsername:        sipUsername,
-		DurationSec:        durationSec,
-		CreatedAt:          sess.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
-		UpdatedAt:          sess.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
-		TranslatorEnabled:  snap.TranslatorEnabled,
-		TranslatorSrcLang:  snap.TranslatorSrcLang,
-		TranslatorTgtLang:  snap.TranslatorTgtLang,
-		TranslatorTTSVoice: snap.TranslatorTTSVoice,
-		AnsweredAt:         sessionAnsweredAt(sess),
+		ID:                   sess.ID,
+		State:                string(sess.GetState()),
+		Direction:            direction,
+		From:                 from,
+		To:                   to,
+		SIPCallID:            sipCallID,
+		AuthMode:             authMode,
+		TrunkID:              trunkID,
+		TrunkName:            trunkName,
+		SIPUsername:          sipUsername,
+		DurationSec:          durationSec,
+		CreatedAt:            sess.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		UpdatedAt:            sess.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		TranslatorEnabled:    snap.TranslatorEnabled,
+		TranslatorSrcLang:    snap.TranslatorSrcLang,
+		TranslatorTgtLang:    snap.TranslatorTgtLang,
+		TranslatorTTSVoice:   snap.TranslatorTTSVoice,
+		ScreenShareActive:    screenActive,
+		ScreenShareDirection: screenDir,
+		ScreenShareConfirmed: screenConfirmed,
+		AnsweredAt:           sessionAnsweredAt(sess),
 	}
 
 	s.respondJSON(w, http.StatusOK, response)

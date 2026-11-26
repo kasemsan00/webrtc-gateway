@@ -2,7 +2,9 @@ import {
   RiArrowLeftLine,
   RiArrowLeftRightLine,
   RiArrowRightLine,
+  RiCastFill,
   RiCheckboxCircleFill,
+  RiComputerLine,
   RiCustomerService2Line,
   RiErrorWarningFill,
   RiForbidLine,
@@ -32,6 +34,7 @@ import type {
   LiveFilter,
   LiveSummary,
   OperatorKind,
+  ScreenShareMode,
   TrunkLiveRow,
   TrunkLiveStatus,
 } from '@/features/trunk/live-board'
@@ -219,10 +222,19 @@ const TILES: Array<{
     label: 'In call',
     icon: RiUserVoiceFill,
     value: (summary) => summary.talking,
-    hint: (summary) =>
-      summary.reconnecting > 0
-        ? `${summary.talking - summary.reconnecting} talking · ${summary.reconnecting} reconnecting`
-        : 'Connected calls',
+    hint: (summary) => {
+      const parts: Array<string> = []
+      if (summary.reconnecting > 0) {
+        parts.push(
+          `${summary.talking - summary.reconnecting} talking`,
+          `${summary.reconnecting} reconnecting`,
+        )
+      }
+      if (summary.screenSharing > 0) {
+        parts.push(`${summary.screenSharing} screen share`)
+      }
+      return parts.length > 0 ? parts.join(' · ') : 'Connected calls'
+    },
   },
   {
     filter: 'offline',
@@ -368,6 +380,80 @@ function StatusBadge({ status }: { status: TrunkLiveStatus }) {
   )
 }
 
+function MultiStreamChip({ active }: { active: boolean }) {
+  if (!active) return null
+  return (
+    <span
+      className="inline-flex items-center gap-1 rounded-full border border-indigo-500/35 bg-indigo-500/10 px-2 py-0.5 text-xs font-medium whitespace-nowrap text-indigo-700 dark:text-indigo-300"
+      title="Connected client enabled multi-stream (screen share)"
+      data-multi-stream="enabled"
+    >
+      <RiComputerLine className="size-3.5" aria-hidden />
+      Multi-stream
+    </span>
+  )
+}
+
+function ScreenShareBadge({
+  mode,
+  confirmed,
+}: {
+  mode: ScreenShareMode | null
+  confirmed?: boolean
+}) {
+  if (!mode) return null
+  const label =
+    mode === 'both'
+      ? 'Dual screen'
+      : mode === 'receiving'
+        ? 'Viewing screen'
+        : confirmed
+          ? 'Sharing screen'
+          : 'Sharing screen…'
+  const toneClass =
+    mode === 'both'
+      ? 'border-fuchsia-500/40 bg-fuchsia-500/10 text-fuchsia-700 dark:text-fuchsia-300'
+      : mode === 'receiving'
+        ? 'border-sky-500/40 bg-sky-500/10 text-sky-700 dark:text-sky-300'
+        : 'border-indigo-500/40 bg-indigo-500/10 text-indigo-700 dark:text-indigo-300'
+  const dotClass =
+    mode === 'both'
+      ? 'bg-fuchsia-500'
+      : mode === 'receiving'
+        ? 'bg-sky-500'
+        : 'bg-indigo-500'
+  return (
+    <span
+      className={cn(
+        'inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-semibold whitespace-nowrap',
+        toneClass,
+      )}
+      data-screen-share={mode}
+      title={
+        mode === 'both'
+          ? 'Both sides are sharing screens simultaneously'
+          : mode === 'receiving'
+            ? 'Receiving remote screen share'
+            : confirmed
+              ? 'Sharing screen (confirmed by remote side)'
+              : 'Sharing screen (awaiting remote confirmation)'
+      }
+    >
+      <span className="relative flex size-2 shrink-0" aria-hidden>
+        <span
+          className={cn(
+            'absolute inline-flex size-full animate-ping rounded-full opacity-60 motion-reduce:animate-none',
+            dotClass,
+          )}
+        />
+        <span className={cn('relative inline-flex size-2 rounded-full', dotClass)} />
+      </span>
+      <RiCastFill className="size-3.5" aria-hidden />
+      {label}
+    </span>
+  )
+}
+
 function ConnectedChip({ row }: { row: TrunkLiveRow }) {
   const { clients } = row
   if (clients.length === 0) return null
@@ -508,15 +594,22 @@ function LinkCell({
   tone,
   flowing,
   reverse,
+  className,
   children,
 }: {
   tone: Tone
   flowing: 'dashed' | 'solid' | 'static'
   reverse?: boolean
+  className?: string
   children: ReactNode
 }) {
   return (
-    <div className="relative order-last col-span-3 flex min-h-9 items-center md:order-none md:col-span-1">
+    <div
+      className={cn(
+        'relative order-last col-span-3 flex min-h-9 items-center md:order-none md:col-span-1',
+        className,
+      )}
+    >
       <LinkLine tone={tone} flowing={flowing} reverse={reverse} />
       <span
         className={cn(
@@ -575,16 +668,27 @@ function CallFlow({
       aria-label={describeCall(call)}
     >
       <OperatorNode operator={call.operator} />
-      <LinkCell
-        tone={tone}
-        flowing={ringing || call.phase === 'reconnecting' ? 'dashed' : 'solid'}
-        reverse={inbound}
-      >
-        {inbound ? <Arrow className="size-4" aria-hidden /> : null}
-        {callPhaseLabel(call)}
-        <span className="font-mono tabular-nums">{elapsed}</span>
-        {!inbound ? <Arrow className="size-4" aria-hidden /> : null}
-      </LinkCell>
+      <div className="order-last col-span-3 flex flex-col gap-1 md:order-none md:col-span-1">
+        <LinkCell
+          tone={tone}
+          flowing={ringing || call.phase === 'reconnecting' ? 'dashed' : 'solid'}
+          reverse={inbound}
+          className="order-none col-span-1 w-full"
+        >
+          {inbound ? <Arrow className="size-4" aria-hidden /> : null}
+          {callPhaseLabel(call)}
+          <span className="font-mono tabular-nums">{elapsed}</span>
+          {!inbound ? <Arrow className="size-4" aria-hidden /> : null}
+        </LinkCell>
+        {call.screenShare ? (
+          <div className="flex justify-center">
+            <ScreenShareBadge
+              mode={call.screenShare}
+              confirmed={call.screenShareConfirmed}
+            />
+          </div>
+        ) : null}
+      </div>
       <MobileGlyph
         className={cn('size-5 md:hidden', TONE[tone].text)}
         aria-hidden
@@ -686,8 +790,11 @@ function ActiveLane({
             {row.trunk.username}@{row.trunk.domain}
           </p>
         </div>
-        <div className="flex shrink-0 items-center gap-1 md:justify-between md:pl-4.5">
-          <StatusBadge status={row.status} />
+        <div className="flex shrink-0 flex-wrap items-center gap-1.5 md:justify-between md:pl-4.5">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <StatusBadge status={row.status} />
+            <MultiStreamChip active={row.multiVideoReady} />
+          </div>
           {actions}
         </div>
       </div>
@@ -736,7 +843,10 @@ function DirectCallLane({
         <StatusDot tone={call.phase} live />
         <div className="min-w-0">
           <p className="truncate text-sm font-semibold">Direct call</p>
-          <p className="truncate text-xs text-muted-foreground">No trunk</p>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <p className="truncate text-xs text-muted-foreground">No trunk</p>
+            <MultiStreamChip active={call.multiVideo} />
+          </div>
         </div>
       </div>
       <div className="min-w-0 md:border-l md:pl-5">
@@ -819,6 +929,7 @@ function CompactTrunkCard({
           {meta.label}
         </span>
         <ConnectedChip row={row} />
+        <MultiStreamChip active={row.multiVideoReady} />
         {trunk.isDefault ? (
           <span className="rounded-full border px-1.5 text-[11px] text-muted-foreground">
             Default

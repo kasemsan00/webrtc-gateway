@@ -147,6 +147,10 @@ func (s *Server) handleWSStreamUpdate(client *WSClient, msg WSMessage) {
 		// Clear the claim first so the client can act on the result at once.
 		sess.CompleteMidCallRenegotiation(started.ID, "")
 		reply(status, reason, sdp)
+		if status == streamStatusOK {
+			sid := sessionID
+			s.notifySessionListChanged("updated", &sid)
+		}
 	}
 
 	// The SIP round trip can take seconds (and a glare retry more). It must
@@ -218,4 +222,6 @@ func (s *Server) NotifyAuxVideoState(sessionID string, active bool, reason, dire
 			"reason":    reason,
 		},
 	})
+	sid := sessionID
+	s.notifySessionListChanged("updated", &sid)
 }

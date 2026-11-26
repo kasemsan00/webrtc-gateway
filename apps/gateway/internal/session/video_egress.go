@@ -28,7 +28,7 @@ func (s *Session) WriteVideoToWebRTC(data []byte) (int, error) {
 	return track.Write(data)
 }
 
-func (s *Session) currentVideoTrack() *webrtc.TrackLocalStaticRTP {
+func (s *Session) currentVideoTrack() VideoEgressTrack {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.VideoTrack

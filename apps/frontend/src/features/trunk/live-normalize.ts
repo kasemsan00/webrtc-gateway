@@ -115,6 +115,9 @@ export function normalizeSession(raw: unknown): ActiveSession {
     translatorSrcLang: str(r.translatorSrcLang),
     translatorTgtLang: str(r.translatorTgtLang),
     translatorTtsVoice: str(r.translatorTtsVoice),
+    screenShareActive: bool(r.screenShareActive),
+    screenShareDirection: str(r.screenShareDirection),
+    screenShareConfirmed: bool(r.screenShareConfirmed),
   }
 }
 
@@ -136,6 +139,7 @@ export function normalizeWSClient(raw: unknown): WSClient {
     publicOnly: bool(r.publicOnly),
     agentOnly: bool(r.agentOnly),
     multiCall: bool(r.multiCall),
+    multiVideo: bool(r.multiVideo),
     activeCalls: num(r.activeCalls),
     presenceMode: str(r.presenceMode),
     agentTrunkRefCount: num(r.agentTrunkRefCount),

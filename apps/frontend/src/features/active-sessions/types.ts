@@ -18,6 +18,9 @@ export interface ActiveSession {
   translatorSrcLang?: string
   translatorTgtLang?: string
   translatorTtsVoice?: string
+  screenShareActive?: boolean
+  screenShareDirection?: 'sending' | 'receiving' | 'both' | string
+  screenShareConfirmed?: boolean
 }
 
 export interface ActiveSessionsListResponse {

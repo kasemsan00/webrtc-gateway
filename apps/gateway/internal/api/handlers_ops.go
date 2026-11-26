@@ -117,6 +117,7 @@ type WSClientResponse struct {
 	AgentOnly             bool   `json:"agentOnly,omitempty"`
 	AgentDeviceOnly       bool   `json:"agentDeviceOnly,omitempty"`
 	MultiCall             bool   `json:"multiCall,omitempty"`
+	MultiVideo            bool   `json:"multiVideo,omitempty"`
 	ActiveCalls           int    `json:"activeCalls,omitempty"`
 	PresenceMode          string `json:"presenceMode,omitempty"`
 	AgentTrunkRefCount    int    `json:"agentTrunkRefCount,omitempty"`
